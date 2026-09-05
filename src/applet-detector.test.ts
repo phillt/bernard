@@ -8,7 +8,9 @@ import {
   appletSuggestionBlock,
   buildAppletRequest,
   detectAppletCandidate,
+  exceedsAppletOverlap,
 } from './applet-detector.js';
+import { checkOverlaps, OVERLAP_THRESHOLD } from './overlap-checker.js';
 import {
   AppletCandidateStore,
   MAX_PENDING_APPLET_CANDIDATES,
@@ -128,6 +130,37 @@ describe('AppletCandidateStore (#430)', () => {
     expect(store.listPending().map((c) => c.id)).toEqual([fresh.id]);
   });
 
+  it('stamps when the user declined, which is what starts the cooldown', () => {
+    const c = store.create(stripped(draft()));
+    expect(store.decline(c.id)).toBe(true);
+    const after = store.get(c.id)!;
+    expect(after.status).toBe('rejected');
+    expect(after.decidedAt).toBeTruthy();
+    expect(store.listPending()).toHaveLength(0);
+    expect(store.listSuppressed().map((x) => x.id)).toEqual([c.id]);
+  });
+
+  it('suppresses a decline for 30 days and then lets the idea back', () => {
+    // The user's own framing: remove it from consideration, drop whatever had
+    // built up, and let it come back later if the work really is recurring.
+    // So this is a cooldown, never a blocklist.
+    const c = store.create(stripped(draft()));
+    store.decline(c.id);
+    expect(store.listSuppressed()).toHaveLength(1);
+    expect(store.listSuppressed(Date.now() + 31 * 24 * 3600 * 1000)).toHaveLength(0);
+  });
+
+  it('suppresses nothing when the status was flipped by hand', () => {
+    // Why `decline()` exists as its own method. `updateStatus(id, 'rejected')`
+    // writes the same status and no `decidedAt`, which is a decline that
+    // silently suppresses nothing — the exact failure the method makes
+    // unrepresentable, and the shape of every row written before this feature.
+    const c = store.create(stripped(draft()));
+    store.updateStatus(c.id, 'rejected');
+    expect(store.listPending()).toHaveLength(0);
+    expect(store.listSuppressed()).toHaveLength(0);
+  });
+
   it('survives a corrupt file rather than throwing on the exit path', () => {
     store.create(stripped(draft()));
     fs.writeFileSync(path.join(APPLET_CANDIDATES_DIR, 'broken.json'), '{not json', 'utf-8');
@@ -170,5 +203,60 @@ describe('buildAppletRequest (#430)', () => {
 
   it('says so when the model proposed no actions', () => {
     expect(buildAppletRequest(draft({ actions: [] }))).toContain('decide from the description');
+  });
+});
+
+describe('the suggestion block tells the agent both answers', () => {
+  it('names the decline call, not just the build one', () => {
+    // Without this the tool action is inert: the block said what to do when
+    // the user agrees and nothing when they refuse, so a "no thanks" in
+    // conversation changed nothing and the same suggestion returned next
+    // session. That is what "there is no way to decline them" meant.
+    const block = appletSuggestionBlock([draft()], []);
+    expect(block).toContain('"action":"decline"');
+    expect(block).toContain(draft().draftId);
+    expect(block).toContain('comes back next session');
+  });
+});
+
+describe('the duplicate gate (dead until now)', () => {
+  /** Exactly how `detectAppletCandidate` shapes an applet for `checkOverlaps`. */
+  const shape = (name: string, description: string) => ({
+    name,
+    description,
+    systemPrompt: '',
+    guidelines: [],
+  });
+
+  it('rejects a draft identical to one already suggested', () => {
+    // The bug: an applet has no systemPrompt and no guidelines, so those two
+    // 0.2 terms are structurally zero and the score is capped at 0.6 — against
+    // a `> 0.6` comparison. This gate had never fired once, which is why a
+    // suggestion the user had already seen could come straight back.
+    const a = shape('Article Bias Checker', 'Paste an article URL for bias and accuracy scores.');
+    const { maxScore } = checkOverlaps(a, [], [{ draftId: 'article-bias-checker', ...a }]);
+    expect(maxScore).toBeCloseTo(0.6, 5);
+    // The raw comparison the code used to make — pinned so the regression is
+    // legible rather than a bare boolean flip.
+    expect(maxScore > OVERLAP_THRESHOLD).toBe(false);
+    expect(exceedsAppletOverlap(maxScore)).toBe(true);
+  });
+
+  it('lets an unrelated draft through', () => {
+    const { maxScore } = checkOverlaps(
+      shape('Expense Log', 'Log an expense and see the running total.'),
+      [],
+      [
+        {
+          draftId: 'article-bias-checker',
+          ...shape('Article Bias Checker', 'Paste an article URL for bias and accuracy scores.'),
+        },
+      ],
+    );
+    expect(exceedsAppletOverlap(maxScore)).toBe(false);
+  });
+
+  it('treats an empty field of comparisons as no overlap', () => {
+    expect(exceedsAppletOverlap(0)).toBe(false);
   });
 });

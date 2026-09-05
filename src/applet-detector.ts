@@ -59,6 +59,41 @@ Output strict JSON and nothing else:
 
 `;
 
+/**
+ * The most `computeOverlapScore` can return for two applets.
+ *
+ * Its name and description terms weigh 0.3 each; the systemPrompt and
+ * guidelines terms weigh 0.2 each and are structurally zero here, since an
+ * applet has neither and both sides are passed empty. So 0.6 is a perfect
+ * match, not a near one.
+ */
+const APPLET_OVERLAP_MAX = 0.6;
+
+/**
+ * Whether a draft duplicates something Bernard has already put forward.
+ *
+ * Its own function so the decision can be tested against real
+ * {@link checkOverlaps} output — the gate itself sits behind a live model call,
+ * which is how it went unexercised long enough to be dead.
+ *
+ * **It had never once fired.** `computeOverlapScore` weights name 0.3 +
+ * description 0.3 + systemPrompt 0.2 + guidelines 0.2, and an applet has
+ * neither of the last two: both sides are passed `''` and `[]`. So an applet's
+ * score is capped at 0.6 against a `> 0.6` comparison. Measured — two
+ * byte-identical drafts score exactly 0.6 and were NOT rejected, which is why a
+ * suggestion the user had already seen could always come straight back.
+ *
+ * Normalising by the achievable maximum makes {@link OVERLAP_THRESHOLD} mean
+ * the same thing here as it does for a specialist — "60% similar" — rather than
+ * a number the comparison cannot reach. Deliberately not `>=`, which would
+ * catch the exact duplicate and still miss everything near it; and deliberately
+ * not mapping `actions` onto `guidelines` to fill the empty dimension, which
+ * changes WHAT is compared where this only fixes the scale.
+ */
+export function exceedsAppletOverlap(maxScore: number): boolean {
+  return maxScore / APPLET_OVERLAP_MAX > OVERLAP_THRESHOLD;
+}
+
 /** The draft a detection produces; the store mints id/timestamp/status. */
 export type AppletCandidateDraft = Omit<AppletCandidate, 'id' | 'detectedAt' | 'status' | 'source'>;
 
@@ -77,6 +112,17 @@ export async function detectAppletCandidate(
   config: BernardConfig,
   existingAppIds: string[],
   pendingCandidates: AppletCandidate[],
+  /**
+   * Declines still inside their cooldown (`AppletCandidateStore.listSuppressed`).
+   *
+   * Treated exactly like a pending candidate — same "do NOT repeat" line, same
+   * overlap target — because for this decision they mean the same thing: an
+   * idea Bernard has already put in front of the user and must not put there
+   * again. Before this, a decline dropped out of `listPending()` immediately,
+   * so the very next session could re-suggest the identical applet with a
+   * fresh id and a fresh 30-day clock. Declining did nothing that lasted.
+   */
+  declinedCandidates: AppletCandidate[] = [],
   onUsage?: UsageRecorder,
 ): Promise<AppletDetectionResult | null> {
   if (serializedText.length < MIN_CONVERSATION_LENGTH) return null;
@@ -84,9 +130,11 @@ export async function detectAppletCandidate(
   try {
     const site = resolveSiteModel(config, 'applet-detector');
     const existing = existingAppIds.length ? existingAppIds.join(', ') : '(none)';
-    const pending = pendingCandidates.length
-      ? pendingCandidates.map((c) => c.draftId).join(', ')
-      : '(none)';
+    // One list, because the model is being told one thing: do not propose
+    // these. Splitting them into "suggested" and "declined" would invite it to
+    // treat a decline as weaker than silence, which is backwards.
+    const seen = [...pendingCandidates, ...declinedCandidates];
+    const pending = seen.length ? seen.map((c) => c.draftId).join(', ') : '(none)';
 
     const started = Date.now();
     const result = await generateText({
@@ -124,7 +172,7 @@ export async function detectAppletCandidate(
     const overlap = checkOverlaps(
       { name: draft.name, description: draft.description, systemPrompt: '', guidelines: [] },
       existingAppIds.map((id) => ({ id, name: id.replace(/-/g, ' '), description: '' })),
-      pendingCandidates.map((c) => ({
+      seen.map((c) => ({
         draftId: c.draftId,
         name: c.name,
         description: c.description,
@@ -132,8 +180,12 @@ export async function detectAppletCandidate(
         guidelines: [],
       })),
     );
-    if (overlap.maxScore > OVERLAP_THRESHOLD) {
-      debugLog('applet-detector:overlap', { draftId: draft.draftId, score: overlap.maxScore });
+    if (exceedsAppletOverlap(overlap.maxScore)) {
+      debugLog('applet-detector:overlap', {
+        draftId: draft.draftId,
+        score: overlap.maxScore,
+        normalised: overlap.maxScore / APPLET_OVERLAP_MAX,
+      });
       return null;
     }
 
@@ -285,5 +337,11 @@ export function appletSuggestionBlock(
     (c) =>
       `- "${c.name}" (${c.draftId}): ${c.description}${eligibleIds.has(c.draftId) ? ' — OFFER to build this one when it becomes relevant.' : ''}`,
   );
-  return `## Applet Suggestions\n\nBernard noticed recurring, structured work that an applet could serve. Mention these when relevant; build one only with the \`applet\` tool and only when the user agrees.\n\n${lines.join('\n')}`;
+  // The decline half is load-bearing, not politeness. Without it the tool
+  // action exists and is never called: the block tells the agent what to do
+  // when the user says yes and nothing at all when they say no, so the
+  // suggestion stays pending, the startup notice keeps counting it, and this
+  // very block re-injects it next session. That is what "there is no way to
+  // decline them" meant.
+  return `## Applet Suggestions\n\nBernard noticed recurring, structured work that an applet could serve. Mention these when relevant; build one only with the \`applet\` tool and only when the user agrees.\n\nIf the user turns one down, call \`applet\` with \`{"action":"decline","id":"<draft id>"}\` so it stops being raised. Do not argue with a no, and do not silently drop it — an unrecorded decline comes back next session.\n\n${lines.join('\n')}`;
 }

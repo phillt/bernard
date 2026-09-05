@@ -132,6 +132,10 @@ export async function runWorkerForFile(filePath: string): Promise<void> {
         config,
         new AppRegistry().listIds(),
         pending,
+        // Declines inside their cooldown. This is the whole reason a decline
+        // lasts longer than the moment it is made: without it the record leaves
+        // `listPending()` and the very next run has no memory of it.
+        appletCandidates.listSuppressed(),
       );
       if (detected) appletCandidates.create(detected.candidate, 'exit');
     })(),

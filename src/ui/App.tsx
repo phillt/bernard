@@ -2224,13 +2224,27 @@ export function App({
         const c = pending.find((p) => p.id === value.slice(5));
         if (!c) continue;
         const action = await requestMenu(
-          [{ label: 'Build it' }, { label: 'Dismiss' }, { label: 'Back' }],
+          [
+            { label: 'Build it' },
+            {
+              // "Decline", not the old "Dismiss". The label has to carry the
+              // consequence, because the two plausible readings of "dismiss"
+              // — hide this row, and stop suggesting this — are exactly the
+              // question the user is answering, and only one of them is true.
+              label: 'Decline',
+              description: 'Stops Bernard suggesting this. It may resurface later.',
+            },
+            { label: 'Back' },
+          ],
           { title: `"${c.name}" (${c.draftId})` },
         );
         if (action.cancelled || action.index === 2) continue;
         if (action.index === 1) {
-          appletCandidates.updateStatus(c.id, 'rejected');
-          flashToast(`Dismissed ${c.name}.`, 'success');
+          // `decline`, not `updateStatus(c.id, 'rejected')`. Same status, but
+          // it stamps `decidedAt`, which is what starts the cooldown — a
+          // hand-flipped status is a decline that suppresses nothing.
+          appletCandidates.decline(c.id);
+          flashToast(`Declined ${c.name}.`, 'success');
           stale = true;
           continue;
         }

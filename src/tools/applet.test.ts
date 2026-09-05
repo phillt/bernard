@@ -1209,3 +1209,78 @@ describe('the intent interview', () => {
     expect(out).not.toContain('No design brief');
   });
 });
+
+describe('declining a suggestion from the conversation', () => {
+  useTempHome('bernard-applet-decline');
+
+  async function seed(name = 'Article Bias Checker', draftId = 'article-bias-checker') {
+    const { AppletCandidateStore } = await import('../applet-candidates.js');
+    const store = new AppletCandidateStore();
+    const c = store.create({
+      draftId,
+      name,
+      description: 'Scores an article for bias and accuracy.',
+      actions: ['analyze'],
+      confidence: 0.9,
+      reasoning: 'pasted four article URLs across two sessions',
+    });
+    return { store, c };
+  }
+
+  const run = async (t: any, args: unknown) => (await t.execute(args, {})) as string;
+
+  it('records the decline so it stops being raised', async () => {
+    // The gap this closes. `appletSuggestionBlock` tells the agent to raise
+    // pending suggestions in conversation, and a user saying "no thanks" there
+    // changed nothing on disk: the candidate stayed pending, the startup notice
+    // kept counting it, and the block kept re-injecting it every session.
+    const { tool } = await load();
+    const { store, c } = await seed();
+    const out = await run(tool, { action: 'decline', id: 'article-bias-checker' });
+
+    expect(out).toContain('Declined');
+    expect(store.listPending()).toHaveLength(0);
+    expect(store.get(c.id)?.status).toBe('rejected');
+    // The stamp is the part that lasts — without it the decline suppresses
+    // nothing and the next detector run re-proposes the same applet.
+    expect(store.listSuppressed().map((x) => x.id)).toEqual([c.id]);
+  });
+
+  it('matches the name the agent read out of the suggestion block', async () => {
+    // The model is quoting whatever it saw, and the block carries name and
+    // draft id — never the record's UUID. Case-insensitive for the same reason.
+    const { tool } = await load();
+    const { store } = await seed();
+    await run(tool, { action: 'decline', id: 'article bias CHECKER' });
+    expect(store.listPending()).toHaveLength(0);
+  });
+
+  it('names what is still open rather than refusing bare', async () => {
+    // A bare refusal makes the model guess another label and spend a turn on
+    // it — the same reason `docs` lists its ids on a miss.
+    const { tool } = await load();
+    await seed();
+    const out = await run(tool, { action: 'decline', id: 'something-else' });
+    expect(out).toMatch(/^Error:/);
+    expect(out).toContain('article-bias-checker');
+  });
+
+  it('says so when there is nothing pending', async () => {
+    const { tool } = await load();
+    const out = await run(tool, { action: 'decline', id: 'anything' });
+    expect(out).toMatch(/^Error:/);
+    expect(out).toContain('There are none.');
+  });
+
+  it('leaves an already-declined suggestion alone', async () => {
+    // `listPending()` is the match set, so a second decline finds nothing —
+    // which is the right answer, not an error worth escalating.
+    const { tool } = await load();
+    const { store, c } = await seed();
+    await run(tool, { action: 'decline', id: 'article-bias-checker' });
+    const first = store.get(c.id)?.decidedAt;
+    const out = await run(tool, { action: 'decline', id: 'article-bias-checker' });
+    expect(out).toMatch(/^Error:/);
+    expect(store.get(c.id)?.decidedAt).toBe(first);
+  });
+});

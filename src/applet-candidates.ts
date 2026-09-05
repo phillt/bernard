@@ -36,12 +36,36 @@ export interface AppletCandidate {
   overlapScore?: number;
   /** Set when the composite cleared `autoCreateThreshold` and one was built. */
   autoCreated?: boolean;
+  /**
+   * When the user decided, for a status they chose themselves.
+   *
+   * Only a DECLINE needs it, and it needs it because a decline has to expire:
+   * the whole point is that the idea can resurface later once it has re-earned
+   * its way in. `detectedAt` cannot serve — that is when Bernard had the idea,
+   * not when the user said no, and the gap between them is unbounded.
+   */
+  decidedAt?: string;
 }
 
 export const MAX_PENDING_APPLET_CANDIDATES = 10;
 
 /** Age past which a pending suggestion nobody acted on is dismissed. */
 const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * How long a decline suppresses the same idea.
+ *
+ * A decline is not a veto. The user's own framing: remove it from
+ * consideration, drop whatever had built up, and let it come back later if the
+ * work really is recurring — *"which is fine"*. So this is a cooldown, not a
+ * blocklist, and nothing here ever becomes permanent.
+ *
+ * The same 30 days as {@link MAX_AGE_MS}, deliberately: that is already the
+ * house answer to "how long is a suggestion still current", and a decline is a
+ * STRONGER signal than the silence that number was chosen for. Picking a
+ * second, different number would be inventing precision nobody has.
+ */
+export const DECLINE_COOLDOWN_MS = 30 * 24 * 60 * 60 * 1000;
 
 export class AppletCandidateStore {
   constructor() {
@@ -96,6 +120,43 @@ export class AppletCandidateStore {
     };
     this.write(candidate);
     return candidate;
+  }
+
+  /**
+   * Records that the user said no.
+   *
+   * A distinct method rather than `updateStatus(id, 'rejected')` at each call
+   * site, because a decline is the one status transition with a consequence
+   * beyond leaving the pending queue: it stamps `decidedAt`, which is what
+   * {@link listSuppressed} reads to keep the detector from proposing the same
+   * thing again tomorrow. A call site that flipped the status by hand would
+   * silently produce a decline that suppresses nothing — the failure this
+   * exists to make unrepresentable.
+   */
+  decline(id: string): boolean {
+    const candidate = this.get(id);
+    if (!candidate) return false;
+    candidate.status = 'rejected';
+    candidate.decidedAt = new Date().toISOString();
+    this.write(candidate);
+    return true;
+  }
+
+  /**
+   * Declines still inside their cooldown — what the detector must not re-propose.
+   *
+   * Reads `decidedAt` and not `detectedAt`: the clock starts when the user said
+   * no. A row declined before this field existed has no `decidedAt` and so
+   * suppresses nothing, which is the right way to be wrong — the alternative
+   * silently extends old declines by however long they sat on disk.
+   */
+  listSuppressed(now: number = Date.now()): AppletCandidate[] {
+    return this.list().filter(
+      (c) =>
+        c.status === 'rejected' &&
+        c.decidedAt !== undefined &&
+        now - new Date(c.decidedAt).getTime() < DECLINE_COOLDOWN_MS,
+    );
   }
 
   updateStatus(id: string, status: AppletCandidate['status']): boolean {
