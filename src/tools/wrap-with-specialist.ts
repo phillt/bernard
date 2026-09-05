@@ -118,6 +118,22 @@ export function wrapToolWithSpecialist<TArgs>(
           // an empty line. PR #189 review feedback.
           const snippet = wrapped.error ?? String(wrapped.result ?? '');
           const cls = classifyError({ message: snippet, toolName });
+          // A full pool is a fact about Bernard, not about this request, and
+          // the raw tool is right here. Falling through is the shim's own
+          // contract — it already does exactly this when the specialist is
+          // missing or the wrong kind, on the same reasoning: the wrapper is an
+          // enhancement, not a requirement.
+          //
+          // It matters because the shim routes `file_read_lines` and friends,
+          // so reading five files at once — an ordinary batch — spends five
+          // agent-pool slots against a cap of four and `withSlot` never queues.
+          // A real session lost two file reads mid-investigation to this and
+          // never got them back, which is the opposite of what the cap is for:
+          // bounding fan-out that hits provider rate limits, not metering the
+          // plumbing under an ordinary read.
+          if (cls.category === 'pool_exhausted') {
+            return baseExecute(args, execOptions);
+          }
           // The user-facing half (`playbook.user`) is rendered by the Ink
           // thread from the sink's `tool-result.failure`, built centrally in
           // `output-sink.ts` — which covers every tool, not just the shimmed
