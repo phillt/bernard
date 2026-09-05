@@ -355,3 +355,78 @@ describe('invokeAction', () => {
     expect(rows[0].errorMessage).toContain('nope');
   });
 });
+
+describe('a parse failure says what actually came back', () => {
+  useTempHome('bernard-invoke-parse');
+  let appsDir: string;
+
+  async function load() {
+    vi.resetModules();
+    const paths = await import('../paths.js');
+    const mod = await import('./invoke.js');
+    appsDir = paths.APPS_DIR;
+    return { ...mod, SCRIPT_LOG_FILE: paths.SCRIPT_LOG_FILE };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSpecialistGet.mockReturnValue({
+      id: 'web-wrapper',
+      targetTools: ['web_search', 'web_read'],
+    });
+    // What `wrapWrapperResult` produces when a specialist returns a bare
+    // result: the failing text preserved in `reasoning[0]`, capped.
+    mockDispatchAction.mockResolvedValue({
+      ok: true,
+      formatted: {
+        status: 'error',
+        result: 'Specialist did not produce valid structured output',
+        error: 'parse_failed',
+        reasoning: ['{\n  "url": "https://example.com/x",\n  "outlet": "AP News",\n  "bias": {'],
+      },
+      env: {},
+      startedAt: '2026-01-01T00:00:00.000Z',
+      timings: { mcpConnectMs: 7, totalMs: 12 },
+      stepLimitHit: false,
+    });
+  });
+
+  it('reports the shape that came back instead of repeating the code', async () => {
+    // Before this, the caller and the log both got the bare string
+    // `parse_failed` — unfalsifiable, and it cost a real session ~30 minutes
+    // and 50 messages. The answer was in `reasoning[0]` the whole time and was
+    // dropped one line before it would have been logged.
+    const m = await load();
+    fs.mkdirSync(appsDir, { recursive: true });
+    fs.writeFileSync(path.join(appsDir, 'demo.json'), JSON.stringify(VALID_APP));
+    const res = await m.invokeAction({ appId: 'demo', action: 'ask', args: { q: 'hi' } });
+
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error.message).not.toBe('parse_failed');
+    expect(res.error.message).toContain('url');
+    expect(res.error.message).toContain('outlet');
+    expect(res.error.message).toContain('no status or result');
+    // Keys, never values — the invocation log's standing rule, and a
+    // specialist's output can echo its input.
+    expect(res.error.message).not.toContain('example.com');
+    expect(res.error.message).not.toContain('AP News');
+  });
+
+  it('writes the same diagnosis to the invocation log', async () => {
+    // `bernard app logs` is the door a person actually opens, so the message
+    // has to survive the log boundary too, not just the return envelope.
+    const m = await load();
+    fs.mkdirSync(appsDir, { recursive: true });
+    fs.writeFileSync(path.join(appsDir, 'demo.json'), JSON.stringify(VALID_APP));
+    await m.invokeAction({ appId: 'demo', action: 'ask', args: { q: 'hi' } });
+    const rows = fs
+      .readFileSync(m.SCRIPT_LOG_FILE, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l));
+    const last = rows[rows.length - 1];
+    expect(last.errorMessage).toContain('no status or result');
+    expect(last.errorMessage).not.toContain('AP News');
+  });
+});

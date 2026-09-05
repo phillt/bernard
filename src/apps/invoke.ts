@@ -5,6 +5,7 @@ import { grantedToolNames, resolveFromManifest } from './invocation.js';
 import type { DispatchActionResult } from './dispatch.js';
 import { SpecialistStore } from '../specialists.js';
 import { classifyError } from '../error-taxonomy.js';
+import { describeParseFailure } from '../structured-output.js';
 import { sendToSessions } from '../inbox/send.js';
 import { appendJsonl, rotateJsonlByCount } from '../jsonl.js';
 import { SCRIPT_LOG_FILE } from '../paths.js';
@@ -509,7 +510,15 @@ export async function invokeAction(opts: InvokeActionOptions): Promise<Invocatio
 
   const wrapper = run.formatted;
   if (wrapper.status !== 'ok') {
-    return fail('run_failed', wrapper.error ?? 'The action reported a failure with no message.', {
+    // `parse_failed` alone is unfalsifiable, and the answer was already here:
+    // `wrapWrapperResult` puts the text that would not parse into
+    // `reasoning[0]`, and this line used to read `error` and drop it. Same
+    // shape as #461 — the message computed and thrown away — one layer up.
+    const detail =
+      wrapper.error === 'parse_failed'
+        ? describeParseFailure(wrapper.reasoning)
+        : (wrapper.error ?? 'The action reported a failure with no message.');
+    return fail('run_failed', detail, {
       ...dispatched,
       mcpConnectMs: run.timings.mcpConnectMs,
       stepLimitHit: run.stepLimitHit,

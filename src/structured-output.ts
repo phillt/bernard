@@ -260,3 +260,52 @@ export function wantsStructuredOutput(
   // every non-tool-wrapper one of those declares it outright.
   return specialist?.structuredOutput ?? specialist?.kind === 'tool-wrapper';
 }
+
+/** Keys named in the envelope, for telling "wrong shape" from "not JSON". */
+const ENVELOPE_KEYS = ['status', 'result', 'error', 'reasoning'];
+
+/**
+ * Says what a specialist actually returned when its output would not parse.
+ *
+ * `parse_failed` on its own is unfalsifiable. A real session spent ~30 minutes
+ * and 50 messages on one, because the log said `parse_failed` and the envelope
+ * said `parse_failed` and nothing anywhere said what had been produced instead
+ * — while the answer ("a bare scorecard, no `status` key") was sitting in
+ * `WrapperResult.reasoning[0]` the whole time and was dropped one line before
+ * it would have been logged.
+ *
+ * **Keys, never values.** The invocation log's standing rule is that argument
+ * names are loggable and argument contents are not, and a specialist's output
+ * can echo its input. Naming the keys is what makes the failure diagnosable;
+ * printing the payload would be a disclosure this file has no business making.
+ * It is also the more useful half — `url, title, outlet` identifies the shape
+ * instantly, where 200 characters of prose would not.
+ *
+ * Reads the capped `reasoning[0]`, so the JSON is usually cut mid-object and
+ * cannot be re-parsed. Hence a key scan rather than `JSON.parse`: it does not
+ * distinguish nesting depth, which does not matter — the question is only ever
+ * "is this the envelope, and if not, what is it?"
+ */
+export function describeParseFailure(reasoning: string[] | undefined): string {
+  const text = reasoning?.[0]?.trim() ?? '';
+  if (!text) {
+    return 'The specialist returned nothing to parse — it may have run out of steps before answering.';
+  }
+  const keys = [...new Set([...text.matchAll(/"([A-Za-z_][\w-]*)"\s*:/g)].map((m) => m[1]))];
+  if (keys.length === 0) {
+    return `Expected a JSON {status, result} envelope; the specialist returned ${text.length}+ characters of non-JSON text.`;
+  }
+  const missing = ENVELOPE_KEYS.filter(
+    (k) => !keys.includes(k) && k !== 'error' && k !== 'reasoning',
+  );
+  const seen = keys.slice(0, 8).join(', ');
+  const more = keys.length > 8 ? `, +${keys.length - 8} more` : '';
+  if (missing.length === 0) {
+    return `The specialist returned a JSON object with the envelope keys (${seen}${more}) but it did not match the expected shape.`;
+  }
+  return (
+    `Expected a JSON {status, result} envelope; the specialist returned an object with ` +
+    `keys: ${seen}${more} — no ${missing.join(' or ')}. ` +
+    `Either set structuredOutput on the specialist and tell it to emit the envelope, or leave it unset so the raw result is returned.`
+  );
+}

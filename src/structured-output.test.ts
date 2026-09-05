@@ -11,6 +11,7 @@ import {
   WrapperResultSchema,
   STRUCTURED_OUTPUT_RULES,
   wantsStructuredOutput,
+  describeParseFailure,
 } from './structured-output.js';
 
 describe('extractJsonBlock', () => {
@@ -311,5 +312,61 @@ describe('wantsStructuredOutput — one decision, two dispatch paths', () => {
       expect(src).toContain('wantsStructuredOutput');
       expect(src).not.toMatch(/structuredOutput\s*\?\?/);
     }
+  });
+});
+
+describe('describeParseFailure — saying what actually came back', () => {
+  // The real payload, truncated at REASONING_MAX_CHARS the way the pipeline
+  // truncates it. Deliberately cut mid-object, because that is the only form
+  // this function ever sees and it is why the implementation scans for keys
+  // instead of calling JSON.parse.
+  const scorecard =
+    '{\n  "url": "https://apnews.com/hub",\n  "title": "AP News",\n  "outlet": "AP News",\n  "author": "",\n  "article": {\n    "bias": {';
+
+  it('names the keys that came back and the envelope keys that did not', () => {
+    const msg = describeParseFailure([scorecard]);
+    expect(msg).toContain('url');
+    expect(msg).toContain('outlet');
+    expect(msg).toContain('no status or result');
+  });
+
+  it('never prints a value', () => {
+    // The invocation log's standing rule: argument names are loggable, contents
+    // are not — and a specialist's output can echo its input. Naming keys is
+    // what makes the failure diagnosable; printing the payload would be a
+    // disclosure this module has no business making.
+    const secret = '{"url": "https://example.com/hunter2-token", "outlet": "ACME"}';
+    const msg = describeParseFailure([secret]);
+    expect(msg).toContain('url');
+    expect(msg).toContain('outlet');
+    expect(msg).not.toContain('hunter2');
+    expect(msg).not.toContain('ACME');
+    expect(msg).not.toContain('example.com');
+  });
+
+  it('says so when the output was not JSON at all', () => {
+    const msg = describeParseFailure(['I could not analyze that article.']);
+    expect(msg).toContain('non-JSON');
+    expect(msg).not.toContain('analyze that article');
+  });
+
+  it('distinguishes an empty answer, which is a step-budget symptom', () => {
+    // `reclassifyStepLimit` handles the case it can see; this is the message
+    // for the case it cannot, and "returned nothing" points somewhere very
+    // different from "returned the wrong shape".
+    expect(describeParseFailure(undefined)).toContain('nothing to parse');
+    expect(describeParseFailure([''])).toContain('nothing to parse');
+  });
+
+  it('does not claim the envelope is missing when it is present but malformed', () => {
+    const msg = describeParseFailure(['{"status": "ok", "result": ']);
+    expect(msg).not.toContain('no status');
+    expect(msg).toContain('did not match the expected shape');
+  });
+
+  it('bounds how many keys it names', () => {
+    const wide = '{' + Array.from({ length: 30 }, (_, i) => `"k${i}": 1`).join(',') + '}';
+    const msg = describeParseFailure([wide]);
+    expect(msg).toContain('+22 more');
   });
 });
