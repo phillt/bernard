@@ -4,7 +4,7 @@ import type { AgentContext } from '../framework/context.js';
 import { buildChildTools, type ToolWrapperInput } from '../framework/agents/index.js';
 import { definitions } from '../framework/agents/index.js';
 import { runHeadless, resolvePosture, type RunHeadlessResult } from '../headless.js';
-import type { WrapperResult } from '../structured-output.js';
+import { wantsStructuredOutput, type WrapperResult } from '../structured-output.js';
 import type { Specialist } from '../specialists.js';
 import { loadAppGrants } from './app-grants.js';
 import { createAppletStoreTool } from './store-tools.js';
@@ -157,7 +157,10 @@ export async function dispatchAction(opts: DispatchActionOpts): Promise<Dispatch
         context: renderArgsBlock(frozenArgs),
         slotId: 0,
         childTools,
-        wantStructured: specialist?.structuredOutput ?? true,
+        // Shared with `tool_wrapper_run`; see `wantsStructuredOutput`. It used
+        // to be `?? true` here, so the two paths disagreed about what one
+        // record means.
+        wantStructured: wantsStructuredOutput(specialist),
       };
     },
   });
