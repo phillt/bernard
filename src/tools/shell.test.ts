@@ -4,10 +4,14 @@ import * as path from 'node:path';
 import { isDangerous, isSafelisted, BERNARD_TMP_PREFIX, createShellTool } from './shell.js';
 
 vi.mock('node:child_process', () => ({
-  execSync: vi.fn(),
+  spawnSync: vi.fn(),
 }));
 
-const { execSync } = await import('node:child_process');
+const { spawnSync } = await import('node:child_process');
+
+/** A successful run: stdout, no stderr, exit 0. */
+const okRun = (stdout: string, stderr = '') =>
+  ({ stdout, stderr, status: 0 }) as unknown as ReturnType<typeof spawnSync>;
 
 describe('isDangerous', () => {
   describe('detects dangerous commands', () => {
@@ -139,7 +143,7 @@ describe('createShellTool', () => {
   });
 
   it('executes a safe command and returns ok envelope', async () => {
-    vi.mocked(execSync).mockReturnValue('hello world');
+    vi.mocked(spawnSync).mockReturnValue(okRun('hello world'));
     const shellTool = createShellTool({ shellTimeout: 30000, confirmDangerous });
     const result = await shellTool.execute({ command: 'echo hello' }, {});
     expect(result).toEqual({
@@ -150,7 +154,7 @@ describe('createShellTool', () => {
   });
 
   it('returns "(no output)" for empty stdout', async () => {
-    vi.mocked(execSync).mockReturnValue('');
+    vi.mocked(spawnSync).mockReturnValue(okRun(''));
     const shellTool = createShellTool({ shellTimeout: 30000, confirmDangerous });
     const result = await shellTool.execute({ command: 'true' }, {});
     expect(result).toEqual({
@@ -161,7 +165,7 @@ describe('createShellTool', () => {
 
   it('calls confirmDangerous for dangerous commands', async () => {
     confirmDangerous.mockResolvedValue(true);
-    vi.mocked(execSync).mockReturnValue('done');
+    vi.mocked(spawnSync).mockReturnValue(okRun('done'));
     const shellTool = createShellTool({ shellTimeout: 30000, confirmDangerous });
     const result = await shellTool.execute({ command: 'rm -rf /tmp/test' }, {});
     expect(confirmDangerous).toHaveBeenCalledWith('rm -rf /tmp/test', undefined);
@@ -173,7 +177,7 @@ describe('createShellTool', () => {
 
   it('forwards the abort signal to confirmDangerous', async () => {
     confirmDangerous.mockResolvedValue(true);
-    vi.mocked(execSync).mockReturnValue('done');
+    vi.mocked(spawnSync).mockReturnValue(okRun('done'));
     const controller = new AbortController();
     const shellTool = createShellTool({ shellTimeout: 30000, confirmDangerous });
     await shellTool.execute(
@@ -186,12 +190,12 @@ describe('createShellTool', () => {
   });
 
   it('skips confirmDangerous for safelisted Bernard tmp cleanup', async () => {
-    vi.mocked(execSync).mockReturnValue('');
+    vi.mocked(spawnSync).mockReturnValue(okRun(''));
     const tmpFile = `${BERNARD_TMP_PREFIX}task.sh`;
     const shellTool = createShellTool({ shellTimeout: 30000, confirmDangerous });
     const result = await shellTool.execute({ command: `rm -f ${tmpFile}` }, {});
     expect(confirmDangerous).not.toHaveBeenCalled();
-    expect(execSync).toHaveBeenCalled();
+    expect(spawnSync).toHaveBeenCalled();
     expect(result.status).toBe('ok');
   });
 
@@ -203,7 +207,7 @@ describe('createShellTool', () => {
       status: 'ok',
       result: { output: 'Command cancelled by user.', is_error: false },
     });
-    expect(execSync).not.toHaveBeenCalled();
+    expect(spawnSync).not.toHaveBeenCalled();
   });
 
   it('does NOT prompt at all when confirmAction is wired — the unified gate owns it (#144/#212)', async () => {
@@ -213,7 +217,7 @@ describe('createShellTool', () => {
     // and ignores every "always allow" / skip-permissions decision (#212).
     const confirmAction = vi.fn().mockResolvedValue(true);
     confirmDangerous.mockResolvedValue(true);
-    vi.mocked(execSync).mockReturnValue('done');
+    vi.mocked(spawnSync).mockReturnValue(okRun('done'));
     const shellTool = createShellTool({
       shellTimeout: 30000,
       confirmDangerous,
@@ -222,24 +226,70 @@ describe('createShellTool', () => {
     await shellTool.execute({ command: 'rm -rf /tmp/test' }, {});
     expect(confirmAction).not.toHaveBeenCalled();
     expect(confirmDangerous).not.toHaveBeenCalled();
-    expect(execSync).toHaveBeenCalled();
+    expect(spawnSync).toHaveBeenCalled();
   });
 
   it('falls back to confirmDangerous when confirmAction is not wired (#144)', async () => {
     confirmDangerous.mockResolvedValue(true);
-    vi.mocked(execSync).mockReturnValue('done');
+    vi.mocked(spawnSync).mockReturnValue(okRun('done'));
     const shellTool = createShellTool({ shellTimeout: 30000, confirmDangerous });
     await shellTool.execute({ command: 'rm -rf /tmp/test' }, {});
     expect(confirmDangerous).toHaveBeenCalledWith('rm -rf /tmp/test', undefined);
   });
 
-  it('returns error envelope on command failure', async () => {
-    vi.mocked(execSync).mockImplementation(() => {
-      const e = new Error('Command failed') as any;
-      e.stderr = 'permission denied';
-      e.stdout = '';
-      throw e;
+  it('surfaces stderr when a command exits 0 with nothing on stdout', async () => {
+    // The silent failure this exists to end. `execSync` returns stdout and
+    // nothing else, so stderr was captured by the child and discarded — and it
+    // throws only on a non-zero exit, which in a PIPELINE is the last stage's.
+    // `rg foo src | head -5` with no `rg` installed exits 0, so the model was
+    // handed "(no output)" with `is_error: false` and correctly concluded the
+    // string it was hunting did not exist. It did, 46 times.
+    vi.mocked(spawnSync).mockReturnValue(okRun('', '/bin/sh: 1: rg: not found\n'));
+    const shellTool = createShellTool({ shellTimeout: 30000, confirmDangerous });
+    const result = await shellTool.execute({ command: 'rg foo src | head -5' }, {});
+    expect(result).toEqual({
+      status: 'ok',
+      // `is_error` stays false: the pipeline really did exit 0. Claiming
+      // otherwise would mislabel every command that warns and succeeds.
+      result: { output: '/bin/sh: 1: rg: not found\n', is_error: false },
     });
+  });
+
+  it('does NOT fold stderr in when the command produced real output', async () => {
+    // The other half, and why this is not `[stdout, stderr].join()`. Plenty of
+    // working commands write progress and warnings to stderr; folding that into
+    // every result would put noise on the common path. Only the silent case —
+    // nothing on stdout, something on stderr — is rewritten.
+    vi.mocked(spawnSync).mockReturnValue(okRun('real output\n', 'a warning\n'));
+    const shellTool = createShellTool({ shellTimeout: 30000, confirmDangerous });
+    const result = await shellTool.execute({ command: 'build' }, {});
+    expect(result).toEqual({
+      status: 'ok',
+      result: { output: 'real output\n', is_error: false },
+    });
+  });
+
+  it('still reports a non-zero exit as an error, with both streams', async () => {
+    vi.mocked(spawnSync).mockReturnValue({
+      stdout: 'partial\n',
+      stderr: 'boom\n',
+      status: 2,
+    } as never);
+    const shellTool = createShellTool({ shellTimeout: 30000, confirmDangerous });
+    const result = await shellTool.execute({ command: 'thing' }, {});
+    expect(result.status).toBe('error');
+    if (result.status === 'error') {
+      expect(result.error.message).toContain('partial');
+      expect(result.error.message).toContain('boom');
+    }
+  });
+
+  it('returns error envelope on command failure', async () => {
+    vi.mocked(spawnSync).mockReturnValue({
+      stdout: '',
+      stderr: 'permission denied',
+      status: 1,
+    } as never);
     const shellTool = createShellTool({ shellTimeout: 30000, confirmDangerous });
     const result = await shellTool.execute({ command: 'cat /root/secret' }, {});
     expect(result.status).toBe('error');

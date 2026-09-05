@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { execSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { ToolOptions, ShellResult } from './types.js';
@@ -142,13 +142,48 @@ export function createShellTool(options: ToolOptions): BernardTool<ShellArgs, Sh
       }
 
       try {
-        const stdout = execSync(command, {
+        // `spawnSync`, not `execSync`, for ONE reason: `execSync` returns
+        // stdout and nothing else, so on the success path stderr is captured
+        // by the child and then discarded — there is no way to read it.
+        //
+        // That silently loses the most diagnostic string a shell produces.
+        // `execSync` throws only on a non-zero exit, and in a PIPELINE the exit
+        // status is the last stage's, so `rg foo src | head -5` with no `rg`
+        // installed exits 0 and returns clean, empty, successful output. A real
+        // session burned ~30 minutes and 50 messages on exactly that: the model
+        // ran a search, was told "(no output)" with `is_error: false`, and
+        // correctly concluded the string it was hunting did not exist. It did,
+        // 46 times — `rg: not found` had gone to a stream nobody read.
+        //
+        // Sibling of #363/#364 (a tool that fails while returning), with a
+        // mechanism no result-shape check could ever see: the evidence was not
+        // in the result at all.
+        const proc = spawnSync(command, {
+          shell: true,
           encoding: 'utf-8',
           timeout: options.shellTimeout,
           maxBuffer: 1024 * 1024 * 10, // 10MB
           stdio: ['pipe', 'pipe', 'pipe'],
         });
-        return ok({ output: normalizeToolText(stdout) || '(no output)', is_error: false });
+        if (proc.error) throw proc.error;
+        const outText = normalizeToolText(proc.stdout || '');
+        const errText = normalizeToolText(proc.stderr || '');
+        if (proc.status !== 0) {
+          const output = [outText, errText].filter(Boolean).join('\n') || 'Command failed';
+          return err({
+            type: 'exec_failed',
+            message: output,
+            snippet: output.slice(0, ERROR_SNIPPET_MAX),
+          });
+        }
+        // Deliberately NOT `[stdout, stderr].join()` on success. Plenty of
+        // working commands write progress and warnings to stderr, and folding
+        // that into every result would be noise on the common path. The silent
+        // case is the narrow one: nothing on stdout, something on stderr. There
+        // it is the only information available, so it replaces "(no output)".
+        // `is_error` stays false — the pipeline really did exit 0, and claiming
+        // otherwise would mislabel every command that warns and succeeds.
+        return ok({ output: outText || errText || '(no output)', is_error: false });
       } catch (e: unknown) {
         const execError = e as { stderr?: string; stdout?: string; message?: string };
         const stderr = normalizeToolText(execError.stderr || '');
