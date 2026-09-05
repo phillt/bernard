@@ -1,14 +1,9 @@
 import { printError, printInfo } from '../output.js';
 import { AppRegistry, bundledAppIds } from './registry.js';
-import { parseRawAppManifest } from './manifest.js';
 import { deleteApplet } from './lifecycle.js';
 import { applyCspGrant, setActionGrant, type CspGrantSpec } from './manage.js';
 import { formatAppletLog } from './invocation-log.js';
-import { SpecialistStore } from '../specialists.js';
-import { uncoveredTools, uncoveredToolsMessage } from './invocation.js';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
-import { APPS_DIR, appletAssetDir } from '../paths.js';
+import { appletAssetDir } from '../paths.js';
 
 /**
  * `bernard app` — the half of applet authoring a model may not do.

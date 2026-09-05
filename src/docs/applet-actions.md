@@ -2,6 +2,7 @@
 title: Applet actions and what they may do
 description: How to declare the buttons an applet can press — argument types, agent versus direct-tool dispatch, and why an action ends up with no tools. Read when creating an applet or when an action fails at the click.
 ---
+
 # Actions
 
 An action is the only way an applet reaches Bernard. The page cannot send a

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { attachActionMeta } from '../framework/tools/adapter.js';
 import { capSubagentResult } from './result-cap.js';
 import { AppRegistry } from '../apps/registry.js';
+import { AppletCandidateStore } from '../applet-candidates.js';
 import type { ToolOptions } from './types.js';
 import { defaultAppletPage } from '../apps/page-template.js';
 import { SpecialistStore, type Specialist } from '../specialists.js';
@@ -127,9 +128,23 @@ const APPLET_HIGH_RISK_ACTIONS: ReadonlySet<string> = new Set(['delete']);
 
 const PARAMETERS = z.object({
   action: z
-    .enum(['create', 'update', 'read', 'list', 'logs', 'delete', 'style', 'brief', 'interview'])
+    .enum([
+      'create',
+      'update',
+      'read',
+      'list',
+      'logs',
+      'delete',
+      'style',
+      'brief',
+      'interview',
+      'decline',
+    ])
     .describe(
-      "The operation to perform. `logs` shows what this applet's buttons actually did, " +
+      'The operation to perform. `decline` records that the user does not want a ' +
+        'SUGGESTED applet — call it whenever they turn one down, so Bernard stops ' +
+        'raising it; pass the suggestion name or its draft id as `id`. ' +
+        "`logs` shows what this applet's buttons actually did, " +
         'including why one failed. `delete` removes the applet and everything keyed to it, ' +
         'and asks the user first. `style` hands an existing applet to the design pass — ' +
         'a new applet gets that automatically, so reach for this to restyle one. ' +
@@ -476,6 +491,40 @@ async function run(
         `Deleted applet "${id}" — its page, design brief, data store, workspace, tool grants ` +
         `and external-access grants are gone.${bound} Its port assignment is kept, so re-creating ` +
         'this id restores the same origin.'
+      );
+    }
+    case 'decline': {
+      // The gap this closes. `appletSuggestionBlock` tells the agent to raise
+      // pending suggestions in conversation, and until now a user saying "no
+      // thanks" there changed nothing on disk: the candidate stayed pending,
+      // the startup notice kept counting it, and the block kept re-injecting it
+      // every session. The only decline was buried three levels into
+      // `/applets`, which is why the complaint was that there was no way to
+      // decline one at all.
+      const id = need(args.id, 'id', 'decline');
+      const store = new AppletCandidateStore();
+      const pending = store.listPending();
+      // Matched on `draftId` or `name`, because the agent is quoting whatever
+      // it read out of the suggestion block, which carries both — and the
+      // record `id` is a UUID the model has never seen, so it is deliberately
+      // not a match key. One casing rule for both: the model is quoting the
+      // same text either way.
+      const lower = id.toLowerCase();
+      const match = pending.find(
+        (c) => c.draftId.toLowerCase() === lower || c.name.toLowerCase() === lower,
+      );
+      if (!match) {
+        // Names what IS open rather than only what is not: a bare refusal makes
+        // the model guess another label and spend a second turn on it.
+        const open = pending.map((c) => `"${c.name}" (${c.draftId})`).join(', ');
+        return `Error: no pending applet suggestion matching "${id}". ${
+          open ? `Open suggestions: ${open}.` : 'There are none.'
+        }`;
+      }
+      store.decline(match.id);
+      return (
+        `Declined the "${match.name}" suggestion. Bernard will stop raising it, ` +
+        'and it can resurface later if the same work keeps coming up.'
       );
     }
     case 'interview': {

@@ -36,12 +36,58 @@ export interface AppletCandidate {
   overlapScore?: number;
   /** Set when the composite cleared `autoCreateThreshold` and one was built. */
   autoCreated?: boolean;
+  /**
+   * When the user decided, for a status they chose themselves.
+   *
+   * Only a DECLINE needs it, and it needs it because a decline has to expire:
+   * the whole point is that the idea can resurface later once it has re-earned
+   * its way in. `detectedAt` cannot serve — that is when Bernard had the idea,
+   * not when the user said no, and the gap between them is unbounded.
+   */
+  decidedAt?: string;
 }
 
 export const MAX_PENDING_APPLET_CANDIDATES = 10;
 
 /** Age past which a pending suggestion nobody acted on is dismissed. */
 const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * How long a decline suppresses the same idea.
+ *
+ * A decline is not a veto. The user's own framing: remove it from
+ * consideration, drop whatever had built up, and let it come back later if the
+ * work really is recurring — *"which is fine"*. So this is a cooldown, not a
+ * blocklist, and nothing here ever becomes permanent.
+ *
+ * `MAX_AGE_MS` itself, not a second literal of the same length: that is
+ * already the house answer to "how long is a suggestion still current", and a
+ * decline is a STRONGER signal than the silence that number was chosen for.
+ * Written as a reference so the two cannot drift apart while a comment still
+ * claims they agree.
+ */
+export const DECLINE_COOLDOWN_MS = MAX_AGE_MS;
+
+/**
+ * Whether a declined suggestion is still inside its cooldown.
+ *
+ * Free of the store so one `list()` can be partitioned into pending and
+ * suppressed in a single pass — the shape `pruneOld` already argues for, and
+ * which `rag-worker.ts` needs because it wants both sets from one read.
+ *
+ * Reads `decidedAt`, never `detectedAt`: the clock starts when the user said
+ * no, and the gap between having the idea and hearing about it is unbounded. A
+ * row declined before this field existed carries no `decidedAt` and suppresses
+ * nothing, which is the right way to be wrong — the alternative silently
+ * extends old declines by however long they happened to sit on disk.
+ */
+export function isSuppressed(c: AppletCandidate, now: number = Date.now()): boolean {
+  return (
+    c.status === 'rejected' &&
+    c.decidedAt !== undefined &&
+    now - new Date(c.decidedAt).getTime() < DECLINE_COOLDOWN_MS
+  );
+}
 
 export class AppletCandidateStore {
   constructor() {
@@ -98,10 +144,45 @@ export class AppletCandidateStore {
     return candidate;
   }
 
+  /**
+   * Records that the user said no. The name call sites should use.
+   *
+   * The stamp itself lives in {@link updateStatus}, so a decline written the
+   * long way is still a decline — this reads better at a call site without
+   * being the only place the invariant holds. An earlier cut put the stamp
+   * here alone and claimed that made a hand-flipped status unrepresentable; it
+   * did not, and a test pinned the broken behaviour as expected.
+   */
+  decline(id: string): boolean {
+    return this.updateStatus(id, 'rejected');
+  }
+
+  /**
+   * Declines still inside their cooldown — what the detector must not re-propose.
+   *
+   * A convenience over {@link isSuppressed}; the worker partitions one `list()`
+   * with that predicate instead, since it needs the pending rows from the same
+   * read.
+   */
+  listSuppressed(now: number = Date.now()): AppletCandidate[] {
+    return this.list().filter((c) => isSuppressed(c, now));
+  }
+
   updateStatus(id: string, status: AppletCandidate['status']): boolean {
     const candidate = this.get(id);
     if (!candidate) return false;
     candidate.status = status;
+    if (status === 'rejected') candidate.decidedAt = new Date().toISOString();
+    // Stamped here rather than in {@link decline}, so status and `decidedAt`
+    // are written together however the transition is reached. A decline
+    // without the stamp suppresses nothing — it leaves the pending queue and
+    // the very next detector run re-proposes the same applet — and putting the
+    // stamp only in the named method leaves that trap fully reachable through
+    // the API next to it.
+    //
+    // Only `rejected`. `dismissed` is the 30-day age sweep and `accepted` is a
+    // build: silence is not a no, so neither starts a cooldown.
+
     this.write(candidate);
     return true;
   }

@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { APPLET_COLOR_TOKENS, APPLET_SCALE_TOKENS, APPLET_STYLED_SELECTORS, TOKENS_PATH, tokensStylesheet } from './tokens.js';
+import {
+  APPLET_COLOR_TOKENS,
+  APPLET_SCALE_TOKENS,
+  APPLET_STYLED_SELECTORS,
+  TOKENS_PATH,
+  tokensStylesheet,
+} from './tokens.js';
 import { contrastOver, HEX_LITERAL_RE } from '../color.js';
 import { getThemeColors, setTheme, DEFAULT_THEME } from '../theme.js';
 

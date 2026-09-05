@@ -59,6 +59,75 @@ Output strict JSON and nothing else:
 
 `;
 
+/**
+ * The most `computeOverlapScore` can return for two applets.
+ *
+ * Its name and description terms weigh 0.3 each; the systemPrompt and
+ * guidelines terms weigh 0.2 each and are structurally zero here, since an
+ * applet has neither and both sides are passed empty. So 0.6 is a perfect
+ * match, not a near one.
+ */
+const APPLET_OVERLAP_MAX = 0.6;
+
+/**
+ * Rescales a raw {@link checkOverlaps} score onto the 0-1 range it claims.
+ *
+ * Its own function so the arithmetic can be tested against real
+ * `checkOverlaps` output — everything downstream of it sits behind a live model
+ * call, which is how the gate went unexercised long enough to be dead.
+ *
+ * **The gate had never once fired.** `computeOverlapScore` weights name 0.3 +
+ * description 0.3 + systemPrompt 0.2 + guidelines 0.2, and an applet has
+ * neither of the last two: both sides are passed `''` and `[]`. So an applet's
+ * score is capped at 0.6 against a `> 0.6` comparison. Measured — two
+ * byte-identical drafts score exactly 0.6 and were NOT rejected, which is why a
+ * suggestion the user had already seen could always come straight back.
+ *
+ * Normalising the SCORE rather than the comparison, because `maxScore` has
+ * three readers and only one of them is the gate: it also feeds
+ * {@link appletConfidence}'s `(1 - overlapScore) * 0.3` term and is persisted
+ * on the record. Left raw, a byte-identical duplicate contributes 0.12 of
+ * unearned confidence toward the 0.8 auto-create threshold — the scale error is
+ * a property of the score, not of the gate.
+ *
+ * Deliberately not `>=` at the gate, which would catch the exact duplicate and
+ * still miss everything near it, and would fix neither of the other two
+ * readers. Deliberately not mapping `actions` onto `guidelines` to fill the
+ * empty dimension, which changes WHAT is compared where this only fixes the
+ * scale. Doing it inside `overlap-checker.ts` is the deeper fix and is a
+ * separate change: it makes the SPECIALIST gate stricter, which is that
+ * threshold finally meaning what it says but is behaviour outside this one.
+ */
+export function normaliseAppletOverlap(maxScore: number): number {
+  return maxScore / APPLET_OVERLAP_MAX;
+}
+
+/**
+ * Whether a draft names something Bernard already has or has already proposed.
+ *
+ * Strict id/name equality with the prefix rule from `specialist-detector.ts`,
+ * which catches the near-misses a model produces when it re-derives an id it
+ * has seen — `expense-log` against `expense-logger`.
+ */
+export function isExactDuplicate(
+  draft: { draftId: string; name: string },
+  existingAppIds: string[],
+  seen: { draftId: string; name: string }[],
+): boolean {
+  const id = draft.draftId.toLowerCase();
+  const name = draft.name.toLowerCase();
+  const collides = (otherId: string, otherName: string) => {
+    const oid = otherId.toLowerCase();
+    return (
+      oid === id || otherName.toLowerCase() === name || oid.startsWith(id) || id.startsWith(oid)
+    );
+  };
+  return (
+    existingAppIds.some((appId) => collides(appId, appId.replace(/-/g, ' '))) ||
+    seen.some((c) => collides(c.draftId, c.name))
+  );
+}
+
 /** The draft a detection produces; the store mints id/timestamp/status. */
 export type AppletCandidateDraft = Omit<AppletCandidate, 'id' | 'detectedAt' | 'status' | 'source'>;
 
@@ -77,6 +146,17 @@ export async function detectAppletCandidate(
   config: BernardConfig,
   existingAppIds: string[],
   pendingCandidates: AppletCandidate[],
+  /**
+   * Declines still inside their cooldown (`AppletCandidateStore.listSuppressed`).
+   *
+   * Treated exactly like a pending candidate — same "do NOT repeat" line, same
+   * overlap target — because for this decision they mean the same thing: an
+   * idea Bernard has already put in front of the user and must not put there
+   * again. Before this, a decline dropped out of `listPending()` immediately,
+   * so the very next session could re-suggest the identical applet with a
+   * fresh id and a fresh 30-day clock. Declining did nothing that lasted.
+   */
+  declinedCandidates: AppletCandidate[],
   onUsage?: UsageRecorder,
 ): Promise<AppletDetectionResult | null> {
   if (serializedText.length < MIN_CONVERSATION_LENGTH) return null;
@@ -84,9 +164,11 @@ export async function detectAppletCandidate(
   try {
     const site = resolveSiteModel(config, 'applet-detector');
     const existing = existingAppIds.length ? existingAppIds.join(', ') : '(none)';
-    const pending = pendingCandidates.length
-      ? pendingCandidates.map((c) => c.draftId).join(', ')
-      : '(none)';
+    // One list, because the model is being told one thing: do not propose
+    // these. Splitting them into "suggested" and "declined" would invite it to
+    // treat a decline as weaker than silence, which is backwards.
+    const seen = [...pendingCandidates, ...declinedCandidates];
+    const pending = seen.length ? seen.map((c) => c.draftId).join(', ') : '(none)';
 
     const started = Date.now();
     const result = await generateText({
@@ -118,13 +200,27 @@ export async function detectAppletCandidate(
     const draft = parsed.candidate;
     if (draft.confidence < MIN_CONFIDENCE) return null;
 
+    // Exact duplication is a string problem, and the fuzzy gate below cannot
+    // solve it. Ported from `specialist-detector.ts`, which has run both
+    // defences from the start; the applet detector copied only the fuzzy half.
+    //
+    // It is the only thing that catches a draft duplicating an ALREADY-BUILT
+    // applet: that arm of `checkOverlaps` synthesises `description: ''`, so
+    // that dimension scores 0 with its weight still counted and the arm's
+    // ceiling is 0.5 — under the gate either way, normalised or not. It is
+    // also what makes `existingAppIds` load-bearing for the first time.
+    if (isExactDuplicate(draft, existingAppIds, seen)) {
+      debugLog('applet-detector:duplicate', { draftId: draft.draftId });
+      return null;
+    }
+
     // `checkOverlaps` is reused verbatim: it is token overlap over name +
     // description + optional prompt/guidelines, which is exactly as meaningful
     // for an applet as for a specialist.
     const overlap = checkOverlaps(
       { name: draft.name, description: draft.description, systemPrompt: '', guidelines: [] },
       existingAppIds.map((id) => ({ id, name: id.replace(/-/g, ' '), description: '' })),
-      pendingCandidates.map((c) => ({
+      seen.map((c) => ({
         draftId: c.draftId,
         name: c.name,
         description: c.description,
@@ -132,14 +228,15 @@ export async function detectAppletCandidate(
         guidelines: [],
       })),
     );
-    if (overlap.maxScore > OVERLAP_THRESHOLD) {
-      debugLog('applet-detector:overlap', { draftId: draft.draftId, score: overlap.maxScore });
+    const overlapScore = normaliseAppletOverlap(overlap.maxScore);
+    if (overlapScore > OVERLAP_THRESHOLD) {
+      debugLog('applet-detector:overlap', { draftId: draft.draftId, score: overlapScore });
       return null;
     }
 
     const confidence = appletConfidence(
       draft.confidence,
-      overlap.maxScore,
+      overlapScore,
       draft,
       serializedText.length,
     );
@@ -152,7 +249,7 @@ export async function detectAppletCandidate(
         actions: draft.actions ?? [],
         confidence,
         reasoning: draft.reasoning,
-        overlapScore: overlap.maxScore,
+        overlapScore,
       },
     };
   } catch (err) {
@@ -285,5 +382,19 @@ export function appletSuggestionBlock(
     (c) =>
       `- "${c.name}" (${c.draftId}): ${c.description}${eligibleIds.has(c.draftId) ? ' — OFFER to build this one when it becomes relevant.' : ''}`,
   );
-  return `## Applet Suggestions\n\nBernard noticed recurring, structured work that an applet could serve. Mention these when relevant; build one only with the \`applet\` tool and only when the user agrees.\n\n${lines.join('\n')}`;
+  // The decline half is load-bearing, not politeness. Without it the tool
+  // action exists and is never called: the block told the agent what to do when
+  // the user says yes and nothing at all when they say no, so the suggestion
+  // stayed pending, the startup notice kept counting it, and this very block
+  // re-injected it next session. That is what "there is no way to decline
+  // them" meant.
+  //
+  // It names the action and not the call shape, because the call shape is
+  // already in the tool's own `.describe()` — which sits in the tool block,
+  // BEFORE the prompt-cache breakpoint, so it is paid once. This block is
+  // folded into `alertContext`, which `agent.ts` never clears, so it lands in
+  // `<system_provided_context>` after the breakpoint and is re-billed on every
+  // step of every turn for the life of the session. Two copies of one sentence
+  // is also two things to keep in step.
+  return `## Applet Suggestions\n\nBernard noticed recurring, structured work that an applet could serve. Mention these when relevant; build one only with the \`applet\` tool and only when the user agrees.\n\nIf the user turns one down, record it with the \`applet\` tool's \`decline\` action so it stops being raised. Do not argue with a no, and do not silently drop it — an unrecorded decline comes back next session.\n\n${lines.join('\n')}`;
 }

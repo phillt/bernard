@@ -2,10 +2,11 @@
 title: What Bernard can do
 description: Bernard's own features — memory, scheduled jobs, specialists, applets, MCP servers, voice — at the level a person asks about them. Read when the user asks what Bernard can do or whether it can do something.
 ---
+
 # What Bernard can do
 
 Answer from this document rather than from the tool list. The tool list is
-what *you* can reach on this turn; it is not what Bernard is.
+what _you_ can reach on this turn; it is not what Bernard is.
 
 ## Memory
 
