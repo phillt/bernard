@@ -1,5 +1,6 @@
 import { generateText } from 'ai';
 import { getModelForConfig, getProviderOptionsForConfig } from './providers/index.js';
+import { extractErrorFields } from './error-fields.js';
 import { classifyError } from './error-taxonomy.js';
 import type { ToolErrorType } from './framework/tools/types.js';
 import { ALL_ROLE_IDS, type RoleId } from './model-roles.js';
@@ -53,23 +54,6 @@ export interface ValidateModelOptions {
 }
 
 /** Pull an HTTP status / errno / message out of a thrown AI SDK (or network) error. */
-function extractError(err: unknown): { httpStatus?: number; errno?: string; message: string } {
-  const e = err as {
-    message?: unknown;
-    statusCode?: unknown;
-    status?: unknown;
-    code?: unknown;
-    errno?: unknown;
-  };
-  const message = typeof e?.message === 'string' && e.message ? e.message : String(err);
-  let httpStatus: number | undefined;
-  if (typeof e?.statusCode === 'number') httpStatus = e.statusCode;
-  else if (typeof e?.status === 'number') httpStatus = e.status;
-  let errno: string | undefined;
-  if (typeof e?.code === 'string') errno = e.code;
-  else if (typeof e?.errno === 'string') errno = e.errno;
-  return { httpStatus, errno, message };
-}
 
 /**
  * Refine the taxonomy category for the model-validation context. Providers
@@ -128,7 +112,7 @@ export async function validateModel(
     return { provider, model, ok: true, latencyMs };
   } catch (err) {
     const latencyMs = Date.now() - t0;
-    const { httpStatus, errno, message } = extractError(err);
+    const { httpStatus, errno, message } = extractErrorFields(err);
     const aborted = ctrl.signal.aborted && !opts.abortSignal?.aborted;
     const cls = classifyError({ message, httpStatus, errno });
     const category = aborted ? 'timeout' : refineCategory(cls.category, message);

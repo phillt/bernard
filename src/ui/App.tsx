@@ -89,7 +89,13 @@ import { noPromptCacheHint } from '../cost-guardrail.js';
 import { makeUsageRecorder, makeOutOfTurnUsageRecorder } from '../framework/hooks/token-stats.js';
 import { truncate } from '../text.js';
 import { WIZARD_CATEGORIES_DATA, type WizardFieldData } from '../profiles-wizard-data.js';
-import { loadImage, tryLoadImage, extractImagePaths, type ImageAttachment } from '../image.js';
+import {
+  loadImage,
+  loadImageResult,
+  extractImagePathGroups,
+  type ImageAttachment,
+  type ImageLoadFailure,
+} from '../image.js';
 import { runDefinition } from '../framework/agents/run.js';
 import { taskDefinition, type TaskInput } from '../framework/agents/task.js';
 import { renderTaskText } from '../framework/agents/user-message.js';
@@ -2711,23 +2717,76 @@ export function App({
 
     // Inline-image detection on plain text turns.
     let inlineImages: ImageAttachment[] | undefined;
-    const candidatePaths = extractImagePaths(text);
-    if (candidatePaths.length > 0) {
+    const candidateGroups = extractImagePathGroups(text);
+    if (candidateGroups.length > 0) {
       if (mainVisionCapable(config)) {
+        // Extraction OVER-OFFERS: it cannot tell a directory name from a
+        // preceding word, so it hands back progressively wider forms and lets
+        // the filesystem decide. Per GROUP, the WIDEST that resolves wins.
+        //
+        // Both halves of that are load-bearing. Iterating a flat list attaches
+        // every candidate that happens to exist — the narrowest is a bare tail
+        // resolved against the cwd, so `~/Downloads/design assets/logo.png`
+        // sent from a repo containing `assets/logo.png` attached both. And
+        // taking the NARROWEST that resolves is worse still: measured, it
+        // attaches the cwd decoy and not the file the user named. A longer path
+        // is more specific and far less likely to be a coincidence.
+        //
+        // Validate-then-read matters here: `loadImageResult` reads up to 10 MB
+        // synchronously on the render thread, and a dedupe after the read only
+        // suppresses work already paid for.
         const loaded: ImageAttachment[] = [];
-        for (const p of candidatePaths) {
-          const img = tryLoadImage(p);
-          if (img) loaded.push(img);
+        let firstFailure: ImageLoadFailure | undefined;
+        const attached = new Set<string>();
+        for (const group of candidateGroups) {
+          let groupFailure: ImageLoadFailure | undefined;
+          for (const p of [...group].reverse()) {
+            const res = loadImageResult(p);
+            if (!res.ok) {
+              groupFailure ??= res.failure;
+              continue;
+            }
+            if (!attached.has(res.image.path)) {
+              attached.add(res.image.path);
+              loaded.push(res.image);
+            }
+            groupFailure = undefined;
+            break;
+          }
+          if (groupFailure) firstFailure ??= groupFailure;
         }
         if (loaded.length > 0) {
           for (const img of loaded) {
             flashToast(`Attaching ${img.path}`);
           }
           inlineImages = loaded;
+        } else if (firstFailure) {
+          // Nothing loaded, and until now that was completely silent: the
+          // branch had no `else`, so a user who pasted a path watched the turn
+          // run with no image and no explanation. A notice rather than a toast
+          // because `runAgentTurn` fires on the very next line and its output
+          // scrolls past — the rule this file states twice for anything that
+          // must outlive a keystroke. Bernard's own voice, so the chevron is
+          // right.
+          //
+          // The FIRST failure, which is the regex's own match — a real-looking
+          // path. Not the last: `widerCandidates` walks back over words without
+          // regard for an earlier match, so with two paths on one line the tail
+          // of the list is the user's sentence, and the notice would have read
+          // `Image file not found: files /a/b c/one.jpg and /a/b c/two.jpg`.
+          pushAssistantNotice(
+            `I spotted what looked like an image path but could not attach it.\n` +
+              `${firstFailure.reason}\n` +
+              `If the path has spaces, quoting it works: /image "…"`,
+          );
         }
       } else {
+        // Names the model the gate actually checked. `mainVisionCapable`
+        // resolves the lineup's `main` site, which under a lineup is not
+        // `config.model` — so this line used to be able to blame a model that
+        // was never consulted. `/image` already gets this right.
         flashToast(
-          `Image(s) detected but model "${config.model}" does not support vision.`,
+          `Image(s) detected but model "${resolveMainModel(config)}" does not support vision.`,
           'warning',
         );
       }

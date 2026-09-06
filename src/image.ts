@@ -36,8 +36,13 @@ export const IMAGE_TOKEN_ESTIMATE = 1000;
  * Regex matching tokens that look like file paths ending in a supported image extension.
  * Handles absolute paths, relative paths, `~` home-dir expansion, and quoted paths.
  */
+/** How an unquoted path may begin. Shared with {@link ANCHORED_RE}. */
+const PATH_PREFIX = '[~.]?\\/|\\.\\.\\/';
+
 const IMAGE_PATH_RE =
   /(?:"([^"]+\.(?:png|jpe?g|gif|webp))"|'([^']+\.(?:png|jpe?g|gif|webp))'|((?:[~.]?\/|\.\.\/)?[\w.\-\/]+\.(?:png|jpe?g|gif|webp)))/gi;
+// NB: the prefix above is `PATH_PREFIX`, inlined because a regex literal cannot
+// interpolate. `image.test.ts` asserts the two stay in step.
 
 /** Returns the MIME type for a file path based on its extension, or `null` if unsupported. */
 export function detectMimeType(filePath: string): string | null {
@@ -122,14 +127,40 @@ export function loadImage(filePath: string): ImageAttachment {
 }
 
 /**
- * Like `loadImage`, but returns `null` instead of throwing.
- * Used for inline detection where a non-existent or invalid file should be silently skipped.
+ * A load that failed, and why.
+ *
+ * Just the reason: `validateImagePath` already embeds the resolved path in the
+ * two messages where it is useful, and a separate field had no reader.
  */
-export function tryLoadImage(filePath: string): ImageAttachment | null {
+export interface ImageLoadFailure {
+  reason: string;
+}
+
+/**
+ * `loadImage`, but hands back the reason instead of throwing or swallowing it.
+ *
+ * Replaces a `tryLoadImage` that returned `null` from an empty `catch`. That
+ * was defensible for a candidate offered speculatively by
+ * {@link extractImagePaths} and expected to miss — and wrong for the last one:
+ * when every path a user pasted fails, the reason is the only thing that says
+ * whether the file is missing, too big, or an unsupported format, and
+ * `validateImagePath` has already composed exactly that sentence. Returning it
+ * lets one caller decide, instead of the loader deciding for everyone.
+ *
+ * The asymmetry this removes: `/image` reported the reason all along, because
+ * it calls `loadImage` and catches; inline detection threw it away and said
+ * nothing at all.
+ */
+export function loadImageResult(
+  filePath: string,
+): { ok: true; image: ImageAttachment } | { ok: false; failure: ImageLoadFailure } {
   try {
-    return loadImage(filePath);
-  } catch {
-    return null;
+    return { ok: true, image: loadImage(filePath) };
+  } catch (err) {
+    return {
+      ok: false,
+      failure: { reason: err instanceof Error ? err.message : String(err) },
+    };
   }
 }
 
@@ -138,26 +169,148 @@ export function tryLoadImage(filePath: string): ImageAttachment | null {
  * Returns the extracted path strings (with `~` expansion applied).
  */
 export function extractImagePaths(text: string): string[] {
-  const paths: string[] = [];
+  return extractImagePathGroups(text).flat();
+}
+
+/**
+ * The same candidates, grouped by the match each came from, narrowest first.
+ *
+ * The grouping is what makes "the first one that exists wins" expressible. A
+ * flat list cannot say it, and a caller iterating one attaches EVERY candidate
+ * that resolves — so a message naming `~/Downloads/design assets/logo.png`,
+ * sent from a repo that happens to contain `assets/logo.png`, attached both.
+ * The narrow candidate is a bare tail resolved against the cwd, so that
+ * collision is ordinary rather than contrived.
+ */
+export function extractImagePathGroups(text: string): string[][] {
+  const groups: string[][] = [];
+  const seen = new Set<string>();
+  let current: string[] = [];
+  const offer = (raw: string) => {
+    const expanded = expandHome(raw);
+    if (seen.has(expanded)) return;
+    seen.add(expanded);
+    current.push(expanded);
+  };
+  const flush = () => {
+    if (current.length > 0) groups.push(current);
+    current = [];
+  };
+
   let match: RegExpExecArray | null;
   IMAGE_PATH_RE.lastIndex = 0;
   while ((match = IMAGE_PATH_RE.exec(text)) !== null) {
     // Groups: 1 = double-quoted, 2 = single-quoted, 3 = unquoted
-    const raw = match[1] ?? match[2] ?? match[3];
-    if (raw) {
-      paths.push(expandHome(raw));
+    const quoted = match[1] ?? match[2];
+    if (quoted) {
+      offer(quoted);
+      flush();
+      continue;
     }
+    const unquoted = match[3];
+    if (!unquoted) continue;
+    offer(unquoted);
+    // Widen ONLY a match with no path anchor. `/tmp/a.png`, `./a.png` and
+    // `~/a.png` are already whole, so offering `look at /tmp/a.png` on top of
+    // them is noise that can never resolve. A bare `cards/Scan.jpg` is the
+    // signature of the actual failure: the character class stopped at a space
+    // inside the directory name and cut the front off the path.
+    if (!ANCHORED_RE.test(unquoted)) {
+      for (const wider of widerCandidates(text, match.index, unquoted)) offer(wider);
+    }
+    flush();
   }
-  return paths;
+  flush();
+  return groups;
 }
+
+/**
+ * Progressively longer forms of an unquoted match, walking left over spaces.
+ *
+ * The problem: a pasted path like `/home/me/business cards/Scan_1.jpg` matches
+ * only `cards/Scan_1.jpg`, because the unquoted branch of {@link IMAGE_PATH_RE}
+ * has no space in its character class. Adding one is not the fix — greedy would
+ * swallow `read /etc/hosts and check foo.png` whole, and non-greedy stops at
+ * the first extension, which is the same sentence with a different wrong
+ * answer. A regex cannot tell a directory name from a preceding word.
+ *
+ * The filesystem can. So this OVER-OFFERS and lets the caller decide:
+ * `cards/Scan_1.jpg`, then `business cards/Scan_1.jpg`, then
+ * `/home/me/business cards/Scan_1.jpg`. Every caller already validates each
+ * candidate before loading it, so an extra miss costs a `statSync` and the
+ * first one that exists wins.
+ *
+ * Bounded at {@link MAX_PATH_WORDS} words: a directory name is a handful of
+ * words, and without a bound a sentence of prose ending in `.png` would offer a
+ * candidate per word.
+ *
+ * Stays pure — no filesystem access — so it remains testable with no fixtures,
+ * which is the property `line-geometry.ts` and `mcp-names.ts` are split out to
+ * keep.
+ */
+function widerCandidates(text: string, matchIndex: number, matched: string): string[] {
+  const out: string[] = [];
+  let cursor = matchIndex;
+  for (let i = 0; i < MAX_PATH_WORDS; i++) {
+    // Exactly one space. A newline ends the walk — a path does not span lines —
+    // and so does a double space, which is prose rather than a directory name.
+    if (cursor < 1 || text[cursor - 1] !== ' ') break;
+    // Scan back over the word by hand rather than `lastIndexOf(' ')`, which
+    // looks only for spaces and so walks straight THROUGH a newline: for
+    // "first line\nsecond cards/x.png" it found the space at index 5 and
+    // offered a candidate spanning both lines.
+    let wordStart = cursor - 1;
+    while (wordStart > 0 && !/\s/.test(text[wordStart - 1])) wordStart--;
+    if (wordStart >= cursor - 1) break;
+    cursor = wordStart;
+    out.push(text.slice(cursor, matchIndex + matched.length));
+  }
+  return out;
+}
+
+/** How many space-separated words to walk back over. A directory name is short. */
+export const MAX_PATH_WORDS = 6;
+
+/**
+ * A match that already begins like a path, and so needs no widening.
+ *
+ * Spelled from the same alternation {@link IMAGE_PATH_RE}'s group 3 opens with,
+ * so the two cannot mean different things — an earlier cut wrote a second,
+ * differently-worded set here.
+ */
+const ANCHORED_RE = new RegExp('^(?:' + PATH_PREFIX + ')');
 
 /**
  * Removes image-path tokens from user text. Used to sanitize input before handing it to
  * the reference resolver so attachment paths aren't mistaken for unresolved entities.
  */
 export function stripImagePaths(text: string): string {
-  const re = new RegExp(IMAGE_PATH_RE.source, 'gi');
-  return text.replace(re, ' ').replace(/\s+/g, ' ').trim();
+  // Widened alongside {@link extractImagePathGroups}, or the two disagree about
+  // what a path IS. The bare regex removes only the narrow match, so
+  // "rename /home/me/photos/business cards/Scan_1.jpg please" strips to
+  // "rename /home/me/photos/business please" — a dangling half-path handed to
+  // the reference resolver, which is exactly what this function exists to
+  // prevent. They were a matched pair keyed on one regex; widening only the
+  // extractor broke the pairing.
+  //
+  // Longest first, so a wide candidate is removed whole rather than being left
+  // in fragments by its own narrower prefix.
+  let out = text;
+  const widened = extractImagePathGroups(text)
+    .flat()
+    // Only candidates that EXIST, which is the same decision the attach path
+    // makes — strip what was treated as an attachment, not every guess. The
+    // widest candidate deliberately includes preceding words, so removing it
+    // unconditionally eats prose: "rename /home/me/photos/business
+    // cards/Scan_1.jpg please" became "please".
+    .filter((c) => fs.existsSync(c))
+    // Longest first, so a wide path is removed whole rather than left in
+    // fragments by its own narrower prefix.
+    .sort((a, b) => b.length - a.length);
+  for (const c of widened) {
+    if (out.includes(c)) out = out.split(c).join(' ');
+  }
+  return out.replace(new RegExp(IMAGE_PATH_RE.source, 'gi'), ' ').replace(/\s+/g, ' ').trim();
 }
 
 /**

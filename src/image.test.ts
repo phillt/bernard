@@ -4,15 +4,17 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { CoreMessage } from 'ai';
 import {
-  detectMimeType,
-  loadImage,
-  tryLoadImage,
-  extractImagePaths,
-  stripImagePaths,
-  isVisionCapableModel,
-  stripImagesFromHistory,
-  estimateContentPartTokens,
   IMAGE_TOKEN_ESTIMATE,
+  MAX_PATH_WORDS,
+  detectMimeType,
+  estimateContentPartTokens,
+  extractImagePathGroups,
+  extractImagePaths,
+  isVisionCapableModel,
+  loadImage,
+  loadImageResult,
+  stripImagePaths,
+  stripImagesFromHistory,
 } from './image.js';
 
 /* ---------- detectMimeType ---------- */
@@ -99,29 +101,42 @@ describe('loadImage', () => {
   });
 });
 
-/* ---------- tryLoadImage ---------- */
-describe('tryLoadImage', () => {
-  it('returns null for non-existent file', () => {
-    expect(tryLoadImage('/tmp/definitely-not-a-real-file.png')).toBeNull();
+/* ---------- loadImageResult ---------- */
+describe('loadImageResult', () => {
+  // Replaces `tryLoadImage`, whose empty catch discarded the reason. A user who
+  // pasted a path and got nothing had no way to tell a missing file from an
+  // unsupported format — and the reason already existed, composed by
+  // `validateImagePath` one frame down.
+  it('reports why a missing file could not load', () => {
+    const res = loadImageResult('/tmp/definitely-not-a-real-file.png');
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    // The path is in the reason itself — `validateImagePath` composes it — so
+    // a separate field had no reader and is gone.
+    expect(res.failure.reason).toMatch(/not found/i);
+    expect(res.failure.reason).toContain('definitely-not-a-real-file.png');
   });
 
-  it('returns null for unsupported extension', () => {
+  it('reports an unsupported extension as such, not as missing', () => {
+    // The distinction that makes the message worth showing at all.
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bernard-try-'));
     const txtPath = path.join(tmpDir, 'file.txt');
     fs.writeFileSync(txtPath, 'hello');
 
-    expect(tryLoadImage(txtPath)).toBeNull();
+    const res = loadImageResult(txtPath);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.failure.reason).toMatch(/unsupported/i);
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('returns ImageAttachment for valid file', () => {
+  it('returns the attachment for a valid file', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bernard-try-'));
     const imgPath = path.join(tmpDir, 'ok.png');
     fs.writeFileSync(imgPath, Buffer.from('data'));
 
-    const result = tryLoadImage(imgPath);
-    expect(result).not.toBeNull();
-    expect(result!.mimeType).toBe('image/png');
+    const res = loadImageResult(imgPath);
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.image.mimeType).toBe('image/png');
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
@@ -331,5 +346,108 @@ describe('stripImagesFromHistory', () => {
 
     const stripped = stripImagesFromHistory(history);
     expect(stripped[0]).toBe(history[0]); // same reference — no change needed
+  });
+});
+
+describe('an unquoted path containing a space', () => {
+  // The reported failure: two scans pasted as
+  // `/home/me/Documents/photos/business cards/Scan_1.jpg` attached nothing.
+  // `IMAGE_PATH_RE`'s unquoted branch has no space in its character class, so
+  // it matched only `cards/Scan_1.jpg` — a relative path that does not exist —
+  // and the load failed silently. Existing coverage tested spaces ONLY inside
+  // quotes, so the paste-a-path case, which is how this is actually used, was
+  // untested.
+  it('offers the whole path as a candidate', () => {
+    const got = extractImagePaths('rename /home/me/photos/business cards/Scan_1.jpg please');
+    expect(got).toContain('/home/me/photos/business cards/Scan_1.jpg');
+  });
+
+  it('offers it for each of several paths on one line', () => {
+    const got = extractImagePaths(
+      'files /a/b c/one.jpg and /a/b c/two.jpg (same card, front and back)',
+    );
+    expect(got).toContain('/a/b c/one.jpg');
+    expect(got).toContain('/a/b c/two.jpg');
+  });
+
+  it('does not widen a match that is already a whole path', () => {
+    // Widening an anchored match can only produce candidates that cannot
+    // resolve — `look at /tmp/a.png` is not a file. Restricting it to
+    // unanchored matches is what keeps the output clean for the common case.
+    expect(extractImagePaths('look at /tmp/screenshot.png')).toEqual(['/tmp/screenshot.png']);
+    expect(extractImagePaths('see ./images/logo.webp')).toEqual(['./images/logo.webp']);
+  });
+
+  it('offers nothing that resolves for ordinary prose', () => {
+    // The reason this over-offers instead of widening the regex: no pattern can
+    // tell a directory name from a preceding word, but the filesystem can. Every
+    // candidate here is a guess, and every one of them fails to exist.
+    const got = extractImagePaths('read /etc/hosts and check foo.png');
+    expect(got.some((p) => fs.existsSync(p))).toBe(false);
+  });
+
+  it('stops widening at a newline', () => {
+    // A path does not span lines. `lastIndexOf(' ')` walked straight through
+    // one, which is why the scan is hand-rolled.
+    expect(extractImagePaths('first line\nsecond cards/x.png')).toEqual([
+      'cards/x.png',
+      'second cards/x.png',
+    ]);
+  });
+
+  it('bounds how far back it walks', () => {
+    // Without a bound, a sentence ending in `.png` offers one candidate per
+    // word. The previous assertion here was `length <= 7` against an input that
+    // stops at a newline after ONE word — it passed for any bound, so it tested
+    // nothing. This input has eight preceding words and actually reaches it.
+    const got = extractImagePaths('one two three four five six seven eight cards/x.png');
+    expect(got).toHaveLength(1 + MAX_PATH_WORDS);
+  });
+
+  it('never offers the same candidate twice', () => {
+    const got = extractImagePaths('a/b.png and a/b.png');
+    expect(new Set(got).size).toBe(got.length);
+  });
+});
+
+describe('candidate groups', () => {
+  it('groups each match, narrowest first, so a caller can pick one per path', () => {
+    // A flat list cannot express "one attachment per path": a caller iterating
+    // it attaches every candidate that happens to exist, and the narrowest is a
+    // bare tail resolved against the cwd.
+    const groups = extractImagePathGroups('files /a/b c/one.jpg and /a/b c/two.jpg');
+    expect(groups).toHaveLength(2);
+    expect(groups[0][0]).toBe('c/one.jpg');
+    expect(groups[0]).toContain('/a/b c/one.jpg');
+    expect(groups[1]).toContain('/a/b c/two.jpg');
+  });
+
+  it('flattens to what extractImagePaths returns', () => {
+    const text = 'see /tmp/a.png and cards/b.jpg';
+    expect(extractImagePathGroups(text).flat()).toEqual(extractImagePaths(text));
+  });
+});
+
+describe('stripImagePaths keeps step with the extractor', () => {
+  it('removes a widened path whole, leaving no dangling fragment', () => {
+    // They were a matched pair keyed on one regex. Widening only the extractor
+    // left "rename /home/me/photos/business cards/S.jpg" stripping to
+    // "rename /home/me/photos/business" — a half-path handed to the reference
+    // resolver, which is what this function exists to prevent.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bernard-strip-'));
+    const sub = path.join(dir, 'business cards');
+    fs.mkdirSync(sub);
+    const img = path.join(sub, 'S.jpg');
+    fs.writeFileSync(img, Buffer.from('x'));
+
+    expect(stripImagePaths(`rename ${img} please`)).toBe('rename please');
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('does not eat prose around a path that does not exist', () => {
+    // Only candidates that EXIST are removed, matching the attach decision.
+    // The widest candidate deliberately includes preceding words, so stripping
+    // it unconditionally turned "rename … please" into "please".
+    expect(stripImagePaths('rename /nope/business cards/S.jpg please')).toContain('rename');
   });
 });

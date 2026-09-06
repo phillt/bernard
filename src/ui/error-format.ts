@@ -1,3 +1,5 @@
+import { extractErrorFields } from '../error-fields.js';
+import { extractJsonBlock } from '../structured-output.js';
 import { classifyError } from '../error-taxonomy.js';
 
 /** Data backing the `<ErrorPanel>` transcript item. */
@@ -38,9 +40,22 @@ const TITLES: Record<string, string> = {
  * and cause for the dim detail block.
  */
 export function formatAgentError(err: unknown, includeDetails: boolean): ErrorPanelData {
-  const raw = err instanceof Error ? err.message : String(err);
-  const message = cleanMessage(raw);
-  const cls = classifyError({ message });
+  const fields = extractErrorFields(err);
+  const message = cleanMessage(fields.message);
+  // The status and errno the error already carries, not just its prose. Passing
+  // only the message left three ordinary provider failures — a terse 429, a 503
+  // "Internal error", a 401 "invalid x-api-key" — all reading `unknown` with
+  // the unrecognised-error hint, which is the defect this whole change set is
+  // about, on the paths where the answer was sitting on the object.
+  //
+  // This does not replace the capacity regex: the motivating case is HTTP 200
+  // with the refusal in the BODY, so it arrives with no status at all and the
+  // message is the only signal. Both are needed.
+  const cls = classifyError({
+    message,
+    ...(fields.httpStatus !== undefined ? { httpStatus: fields.httpStatus } : {}),
+    ...(fields.errno !== undefined ? { errno: fields.errno } : {}),
+  });
   return {
     title: TITLES[cls.category] ?? 'Agent error',
     category: cls.category,
@@ -57,23 +72,38 @@ function cleanMessage(raw: string): string {
   return extractJsonMessage(m) ?? m;
 }
 
-/** Pull `.error.message` / `.message` out of a JSON envelope embedded in the string. */
+/**
+ * Pull `.error.message` / `.message` out of a JSON envelope embedded in the string.
+ *
+ * The envelope is located by BRACE MATCHING from the first `{`, not by scanning
+ * back from the last `}`. That distinction is the whole bug: the AI SDK builds
+ * a `TypeValidationError` as
+ *
+ *     Type validation failed: Value: ${JSON.stringify(value)}.
+ *     Error message: ${zod issues}
+ *
+ * and the trailing zod issues carry their own braces. `lastIndexOf('}')` landed
+ * inside that array, the parse failed, and the raw string went to the panel
+ * untouched — which is how a user saw "Type validation failed: Value: {…}"
+ * when the envelope inside it said, in plain English, that the model was at
+ * capacity. The old fixture had nothing after the closing brace, so the path
+ * that actually runs in production was never exercised.
+ */
 function extractJsonMessage(s: string): string | null {
   const start = s.indexOf('{');
   if (start === -1) return null;
-  const candidate = s.slice(start);
-  const tryParse = (text: string): string | null => {
-    try {
-      return pickMessage(JSON.parse(text));
-    } catch {
-      return null;
-    }
-  };
-  // First try the whole tail, then trim any prose after the final brace.
-  const whole = tryParse(candidate);
-  if (whole) return whole;
-  const end = candidate.lastIndexOf('}');
-  return end > 0 ? tryParse(candidate.slice(0, end + 1)) : null;
+  // `extractJsonBlock` is the repo's balanced-JSON scanner and does exactly
+  // this — depth counting that respects string literals and escapes. An earlier
+  // cut wrote a second copy here; `structured-output.ts` is a zod-only leaf, so
+  // there is no import cost worth a duplicate, and its escape handling is the
+  // stricter of the two.
+  const block = extractJsonBlock(s, start);
+  if (!block) return null;
+  try {
+    return pickMessage(JSON.parse(block));
+  } catch {
+    return null;
+  }
 }
 
 function pickMessage(obj: unknown): string | null {

@@ -1924,6 +1924,37 @@ describe('<App> external messages', () => {
   });
 });
 
+describe('<App> a pasted image path that cannot be attached', () => {
+  it('says so, instead of running the turn in silence', async () => {
+    // The reported failure. Two scans were pasted as paths, neither attached,
+    // and nothing was said: the detection branch had no `else`, so "found
+    // candidates, loaded none" produced no toast and no notice. The turn then
+    // ran as plain text and the user had no idea an attachment was expected.
+    //
+    // A notice rather than a toast, per the rule this file states twice for
+    // anything that must outlive a keystroke: `runAgentTurn` fires on the very
+    // next line and its output scrolls the toast away.
+    const { stdin, lastFrame, unmount } = renderApp();
+    await tick();
+    await submit(stdin, 'please look at /tmp/definitely-not-here-12345.png');
+    await tick(40);
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toContain('could not attach');
+    // And it says WHY — `tryLoadImage`'s empty catch used to discard the
+    // reason, so "missing" and "unsupported format" were indistinguishable.
+    expect(frame).toMatch(/not found/i);
+    unmount();
+  });
+
+  it('stays quiet when no path was in the text at all', async () => {
+    const { stdin, lastFrame, unmount } = renderApp();
+    await tick();
+    await submit(stdin, 'just a normal message');
+    await tick(40);
+    expect(stripAnsi(lastFrame() ?? '')).not.toContain('could not attach');
+    unmount();
+  });
+});
 describe('<App> ask_user answers appear when they are given', () => {
   it('echoes the answer into the transcript before the turn ends', async () => {
     // The reported complaint: "the questionnaire answers tend to show up after

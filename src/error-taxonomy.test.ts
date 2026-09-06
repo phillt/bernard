@@ -297,3 +297,39 @@ describe('failure markers (#353)', () => {
     );
   });
 });
+
+describe('an error with no tool behind it', () => {
+  it('does not blame a tool that was never involved', () => {
+    // `unknown`'s user line was "Tool failed with an unrecognized error." It
+    // renders under turn-level provider failures too, where there is no tool —
+    // sending the reader after the wrong component.
+    expect(classifyError({ message: 'something odd' }).playbook.user).not.toMatch(/tool/i);
+    expect(classifyError({ message: 'something odd', toolName: 'shell' }).playbook.user).toMatch(
+      /tool/i,
+    );
+  });
+
+  it('leaves the model-facing half identical either way', () => {
+    // Only the human half depends on context; the model is told the same thing.
+    const a = classifyError({ message: 'odd' }).playbook.model;
+    const b = classifyError({ message: 'odd', toolName: 'shell' }).playbook.model;
+    expect(a).toBe(b);
+  });
+
+  it('reads provider capacity as a rate limit, not as unknown', () => {
+    for (const m of [
+      'The model is currently at capacity due to high demand.',
+      'Service is overloaded, try again shortly',
+      'currently unavailable, please retry',
+    ]) {
+      expect(classifyError({ message: m }).category, m).toBe('rate_limit');
+    }
+    // And it carries wait-and-retry advice, which is the point of routing it
+    // here rather than leaving it `unknown`.
+    expect(classifyError({ message: 'at capacity' }).playbook.user).toMatch(/wait|retry|lineup/i);
+    // NOT asserting `retryable`: `rate_limit` is deliberately left out of that
+    // set, and the set has no production consumer at all — only a doc comment
+    // referring to `ToolError.retryable`. Widening it here would be a claim
+    // nothing reads, decided on the way past. Left alone on purpose.
+  });
+});
