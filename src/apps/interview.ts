@@ -231,15 +231,22 @@ their problem interesting ("ah, that makes sense", "that sounds annoying"), but
 never praise an idea — "that's a great feature idea!" teaches them to pitch
 features instead of describing their week.
 
-## Then build, immediately
+## Then plan it, then build, immediately
 
-1. Write what you learned into the brief: \`applet\` with
+1. Plan it: \`applet\` with \`{"action":"plan", "name":"…", "description":"…",
+   "intent":{${fields}}}\`. It returns the scope, the controls and states, and
+   what is stored. Do this BEFORE writing a page — it is the only step that
+   decides what the applet should be, and skipping it is how a plausible but
+   arbitrary page gets built.
+2. Write what you learned into the brief: \`applet\` with
    \`{"action":"create", …, "intent":{${fields}}}\`.
    Put what you are GUESSING in \`assumptions\` — that is what separates it from
    what you were told.
-2. Build the smallest coherent thing: one input, one transformation, one
-   useful result. Not a settings screen, not a database, not five actions.
-3. It opens by itself. Then ask ONE question against the real thing:
+3. Build what the plan says. It is already the smallest coherent thing:
+   one input, one transformation, one useful result.
+   Not a settings screen, not a database, not five actions. Where the plan left
+   a section out, decide it yourself rather than widening the scope to cover it.
+4. It opens by itself. Then ask ONE question against the real thing:
    "Here it is — what is wrong with it?"
 
 That last step is where the real requirements are. Someone who cannot build

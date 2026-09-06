@@ -189,6 +189,9 @@ export const POST_V1_BUNDLED = [
   'agent-builder.json',
   'applet-styler.json',
   'applet-reviewer.json',
+  'applet-architect.json',
+  'applet-ux-planner.json',
+  'applet-data-planner.json',
 ];
 
 /**

@@ -1,6 +1,4 @@
 import { dispatchToolWrapper } from './tool-wrapper-run.js';
-import { createAppletTool } from './applet.js';
-import { AppRegistry } from '../apps/registry.js';
 import { isDispatchCancellation } from '../error-taxonomy.js';
 import { debugLog } from '../logger.js';
 import type { AgentContext } from '../framework/context.js';
@@ -168,18 +166,6 @@ export function makeAppletStyler(ctx: AgentContext): AppletStyler {
   };
 }
 
-/**
- * The `applet` tool with the design pass wired in — what `main.ts` builds.
- *
- * `seed: false` because `createTools` already constructed a seeding registry
- * this same turn, so re-seeding would be filesystem work for a result already
- * on disk. Schema and description are untouched, so the tool block stays
- * byte-identical and the prompt cache is unaffected.
- */
-export function createAppletToolWithStyling(ctx: AgentContext) {
-  return createAppletTool(
-    new AppRegistry({ seed: false }),
-    ctx.toolOptions.requestPermissionConsent,
-    makeAppletStyler(ctx),
-  );
-}
+// The composed factory that used to live here is now
+// `applet-ctx-tools.ts`'s `createMainAppletTool`, which wires the planning pass
+// alongside this one. This module keeps only the half it is named for.

@@ -1285,3 +1285,92 @@ describe('declining a suggestion from the conversation', () => {
     expect(store.get(c.id)?.decidedAt).toBe(first);
   });
 });
+
+describe('the plan action (#13)', () => {
+  useTempHome('bernard-applet-plan-action');
+
+  it('runs at low risk, so the read-only gate does not refuse it', async () => {
+    // It dispatches three planners and writes nothing anywhere. Classified a
+    // write, the block gate would refuse it outright with nobody to ask — the
+    // exact trap `interview` hit, where a constant-string getter was treated as
+    // a mutation. Asserted as the OUTCOME rather than on the read-actions set,
+    // so swapping how the meta is attached cannot silently change the answer.
+    const { createAppletTool } = await import('./applet.js');
+    const { riskFromMeta } = await import('../risk.js');
+    const { readToolMeta } = await import('../framework/tools/adapter.js');
+    const meta = readToolMeta(createAppletTool());
+    expect(riskFromMeta(meta, { action: 'plan' })).toBe('low');
+  });
+
+  it('says plainly that it is unavailable rather than reporting a failure', async () => {
+    // Every instance `createTools` builds is planner-less. Nothing was
+    // attempted, so this is not a failed planning pass.
+    const { createAppletTool } = await import('./applet.js');
+    const out = await (createAppletTool().execute as (a: unknown, o: unknown) => Promise<string>)(
+      { action: 'plan', name: 'X', description: 'y', intent: { goal: 'z' } },
+      {},
+    );
+    expect(out).toContain('not available here');
+  });
+
+  it('says planning is off rather than failing, and tells the model to build', async () => {
+    // `appletFlag` catches a throwing `loadConfig` and reads as "off", so this
+    // is also the path every no-API-key environment takes. A disabled pass is
+    // not a failure: reported as one, the model retries a call that will never
+    // do anything. The doctrine has to come with it, since this is the only
+    // thing standing between the interview and an arbitrary page.
+    vi.resetModules();
+    vi.doMock('../config.js', () => ({ loadConfig: () => ({ appletPlanning: false }) }));
+    const { createAppletTool } = await import('./applet.js');
+    const planner = vi.fn(async () => ({ planned: true as const, spec: '# Build plan' }));
+    const out = await (
+      createAppletTool(undefined, undefined, undefined, planner).execute as (
+        a: unknown,
+        o: unknown,
+      ) => Promise<string>
+    )({ action: 'plan', name: 'X', intent: { goal: 'z' } }, {});
+
+    expect(out).not.toMatch(/^Error:/);
+    expect(out).toContain('one input, one transformation, one useful result');
+    expect(planner).not.toHaveBeenCalled();
+  });
+
+  it('refuses to plan from an empty intent', async () => {
+    // Planning from nothing produces a confident invention, which is worse than
+    // no plan: it reads as researched and nobody can tell which part to argue
+    // with. Checked before the planner, so it costs no dispatch.
+    vi.resetModules();
+    vi.doMock('../config.js', () => ({ loadConfig: () => ({ appletPlanning: true }) }));
+    const { createAppletTool } = await import('./applet.js');
+    const planner = vi.fn(async () => ({ planned: true as const, spec: '# Build plan' }));
+    const tool = createAppletTool(undefined, undefined, undefined, planner);
+    const run = tool.execute as (a: unknown, o: unknown) => Promise<string>;
+
+    expect(await run({ action: 'plan', name: 'X' }, {})).toMatch(/^Error:/);
+    expect(await run({ action: 'plan', name: 'X', intent: { goal: '  ' } }, {})).toContain(
+      'interview',
+    );
+    expect(planner).not.toHaveBeenCalled();
+  });
+
+  it('returns the spec, and names the reason when planning did not run', async () => {
+    vi.resetModules();
+    vi.doMock('../config.js', () => ({ loadConfig: () => ({ appletPlanning: true }) }));
+    const { createAppletTool } = await import('./applet.js');
+    const run = (planned: boolean) =>
+      (
+        createAppletTool(undefined, undefined, undefined, async () =>
+          planned
+            ? { planned: true as const, spec: '# Build plan for "X"' }
+            : { planned: false as const, reason: 'pool_exhausted' },
+        ).execute as (a: unknown, o: unknown) => Promise<string>
+      )({ action: 'plan', name: 'X', intent: { goal: 'z' } }, {});
+
+    expect(await run(true)).toContain('# Build plan for "X"');
+    const failed = await run(false);
+    expect(failed).toContain('pool_exhausted');
+    // A failed plan must never block the build — the refusal has to tell the
+    // model to go ahead, or it retries a call that will fail the same way.
+    expect(failed).toContain('one input, one transformation, one useful result');
+  });
+});

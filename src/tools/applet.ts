@@ -9,6 +9,7 @@ import { defaultAppletPage } from '../apps/page-template.js';
 import { SpecialistStore, type Specialist } from '../specialists.js';
 import { directInvocableRefusalByName, toolArgRefusal } from '../apps/direct-tool.js';
 import type { AppletStyler, StyleOutcome } from './applet-styling.js';
+import type { AppletPlanner, PlanTarget } from './applet-planning.js';
 import { AppletBriefStore } from '../apps/brief-store.js';
 import { INTENT_FIELDS, INTENT_FIELD_LABELS, MAX_NOTE_CHARS, renderBrief } from '../apps/brief.js';
 import { interviewPlaybook } from '../apps/interview.js';
@@ -121,6 +122,10 @@ const APPLET_READ_ACTIONS: ReadonlySet<string> = new Set([
   // Returns a constant string and touches nothing. Omitted, `attachActionMeta`
   // classifies it a write and the read-only block gate refuses a prompt getter.
   'interview',
+  // Dispatches three planners and writes nothing anywhere. Same trap as
+  // `interview`: classified a write, the read-only block gate refuses it
+  // outright with nobody to ask.
+  'plan',
 ]);
 
 /** Actions that must be confirmed even under `confirmMode: 'auto'` (#456). */
@@ -138,6 +143,7 @@ const PARAMETERS = z.object({
       'style',
       'brief',
       'interview',
+      'plan',
       'decline',
     ])
     .describe(
@@ -152,7 +158,9 @@ const PARAMETERS = z.object({
         'been decided; `read` already returns it, so reach for `brief` to CHANGE it. ' +
         '`interview` returns how to find out what someone actually needs before building ' +
         'for them — reach for it FIRST whenever the request is vague, or the person has ' +
-        'not built software before.',
+        'not built software before. `plan` decides what to build BEFORE you write a page: ' +
+        'the scope, the controls and states, and what is stored — call it after the ' +
+        'interview and build from what it returns.',
     ),
   id: z.string().optional().describe('Applet id (kebab-case). Required for create/update/read.'),
   intent: z
@@ -263,6 +271,7 @@ export function createAppletTool(
   registry?: AppRegistry,
   requestConsent?: ToolOptions['requestPermissionConsent'],
   styleApplet?: AppletStyler,
+  planApplet?: AppletPlanner,
 ) {
   const store = registry ?? new AppRegistry();
   return attachActionMeta(
@@ -281,7 +290,14 @@ export function createAppletTool(
           // back the promise before it rejects, so this `catch` would see
           // nothing and the `Error: ` prefix `detectToolError` reads (#364)
           // would silently stop being applied.
-          return await run(store, args, requestConsent, styleApplet, execOptions?.abortSignal);
+          return await run(
+            store,
+            args,
+            requestConsent,
+            styleApplet,
+            planApplet,
+            execOptions?.abortSignal,
+          );
         } catch (err) {
           // The `Error: ` prefix is what `detectToolError` reads (#364).
           return `Error: ${err instanceof Error ? err.message : String(err)}`;
@@ -319,6 +335,7 @@ async function run(
   args: AppletArgs,
   requestConsent?: ToolOptions['requestPermissionConsent'],
   styleApplet?: AppletStyler,
+  planApplet?: AppletPlanner,
   abortSignal?: AbortSignal,
 ): Promise<string> {
   switch (args.action) {
@@ -548,6 +565,35 @@ async function run(
       const fields = Object.keys(written.intent).length;
       return `Updated the brief for "${id}" — ${fields} intent field(s), ${written.notes.length} note(s).`;
     }
+    case 'plan': {
+      // Before anything else, for the reason `style` gives: on a planner-less
+      // instance — every one `createTools` builds — the work below is done and
+      // thrown away.
+      if (!planApplet) {
+        return 'Error: planning is not available here. Ask from the main REPL.';
+      }
+      if (!(await appletFlag('appletPlanning'))) {
+        // A disabled pass is not a failure. Said plainly so the model builds
+        // rather than retrying a call that will never do anything.
+        return 'Planning is turned off (BERNARD_APPLET_PLANNING). Build directly, keeping it to one input, one transformation, one useful result.';
+      }
+      const intent = args.intent ?? {};
+      if (Object.values(intent).every((v) => !v?.trim())) {
+        // Planning from nothing produces a confident invention, which is worse
+        // than no plan: it reads as researched and nobody knows which part to
+        // argue with.
+        return 'Error: `plan` needs `intent` — what the person actually said. Run `applet {"action":"interview"}` first.';
+      }
+      const target: PlanTarget = {
+        name: args.name ?? args.id ?? 'this applet',
+        description: args.description ?? '',
+        intent,
+      };
+      const outcome = await planApplet(target, abortSignal);
+      return outcome.planned
+        ? outcome.spec
+        : `Error: planning did not run (${outcome.reason}). Build directly, keeping it to one input, one transformation, one useful result.`;
+    }
     case 'style': {
       const id = need(args.id, 'id', 'style');
       // Before `store.get`, which is a read plus a full manifest parse: on a
@@ -741,7 +787,9 @@ function grantHint(appId: string, actions: string[]): string {
  * for the catch is the non-obvious part, and the third copy is the one that
  * gets it wrong.
  */
-async function appletFlag(key: 'autoOpenApplets' | 'autoStyleApplets'): Promise<boolean> {
+async function appletFlag(
+  key: 'autoOpenApplets' | 'autoStyleApplets' | 'appletPlanning',
+): Promise<boolean> {
   try {
     const { loadConfig } = await import('../config.js');
     return loadConfig()[key];

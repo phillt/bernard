@@ -189,3 +189,114 @@ describe('the two-path rule is stated once (#466)', () => {
     expect(styler.systemPrompt).toContain(UI_RUNTIME_RULE);
   });
 });
+
+/**
+ * The three planners that decide what an applet should be (#13).
+ *
+ * They are frozen the moment they ship — `roleOf` derives `builtin` from this
+ * directory, so no user can edit, disable or delete one — and their whole
+ * mechanism is prose. That combination is what makes these pins worth having:
+ * a prompt naming a document that does not exist, or claiming an authority the
+ * write path does not grant, fails as a WORSE PLAN rather than as an error.
+ */
+describe('the applet planners (#13)', () => {
+  const PLANNERS = ['applet-architect', 'applet-ux-planner', 'applet-data-planner'];
+
+  const load = (name: string) =>
+    JSON.parse(fs.readFileSync(path.join(DIR, `${name}.json`), 'utf-8')) as {
+      kind: string;
+      targetTools: string[];
+      structuredOutput: boolean;
+      systemPrompt: string;
+      guidelines: string[];
+    };
+
+  it.each(PLANNERS)('%s can reach the documentation it is told to read', (name) => {
+    // `docs` is `audience: 'main'`, which sounds like it excludes a dispatched
+    // specialist and does not: `toolWrapperDefinition` declares
+    // `toolSurface: 'full'`, and the surface filter drops `'main'` groups only
+    // on a WORKER surface. Without `docs` in targetTools these three would run
+    // tool-less and plan from memory, which is the one thing they must not do.
+    const record = load(name);
+    expect(record.targetTools).toContain('docs');
+    expect(record.kind).toBe('tool-wrapper');
+    // Declared, never inherited from the `kind` default. `wantsStructuredOutput`
+    // exists because the two dispatch doors once disagreed about that default.
+    expect(record.structuredOutput).toBe(true);
+    expect(record.guidelines.length).toBeGreaterThan(0);
+  });
+
+  it.each(PLANNERS)('%s names only documents that exist', async (name) => {
+    // The anti-drift direction that matters: a prompt telling a planner to read
+    // `applet-design` gets an `Error: no document` and a wasted step, and the
+    // planner then invents the guidance it was sent to fetch.
+    const { allDocs } = await import('../docs-store.js');
+    const ids = new Set(allDocs().map((d) => d.id));
+    const named = load(name).systemPrompt.match(/`(applet-[a-z-]+|bernard-[a-z-]+)`/g) ?? [];
+    const unknown = [
+      ...new Set(
+        named
+          .map((m) => m.replace(/`/g, ''))
+          // The planners' own ids look exactly like doc ids, and a prompt
+          // naming a sibling planner is not naming a document.
+          .filter((id) => !PLANNERS.includes(id) && !ids.has(id)),
+      ),
+    ];
+    expect(unknown, `Names documents that do not exist: ${unknown.join(', ')}`).toEqual([]);
+  });
+
+  it('the UX planner carries the honesty clause and the two-path rule', () => {
+    const prompt = load('applet-ux-planner').systemPrompt;
+    // The clause `applet-styler` and `applet-reviewer` both carry, for the same
+    // reason: Bernard has no browser, so a claim about how a page LOOKS is
+    // unfalsifiable. A planner is allowed to exist here precisely because it
+    // decides structure, which is decidable from the records — the moment it
+    // starts asserting appearance, that argument stops holding.
+    expect(prompt).toContain('cannot see the page render');
+    // Same pin the styler carries. Three prompts now state this rule; the point
+    // of a constant is that none of them is allowed to paraphrase it.
+    expect(prompt).toContain(UI_RUNTIME_PATH);
+    expect(prompt).toContain(UI_RUNTIME_RULE);
+  });
+
+  it('the UX planner plans against selectors the stylesheet actually has', async () => {
+    // It summarises the class list rather than enumerating it — the full list is
+    // in `applet-styling`, which it is told to read, and a second enumeration is
+    // exactly the copy #424 built the served sheet to end. So the pin runs the
+    // other way: every class it DOES name has to be real.
+    const named = load('applet-ux-planner').systemPrompt.match(/`\.[a-z-]+`/g) ?? [];
+    const real = new Set(APPLET_STYLED_SELECTORS.map((s) => s.split(/[ :>]/)[0]));
+    const invented = [...new Set(named.map((m) => m.replace(/`/g, '')))].filter(
+      (c) => !real.has(c),
+    );
+    expect(invented, `Names classes the sheet does not style: ${invented.join(', ')}`).toEqual([]);
+  });
+
+  it('the data planner names every argument type and no others', async () => {
+    // Read off the zod enum rather than retyped. A fifth type in the prompt is a
+    // plan the manifest cannot express; a missing one is a plan that reaches for
+    // `string` where an enum would have made the action uninjectable.
+    const { ArgSpecSchema } = await import('../apps/manifest.js');
+    const shape = (
+      ArgSpecSchema as unknown as { _def: { schema?: { shape: Record<string, any> } } }
+    )._def.schema?.shape;
+    const types: string[] = (shape?.type?._def?.values ?? shape?.type?.options) as string[];
+    expect(types.length).toBeGreaterThan(0);
+    const prompt = load('applet-data-planner').systemPrompt;
+    for (const t of types) expect(prompt, `does not name the \`${t}\` type`).toContain(`\`${t}\``);
+  });
+
+  it('no planner claims it can grant tools', () => {
+    // `toolAllowlist`, `toolMode` and `confirmMode` are the user's, settable
+    // only from the command line — the `applet` tool merely carries them
+    // through from a prior manifest. A planner that writes one into its plan
+    // produces an action created tool-less that then answers badly rather than
+    // failing, which is the hardest shape to diagnose.
+    const prompt = load('applet-data-planner').systemPrompt;
+    expect(prompt).toContain('bernard app allow');
+    expect(prompt).toMatch(/cannot grant them/i);
+    for (const name of PLANNERS) {
+      expect(load(name).systemPrompt).not.toMatch(/set `?toolAllowlist/i);
+    }
+  });
+});
