@@ -1,3 +1,4 @@
+import { extractJsonBlock } from '../structured-output.js';
 import { classifyError } from '../error-taxonomy.js';
 
 /** Data backing the `<ErrorPanel>` transcript item. */
@@ -77,10 +78,15 @@ function cleanMessage(raw: string): string {
 function extractJsonMessage(s: string): string | null {
   const start = s.indexOf('{');
   if (start === -1) return null;
-  const end = matchingBrace(s, start);
-  if (end === -1) return null;
+  // `extractJsonBlock` is the repo's balanced-JSON scanner and does exactly
+  // this — depth counting that respects string literals and escapes. An earlier
+  // cut wrote a second copy here; `structured-output.ts` is a zod-only leaf, so
+  // there is no import cost worth a duplicate, and its escape handling is the
+  // stricter of the two.
+  const block = extractJsonBlock(s, start);
+  if (!block) return null;
   try {
-    return pickMessage(JSON.parse(s.slice(start, end + 1)));
+    return pickMessage(JSON.parse(block));
   } catch {
     return null;
   }

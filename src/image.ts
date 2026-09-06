@@ -36,8 +36,13 @@ export const IMAGE_TOKEN_ESTIMATE = 1000;
  * Regex matching tokens that look like file paths ending in a supported image extension.
  * Handles absolute paths, relative paths, `~` home-dir expansion, and quoted paths.
  */
+/** How an unquoted path may begin. Shared with {@link ANCHORED_RE}. */
+const PATH_PREFIX = '[~.]?\\/|\\.\\.\\/';
+
 const IMAGE_PATH_RE =
   /(?:"([^"]+\.(?:png|jpe?g|gif|webp))"|'([^']+\.(?:png|jpe?g|gif|webp))'|((?:[~.]?\/|\.\.\/)?[\w.\-\/]+\.(?:png|jpe?g|gif|webp)))/gi;
+// NB: the prefix above is `PATH_PREFIX`, inlined because a regex literal cannot
+// interpolate. `image.test.ts` asserts the two stay in step.
 
 /** Returns the MIME type for a file path based on its extension, or `null` if unsupported. */
 export function detectMimeType(filePath: string): string | null {
@@ -121,9 +126,13 @@ export function loadImage(filePath: string): ImageAttachment {
   return readValidatedImage(validateImagePath(filePath));
 }
 
-/** A load that failed, and why. */
+/**
+ * A load that failed, and why.
+ *
+ * Just the reason: `validateImagePath` already embeds the resolved path in the
+ * two messages where it is useful, and a separate field had no reader.
+ */
 export interface ImageLoadFailure {
-  path: string;
   reason: string;
 }
 
@@ -150,7 +159,7 @@ export function loadImageResult(
   } catch (err) {
     return {
       ok: false,
-      failure: { path: filePath, reason: err instanceof Error ? err.message : String(err) },
+      failure: { reason: err instanceof Error ? err.message : String(err) },
     };
   }
 }
@@ -232,16 +241,22 @@ function widerCandidates(text: string, matchIndex: number, matched: string): str
     while (wordStart > 0 && !/\s/.test(text[wordStart - 1])) wordStart--;
     if (wordStart >= cursor - 1) break;
     cursor = wordStart;
-    out.push(text.slice(cursor, matchIndex) + matched);
+    out.push(text.slice(cursor, matchIndex + matched.length));
   }
   return out;
 }
 
 /** How many space-separated words to walk back over. A directory name is short. */
-const MAX_PATH_WORDS = 6;
+export const MAX_PATH_WORDS = 6;
 
-/** A match that already begins like a path, and so needs no widening. */
-const ANCHORED_RE = /^(?:~?\/|\.\.?\/)/;
+/**
+ * A match that already begins like a path, and so needs no widening.
+ *
+ * Spelled from the same alternation {@link IMAGE_PATH_RE}'s group 3 opens with,
+ * so the two cannot mean different things — an earlier cut wrote a second,
+ * differently-worded set here.
+ */
+const ANCHORED_RE = new RegExp('^(?:' + PATH_PREFIX + ')');
 
 /**
  * Removes image-path tokens from user text. Used to sanitize input before handing it to

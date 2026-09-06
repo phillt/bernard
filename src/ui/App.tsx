@@ -2725,7 +2725,7 @@ export function App({
         // the same path and lets the filesystem decide. Dedupe on the resolved
         // path so two candidates for one file cannot attach it twice.
         const loaded: ImageAttachment[] = [];
-        const failures: ImageLoadFailure[] = [];
+        let firstFailure: ImageLoadFailure | undefined;
         const attached = new Set<string>();
         for (const p of candidatePaths) {
           const res = loadImageResult(p);
@@ -2734,7 +2734,7 @@ export function App({
             attached.add(res.image.path);
             loaded.push(res.image);
           } else {
-            failures.push(res.failure);
+            firstFailure ??= res.failure;
           }
         }
         if (loaded.length > 0) {
@@ -2742,7 +2742,7 @@ export function App({
             flashToast(`Attaching ${img.path}`);
           }
           inlineImages = loaded;
-        } else if (failures.length > 0) {
+        } else if (firstFailure) {
           // Nothing loaded, and until now that was completely silent: the
           // branch had no `else`, so a user who pasted a path watched the turn
           // run with no image and no explanation. A notice rather than a toast
@@ -2751,13 +2751,14 @@ export function App({
           // must outlive a keystroke. Bernard's own voice, so the chevron is
           // right.
           //
-          // Only the WIDEST failure per file is worth showing: the narrow
-          // candidates are speculative by construction and their "not found"
-          // is noise. The last one offered is the widest.
-          const worst = failures[failures.length - 1];
+          // The FIRST failure, which is the regex's own match — a real-looking
+          // path. Not the last: `widerCandidates` walks back over words without
+          // regard for an earlier match, so with two paths on one line the tail
+          // of the list is the user's sentence, and the notice would have read
+          // `Image file not found: files /a/b c/one.jpg and /a/b c/two.jpg`.
           pushAssistantNotice(
             `I spotted what looked like an image path but could not attach it.\n` +
-              `${worst.reason}\n` +
+              `${firstFailure.reason}\n` +
               `If the path has spaces, quoting it works: /image "…"`,
           );
         }

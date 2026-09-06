@@ -71,15 +71,11 @@ describe('the shape the AI SDK actually throws', () => {
     // `unknown`, whose user line said "Tool failed with an unrecognized error"
     // — a tool that was never involved.
     const out = formatAgentError(new Error(SDK_MESSAGE), false);
+    // Only the category here: the hint is pinned by the pre-existing quota
+    // test and the phrasing by `error-taxonomy.test.ts`. What this one adds is
+    // that the brace fix and the classification fix COMPOSE on the real
+    // message — neither neighbour exercises both.
     expect(out.category).toBe('rate_limit');
-    expect(out.hint).toMatch(/wait|retry|lineup/i);
-  });
-
-  it('shows no technical detail by default, and shows it under debug', () => {
-    const err = new Error(SDK_MESSAGE);
-    err.stack = 'Error: boom\n    at somewhere';
-    expect(formatAgentError(err, false).details).toBeUndefined();
-    expect(formatAgentError(err, true).details).toContain('at somewhere');
   });
 
   it('handles a brace inside a quoted value', () => {

@@ -4,15 +4,16 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { CoreMessage } from 'ai';
 import {
+  IMAGE_TOKEN_ESTIMATE,
+  MAX_PATH_WORDS,
   detectMimeType,
+  estimateContentPartTokens,
+  extractImagePaths,
+  isVisionCapableModel,
   loadImage,
   loadImageResult,
-  extractImagePaths,
   stripImagePaths,
-  isVisionCapableModel,
   stripImagesFromHistory,
-  estimateContentPartTokens,
-  IMAGE_TOKEN_ESTIMATE,
 } from './image.js';
 
 /* ---------- detectMimeType ---------- */
@@ -109,8 +110,10 @@ describe('loadImageResult', () => {
     const res = loadImageResult('/tmp/definitely-not-a-real-file.png');
     expect(res.ok).toBe(false);
     if (res.ok) return;
+    // The path is in the reason itself — `validateImagePath` composes it — so
+    // a separate field had no reader and is gone.
     expect(res.failure.reason).toMatch(/not found/i);
-    expect(res.failure.path).toContain('definitely-not-a-real-file.png');
+    expect(res.failure.reason).toContain('definitely-not-a-real-file.png');
   });
 
   it('reports an unsupported extension as such, not as missing', () => {
@@ -382,12 +385,22 @@ describe('an unquoted path containing a space', () => {
     expect(got.some((p) => fs.existsSync(p))).toBe(false);
   });
 
-  it('stops widening at a newline, and bounds how far it walks', () => {
-    // A path does not span lines, and without a bound a sentence ending in
-    // `.png` would offer one candidate per word.
-    const got = extractImagePaths('first line\nsecond cards/x.png');
-    expect(got.every((p) => !p.includes('\n'))).toBe(true);
-    expect(got.length).toBeLessThanOrEqual(7);
+  it('stops widening at a newline', () => {
+    // A path does not span lines. `lastIndexOf(' ')` walked straight through
+    // one, which is why the scan is hand-rolled.
+    expect(extractImagePaths('first line\nsecond cards/x.png')).toEqual([
+      'cards/x.png',
+      'second cards/x.png',
+    ]);
+  });
+
+  it('bounds how far back it walks', () => {
+    // Without a bound, a sentence ending in `.png` offers one candidate per
+    // word. The previous assertion here was `length <= 7` against an input that
+    // stops at a newline after ONE word — it passed for any bound, so it tested
+    // nothing. This input has eight preceding words and actually reaches it.
+    const got = extractImagePaths('one two three four five six seven eight cards/x.png');
+    expect(got).toHaveLength(1 + MAX_PATH_WORDS);
   });
 
   it('never offers the same candidate twice', () => {
