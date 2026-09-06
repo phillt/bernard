@@ -92,38 +92,6 @@ function extractJsonMessage(s: string): string | null {
   }
 }
 
-/**
- * Index of the `}` closing the `{` at `start`, or -1.
- *
- * String-aware, because a brace inside a quoted value must not close the
- * object — provider messages routinely contain them. Escapes are honoured so a
- * `\"` inside a string does not end it early.
- */
-function matchingBrace(s: string, start: number): number {
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = start; i < s.length; i++) {
-    const ch = s[i];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (ch === '\\') {
-      escaped = true;
-      continue;
-    }
-    if (ch === '"') {
-      inString = !inString;
-      continue;
-    }
-    if (inString) continue;
-    if (ch === '{') depth++;
-    else if (ch === '}' && --depth === 0) return i;
-  }
-  return -1;
-}
-
 function pickMessage(obj: unknown): string | null {
   if (!obj || typeof obj !== 'object') return null;
   const o = obj as Record<string, unknown>;
