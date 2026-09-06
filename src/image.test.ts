@@ -8,6 +8,7 @@ import {
   MAX_PATH_WORDS,
   detectMimeType,
   estimateContentPartTokens,
+  extractImagePathGroups,
   extractImagePaths,
   isVisionCapableModel,
   loadImage,
@@ -406,5 +407,47 @@ describe('an unquoted path containing a space', () => {
   it('never offers the same candidate twice', () => {
     const got = extractImagePaths('a/b.png and a/b.png');
     expect(new Set(got).size).toBe(got.length);
+  });
+});
+
+describe('candidate groups', () => {
+  it('groups each match, narrowest first, so a caller can pick one per path', () => {
+    // A flat list cannot express "one attachment per path": a caller iterating
+    // it attaches every candidate that happens to exist, and the narrowest is a
+    // bare tail resolved against the cwd.
+    const groups = extractImagePathGroups('files /a/b c/one.jpg and /a/b c/two.jpg');
+    expect(groups).toHaveLength(2);
+    expect(groups[0][0]).toBe('c/one.jpg');
+    expect(groups[0]).toContain('/a/b c/one.jpg');
+    expect(groups[1]).toContain('/a/b c/two.jpg');
+  });
+
+  it('flattens to what extractImagePaths returns', () => {
+    const text = 'see /tmp/a.png and cards/b.jpg';
+    expect(extractImagePathGroups(text).flat()).toEqual(extractImagePaths(text));
+  });
+});
+
+describe('stripImagePaths keeps step with the extractor', () => {
+  it('removes a widened path whole, leaving no dangling fragment', () => {
+    // They were a matched pair keyed on one regex. Widening only the extractor
+    // left "rename /home/me/photos/business cards/S.jpg" stripping to
+    // "rename /home/me/photos/business" — a half-path handed to the reference
+    // resolver, which is what this function exists to prevent.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bernard-strip-'));
+    const sub = path.join(dir, 'business cards');
+    fs.mkdirSync(sub);
+    const img = path.join(sub, 'S.jpg');
+    fs.writeFileSync(img, Buffer.from('x'));
+
+    expect(stripImagePaths(`rename ${img} please`)).toBe('rename please');
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('does not eat prose around a path that does not exist', () => {
+    // Only candidates that EXIST are removed, matching the attach decision.
+    // The widest candidate deliberately includes preceding words, so stripping
+    // it unconditionally turned "rename … please" into "please".
+    expect(stripImagePaths('rename /nope/business cards/S.jpg please')).toContain('rename');
   });
 });

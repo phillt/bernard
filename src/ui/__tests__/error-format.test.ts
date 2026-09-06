@@ -84,3 +84,26 @@ describe('the shape the AI SDK actually throws', () => {
     expect(formatAgentError(err, false).message).toBe('weird } value');
   });
 });
+
+describe('the fields the error already carries', () => {
+  // `formatAgentError` passed only the message, so three ordinary provider
+  // failures rendered as "Agent error / unknown" with the unrecognised-error
+  // hint — on the paths where the answer was sitting on the object. The
+  // duck-typing already existed for the `/models` probe; it is now shared.
+  it.each([
+    [429, 'Too many', 'rate_limit'],
+    [503, 'Internal error', 'transient'],
+    [401, 'invalid x-api-key', 'auth'],
+  ])('reads a %i as %s', (status, msg, expected) => {
+    const err = Object.assign(new Error(msg), { statusCode: status });
+    expect(formatAgentError(err, false).category).toBe(expected);
+  });
+
+  it('still classifies from the message when there is no status', () => {
+    // The motivating case: HTTP 200 with the refusal in the body, so no status
+    // exists and the message is the only signal. The two mechanisms are not
+    // alternatives.
+    const err = new Error('The model is currently at capacity due to high demand.');
+    expect(formatAgentError(err, false).category).toBe('rate_limit');
+  });
+});

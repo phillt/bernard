@@ -169,13 +169,32 @@ export function loadImageResult(
  * Returns the extracted path strings (with `~` expansion applied).
  */
 export function extractImagePaths(text: string): string[] {
-  const paths: string[] = [];
+  return extractImagePathGroups(text).flat();
+}
+
+/**
+ * The same candidates, grouped by the match each came from, narrowest first.
+ *
+ * The grouping is what makes "the first one that exists wins" expressible. A
+ * flat list cannot say it, and a caller iterating one attaches EVERY candidate
+ * that resolves — so a message naming `~/Downloads/design assets/logo.png`,
+ * sent from a repo that happens to contain `assets/logo.png`, attached both.
+ * The narrow candidate is a bare tail resolved against the cwd, so that
+ * collision is ordinary rather than contrived.
+ */
+export function extractImagePathGroups(text: string): string[][] {
+  const groups: string[][] = [];
   const seen = new Set<string>();
+  let current: string[] = [];
   const offer = (raw: string) => {
     const expanded = expandHome(raw);
     if (seen.has(expanded)) return;
     seen.add(expanded);
-    paths.push(expanded);
+    current.push(expanded);
+  };
+  const flush = () => {
+    if (current.length > 0) groups.push(current);
+    current = [];
   };
 
   let match: RegExpExecArray | null;
@@ -185,6 +204,7 @@ export function extractImagePaths(text: string): string[] {
     const quoted = match[1] ?? match[2];
     if (quoted) {
       offer(quoted);
+      flush();
       continue;
     }
     const unquoted = match[3];
@@ -198,8 +218,10 @@ export function extractImagePaths(text: string): string[] {
     if (!ANCHORED_RE.test(unquoted)) {
       for (const wider of widerCandidates(text, match.index, unquoted)) offer(wider);
     }
+    flush();
   }
-  return paths;
+  flush();
+  return groups;
 }
 
 /**
@@ -263,8 +285,32 @@ const ANCHORED_RE = new RegExp('^(?:' + PATH_PREFIX + ')');
  * the reference resolver so attachment paths aren't mistaken for unresolved entities.
  */
 export function stripImagePaths(text: string): string {
-  const re = new RegExp(IMAGE_PATH_RE.source, 'gi');
-  return text.replace(re, ' ').replace(/\s+/g, ' ').trim();
+  // Widened alongside {@link extractImagePathGroups}, or the two disagree about
+  // what a path IS. The bare regex removes only the narrow match, so
+  // "rename /home/me/photos/business cards/Scan_1.jpg please" strips to
+  // "rename /home/me/photos/business please" — a dangling half-path handed to
+  // the reference resolver, which is exactly what this function exists to
+  // prevent. They were a matched pair keyed on one regex; widening only the
+  // extractor broke the pairing.
+  //
+  // Longest first, so a wide candidate is removed whole rather than being left
+  // in fragments by its own narrower prefix.
+  let out = text;
+  const widened = extractImagePathGroups(text)
+    .flat()
+    // Only candidates that EXIST, which is the same decision the attach path
+    // makes — strip what was treated as an attachment, not every guess. The
+    // widest candidate deliberately includes preceding words, so removing it
+    // unconditionally eats prose: "rename /home/me/photos/business
+    // cards/Scan_1.jpg please" became "please".
+    .filter((c) => fs.existsSync(c))
+    // Longest first, so a wide path is removed whole rather than left in
+    // fragments by its own narrower prefix.
+    .sort((a, b) => b.length - a.length);
+  for (const c of widened) {
+    if (out.includes(c)) out = out.split(c).join(' ');
+  }
+  return out.replace(new RegExp(IMAGE_PATH_RE.source, 'gi'), ' ').replace(/\s+/g, ' ').trim();
 }
 
 /**

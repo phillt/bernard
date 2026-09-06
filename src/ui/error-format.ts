@@ -1,3 +1,4 @@
+import { extractErrorFields } from '../error-fields.js';
 import { extractJsonBlock } from '../structured-output.js';
 import { classifyError } from '../error-taxonomy.js';
 
@@ -39,9 +40,22 @@ const TITLES: Record<string, string> = {
  * and cause for the dim detail block.
  */
 export function formatAgentError(err: unknown, includeDetails: boolean): ErrorPanelData {
-  const raw = err instanceof Error ? err.message : String(err);
-  const message = cleanMessage(raw);
-  const cls = classifyError({ message });
+  const fields = extractErrorFields(err);
+  const message = cleanMessage(fields.message);
+  // The status and errno the error already carries, not just its prose. Passing
+  // only the message left three ordinary provider failures — a terse 429, a 503
+  // "Internal error", a 401 "invalid x-api-key" — all reading `unknown` with
+  // the unrecognised-error hint, which is the defect this whole change set is
+  // about, on the paths where the answer was sitting on the object.
+  //
+  // This does not replace the capacity regex: the motivating case is HTTP 200
+  // with the refusal in the BODY, so it arrives with no status at all and the
+  // message is the only signal. Both are needed.
+  const cls = classifyError({
+    message,
+    ...(fields.httpStatus !== undefined ? { httpStatus: fields.httpStatus } : {}),
+    ...(fields.errno !== undefined ? { errno: fields.errno } : {}),
+  });
   return {
     title: TITLES[cls.category] ?? 'Agent error',
     category: cls.category,

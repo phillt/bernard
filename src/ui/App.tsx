@@ -92,7 +92,7 @@ import { WIZARD_CATEGORIES_DATA, type WizardFieldData } from '../profiles-wizard
 import {
   loadImage,
   loadImageResult,
-  extractImagePaths,
+  extractImagePathGroups,
   type ImageAttachment,
   type ImageLoadFailure,
 } from '../image.js';
@@ -2717,25 +2717,43 @@ export function App({
 
     // Inline-image detection on plain text turns.
     let inlineImages: ImageAttachment[] | undefined;
-    const candidatePaths = extractImagePaths(text);
-    if (candidatePaths.length > 0) {
+    const candidateGroups = extractImagePathGroups(text);
+    if (candidateGroups.length > 0) {
       if (mainVisionCapable(config)) {
-        // `extractImagePaths` OVER-OFFERS — it cannot tell a directory name
-        // from a preceding word, so it hands back progressively wider forms of
-        // the same path and lets the filesystem decide. Dedupe on the resolved
-        // path so two candidates for one file cannot attach it twice.
+        // Extraction OVER-OFFERS: it cannot tell a directory name from a
+        // preceding word, so it hands back progressively wider forms and lets
+        // the filesystem decide. Per GROUP, the WIDEST that resolves wins.
+        //
+        // Both halves of that are load-bearing. Iterating a flat list attaches
+        // every candidate that happens to exist — the narrowest is a bare tail
+        // resolved against the cwd, so `~/Downloads/design assets/logo.png`
+        // sent from a repo containing `assets/logo.png` attached both. And
+        // taking the NARROWEST that resolves is worse still: measured, it
+        // attaches the cwd decoy and not the file the user named. A longer path
+        // is more specific and far less likely to be a coincidence.
+        //
+        // Validate-then-read matters here: `loadImageResult` reads up to 10 MB
+        // synchronously on the render thread, and a dedupe after the read only
+        // suppresses work already paid for.
         const loaded: ImageAttachment[] = [];
         let firstFailure: ImageLoadFailure | undefined;
         const attached = new Set<string>();
-        for (const p of candidatePaths) {
-          const res = loadImageResult(p);
-          if (res.ok) {
-            if (attached.has(res.image.path)) continue;
-            attached.add(res.image.path);
-            loaded.push(res.image);
-          } else {
-            firstFailure ??= res.failure;
+        for (const group of candidateGroups) {
+          let groupFailure: ImageLoadFailure | undefined;
+          for (const p of [...group].reverse()) {
+            const res = loadImageResult(p);
+            if (!res.ok) {
+              groupFailure ??= res.failure;
+              continue;
+            }
+            if (!attached.has(res.image.path)) {
+              attached.add(res.image.path);
+              loaded.push(res.image);
+            }
+            groupFailure = undefined;
+            break;
           }
+          if (groupFailure) firstFailure ??= groupFailure;
         }
         if (loaded.length > 0) {
           for (const img of loaded) {
