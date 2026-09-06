@@ -42,3 +42,49 @@ describe('formatAgentError', () => {
     );
   });
 });
+
+describe('the shape the AI SDK actually throws', () => {
+  // `TypeValidationError` is built as
+  //   Type validation failed: Value: ${JSON.stringify(value)}.
+  //   Error message: ${zod issues}
+  // and the trailing zod issues carry their own braces. The old
+  // `lastIndexOf('}')` landed inside that array, the parse failed, and the raw
+  // string reached the panel — which is how a user saw a parser complaint when
+  // the envelope inside it said the model was at capacity. The pre-existing
+  // fixture had nothing after the closing brace, so this path never ran.
+  const SDK_MESSAGE =
+    'Agent error: Type validation failed: Value: {"error":{"message":' +
+    '"The model is currently at capacity due to high demand. Please try again in a few minutes."}}.\n' +
+    'Error message: [\n  {\n    "code": "invalid_type",\n    "expected": "object"\n  }\n]';
+
+  it('finds the envelope even with prose and braces after it', () => {
+    const out = formatAgentError(new Error(SDK_MESSAGE), false);
+    expect(out.message).toBe(
+      'The model is currently at capacity due to high demand. Please try again in a few minutes.',
+    );
+    expect(out.message).not.toContain('Type validation failed');
+  });
+
+  it('classifies provider capacity as a rate limit, with advice', () => {
+    // xAI answers a capacity refusal with HTTP 200 and this sentence in the
+    // body, so no status-code branch can catch it. It used to land on
+    // `unknown`, whose user line said "Tool failed with an unrecognized error"
+    // — a tool that was never involved.
+    const out = formatAgentError(new Error(SDK_MESSAGE), false);
+    expect(out.category).toBe('rate_limit');
+    expect(out.hint).toMatch(/wait|retry|lineup/i);
+  });
+
+  it('shows no technical detail by default, and shows it under debug', () => {
+    const err = new Error(SDK_MESSAGE);
+    err.stack = 'Error: boom\n    at somewhere';
+    expect(formatAgentError(err, false).details).toBeUndefined();
+    expect(formatAgentError(err, true).details).toContain('at somewhere');
+  });
+
+  it('handles a brace inside a quoted value', () => {
+    // String-aware matching: a `}` inside a string must not close the object.
+    const err = new Error('boom {"error":{"message":"weird } value"}} trailing');
+    expect(formatAgentError(err, false).message).toBe('weird } value');
+  });
+});

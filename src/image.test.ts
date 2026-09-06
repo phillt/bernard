@@ -6,7 +6,7 @@ import type { CoreMessage } from 'ai';
 import {
   detectMimeType,
   loadImage,
-  tryLoadImage,
+  loadImageResult,
   extractImagePaths,
   stripImagePaths,
   isVisionCapableModel,
@@ -99,29 +99,40 @@ describe('loadImage', () => {
   });
 });
 
-/* ---------- tryLoadImage ---------- */
-describe('tryLoadImage', () => {
-  it('returns null for non-existent file', () => {
-    expect(tryLoadImage('/tmp/definitely-not-a-real-file.png')).toBeNull();
+/* ---------- loadImageResult ---------- */
+describe('loadImageResult', () => {
+  // Replaces `tryLoadImage`, whose empty catch discarded the reason. A user who
+  // pasted a path and got nothing had no way to tell a missing file from an
+  // unsupported format — and the reason already existed, composed by
+  // `validateImagePath` one frame down.
+  it('reports why a missing file could not load', () => {
+    const res = loadImageResult('/tmp/definitely-not-a-real-file.png');
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.failure.reason).toMatch(/not found/i);
+    expect(res.failure.path).toContain('definitely-not-a-real-file.png');
   });
 
-  it('returns null for unsupported extension', () => {
+  it('reports an unsupported extension as such, not as missing', () => {
+    // The distinction that makes the message worth showing at all.
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bernard-try-'));
     const txtPath = path.join(tmpDir, 'file.txt');
     fs.writeFileSync(txtPath, 'hello');
 
-    expect(tryLoadImage(txtPath)).toBeNull();
+    const res = loadImageResult(txtPath);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.failure.reason).toMatch(/unsupported/i);
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('returns ImageAttachment for valid file', () => {
+  it('returns the attachment for a valid file', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bernard-try-'));
     const imgPath = path.join(tmpDir, 'ok.png');
     fs.writeFileSync(imgPath, Buffer.from('data'));
 
-    const result = tryLoadImage(imgPath);
-    expect(result).not.toBeNull();
-    expect(result!.mimeType).toBe('image/png');
+    const res = loadImageResult(imgPath);
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.image.mimeType).toBe('image/png');
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
@@ -331,5 +342,56 @@ describe('stripImagesFromHistory', () => {
 
     const stripped = stripImagesFromHistory(history);
     expect(stripped[0]).toBe(history[0]); // same reference — no change needed
+  });
+});
+
+describe('an unquoted path containing a space', () => {
+  // The reported failure: two scans pasted as
+  // `/home/me/Documents/photos/business cards/Scan_1.jpg` attached nothing.
+  // `IMAGE_PATH_RE`'s unquoted branch has no space in its character class, so
+  // it matched only `cards/Scan_1.jpg` — a relative path that does not exist —
+  // and the load failed silently. Existing coverage tested spaces ONLY inside
+  // quotes, so the paste-a-path case, which is how this is actually used, was
+  // untested.
+  it('offers the whole path as a candidate', () => {
+    const got = extractImagePaths('rename /home/me/photos/business cards/Scan_1.jpg please');
+    expect(got).toContain('/home/me/photos/business cards/Scan_1.jpg');
+  });
+
+  it('offers it for each of several paths on one line', () => {
+    const got = extractImagePaths(
+      'files /a/b c/one.jpg and /a/b c/two.jpg (same card, front and back)',
+    );
+    expect(got).toContain('/a/b c/one.jpg');
+    expect(got).toContain('/a/b c/two.jpg');
+  });
+
+  it('does not widen a match that is already a whole path', () => {
+    // Widening an anchored match can only produce candidates that cannot
+    // resolve — `look at /tmp/a.png` is not a file. Restricting it to
+    // unanchored matches is what keeps the output clean for the common case.
+    expect(extractImagePaths('look at /tmp/screenshot.png')).toEqual(['/tmp/screenshot.png']);
+    expect(extractImagePaths('see ./images/logo.webp')).toEqual(['./images/logo.webp']);
+  });
+
+  it('offers nothing that resolves for ordinary prose', () => {
+    // The reason this over-offers instead of widening the regex: no pattern can
+    // tell a directory name from a preceding word, but the filesystem can. Every
+    // candidate here is a guess, and every one of them fails to exist.
+    const got = extractImagePaths('read /etc/hosts and check foo.png');
+    expect(got.some((p) => fs.existsSync(p))).toBe(false);
+  });
+
+  it('stops widening at a newline, and bounds how far it walks', () => {
+    // A path does not span lines, and without a bound a sentence ending in
+    // `.png` would offer one candidate per word.
+    const got = extractImagePaths('first line\nsecond cards/x.png');
+    expect(got.every((p) => !p.includes('\n'))).toBe(true);
+    expect(got.length).toBeLessThanOrEqual(7);
+  });
+
+  it('never offers the same candidate twice', () => {
+    const got = extractImagePaths('a/b.png and a/b.png');
+    expect(new Set(got).size).toBe(got.length);
   });
 });

@@ -57,23 +57,65 @@ function cleanMessage(raw: string): string {
   return extractJsonMessage(m) ?? m;
 }
 
-/** Pull `.error.message` / `.message` out of a JSON envelope embedded in the string. */
+/**
+ * Pull `.error.message` / `.message` out of a JSON envelope embedded in the string.
+ *
+ * The envelope is located by BRACE MATCHING from the first `{`, not by scanning
+ * back from the last `}`. That distinction is the whole bug: the AI SDK builds
+ * a `TypeValidationError` as
+ *
+ *     Type validation failed: Value: ${JSON.stringify(value)}.
+ *     Error message: ${zod issues}
+ *
+ * and the trailing zod issues carry their own braces. `lastIndexOf('}')` landed
+ * inside that array, the parse failed, and the raw string went to the panel
+ * untouched — which is how a user saw "Type validation failed: Value: {…}"
+ * when the envelope inside it said, in plain English, that the model was at
+ * capacity. The old fixture had nothing after the closing brace, so the path
+ * that actually runs in production was never exercised.
+ */
 function extractJsonMessage(s: string): string | null {
   const start = s.indexOf('{');
   if (start === -1) return null;
-  const candidate = s.slice(start);
-  const tryParse = (text: string): string | null => {
-    try {
-      return pickMessage(JSON.parse(text));
-    } catch {
-      return null;
+  const end = matchingBrace(s, start);
+  if (end === -1) return null;
+  try {
+    return pickMessage(JSON.parse(s.slice(start, end + 1)));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Index of the `}` closing the `{` at `start`, or -1.
+ *
+ * String-aware, because a brace inside a quoted value must not close the
+ * object — provider messages routinely contain them. Escapes are honoured so a
+ * `\"` inside a string does not end it early.
+ */
+function matchingBrace(s: string, start: number): number {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < s.length; i++) {
+    const ch = s[i];
+    if (escaped) {
+      escaped = false;
+      continue;
     }
-  };
-  // First try the whole tail, then trim any prose after the final brace.
-  const whole = tryParse(candidate);
-  if (whole) return whole;
-  const end = candidate.lastIndexOf('}');
-  return end > 0 ? tryParse(candidate.slice(0, end + 1)) : null;
+    if (ch === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (ch === '{') depth++;
+    else if (ch === '}' && --depth === 0) return i;
+  }
+  return -1;
 }
 
 function pickMessage(obj: unknown): string | null {

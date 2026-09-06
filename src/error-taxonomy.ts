@@ -89,7 +89,11 @@ const PLAYBOOKS: Record<ToolErrorType, { user: string; model: string }> = {
       'The call was blocked by the read-only mode gate (#179). Do not retry the same write call. Either ask the user to allow this tool / switch toolMode to write, or take a read-only alternative path.',
   },
   unknown: {
-    user: 'Tool failed with an unrecognized error.',
+    // Read only when no `toolName` is known; `build` swaps in the tool wording
+    // otherwise. This half is addressed to a human, and a turn-level provider
+    // failure has no tool in it — saying "Tool failed" there names a component
+    // that was never involved and sends the reader after the wrong thing.
+    user: 'Something went wrong and the cause was not recognised.',
     model:
       'The error did not match any known pattern. Read the snippet, consider whether one careful retry is justified, and otherwise surface to the user.',
   },
@@ -140,8 +144,25 @@ function build(category: ToolErrorType, toolName?: string): Classification {
     correctable: isCorrectable(category, toolName),
     retryable: RETRYABLE.has(category),
     severity: SEVERITY[category],
-    playbook: PLAYBOOKS[category],
+    playbook: userPlaybookFor(category, toolName),
   };
+}
+
+/** The tool-flavoured wording for `unknown`, used only when a tool is named. */
+const UNKNOWN_TOOL_USER = 'Tool failed with an unrecognized error.';
+
+/**
+ * The playbook, with the one line that depends on whether a tool was involved.
+ *
+ * Only `unknown` differs, and only its `user` half: every other category
+ * describes something that happened regardless of the caller, while `unknown`
+ * has to name the thing that failed and has nothing else to go on.
+ * `playbook.model` is untouched — the model is told the same thing either way.
+ */
+function userPlaybookFor(category: ToolErrorType, toolName?: string) {
+  const base = PLAYBOOKS[category];
+  if (category !== 'unknown' || toolName === undefined) return base;
+  return { ...base, user: UNKNOWN_TOOL_USER };
 }
 
 /**
@@ -250,7 +271,19 @@ function pickCategory(input: ClassifyInput): ToolErrorType {
     // shared; the correctable split happens in isCorrectable().
     return 'not_found';
   }
-  if (/\bHTTP\s*(408|429)\b|rate[\s-]?limit|quota|too many requests/i.test(m)) return 'rate_limit';
+  // `at capacity` / `overloaded` / `high demand` are a rate limit by
+  // consequence: retryable, wait and try again, nothing the caller did wrong.
+  // xAI answers a capacity refusal with HTTP 200 and this sentence in the body,
+  // so none of the status-code branches above can catch it — a real turn
+  // classified `unknown` and told the user "Tool failed with an unrecognized
+  // error" when the provider had said, in plain English, to try again shortly.
+  if (
+    /\bHTTP\s*(408|429)\b|rate[\s-]?limit|quota|too many requests|at capacity|overloaded|high demand|currently unavailable/i.test(
+      m,
+    )
+  ) {
+    return 'rate_limit';
+  }
   if (/\bHTTP\s*5\d\d\b|bad gateway|service unavailable|gateway timeout/i.test(m)) {
     return 'transient';
   }

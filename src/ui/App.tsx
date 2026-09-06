@@ -89,7 +89,13 @@ import { noPromptCacheHint } from '../cost-guardrail.js';
 import { makeUsageRecorder, makeOutOfTurnUsageRecorder } from '../framework/hooks/token-stats.js';
 import { truncate } from '../text.js';
 import { WIZARD_CATEGORIES_DATA, type WizardFieldData } from '../profiles-wizard-data.js';
-import { loadImage, tryLoadImage, extractImagePaths, type ImageAttachment } from '../image.js';
+import {
+  loadImage,
+  loadImageResult,
+  extractImagePaths,
+  type ImageAttachment,
+  type ImageLoadFailure,
+} from '../image.js';
 import { runDefinition } from '../framework/agents/run.js';
 import { taskDefinition, type TaskInput } from '../framework/agents/task.js';
 import { renderTaskText } from '../framework/agents/user-message.js';
@@ -2681,20 +2687,54 @@ export function App({
     const candidatePaths = extractImagePaths(text);
     if (candidatePaths.length > 0) {
       if (mainVisionCapable(config)) {
+        // `extractImagePaths` OVER-OFFERS — it cannot tell a directory name
+        // from a preceding word, so it hands back progressively wider forms of
+        // the same path and lets the filesystem decide. Dedupe on the resolved
+        // path so two candidates for one file cannot attach it twice.
         const loaded: ImageAttachment[] = [];
+        const failures: ImageLoadFailure[] = [];
+        const attached = new Set<string>();
         for (const p of candidatePaths) {
-          const img = tryLoadImage(p);
-          if (img) loaded.push(img);
+          const res = loadImageResult(p);
+          if (res.ok) {
+            if (attached.has(res.image.path)) continue;
+            attached.add(res.image.path);
+            loaded.push(res.image);
+          } else {
+            failures.push(res.failure);
+          }
         }
         if (loaded.length > 0) {
           for (const img of loaded) {
             flashToast(`Attaching ${img.path}`);
           }
           inlineImages = loaded;
+        } else if (failures.length > 0) {
+          // Nothing loaded, and until now that was completely silent: the
+          // branch had no `else`, so a user who pasted a path watched the turn
+          // run with no image and no explanation. A notice rather than a toast
+          // because `runAgentTurn` fires on the very next line and its output
+          // scrolls past — the rule this file states twice for anything that
+          // must outlive a keystroke. Bernard's own voice, so the chevron is
+          // right.
+          //
+          // Only the WIDEST failure per file is worth showing: the narrow
+          // candidates are speculative by construction and their "not found"
+          // is noise. The last one offered is the widest.
+          const worst = failures[failures.length - 1];
+          pushAssistantNotice(
+            `I spotted what looked like an image path but could not attach it.\n` +
+              `${worst.reason}\n` +
+              `If the path has spaces, quoting it works: /image "…"`,
+          );
         }
       } else {
+        // Names the model the gate actually checked. `mainVisionCapable`
+        // resolves the lineup's `main` site, which under a lineup is not
+        // `config.model` — so this line used to be able to blame a model that
+        // was never consulted. `/image` already gets this right.
         flashToast(
-          `Image(s) detected but model "${config.model}" does not support vision.`,
+          `Image(s) detected but model "${resolveMainModel(config)}" does not support vision.`,
           'warning',
         );
       }
