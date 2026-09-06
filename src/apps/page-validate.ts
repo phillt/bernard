@@ -139,6 +139,34 @@ export function validateAppletPage(
     );
   }
 
+  // A `<form>` can never submit in an applet, and no permission can change
+  // that. `csp.ts` emits `form-action 'none'` unconditionally, and
+  // `csp-grant.ts` puts `allow-forms` on the never-grantable list with a stated
+  // reason — it re-opens an exfiltration channel `connect-src` does not cover.
+  //
+  // REFUSED rather than warned, and that is the line this module has been
+  // missing a name for: warn when a user grant could make it work, refuse when
+  // nothing can. The external-link check below is a warning precisely BECAUSE
+  // `sandbox: {tokens:['links']}` exists; there is no such escape here.
+  //
+  // Matched against the raw `html`, not the script-masked `markup`. That is the
+  // same asymmetry `colourIssues` keeps and for the same reason: a `<form` in a
+  // template literal renders a REAL form element, so masking scripts would
+  // silently exempt every UI-runtime page — the population most likely to write
+  // one. It is not the `style=` case, where the CSP makes the mistake visible.
+  //
+  // This is what cost a real applet its Save button: the form swallowed the
+  // click, the page did nothing, and every other check here passed.
+  if (/<form[\s>]/i.test(html)) {
+    refuse(
+      'The page uses a <form>, which can never submit in an applet: the policy sets ' +
+        "form-action 'none' and the sandbox has no allow-forms — and unlike external links, " +
+        'there is no permission a user can grant to enable it. A button inside a form ' +
+        'silently does nothing. Use <div class="field"> for the layout (the served stylesheet ' +
+        'styles it) and a click listener on the button.',
+    );
+  }
+
   // Only when there is something to invoke. A page with no actions is a static
   // page, and requiring a client it never calls would be ceremony.
   // The path is escaped — an unescaped `.` is a wildcard, so `appletXjs`

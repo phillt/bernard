@@ -376,3 +376,62 @@ describe('inline style: refused in markup, warned inside a script (#466)', () =>
     expect(refusalFor(validateAppletPage(page, []))).toContain('inline `style="..."`');
   });
 });
+
+describe('a <form> cannot work, so it is refused', () => {
+  const page = (body: string) =>
+    [
+      '<title>T</title>',
+      '<link rel="stylesheet" href="/__bernard/tokens.css" />',
+      '<link rel="manifest" href="/__bernard/manifest.webmanifest" />',
+      '<script src="/__bernard/applet.js"></script>',
+      body,
+    ].join('\n');
+
+  const refusals = (html: string) =>
+    validateAppletPage(html, ['go']).filter((i) => i.level === 'refuse');
+
+  it('is bound to the policy that makes it impossible', async () => {
+    // The premise, asserted rather than assumed — and this is what earns a
+    // REFUSAL instead of a warning. If `allow-forms` ever becomes grantable,
+    // this fails and forces the refusal to be reconsidered, which is the right
+    // coupling: warn when a grant could fix it, refuse when nothing can.
+    const { cspFor } = await import('../host/csp.js');
+    const { GRANTABLE_SANDBOX_TOKENS } = await import('../host/csp-grant.js');
+    expect(GRANTABLE_SANDBOX_TOKENS as readonly string[]).not.toContain('allow-forms');
+    expect(cspFor({ sandbox: [...GRANTABLE_SANDBOX_TOKENS] } as never)).toContain(
+      "form-action 'none'",
+    );
+  });
+
+  it('refuses a form in the markup', () => {
+    const out = refusals(page('<form><input id="a" /><button>Save</button></form>'));
+    expect(out).toHaveLength(1);
+    expect(out[0].message).toContain('never submit');
+    expect(out[0].message).toContain('click listener');
+  });
+
+  it('refuses a form written from inside a script', () => {
+    // Pins the non-masking decision. A `<form` in an htm template renders a
+    // real form element and is dead for the same reason, so masking scripts
+    // here would silently exempt every UI-runtime page — the population most
+    // likely to write one. A later "tidy-up" that masks scripts fails this.
+    expect(
+      refusals(
+        page(
+          '<div id="root"></div><script>render(html`<form><button>Go</button></form>`)</script>',
+        ),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('leaves a field-and-button page alone', () => {
+    // The false-positive guard, and the shape the docs and the scaffold teach.
+    expect(
+      refusals(
+        page(
+          '<div class="field"><label for="a">A</label><input id="a" /></div><button id="go">Go</button>',
+        ),
+      ),
+    ).toHaveLength(0);
+  });
+});

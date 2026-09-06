@@ -55,6 +55,47 @@ export function formatAskUserAnswers(
 }
 
 /**
+ * The questions that produced a given `ask_user` result.
+ *
+ * Walks BACKWARD from the tool message to the nearest assistant message
+ * carrying the matching `tool-call` part. Backward because a turn can hold
+ * several `ask_user` calls and only the nearest preceding one is this result's.
+ *
+ * Returns `undefined` on anything unexpected — a missing call, a malformed
+ * `args` — so the bubble degrades to bare values rather than throwing. This
+ * module runs on the turn-completion path, where a throw would cost the answers
+ * entirely.
+ */
+function questionsForCall(
+  history: CoreMessage[],
+  toolMsgIndex: number,
+  toolCallId: unknown,
+): string[] {
+  for (let i = toolMsgIndex - 1; i >= 0; i--) {
+    const msg = history[i];
+    if (msg.role !== 'assistant' || !Array.isArray(msg.content)) continue;
+    // Matched on the id unconditionally. An earlier cut loosened the match when
+    // the id was missing, which could only ever attribute ANOTHER tool's
+    // arguments — and then read a `questions` field that call does not have,
+    // arriving back at the same empty answer by a worse route.
+    const call = msg.content.find(
+      (part) =>
+        (part as { type?: unknown }).type === 'tool-call' &&
+        (part as { toolCallId?: unknown }).toolCallId === toolCallId,
+    );
+    if (!call) continue;
+    const qs = ((call as { args?: unknown }).args as { questions?: unknown })?.questions;
+    if (!Array.isArray(qs)) return [];
+    // `[]` rather than `undefined`: the only consumer indexes into it, so the
+    // two behave identically and one of them is a distinction to remember.
+    return qs
+      .map((q) => (q as { question?: unknown })?.question)
+      .filter((q): q is string => typeof q === 'string');
+  }
+  return [];
+}
+
+/**
  * Scans the tail of `history` (from `start` forward) for any `role:'tool'`
  * messages that include an `ask_user` result, synthesises a `role:'user'`
  * message from the answers, and pushes it onto `history` in place.
@@ -73,8 +114,9 @@ export function injectAskUserHistoryMessages(
   history: CoreMessage[],
   start: number,
   injectedIds: Set<string>,
-): void {
-  if (history.length === 0) return;
+): CoreMessage[] {
+  const added: CoreMessage[] = [];
+  if (history.length === 0) return added;
 
   // Clamp in case history shrank due to compression/truncation mid-turn.
   // `history.length - 1` is the maximum valid index; we must not pass the
@@ -119,18 +161,27 @@ export function injectAskUserHistoryMessages(
       }
       if (!payload || typeof payload !== 'object') continue;
 
-      const text = formatAskUserAnswers(payload as AskUserBatchResult);
+      // The questions are recovered from the assistant `tool-call` message
+      // rather than plumbed in from the UI: this module already holds the
+      // history, so keeping the lookup here leaves it pure and self-contained,
+      // and makes the live bubble and a resumed one byte-identical. Before
+      // this the call omitted the argument entirely and the bubble was bare
+      // values with no idea what had been asked.
+      const text = formatAskUserAnswers(
+        payload as AskUserBatchResult,
+        questionsForCall(history, i, toolCallId),
+      );
       if (!text) {
         // Still mark as processed so we don't revisit on the next call.
         injectedIds.add(idKey);
         continue;
       }
 
-      history.push({
-        role: 'user' as const,
-        content: text,
-      });
+      const message: CoreMessage = { role: 'user' as const, content: text };
+      history.push(message);
+      added.push(message);
       injectedIds.add(idKey);
     }
   }
+  return added;
 }

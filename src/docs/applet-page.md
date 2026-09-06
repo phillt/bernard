@@ -35,6 +35,11 @@ wrong:
 
 - **`<style>` blocks and `style="..."` attributes.** Style with the variables
   from `/__bernard/tokens.css`, or ship a separate `.css` file and link it.
+- **Form submission.** The policy sets `form-action 'none'` and the sandbox has
+  no `allow-forms`, and no permission can grant it. A `<button>` inside a
+  `<form>` defaults to submitting, so it does nothing at all — the page just
+  sits there. Use `<div class="field">` for the layout and a `click` listener on
+  the button. Writing a `<form>` is refused when the page is saved.
 - **Anything loaded from another origin** — an image, a font, a stylesheet, a
   `fetch`. An applet may ask for specific origins; until the person grants
   them, nothing off-origin loads.
@@ -78,8 +83,20 @@ const all = await bernard.store.list('note:');
 await bernard.store.delete('draft');
 ```
 
-Values are JSON. `list` takes a key prefix. The store is per applet — no other
-applet can read it.
+Each call resolves to what you asked for, not to a wire envelope:
+
+- `get` — the stored value, or `null` if there is nothing there
+- `set` — the value it stored
+- `list(prefix, {limit, after})` — entries with `key`, `value` and `updatedAt`,
+  **at most 100 per call**; page with `after` set to the last key you saw
+- `delete` — `true` if something was removed
+
+`list` keeps its entries because a prefix listing without keys is unusable, and
+it doubles as the metadata door: `list(exactKey)` is how you read `updatedAt`.
+The one thing `get` cannot tell you is a missing key from a stored `null` —
+both come back `null`. Use `list(key)` and check the length if that matters.
+
+Values are JSON. The store is per applet — no other applet can read it.
 
 ## What gets refused at the write path
 
@@ -87,6 +104,7 @@ A page is checked before it is written, and refused when it could not work:
 
 - a missing stylesheet, manifest or client link
 - an inline `<style>` block or `style="..."` attribute
+- a `<form>` element, which can never submit
 - speaking the host protocol directly instead of using the client
 - invoking an action the manifest does not declare
 

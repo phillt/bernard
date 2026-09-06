@@ -81,7 +81,9 @@ export function createAskUserTool(askUser: ToolOptions['askUser']) {
           otherLabel: q.other_label,
           multiSelect: q.choices && q.choices.length > 0 ? q.multi_select === true : false,
         }));
-        const result = await askUser(normalised, execOptions?.abortSignal);
+        const result = await askUser(normalised, execOptions?.abortSignal, {
+          recordInTranscript: true,
+        });
         return JSON.stringify(result);
       },
     }),
