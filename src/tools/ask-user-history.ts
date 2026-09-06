@@ -55,21 +55,6 @@ export function formatAskUserAnswers(
 }
 
 /**
- * Scans the tail of `history` (from `start` forward) for any `role:'tool'`
- * messages that include an `ask_user` result, synthesises a `role:'user'`
- * message from the answers, and pushes it onto `history` in place.
- *
- * The scan is robust to a shrunk/replaced history array: `start` is clamped
- * so it never exceeds the current array length.
- *
- * Deduplication: `injectedIds` is a caller-supplied Set that tracks tool call
- * IDs already processed this turn. Pass the same Set on every call within a
- * turn (e.g. auto-continue loop) to prevent double-injection.
- *
- * The `role:'tool'` result message is kept intact — we are ADDING a user
- * message after it, not replacing it.
- */
-/**
  * The questions that produced a given `ask_user` result.
  *
  * Walks BACKWARD from the tool message to the nearest assistant message
@@ -84,26 +69,47 @@ export function formatAskUserAnswers(
 function questionsForCall(
   history: CoreMessage[],
   toolMsgIndex: number,
-  toolCallId: string | undefined,
-): string[] | undefined {
+  toolCallId: unknown,
+): string[] {
   for (let i = toolMsgIndex - 1; i >= 0; i--) {
     const msg = history[i];
     if (msg.role !== 'assistant' || !Array.isArray(msg.content)) continue;
-    for (const part of msg.content) {
-      const p = part as { type?: unknown; toolCallId?: unknown; args?: unknown };
-      if (p.type !== 'tool-call') continue;
-      if (toolCallId !== undefined && p.toolCallId !== toolCallId) continue;
-      const qs = (p.args as { questions?: unknown })?.questions;
-      if (!Array.isArray(qs)) return undefined;
-      const texts = qs
-        .map((q) => (q as { question?: unknown })?.question)
-        .filter((q): q is string => typeof q === 'string');
-      return texts.length > 0 ? texts : undefined;
-    }
+    // Matched on the id unconditionally. An earlier cut loosened the match when
+    // the id was missing, which could only ever attribute ANOTHER tool's
+    // arguments — and then read a `questions` field that call does not have,
+    // arriving back at the same empty answer by a worse route.
+    const call = msg.content.find(
+      (part) =>
+        (part as { type?: unknown }).type === 'tool-call' &&
+        (part as { toolCallId?: unknown }).toolCallId === toolCallId,
+    );
+    if (!call) continue;
+    const qs = ((call as { args?: unknown }).args as { questions?: unknown })?.questions;
+    if (!Array.isArray(qs)) return [];
+    // `[]` rather than `undefined`: the only consumer indexes into it, so the
+    // two behave identically and one of them is a distinction to remember.
+    return qs
+      .map((q) => (q as { question?: unknown })?.question)
+      .filter((q): q is string => typeof q === 'string');
   }
-  return undefined;
+  return [];
 }
 
+/**
+ * Scans the tail of `history` (from `start` forward) for any `role:'tool'`
+ * messages that include an `ask_user` result, synthesises a `role:'user'`
+ * message from the answers, and pushes it onto `history` in place.
+ *
+ * The scan is robust to a shrunk/replaced history array: `start` is clamped
+ * so it never exceeds the current array length.
+ *
+ * Deduplication: `injectedIds` is a caller-supplied Set that tracks tool call
+ * IDs already processed this turn. Pass the same Set on every call within a
+ * turn (e.g. auto-continue loop) to prevent double-injection.
+ *
+ * The `role:'tool'` result message is kept intact — we are ADDING a user
+ * message after it, not replacing it.
+ */
 export function injectAskUserHistoryMessages(
   history: CoreMessage[],
   start: number,
@@ -163,7 +169,7 @@ export function injectAskUserHistoryMessages(
       // values with no idea what had been asked.
       const text = formatAskUserAnswers(
         payload as AskUserBatchResult,
-        questionsForCall(history, i, typeof toolCallId === 'string' ? toolCallId : undefined),
+        questionsForCall(history, i, toolCallId),
       );
       if (!text) {
         // Still mark as processed so we don't revisit on the next call.

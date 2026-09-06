@@ -102,13 +102,14 @@ import { DimensionsProvider } from './ui/DimensionsContext.js';
 import { withFullScreen } from './ui/withFullScreen.js';
 import { getInkHandlers } from './ui/ink-handlers.js';
 import type {
-  ToolOptions,
-  ConfirmActionInput,
+  AskUserBatchResult,
+  AskUserOptions,
+  AskUserQuestion,
   BlockActionInput,
   BlockOutcome,
-  AskUserQuestion,
+  ConfirmActionInput,
   PermissionConsentRequest,
-  AskUserBatchResult,
+  ToolOptions,
 } from './tools/types.js';
 import type { CoreMessage } from 'ai';
 import {
@@ -380,7 +381,7 @@ async function runInkRepl(args: {
   const askUser = async (
     questions: AskUserQuestion[],
     signal?: AbortSignal,
-    opts?: { recordInTranscript?: boolean },
+    opts?: AskUserOptions,
   ): Promise<AskUserBatchResult> => {
     const h = getInkHandlers();
     if (!h) return { cancelled: true, answered: [] };

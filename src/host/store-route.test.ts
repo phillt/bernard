@@ -14,14 +14,18 @@ describe('the applet store route (#422)', () => {
     expect(m.handleStoreRequest('notes', { op: 'set', key: 'k', value: { n: 1 } })).toMatchObject({
       ok: true,
     });
+    // The VALUE, not the entry that carries it. The route is the one and only
+    // unwrap now: `sdk.ts` used to do a second one, justified by a wire
+    // contract that has no other readers — a page speaking this endpoint
+    // directly is refused at the write path.
     expect(m.handleStoreRequest('notes', { op: 'get', key: 'k' })).toMatchObject({
       ok: true,
-      result: { key: 'k', value: { n: 1 } },
+      result: { n: 1 },
     });
     expect(m.handleStoreRequest('notes', { op: 'list' })).toMatchObject({ ok: true });
     expect(m.handleStoreRequest('notes', { op: 'delete', key: 'k' })).toMatchObject({
       ok: true,
-      result: { deleted: true },
+      result: true,
     });
     m.closeAppletStore('notes');
   });
@@ -53,10 +57,10 @@ describe('the applet store route (#422)', () => {
     m.handleStoreRequest('notes', { op: 'set', key: 'k', value: 'notes' });
     m.handleStoreRequest('todo', { op: 'set', key: 'k', value: 'todo' });
     expect(m.handleStoreRequest('notes', { op: 'get', key: 'k' })).toMatchObject({
-      result: { value: 'notes' },
+      result: 'notes',
     });
     expect(m.handleStoreRequest('todo', { op: 'get', key: 'k' })).toMatchObject({
-      result: { value: 'todo' },
+      result: 'todo',
     });
     m.closeAppletStore('notes');
     m.closeAppletStore('todo');

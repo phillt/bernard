@@ -1975,3 +1975,46 @@ describe('<App> ask_user answers appear when they are given', () => {
     unmount();
   });
 });
+
+describe('<App> an aborted turn withdraws the echoed answers', () => {
+  it('leaves no bubble for an answer the model never received', async () => {
+    // The echo renders an answer the moment it is given, but the history
+    // injection that makes the model see it is guarded on `!aborted`. So
+    // answering and then pressing Esc used to leave a user bubble backed by
+    // nothing — not the model, not the history, not disk — and it vanished on
+    // resume. The same lie `recordInTranscript` exists to prevent, by another
+    // door.
+    //
+    // `fullScreen: true` is load-bearing: only `TranscriptViewport` re-renders
+    // the list, so only there can an item leave the screen. Ink's `<Static>`
+    // writes once and never un-writes, which is a real limit of the fix and is
+    // recorded beside it.
+    let release!: () => void;
+    const turn = new Promise<void>((r) => (release = r));
+    const { stdin, lastFrame, unmount } = renderApp({
+      fullScreen: true,
+      agent: {
+        processInput: vi.fn(async () => {
+          await getInkHandlers()!.requestAskUser(
+            [{ question: 'Pick one', choices: ['A', 'B'] }],
+            undefined,
+            { recordInTranscript: true },
+          );
+          await turn;
+        }),
+      },
+    });
+    await tick();
+    await submit(stdin, 'go');
+    await tick(60);
+    stdin.write('1');
+    await tick(60);
+    expect(stripAnsi(lastFrame() ?? '')).toContain('Pick one');
+
+    stdin.write('\x1b'); // Esc aborts the turn
+    release();
+    await tick(80);
+    expect(stripAnsi(lastFrame() ?? '')).not.toContain('Pick one: A');
+    unmount();
+  }, 10000);
+});

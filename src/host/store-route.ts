@@ -33,20 +33,35 @@ export function handleStoreRequest(appId: string, body: unknown): StoreResponse 
   try {
     const op = parseStoreOp(req);
     const result = applyStoreOp(appletStoreFor(appId), op);
-    // Unwrapped to the shape the SDK reads: an entry, a list, or a `{deleted}`
-    // flag. NOT the shape the page reads — `sdk.ts` unwraps a second time so a
-    // caller gets the value it asked for. This comment used to say "the page's
-    // JavaScript", and that sentence is arguably the root cause of a real
-    // failure: it told a reader the job was finished one layer too early, so
-    // the client passed the envelope straight through and every applet that
-    // trusted the documentation got an object where it expected a value.
+    // Unwrapped ONCE, here, to exactly what the page's JavaScript reads: the
+    // value for a get or a set, a boolean for a delete, the entries for a list.
+    //
+    // This used to stop one layer short — it emitted the entry, and `sdk.ts`
+    // unwrapped a second time — and that is what a real applet lost half an
+    // hour to: an earlier version of this comment claimed the job was done
+    // here, the client passed the envelope through, and `store.get('items')`
+    // handed the page `{key, value, updatedAt}`.
+    //
+    // The second layer is not merely redundant, it points the wrong way. It
+    // was justified as keeping a wire contract "other readers depend on", and
+    // there are none: this function has one caller, a page that speaks the wire
+    // itself is REFUSED at the write path (`page-validate.ts`'s HAND_ROLLED),
+    // and the other door reaches `applyStoreOp` directly. The tell is that this
+    // switch drops `kind` — the only field saying what the payload IS — and the
+    // client then reconstructed it from the op it had SENT. A reader switching
+    // on what it asked rather than what it got is a missing layer, not a
+    // redundant one, and it meant a fifth op would silently take the `list`
+    // encoding.
+    //
+    // `updatedAt` is dropped from a get with it. Nothing read it, and the
+    // documented metadata door is `list(exactKey)`, which keeps its entries.
     switch (result.kind) {
       case 'entry':
-        return { ok: true, result: result.entry };
+        return { ok: true, result: result.entry ? result.entry.value : null };
       case 'written':
-        return { ok: true, result: result.entry };
+        return { ok: true, result: result.entry.value };
       case 'deleted':
-        return { ok: true, result: { deleted: result.deleted } };
+        return { ok: true, result: result.deleted };
       case 'entries':
         return { ok: true, result: result.entries };
     }

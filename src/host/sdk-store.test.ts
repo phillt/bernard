@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { useTempHome } from '../__tests__/temp-home.js';
 import { appletSdkScript } from './sdk.js';
 
@@ -40,8 +40,18 @@ describe('what a store call resolves to', () => {
   // leaks keys between tests — which is how the pagination assertion first
   // failed, seeing a neighbour's row.
   let n = 0;
+  const opened: string[] = [];
+  // `appletStoreFor` caches a connection per app id for the life of the
+  // process, and `useTempHome` then deletes the directory under it. Both
+  // sibling suites that touch this cache close what they open; this one is
+  // held to the same convention rather than relying on it being harmless.
+  afterEach(async () => {
+    const { closeAppletStore } = await import('../apps/store.js');
+    while (opened.length) closeAppletStore(opened.pop()!);
+  });
   async function client(): Promise<StoreClient> {
     const appId = `sdk-store-${n++}`;
+    opened.push(appId);
     const vm = await import('node:vm');
     const { handleStoreRequest } = await import('./store-route.js');
     const ctx: Record<string, unknown> = {

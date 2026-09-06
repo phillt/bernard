@@ -131,11 +131,12 @@ import { debugLog, getSessionId, getSessionLogPath, isDebugEnabled } from '../lo
 import { SessionTelemetry } from '../session-telemetry.js';
 import { withSlot, getMaxConcurrentAgents, getActiveCount } from '../tools/agent-pool.js';
 import type {
-  AskUserQuestion,
   AskUserBatchResult,
-  ConfirmActionInput,
+  AskUserOptions,
+  AskUserQuestion,
   BlockActionInput,
   BlockOutcome,
+  ConfirmActionInput,
 } from '../tools/types.js';
 import type {
   MenuEntry,
@@ -737,7 +738,26 @@ export function App({
    * visible. A WeakSet keyed on the message object needs no clearing and
    * cannot outlive the history that holds it.
    */
-  const askUserRenderedRef = useRef(new WeakSet<CoreMessage>());
+  const askUserRenderedRef = useRef<WeakSet<CoreMessage>>(new WeakSet());
+  /**
+   * Transcript keys the `ask_user` echo pushed during the current turn.
+   *
+   * Withdrawn if the turn aborts. The echo renders an answer the moment it is
+   * given, but the history injection that makes the model see it is guarded on
+   * `!aborted` — and `agent.ts` appends the turn's messages only after
+   * `generateText` returns. So answering and then pressing Esc left a user
+   * bubble on screen whose answers reached neither the model, the history, nor
+   * disk, and which vanished on resume. That is exactly the lie
+   * `recordInTranscript` exists to prevent, arriving by the other door.
+   *
+   * **Effective in full-screen only, and that is stated rather than hidden.**
+   * `TranscriptViewport` re-renders the whole list, so a withdrawn item leaves
+   * the screen; the legacy `<Static>` path writes each item once and never
+   * un-writes, so there it is a no-op — no worse than before, and full-screen
+   * is the default. Measured, not assumed: the test drives `fullScreen: true`
+   * for exactly this reason.
+   */
+  const askUserEchoKeysRef = useRef<string[]>([]);
   const [pendingMenu, setPendingMenu] = useState<PendingMenu | null>(null);
   const [pendingWizard, setPendingWizard] = useState<PendingWizard | null>(null);
   const [pendingMultiMenu, setPendingMultiMenu] = useState<PendingMultiMenu | null>(null);
@@ -1134,19 +1154,22 @@ export function App({
     setToast({ message, variant });
   };
 
-  // Push a UI-only assistant notice into the transcript (same mechanism as the
-  // startup lineup-correction notice): straight into `staticItems`, never into
-  // `agent.history`, so it isn't persisted or replayed.
-  const pushAssistantNotice = (content: string) => {
-    setStaticItems((prev) => [
-      ...prev,
-      {
-        key: String(itemKeyRef.current++),
-        message: { role: 'assistant', content },
-        toolDetails: false,
-      },
-    ]);
+  /**
+   * Push a UI-only message into the transcript.
+   *
+   * Straight into `staticItems`, never into `agent.history`, so it is not
+   * persisted or replayed — and it must never advance `committedLenRef`. That
+   * invariant used to be a comment beside each copy of this body; keeping one
+   * writer is what makes it a property rather than a convention.
+   */
+  const pushTranscriptMessage = (role: 'assistant' | 'user', content: string): string => {
+    const key = String(itemKeyRef.current++);
+    setStaticItems((prev) => [...prev, { key, message: { role, content }, toolDetails: false }]);
+    return key;
   };
+
+  /** Bernard's own voice, behind the `❮` chevron. */
+  const pushAssistantNotice = (content: string) => pushTranscriptMessage('assistant', content);
 
   // Warn-only lineup validation (#264 follow-up). After a save/switch we
   // live-probe the lineup's models in the background and, IF any are
@@ -3892,10 +3915,20 @@ export function App({
       // Per-turn dedup set — one entry per toolCallId we've already injected for.
       // Prevents double-injection if the agent auto-continues after a length cut.
       const askUserInjectedIds = new Set<string>();
+      askUserEchoKeysRef.current = [];
       await inflight;
       // Inject synthetic `role:'user'` messages for any ask_user answers that
       // landed in history this turn (#245). Only run on non-aborted turns so
       // cancelled turns don't emit a stale partial bubble.
+      if (controller.signal.aborted) {
+        // Withdraw the echoed answers: nothing carried them to the model, so
+        // leaving them would show a user message that was never part of the
+        // conversation.
+        const withdrawn = new Set(askUserEchoKeysRef.current);
+        if (withdrawn.size > 0) {
+          setStaticItems((prev) => prev.filter((i) => !withdrawn.has(i.key)));
+        }
+      }
       if (!controller.signal.aborted) {
         // The messages it adds exist for the MODEL — the next turn has to see
         // what was answered. They must not be rendered, because `requestAskUser`
@@ -4468,7 +4501,7 @@ export function App({
   async function requestAskUser(
     questions: AskUserQuestion[],
     signal?: AbortSignal,
-    opts?: { recordInTranscript?: boolean },
+    opts?: AskUserOptions,
   ): Promise<AskUserBatchResult> {
     /**
      * Echo the answers into the transcript the moment they are given.
@@ -4495,14 +4528,7 @@ export function App({
         questions.map((q) => q.question),
       );
       if (!text) return;
-      setStaticItems((prev) => [
-        ...prev,
-        {
-          key: String(itemKeyRef.current++),
-          message: { role: 'user' as const, content: text },
-          toolDetails: false,
-        },
-      ]);
+      askUserEchoKeysRef.current.push(pushTranscriptMessage('user', text));
     };
     // A batch is a wizard (#473), which is what gives every existing `ask_user`
     // caller back, edit and a check-your-answers review for nothing. A single
@@ -4517,14 +4543,6 @@ export function App({
       return result;
     }
     const answers: (string | string[])[] = [];
-    // Every early exit goes through here so a cancelled batch still echoes the
-    // answers already given — the user typed them, and losing them from the
-    // transcript is the same complaint one step smaller.
-    const cancelled = (): AskUserBatchResult => {
-      const out: AskUserBatchResult = { cancelled: true, answered: answers };
-      echo(out);
-      return out;
-    };
     for (const q of questions) {
       // Belt-and-braces since #266: every overlay below now takes the signal
       // itself, so an abort mid-question tears the overlay down instead of
@@ -4562,12 +4580,12 @@ export function App({
       }
 
       const result = await requestMenu(entries, { title: q.question }, signal);
-      if (result.cancelled) return cancelled();
+      if (result.cancelled) return { cancelled: true, answered: answers };
 
       if (isHatch(result.item)) {
         // User picked "Other" — gather free-form text.
         const free = await requestTextInput(askUserPrompt(q.question), signal);
-        if (free.cancelled) return cancelled();
+        if (free.cancelled) return { cancelled: true, answered: answers };
         answers.push(free.raw.trim());
       } else {
         answers.push(result.item.label);
