@@ -227,3 +227,61 @@ describe('injectAskUserHistoryMessages', () => {
     expect(history).toHaveLength(1);
   });
 });
+
+describe('the injected bubble says what was asked', () => {
+  const call = (id: string, questions: unknown[]) => ({
+    role: 'assistant' as const,
+    content: [{ type: 'tool-call', toolCallId: id, toolName: 'ask_user', args: { questions } }],
+  });
+  const result = (id: string, payload: unknown) => ({
+    role: 'tool' as const,
+    content: [
+      {
+        type: 'tool-result',
+        toolCallId: id,
+        toolName: 'ask_user',
+        result: JSON.stringify(payload),
+      },
+    ],
+  });
+
+  it('recovers the questions from the tool-call message', () => {
+    // The defect: the injector called `formatAskUserAnswers` without the
+    // `questions` argument it supports, so the bubble was bare values with no
+    // idea what had been asked.
+    const history = [
+      call('c1', [{ question: 'Pick a colour' }, { question: 'Pick a size' }]),
+      result('c1', { answers: ['red', 'large'] }),
+    ] as never[];
+    const added = injectAskUserHistoryMessages(history, 0, new Set());
+    expect(added).toHaveLength(1);
+    expect(String(added[0].content)).toContain('Pick a colour');
+    expect(String(added[0].content)).toContain('red');
+  });
+
+  it('falls back to bare answers when the call cannot be found', () => {
+    // Runs on the turn-completion path, so it degrades rather than throwing —
+    // a throw there costs the answers entirely.
+    const history = [result('c1', { answers: ['red'] })] as never[];
+    const added = injectAskUserHistoryMessages(history, 0, new Set());
+    expect(added).toHaveLength(1);
+    expect(String(added[0].content)).toContain('red');
+  });
+
+  it('survives a malformed args payload', () => {
+    const history = [
+      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c1', args: 'nope' }] },
+      result('c1', { answers: ['red'] }),
+    ] as never[];
+    expect(() => injectAskUserHistoryMessages(history, 0, new Set())).not.toThrow();
+  });
+
+  it('returns the messages it added, by identity, so a caller can suppress them', () => {
+    // What lets App render the answer once, at the moment it is given, while
+    // the injector still writes history for the model. Identity, not indices.
+    const history = [call('c1', [{ question: 'Q' }]), result('c1', { answers: ['A'] })] as never[];
+    const added = injectAskUserHistoryMessages(history, 0, new Set());
+    expect(added).toHaveLength(1);
+    expect(history).toContain(added[0]);
+  });
+});

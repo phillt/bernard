@@ -33,6 +33,11 @@ describe('ask_user tool', () => {
         },
       ],
       undefined,
+      // The tool opts in to the transcript echo; `agent.ts`'s step-budget
+      // prompt, the other `askUser` caller, deliberately does not — its
+      // answers produce no tool result, so a bubble for them would be a user
+      // message the model never received.
+      { recordInTranscript: true },
     );
   });
 

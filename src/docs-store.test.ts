@@ -190,6 +190,67 @@ describe('the shipped corpus', () => {
   });
 });
 
+describe('what the documents promise about the client', () => {
+  /**
+   * The binding that was missing when this cost someone half an hour: every
+   * `bernard.*` a document names must exist on the client the host actually
+   * serves. The corpus already binds colour tokens and served paths this way;
+   * an API was the obvious third and was not there.
+   *
+   * Membership, not string equality — it asserts against a set derived from
+   * executing the real script, so a rename fails and a reword does not.
+   */
+  async function servedSurface() {
+    const vm = await import('node:vm');
+    const { appletSdkScript } = await import('./host/sdk.js');
+    const ctx: Record<string, unknown> = {
+      window: {} as Record<string, unknown>,
+      addEventListener() {},
+      document: { getElementById: () => null },
+      fetch: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+    };
+    vm.createContext(ctx);
+    new vm.Script(appletSdkScript()).runInContext(ctx);
+    const bernard = (ctx.window as { bernard: Record<string, unknown> }).bernard;
+    return {
+      top: new Set(Object.keys(bernard)),
+      store: new Set(Object.keys(bernard.store as object)),
+    };
+  }
+
+  it('names no `bernard.store.*` method the client does not have', async () => {
+    const { store } = await servedSurface();
+    for (const doc of allDocs()) {
+      for (const m of doc.body.matchAll(/\bbernard\.store\.([A-Za-z_$][\w$]*)/g)) {
+        expect([...store], `${doc.id} names bernard.store.${m[1]}`).toContain(m[1]);
+      }
+    }
+  });
+
+  it('names no `bernard.*` member the client does not have', async () => {
+    const { top } = await servedSurface();
+    for (const doc of allDocs()) {
+      for (const m of doc.body.matchAll(/\bbernard\.([A-Za-z_$][\w$]*)/g)) {
+        expect([...top], `${doc.id} names bernard.${m[1]}`).toContain(m[1]);
+      }
+    }
+  });
+
+  it('shows no `<form>` in any code example, since the write path refuses one', () => {
+    // A document teaching markup the write path rejects is worse than no
+    // document. Closes the loop between the refusal and the corpus.
+    //
+    // Fenced blocks only. Prose that names `<form>` in order to FORBID it is
+    // exactly what these documents should contain — the first cut checked the
+    // whole body and failed on the warning it was written to enforce.
+    for (const doc of allDocs()) {
+      for (const block of doc.body.match(/```[\s\S]*?```/g) ?? []) {
+        expect(block, `${doc.id} shows a <form> in an example`).not.toMatch(/<form[\s>]/i);
+      }
+    }
+  });
+});
+
 describe('front matter', () => {
   it('reads the two keys and leaves the body untouched', () => {
     // The id comes from the FILENAME, never the front matter — no shipped doc

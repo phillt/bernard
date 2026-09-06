@@ -46,9 +46,9 @@
   async function showLast() {
     const el = document.getElementById('last');
     try {
-      const entry = await bernard.store.get('last');
-      el.textContent = entry
-        ? `Last run: ${entry.value.action} — “${entry.value.question}”`
+      const last = await bernard.store.get('last');
+      el.textContent = last
+        ? `Last run: ${last.action} — “${last.question}”`
         : 'Nothing run yet.';
     } catch {
       el.textContent = '';

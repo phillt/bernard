@@ -1923,3 +1923,98 @@ describe('<App> external messages', () => {
     expect(listLiveSessions()).toEqual([]);
   });
 });
+
+describe('<App> ask_user answers appear when they are given', () => {
+  it('echoes the answer into the transcript before the turn ends', async () => {
+    // The reported complaint: "the questionnaire answers tend to show up after
+    // the turn rather than before it like a normal message." They landed in the
+    // transcript only at the turn-end `commitNewHistory`, below the assistant's
+    // reply, because the injector appends to the tail of history and nothing
+    // commits mid-turn. A typed message is immediate only because it gets its
+    // own commit at turn start.
+    //
+    // No turn runs here at all, which is the point — the bubble must not wait
+    // for one.
+    const { stdin, lastFrame, unmount } = renderApp();
+    await tick();
+    const pending = getInkHandlers()!.requestAskUser(
+      [{ question: 'Pick one', choices: ['A', 'B'] }],
+      undefined,
+      { recordInTranscript: true },
+    );
+    await tick(40);
+    stdin.write('1');
+    await pending;
+    await tick(40);
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toContain('Pick one');
+    expect(frame).toContain('A');
+    unmount();
+  });
+
+  it('stays silent for a caller that did not opt in', async () => {
+    // `agent.ts`'s step-budget prompt is the other `askUser` caller. It
+    // produces no tool result, so the model never receives its answer — a
+    // bubble for it would be a user message that was never part of the
+    // conversation, the failure `buildResumeSeed` names for self-injected
+    // seams. The flag pairs the visible and model-visible producers by
+    // construction rather than by memory.
+    const { stdin, lastFrame, unmount } = renderApp();
+    await tick();
+    const before = stripAnsi(lastFrame() ?? '');
+    const pending = getInkHandlers()!.requestAskUser([
+      { question: 'Keep going?', choices: ['Yes', 'No'] },
+    ]);
+    await tick(40);
+    stdin.write('1');
+    await pending;
+    await tick(40);
+    const after = stripAnsi(lastFrame() ?? '');
+    expect(after.includes('Keep going?: Yes')).toBe(false);
+    expect(after.length).toBeLessThanOrEqual(before.length + 200);
+    unmount();
+  });
+});
+
+describe('<App> an aborted turn withdraws the echoed answers', () => {
+  it('leaves no bubble for an answer the model never received', async () => {
+    // The echo renders an answer the moment it is given, but the history
+    // injection that makes the model see it is guarded on `!aborted`. So
+    // answering and then pressing Esc used to leave a user bubble backed by
+    // nothing — not the model, not the history, not disk — and it vanished on
+    // resume. The same lie `recordInTranscript` exists to prevent, by another
+    // door.
+    //
+    // `fullScreen: true` is load-bearing: only `TranscriptViewport` re-renders
+    // the list, so only there can an item leave the screen. Ink's `<Static>`
+    // writes once and never un-writes, which is a real limit of the fix and is
+    // recorded beside it.
+    let release!: () => void;
+    const turn = new Promise<void>((r) => (release = r));
+    const { stdin, lastFrame, unmount } = renderApp({
+      fullScreen: true,
+      agent: {
+        processInput: vi.fn(async () => {
+          await getInkHandlers()!.requestAskUser(
+            [{ question: 'Pick one', choices: ['A', 'B'] }],
+            undefined,
+            { recordInTranscript: true },
+          );
+          await turn;
+        }),
+      },
+    });
+    await tick();
+    await submit(stdin, 'go');
+    await tick(60);
+    stdin.write('1');
+    await tick(60);
+    expect(stripAnsi(lastFrame() ?? '')).toContain('Pick one');
+
+    stdin.write('\x1b'); // Esc aborts the turn
+    release();
+    await tick(80);
+    expect(stripAnsi(lastFrame() ?? '')).not.toContain('Pick one: A');
+    unmount();
+  }, 10000);
+});

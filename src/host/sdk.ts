@@ -144,6 +144,8 @@ function build(): string {
       if (key !== undefined) body.key = key;
       if (value !== undefined) body.value = value;
       if (opts && opts.prefix !== undefined) body.prefix = opts.prefix;
+      if (opts && opts.limit !== undefined) body.limit = opts.limit;
+      if (opts && opts.after !== undefined) body.after = opts.after;
       return post(STORE, boot, body).then(function (res) {
         // The two doors do not agree on the error shape: /invoke answers
         // { error: { code, message } } and /store answers { error: "..." }.
@@ -239,7 +241,15 @@ function build(): string {
     store: {
       get: function (key) { return storeOp('get', key); },
       set: function (key, value) { return storeOp('set', key, value); },
-      list: function (prefix) { return storeOp('list', undefined, undefined, { prefix: prefix }); },
+      // limit/after were supported by the route and dropped here, so a page
+      // with more than 100 entries silently got 100 and could not tell.
+      list: function (prefix, opts) {
+        return storeOp('list', undefined, undefined, {
+          prefix: prefix,
+          limit: opts && opts.limit,
+          after: opts && opts.after,
+        });
+      },
       delete: function (key) { return storeOp('delete', key); },
     },
   };

@@ -406,7 +406,7 @@ describe('applet server', () => {
     });
     expect(await call({ op: 'get', key: 'draft' })).toMatchObject({
       ok: true,
-      result: { key: 'draft', value: { text: 'hi' } },
+      result: { text: 'hi' },
     });
 
     const { closeAppletStore } = await import('./store-route.js');

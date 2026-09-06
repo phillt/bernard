@@ -70,7 +70,9 @@ class, and you get the product look with nothing to maintain:
 
 ${selectors}
 
-So a form is \`<label>\` + \`<input>\` inside \`.field\`, a button row is
+So an input row is \`<label>\` + \`<input>\` inside a \`<div class="field">\` —
+never a \`<form>\` element, which can never submit and is refused when the page
+is saved. A button row is
 \`.actions\`, a result block is \`<pre class="output">\`, and a list of things is
 \`<ul class="cards"><li>\`. \`button.secondary\` and \`button.danger\` are the two
 button variants. \`.hidden\` hides an element; toggle it with
@@ -201,7 +203,7 @@ function uiRuntimeDoc(): DocEntry {
       'When plain DOM code stops being enough, and how to use the served Preact runtime instead. Read before hand-writing innerHTML or a render loop in an applet.',
     body: `# The UI runtime
 
-Most applets need no library. One form, one button, one result block — write
+Most applets need no library. One input, one button, one result block — write
 plain DOM code and stop.
 
 Reach for the runtime when the page has **${UI_RUNTIME_RULE}**. That is the
@@ -229,6 +231,7 @@ client. It attaches one global, \`${UI_RUNTIME_GLOBAL}\`.
     const [text, setText] = useState('');
 
     useEffect(() => {
+      // resolves to the value, or null — not an entry wrapper
       bernard.store.get('items').then((saved) => setItems(saved || []));
     }, []);
 

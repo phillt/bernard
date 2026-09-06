@@ -27,6 +27,7 @@ import type {
 } from './menu-types.js';
 import type {
   AskUserBatchResult,
+  AskUserOptions,
   AskUserQuestion,
   BlockActionInput,
   BlockOutcome,
@@ -56,6 +57,7 @@ export interface InkHandlers {
   requestAskUser: (
     questions: AskUserQuestion[],
     signal?: AbortSignal,
+    opts?: AskUserOptions,
   ) => Promise<AskUserBatchResult>;
   requestConfirmDangerous: (command: string, signal?: AbortSignal) => Promise<boolean>;
   /**
