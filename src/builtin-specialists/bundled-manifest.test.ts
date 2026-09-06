@@ -286,6 +286,43 @@ describe('the applet planners (#13)', () => {
     for (const t of types) expect(prompt, `does not name the \`${t}\` type`).toContain(`\`${t}\``);
   });
 
+  it('no planner depends on an intent field the interview never fills', async () => {
+    // The bridge from the interview to the planners is the brief's `intent`, and
+    // it is NARROW: the record has twelve fields and four questions fill four of
+    // them. A planner reaching for one of the other eight is not a visible
+    // failure — `renderIntent` drops empty fields, so the planner never sees the
+    // name, silently takes whatever fallback the prompt gave it, and the rule
+    // reads as live while being dead on every single build.
+    //
+    // Found exactly that way: `applet-ux-planner` derived control size and
+    // density from `intent.context`, which no question asks for, so the rule
+    // could never once have fired.
+    const { INTERVIEW_QUESTIONS } = await import('../apps/interview.js');
+    const { INTENT_FIELDS } = await import('../apps/brief.js');
+    const filled = new Set<string>(INTERVIEW_QUESTIONS.map((q) => q.field));
+    expect(filled.size).toBeGreaterThan(0);
+
+    for (const name of PLANNERS) {
+      const prompt = load(name).systemPrompt;
+      const dead = INTENT_FIELDS.filter((f) => !filled.has(f) && prompt.includes(`\`${f}\``));
+      expect(
+        dead,
+        `${name} plans from intent fields the interview never collects, so those ` +
+          `rules are dead on every build: ${dead.join(', ')}. Either ask for them ` +
+          `or derive them from a field that IS filled (${[...filled].join(', ')}).`,
+      ).toEqual([]);
+    }
+  });
+
+  it('states the plain-language rule once, for both the interviewer and the labels', async () => {
+    // Same shape as the `UI_RUNTIME_RULE` pin directly below. Two surfaces —
+    // what the interviewer SAYS and what a button LABEL says — one rule, and
+    // before the constant they were two strings nothing held together.
+    const { PLAIN_LANGUAGE_RULE, interviewPlaybook } = await import('../apps/interview.js');
+    expect(interviewPlaybook()).toContain(PLAIN_LANGUAGE_RULE);
+    expect(load('applet-ux-planner').systemPrompt).toContain(PLAIN_LANGUAGE_RULE);
+  });
+
   it('no planner claims it can grant tools', () => {
     // `toolAllowlist`, `toolMode` and `confirmMode` are the user's, settable
     // only from the command line — the `applet` tool merely carries them

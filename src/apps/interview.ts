@@ -118,6 +118,22 @@ export const PROBES = [
   'What happens when that goes wrong?',
 ] as const;
 
+/**
+ * The level Bernard writes at, wherever a person will read the words.
+ *
+ * A constant rather than a phrase two prompts happen to share. It governs two
+ * different surfaces — what the interviewer SAYS, and what a button LABEL says —
+ * and stating it twice is the drift {@link UI_RUNTIME_RULE} was made a constant
+ * to stop: the copies do not fail, they diverge, and the second one quietly
+ * stops meaning what the first one does. A test asserts both name it.
+ *
+ * Nine is not a guess about the reader. It is the level plain-language guidance
+ * settles on for public-facing text, and the point is that jargon a builder
+ * cannot hear is exactly what makes an applet unusable by the person who asked
+ * for it.
+ */
+export const PLAIN_LANGUAGE_RULE = 'Reading age nine';
+
 /** Questions that must never be asked, and what to ask instead. */
 export const ANTI_PATTERNS: { avoid: string; instead: string; why: string }[] = [
   {
@@ -225,7 +241,7 @@ ${avoid}
 
 ## How to talk
 
-Reading age nine. Short sentences, ordinary words, no jargon — not "inputs",
+${PLAIN_LANGUAGE_RULE}. Short sentences, ordinary words, no jargon — not "inputs",
 "outputs", "data model", "persistence", "users". React like a person who finds
 their problem interesting ("ah, that makes sense", "that sounds annoying"), but
 never praise an idea — "that's a great feature idea!" teaches them to pitch
