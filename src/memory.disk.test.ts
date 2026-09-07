@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as realFs from 'node:fs';
 import * as path from 'node:path';
 import { useTempHome } from './__tests__/temp-home.js';
-import type { MemoryStore as MemoryStoreType, MemoryRecord } from './memory.js';
+import type { MemoryStore as MemoryStoreType } from './memory.js';
 
 /**
  * The on-disk half of `MemoryStore` (#513), against a REAL directory.
@@ -16,7 +16,7 @@ import type { MemoryStore as MemoryStoreType, MemoryRecord } from './memory.js';
  * `MEMORY_DIR` is a module-level const resolved from `BERNARD_HOME` at import,
  * so every test re-imports after `useTempHome` has set it.
  */
-const home = useTempHome('bernard-memory-disk');
+useTempHome('bernard-memory-disk');
 
 let MemoryStore: typeof MemoryStoreType;
 let sanitizeKey: (k: string) => string;
@@ -33,7 +33,6 @@ beforeEach(async () => {
   // FLAT layout, so guessing the shape here would silently test a directory
   // the store never touches.
   memDir = (await import('./paths.js')).MEMORY_DIR;
-  void home;
 });
 
 /** Writes a file into the memory directory behind the store's back. */
@@ -69,6 +68,16 @@ describe('legacy files — the entire existing corpus', () => {
   it('falls back to the sanitized filename when no key was recorded', () => {
     seed('email-accounts.md', 'x');
     expect(new MemoryStore().readRecord('email-accounts')?.key).toBe('email-accounts');
+  });
+
+  it('treats a fence carrying only a key: line as prose, not metadata', () => {
+    // `key:` is an ordinary line in prose about YAML, and these files are
+    // model-written — a memory documenting a config format would otherwise be
+    // silently decapitated. `writtenAt`/`supersededBy` are the discriminators
+    // because `serializeMemory` is the only thing that writes them.
+    const body = '---\nkey: some.setting\nvalue: 3\n---\nHow the config works.\n';
+    seed('yaml-note.md', body);
+    expect(new MemoryStore().readMemory('yaml-note')).toBe(body);
   });
 
   it('does not decapitate a body that legitimately opens with a rule', () => {
@@ -259,13 +268,37 @@ describe('the read cache', () => {
     realFs.utimesSync(p, pinned, pinned);
     expect(store.readMemory('note')).toBe('body');
 
-    realFs.writeFileSync(p, realFs.readFileSync(p, 'utf-8').replace('body', 'CHANGED'), 'utf-8');
+    // Same LENGTH as well as same mtime: the cache validates on both, so a
+    // different-sized write is a legitimate miss and would pass this test for
+    // the wrong reason.
+    realFs.writeFileSync(p, realFs.readFileSync(p, 'utf-8').replace('body', 'BODY'), 'utf-8');
     realFs.utimesSync(p, pinned, pinned);
 
     expect(store.readMemory('note')).toBe('body');
     // And a fresh store, with no cache, sees the change — so the assertion
     // above is about caching rather than about the write having failed.
-    expect(new MemoryStore().readMemory('note')).toBe('CHANGED');
+    expect(new MemoryStore().readMemory('note')).toBe('BODY');
+  });
+
+  it('re-reads a same-mtime write of a different size', () => {
+    // Why `CacheEntry` carries `size` as well as `mtimeMs`, following
+    // `apps/app-csp-grants.ts`'s `readCached`: mtime granularity can miss a
+    // same-millisecond external write, and a cross-process writer is the exact
+    // scenario this cache was built to catch. On mtime alone this returns the
+    // stale body.
+    const store = new MemoryStore();
+    store.writeMemory('note', 'short');
+    expect(store.readMemory('note')).toBe('short');
+
+    const p = path.join(memDir, 'note.md');
+    const pinned = new Date('2026-09-07T12:00:00.000Z');
+    realFs.utimesSync(p, pinned, pinned);
+    expect(store.readMemory('note')).toBe('short');
+
+    realFs.writeFileSync(p, realFs.readFileSync(p, 'utf-8').replace('short', 'much longer body'));
+    realFs.utimesSync(p, pinned, pinned);
+
+    expect(store.readMemory('note')).toBe('much longer body');
   });
 
   it('re-reads when another process writes the same file', () => {
@@ -289,18 +322,5 @@ describe('the read cache', () => {
     expect(store.readMemory('note')).toBe('body');
     realFs.unlinkSync(path.join(memDir, 'note.md'));
     expect(store.readMemory('note')).toBeNull();
-  });
-});
-
-describe('getAllMemoryRecords', () => {
-  it('carries the metadata getAllMemoryContents drops', () => {
-    const store = new MemoryStore();
-    store.writeMemory('a', 'one');
-    store.writeMemory('b', 'two');
-    const records = store.getAllMemoryRecords();
-    expect([...records.keys()].sort()).toEqual(['a', 'b']);
-    for (const record of records.values() as Iterable<MemoryRecord>) {
-      expect(record.writtenAt).toBeTruthy();
-    }
   });
 });

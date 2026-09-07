@@ -79,32 +79,16 @@ describe('the read-only memory tool', () => {
     expect(calls).toContainEqual(['readMemory', 'a']);
   });
 
-  it('rejects write without reaching the store', async () => {
-    const r = await createReadOnlyMemoryTool(store).execute(
-      { action: 'write', key: 'a', content: 'x' } as never,
-      {} as never,
-    );
-    expect(r.status).toBe('error');
-    expect(calls).toEqual([]);
-  });
-
-  it('rejects delete without reaching the store', async () => {
-    const r = await createReadOnlyMemoryTool(store).execute(
-      { action: 'delete', key: 'a' } as never,
-      {} as never,
-    );
-    expect(r.status).toBe('error');
-    expect(calls).toEqual([]);
-  });
-
-  it('rejects supersede without reaching the store', async () => {
-    // The case the hardcoded list would have admitted. A Critic retiring a
-    // user's curated memory is not a smaller act than deleting one — it is the
-    // same act with the file left behind.
-    const r = await createReadOnlyMemoryTool(store).execute(
-      { action: 'supersede', key: 'a', replacement: 'b' } as never,
-      {} as never,
-    );
+  // One property, three actions. The `supersede` row is the case a hardcoded
+  // list would have admitted: a Critic retiring a user's curated memory is not
+  // a smaller act than deleting one, it is the same act with the file left
+  // behind.
+  it.each([
+    ['write', { action: 'write', key: 'a', content: 'x' }],
+    ['delete', { action: 'delete', key: 'a' }],
+    ['supersede', { action: 'supersede', key: 'a', replacement: 'b' }],
+  ])('rejects %s without reaching the store', async (_name, args) => {
+    const r = await createReadOnlyMemoryTool(store).execute(args as never, {} as never);
     expect(r.status).toBe('error');
     expect(calls).toEqual([]);
   });
@@ -129,14 +113,10 @@ describe('the read-only scratch tool', () => {
   });
 });
 
-describe('the wrapper refuses a tool it cannot classify', () => {
-  it('rejects every action when the tool declares no isWriteAction', async () => {
-    // Fail closed, deliberately: a read-only wrapper that cannot tell a read
-    // from a write must not guess. Both real callers declare the predicate, so
-    // this is a guard rather than a live path — which is exactly why it needs a
-    // test, since nothing else would ever exercise it.
-    const wrapped = readOnlyWrap({
-      meta: { name: 'bare', kind: 'write', deterministic: false },
+describe('a tool that declares no isWriteAction falls back to its kind', () => {
+  function bare(kind: 'read' | 'write') {
+    return readOnlyWrap({
+      meta: { name: 'bare', kind, deterministic: false },
       description: 'd',
       parameters: {} as never,
       execute: async () => {
@@ -145,9 +125,21 @@ describe('the wrapper refuses a tool it cannot classify', () => {
       },
       serializeForModel: () => 'x',
     } as never);
+  }
 
-    const r = await wrapped.execute({ action: 'read' } as never, {} as never);
+  it('blocks a write-kind tool', async () => {
+    // `shouldBlockInReadOnly`'s documented fallback, not a guess made here —
+    // which is the whole reason this delegates rather than re-deciding.
+    const r = await bare('write').execute({ action: 'anything' } as never, {} as never);
     expect(r.status).toBe('error');
     expect(calls).toEqual([]);
+  });
+
+  it('allows a read-kind tool', async () => {
+    // The earlier form refused every action on any tool without a predicate,
+    // which is a FALSE refusal here: the tool declared itself a read.
+    const r = await bare('read').execute({ action: 'anything' } as never, {} as never);
+    expect(r.status).toBe('ok');
+    expect(calls).toEqual([['bare']]);
   });
 });

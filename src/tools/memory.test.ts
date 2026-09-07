@@ -54,6 +54,11 @@ describe('createMemoryTool', () => {
   it('list returns stored keys', async () => {
     store.writeMemory('prefs', 'dark mode');
     vi.mocked(fs.readdirSync).mockReturnValue(['prefs.md'] as any);
+    // `readFileSync` has to answer too: `listMemory()` loads each entry to read
+    // `supersededBy`, so a file that `readdir` reports and `read` cannot open is
+    // correctly excluded as vanished. The suite's default mock throws ENOENT for
+    // everything, which described a file that does not exist.
+    vi.mocked(fs.readFileSync).mockReturnValue('dark mode' as any);
     const result = await runSerialized(memoryTool, { action: 'list' });
     expect(result).toContain('prefs');
   });
