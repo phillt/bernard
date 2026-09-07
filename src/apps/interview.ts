@@ -118,6 +118,36 @@ export const PROBES = [
   'What happens when that goes wrong?',
 ] as const;
 
+/**
+ * The level Bernard writes at, wherever a person will read the words.
+ *
+ * A constant rather than a phrase two prompts happen to share. It governs two
+ * different surfaces — what the interviewer SAYS, and what a button LABEL says —
+ * and stating it twice is the drift {@link UI_RUNTIME_RULE} was made a constant
+ * to stop: the copies do not fail, they diverge, and the second one quietly
+ * stops meaning what the first one does. A test asserts both name it.
+ *
+ * Nine is not a guess about the reader. It is the level plain-language guidance
+ * settles on for public-facing text, and the point is that jargon a builder
+ * cannot hear is exactly what makes an applet unusable by the person who asked
+ * for it.
+ */
+export const PLAIN_LANGUAGE_RULE = 'Reading age nine';
+
+/**
+ * What "the smallest coherent thing" actually means, in the words every surface
+ * uses.
+ *
+ * Stated in five places before this became a constant: the playbook's build
+ * step, both of `applet plan`'s fail-open returns, and `applet-architect`'s
+ * prompt and guidelines. Same argument as {@link PLAIN_LANGUAGE_RULE} — and
+ * this one matters more, because the two fail-open returns are the ONLY thing
+ * standing between the interview and an arbitrary page when the planning pass
+ * does not run. A copy that drifts there degrades exactly when the safety net
+ * is load-bearing.
+ */
+export const SMALLEST_THING_RULE = 'one input, one transformation, one useful result';
+
 /** Questions that must never be asked, and what to ask instead. */
 export const ANTI_PATTERNS: { avoid: string; instead: string; why: string }[] = [
   {
@@ -225,21 +255,28 @@ ${avoid}
 
 ## How to talk
 
-Reading age nine. Short sentences, ordinary words, no jargon — not "inputs",
+${PLAIN_LANGUAGE_RULE}. Short sentences, ordinary words, no jargon — not "inputs",
 "outputs", "data model", "persistence", "users". React like a person who finds
 their problem interesting ("ah, that makes sense", "that sounds annoying"), but
 never praise an idea — "that's a great feature idea!" teaches them to pitch
 features instead of describing their week.
 
-## Then build, immediately
+## Then plan it, then build, immediately
 
-1. Write what you learned into the brief: \`applet\` with
+1. Plan it: \`applet\` with \`{"action":"plan", "name":"…", "description":"…",
+   "intent":{${fields}}}\`. It returns the scope, the controls and states, and
+   what is stored. Do this BEFORE writing a page — it is the only step that
+   decides what the applet should be, and skipping it is how a plausible but
+   arbitrary page gets built.
+2. Write what you learned into the brief: \`applet\` with
    \`{"action":"create", …, "intent":{${fields}}}\`.
    Put what you are GUESSING in \`assumptions\` — that is what separates it from
    what you were told.
-2. Build the smallest coherent thing: one input, one transformation, one
-   useful result. Not a settings screen, not a database, not five actions.
-3. It opens by itself. Then ask ONE question against the real thing:
+3. Build what the plan says. It is already the smallest coherent thing:
+   ${SMALLEST_THING_RULE}.
+   Not a settings screen, not a database, not five actions. Where the plan left
+   a section out, decide it yourself rather than widening the scope to cover it.
+4. It opens by itself. Then ask ONE question against the real thing:
    "Here it is — what is wrong with it?"
 
 That last step is where the real requirements are. Someone who cannot build

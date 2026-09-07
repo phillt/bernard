@@ -61,6 +61,7 @@ export interface ProfileSettings {
   autoCreateApplets?: boolean;
   autoOpenApplets?: boolean;
   autoStyleApplets?: boolean;
+  appletPlanning?: boolean;
   autoCreateThreshold?: number;
   promptRewriter?: boolean;
   recallFilter?: boolean;
@@ -249,6 +250,7 @@ const LEGACY_BOOLEAN_KEYS = [
   'autoCreateApplets',
   'autoOpenApplets',
   'autoStyleApplets',
+  'appletPlanning',
   'promptRewriter',
   'recallFilter',
   'referenceLookup',

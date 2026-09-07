@@ -9,9 +9,16 @@ import { defaultAppletPage } from '../apps/page-template.js';
 import { SpecialistStore, type Specialist } from '../specialists.js';
 import { directInvocableRefusalByName, toolArgRefusal } from '../apps/direct-tool.js';
 import type { AppletStyler, StyleOutcome } from './applet-styling.js';
+import type { AppletPlanner, PlanTarget } from './applet-planning.js';
 import { AppletBriefStore } from '../apps/brief-store.js';
-import { INTENT_FIELDS, INTENT_FIELD_LABELS, MAX_NOTE_CHARS, renderBrief } from '../apps/brief.js';
-import { interviewPlaybook } from '../apps/interview.js';
+import {
+  INTENT_FIELDS,
+  INTENT_FIELD_LABELS,
+  MAX_NOTE_CHARS,
+  normalizeIntent,
+  renderBrief,
+} from '../apps/brief.js';
+import { SMALLEST_THING_RULE, interviewPlaybook } from '../apps/interview.js';
 import { uncoveredTools, uncoveredToolsMessage } from '../apps/invocation.js';
 import {
   formatWarnings,
@@ -121,6 +128,10 @@ const APPLET_READ_ACTIONS: ReadonlySet<string> = new Set([
   // Returns a constant string and touches nothing. Omitted, `attachActionMeta`
   // classifies it a write and the read-only block gate refuses a prompt getter.
   'interview',
+  // Dispatches three planners and writes nothing anywhere. Same trap as
+  // `interview`: classified a write, the read-only block gate refuses it
+  // outright with nobody to ask.
+  'plan',
 ]);
 
 /** Actions that must be confirmed even under `confirmMode: 'auto'` (#456). */
@@ -138,6 +149,7 @@ const PARAMETERS = z.object({
       'style',
       'brief',
       'interview',
+      'plan',
       'decline',
     ])
     .describe(
@@ -152,7 +164,9 @@ const PARAMETERS = z.object({
         'been decided; `read` already returns it, so reach for `brief` to CHANGE it. ' +
         '`interview` returns how to find out what someone actually needs before building ' +
         'for them — reach for it FIRST whenever the request is vague, or the person has ' +
-        'not built software before.',
+        'not built software before. `plan` decides what to build BEFORE you write a page: ' +
+        'the scope, the controls and states, and what is stored — call it after the ' +
+        'interview and build from what it returns.',
     ),
   id: z.string().optional().describe('Applet id (kebab-case). Required for create/update/read.'),
   intent: z
@@ -259,11 +273,25 @@ type AppletArgs = z.infer<typeof PARAMETERS>;
  * `framework/agents/main.ts` builds, from a live ctx, can dispatch the styler.
  * See `applet-styling.ts`.
  */
-export function createAppletTool(
-  registry?: AppRegistry,
-  requestConsent?: ToolOptions['requestPermissionConsent'],
-  styleApplet?: AppletStyler,
-) {
+/**
+ * The ctx-dependent passes an instance may carry.
+ *
+ * A bag rather than three more positionals: these are a SET, not a sequence —
+ * "which of the ctx-dependent passes does this instance have?" — and the
+ * positional form had already produced `createAppletTool(undefined, undefined,
+ * undefined, planner)` at three call sites, with a fifth hole waiting for the
+ * next pass. The registry stays positional because eighteen of the twenty-seven
+ * callers pass only that.
+ */
+export interface AppletToolDeps {
+  requestConsent?: ToolOptions['requestPermissionConsent'];
+  /** The design pass. Absent on every instance `createTools` builds. */
+  style?: AppletStyler;
+  /** The planning pass. Absent for the same reason, and it is the same guard. */
+  plan?: AppletPlanner;
+}
+
+export function createAppletTool(registry?: AppRegistry, deps: AppletToolDeps = {}) {
   const store = registry ?? new AppRegistry();
   return attachActionMeta(
     tool({
@@ -281,7 +309,7 @@ export function createAppletTool(
           // back the promise before it rejects, so this `catch` would see
           // nothing and the `Error: ` prefix `detectToolError` reads (#364)
           // would silently stop being applied.
-          return await run(store, args, requestConsent, styleApplet, execOptions?.abortSignal);
+          return await run(store, args, deps, execOptions?.abortSignal);
         } catch (err) {
           // The `Error: ` prefix is what `detectToolError` reads (#364).
           return `Error: ${err instanceof Error ? err.message : String(err)}`;
@@ -314,13 +342,24 @@ function briefStore(): AppletBriefStore {
   return briefStoreInstance;
 }
 
+/**
+ * What every fail-open exit from `plan` tells the model to do instead.
+ *
+ * Three exits share it — turned off, config unreadable, and the planners
+ * failing — and it is the only thing standing between the interview and an
+ * arbitrary page when the pass does not run. Built from
+ * {@link SMALLEST_THING_RULE} rather than retyped, so the doctrine cannot drift
+ * between here and the playbook that also states it.
+ */
+const buildDirectly = `Build directly, keeping it to ${SMALLEST_THING_RULE}.`;
+
 async function run(
   store: AppRegistry,
   args: AppletArgs,
-  requestConsent?: ToolOptions['requestPermissionConsent'],
-  styleApplet?: AppletStyler,
+  deps: AppletToolDeps,
   abortSignal?: AbortSignal,
 ): Promise<string> {
+  const { requestConsent, style: styleApplet, plan: planApplet } = deps;
   switch (args.action) {
     case 'list': {
       const ids = store.listIds();
@@ -548,6 +587,46 @@ async function run(
       const fields = Object.keys(written.intent).length;
       return `Updated the brief for "${id}" — ${fields} intent field(s), ${written.notes.length} note(s).`;
     }
+    case 'plan': {
+      // Before anything else, for the reason `style` gives: on a planner-less
+      // instance — every one `createTools` builds — the work below is done and
+      // thrown away.
+      if (!planApplet) {
+        return 'Error: planning is not available here. Ask from the main REPL.';
+      }
+      // The same sanitiser every other intent path goes through (`create` and
+      // `brief` reach it via `briefStore().write`). Skipping it let an intent of
+      // unknown keys pass the emptiness check below and then render as
+      // "nothing recorded" to all three planners, and left a model-supplied
+      // field uncapped on its way into three prompts.
+      const intent = normalizeIntent(args.intent);
+      if (Object.keys(intent).length === 0) {
+        // Planning from nothing produces a confident invention, which is worse
+        // than no plan: it reads as researched and nobody knows which part to
+        // argue with. Checked before the config read below, which is the only
+        // I/O on this path.
+        return 'Error: `plan` needs `intent` — what the person actually said. Run `applet {"action":"interview"}` first.';
+      }
+      const enabled = await appletFlag('appletPlanning');
+      if (enabled !== true) {
+        // Neither case is a failure, and they are different: one is a setting,
+        // the other is a config that could not be read at all (no provider
+        // key). Said plainly so the model builds rather than retrying a call
+        // that will never do anything.
+        return enabled === false
+          ? `Planning is turned off (BERNARD_APPLET_PLANNING). ${buildDirectly}`
+          : `Planning is unavailable here — Bernard could not read its config. ${buildDirectly}`;
+      }
+      const target: PlanTarget = {
+        name: args.name ?? args.id ?? 'this applet',
+        description: args.description ?? '',
+        intent,
+      };
+      const outcome = await planApplet(target, abortSignal);
+      return outcome.planned
+        ? outcome.spec
+        : `Error: planning did not run (${outcome.reason}). ${buildDirectly}`;
+    }
     case 'style': {
       const id = need(args.id, 'id', 'style');
       // Before `store.get`, which is a read plus a full manifest parse: on a
@@ -741,12 +820,20 @@ function grantHint(appId: string, actions: string[]): string {
  * for the catch is the non-obvious part, and the third copy is the one that
  * gets it wrong.
  */
-async function appletFlag(key: 'autoOpenApplets' | 'autoStyleApplets'): Promise<boolean> {
+async function appletFlag(
+  key: 'autoOpenApplets' | 'autoStyleApplets' | 'appletPlanning',
+): Promise<boolean | undefined> {
   try {
     const { loadConfig } = await import('../config.js');
     return loadConfig()[key];
   } catch {
-    return false;
+    // `undefined`, not `false`. Both of the original callers are best-effort
+    // steps on a create that already succeeded, and treat any falsy value as
+    // "skip" — so nothing changed for them. `plan` is the third caller and is
+    // NOT best-effort: it is the whole body of the action, and reporting a
+    // failed config read as "you turned this off" attributes to the user a
+    // setting they never made. Distinguishable is the point.
+    return undefined;
   }
 }
 

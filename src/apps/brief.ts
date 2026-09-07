@@ -105,6 +105,32 @@ export function emptyBrief(): AppletBrief {
   return { intent: {}, notes: [] };
 }
 
+/**
+ * The intent block, as lines — the one place that decides which fields are
+ * shown and in what order.
+ *
+ * Iterates {@link INTENT_FIELDS} rather than the object's own keys, so the
+ * order is the record's and not insertion order off a model-supplied object.
+ * Two readers of the same brief seeing different orders is a difference with no
+ * meaning.
+ *
+ * Empty fields are dropped, and that has a sharp edge worth knowing: it makes a
+ * field nobody asked for indistinguishable from one nobody answered. A planner
+ * built a rule on `intent.context` — which no interview question fills — and
+ * the rule was silently dead on every build rather than erroring. The guard for
+ * that lives in `bundled-manifest.test.ts`; this is the behaviour it guards.
+ */
+export function renderIntentLines(
+  intent: AppletBrief['intent'],
+  opts: { bold?: boolean } = {},
+): string[] {
+  return INTENT_FIELDS.filter((f) => intent[f]?.trim()).map((f) =>
+    opts.bold
+      ? `- **${INTENT_FIELD_LABELS[f]}:** ${intent[f]!.trim()}`
+      : `- ${INTENT_FIELD_LABELS[f]}: ${intent[f]!.trim()}`,
+  );
+}
+
 /** Drops unknown keys and caps each field. Intent comes from a model. */
 export function normalizeIntent(
   raw: Partial<Record<string, string>> | undefined,
@@ -137,9 +163,7 @@ export function normalizeIntent(
  */
 export function renderBrief(brief: AppletBrief, budget = MAX_BRIEF_CHARS): string {
   const lines: string[] = [];
-  const intentEntries = INTENT_FIELDS.filter((f) => brief.intent[f]).map(
-    (f) => `- **${INTENT_FIELD_LABELS[f]}:** ${brief.intent[f]}`,
-  );
+  const intentEntries = renderIntentLines(brief.intent, { bold: true });
   if (intentEntries.length > 0) lines.push('## Intent', ...intentEntries);
 
   let used = lines.join('\n').length;

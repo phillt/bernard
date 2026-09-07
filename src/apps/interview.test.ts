@@ -97,3 +97,23 @@ describe('the playbook', () => {
     expect(text).not.toMatch(/\b(four|4|seven|7) questions\b/i);
   });
 });
+
+describe('the playbook routes through the planner (#13)', () => {
+  const text = interviewPlaybook();
+
+  it('tells the agent to plan before it writes a page', () => {
+    // This is the whole routing mechanism. `applet-styler` shipped with no
+    // referrer anywhere in the tree and therefore never ran; the three planners
+    // are reachable only because this string names the call, so a rewrite that
+    // drops it silently restores the gap it was built to close.
+    expect(text).toContain('"action":"plan"');
+    expect(text.indexOf('"action":"plan"')).toBeLessThan(text.indexOf('"action":"create"'));
+  });
+
+  it('still says to build the smallest coherent thing', () => {
+    // The plan decides the scope now, but the doctrine has to survive a failed
+    // planning pass — that path tells the model to build directly, and this is
+    // the only place the rule is stated to it.
+    expect(text).toContain('one input, one transformation, one useful result');
+  });
+});

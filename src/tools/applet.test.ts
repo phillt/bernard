@@ -763,10 +763,9 @@ describe('the applet tool asks before anything is granted', () => {
   it('writes the grant the user allowed', async () => {
     const { createAppletTool, AppRegistry, grants } = await tools();
     const consent = vi.fn(async (req: { pending: unknown[] }) => req.pending as never);
-    const out = await createAppletTool(new AppRegistry({ seed: false }), consent).execute(
-      WITH('allowed'),
-      {} as never,
-    );
+    const out = await createAppletTool(new AppRegistry({ seed: false }), {
+      requestConsent: consent,
+    }).execute(WITH('allowed'), {} as never);
     expect(consent).toHaveBeenCalledOnce();
     expect(grants.loadAppCspGrant('allowed')).toEqual({ imgSrc: ['https://cdn.example.com'] });
     expect(out).toContain('The user allowed');
@@ -776,10 +775,9 @@ describe('the applet tool asks before anything is granted', () => {
     // Denying is a normal outcome, not a build failure: the applet exists and
     // the model is told, so the page can degrade rather than show dead frames.
     const { createAppletTool, AppRegistry, grants } = await tools();
-    const out = await createAppletTool(new AppRegistry({ seed: false }), async () => []).execute(
-      WITH('denied'),
-      {} as never,
-    );
+    const out = await createAppletTool(new AppRegistry({ seed: false }), {
+      requestConsent: async () => [],
+    }).execute(WITH('denied'), {} as never);
     expect(grants.loadAppCspGrant('denied')).toBeNull();
     expect(out).toContain('created');
     expect(out).toContain('did NOT allow');
@@ -800,7 +798,7 @@ describe('the applet tool asks before anything is granted', () => {
   it('does not ask at all when the applet declared nothing', async () => {
     const { createAppletTool, AppRegistry } = await tools();
     const consent = vi.fn(async () => []);
-    await createAppletTool(new AppRegistry({ seed: false }), consent).execute(
+    await createAppletTool(new AppRegistry({ seed: false }), { requestConsent: consent }).execute(
       { ...CREATE, id: 'nodeclare' },
       {} as never,
     );
@@ -811,7 +809,7 @@ describe('the applet tool asks before anything is granted', () => {
     const { createAppletTool, AppRegistry } = await tools();
     const store = new AppRegistry({ seed: false });
     const consent = vi.fn(async (req: { pending: unknown[] }) => req.pending as never);
-    const tool = createAppletTool(store, consent);
+    const tool = createAppletTool(store, { requestConsent: consent });
     await tool.execute(WITH('reask'), {} as never);
     const out = await tool.execute(
       { action: 'update', id: 'reask', page: PAGE, note: 'new page' },
@@ -879,7 +877,7 @@ async function loadWithStyler(
   const { createAppletTool } = await import('./applet.js');
   const { AppRegistry } = await import('../apps/registry.js');
   return {
-    tool: createAppletTool(new AppRegistry({ seed: false }), undefined, styler as never),
+    tool: createAppletTool(new AppRegistry({ seed: false }), { style: styler as never }),
     AppRegistry,
   };
 }
@@ -972,7 +970,7 @@ describe('the design pass on create', () => {
       order.push('style');
       return { styled: true };
     });
-    const tool = createAppletTool(new AppRegistry({ seed: false }), undefined, styler as never);
+    const tool = createAppletTool(new AppRegistry({ seed: false }), { style: styler as never });
 
     await tool.execute({ ...CREATE, id: 'order-check' }, {} as never);
 
@@ -1283,5 +1281,121 @@ describe('declining a suggestion from the conversation', () => {
     const out = await run(tool, { action: 'decline', id: 'article-bias-checker' });
     expect(out).toMatch(/^Error:/);
     expect(store.get(c.id)?.decidedAt).toBe(first);
+  });
+});
+
+describe('the plan action (#13)', () => {
+  useTempHome('bernard-applet-plan-action');
+
+  it('runs at low risk, so the read-only gate does not refuse it', async () => {
+    // It dispatches three planners and writes nothing anywhere. Classified a
+    // write, the block gate would refuse it outright with nobody to ask — the
+    // exact trap `interview` hit, where a constant-string getter was treated as
+    // a mutation. Asserted as the OUTCOME rather than on the read-actions set,
+    // so swapping how the meta is attached cannot silently change the answer.
+    const { createAppletTool } = await import('./applet.js');
+    const { riskFromMeta } = await import('../risk.js');
+    const { readToolMeta } = await import('../framework/tools/adapter.js');
+    const meta = readToolMeta(createAppletTool());
+    expect(riskFromMeta(meta, { action: 'plan' })).toBe('low');
+  });
+
+  it('says plainly that it is unavailable rather than reporting a failure', async () => {
+    // Every instance `createTools` builds is planner-less. Nothing was
+    // attempted, so this is not a failed planning pass.
+    const { createAppletTool } = await import('./applet.js');
+    const out = await (createAppletTool().execute as (a: unknown, o: unknown) => Promise<string>)(
+      { action: 'plan', name: 'X', description: 'y', intent: { goal: 'z' } },
+      {},
+    );
+    expect(out).toContain('not available here');
+  });
+
+  it('says planning is off rather than failing, and tells the model to build', async () => {
+    // A disabled pass is not a failure: reported as one, the model retries a
+    // call that will never do anything. The doctrine has to come with it, since
+    // it is the only thing standing between the interview and an arbitrary page
+    // when the pass does not run.
+    vi.resetModules();
+    vi.doMock('../config.js', () => ({ loadConfig: () => ({ appletPlanning: false }) }));
+    const { createAppletTool } = await import('./applet.js');
+    const planner = vi.fn(async () => ({ planned: true as const, spec: '# Build plan' }));
+    const out = await (
+      createAppletTool(undefined, { plan: planner }).execute as (
+        a: unknown,
+        o: unknown,
+      ) => Promise<string>
+    )({ action: 'plan', name: 'X', intent: { goal: 'z' } }, {});
+
+    expect(out).not.toMatch(/^Error:/);
+    expect(out).toContain('one input, one transformation, one useful result');
+    expect(planner).not.toHaveBeenCalled();
+  });
+
+  it('separates "turned off" from "could not read the config"', async () => {
+    // `appletFlag` catches a throwing `loadConfig`, which is what every
+    // no-provider-key environment hits. Reported as "turned off", that
+    // attributes to the user a setting they never made — so the two are
+    // distinguishable, and only one of them names the env var.
+    vi.resetModules();
+    vi.doMock('../config.js', () => ({
+      loadConfig: () => {
+        throw new Error('no provider key');
+      },
+    }));
+    const { createAppletTool } = await import('./applet.js');
+    const planner = vi.fn(async () => ({ planned: true as const, spec: '# Build plan' }));
+    const out = await (
+      createAppletTool(undefined, { plan: planner }).execute as (
+        a: unknown,
+        o: unknown,
+      ) => Promise<string>
+    )({ action: 'plan', name: 'X', intent: { goal: 'z' } }, {});
+
+    expect(out).not.toMatch(/^Error:/);
+    expect(out).not.toContain('BERNARD_APPLET_PLANNING');
+    expect(out).toContain('could not read its config');
+    expect(out).toContain('one input, one transformation, one useful result');
+    expect(planner).not.toHaveBeenCalled();
+  });
+
+  it('refuses to plan from an empty intent', async () => {
+    // Planning from nothing produces a confident invention, which is worse than
+    // no plan: it reads as researched and nobody can tell which part to argue
+    // with. Checked before the planner, so it costs no dispatch.
+    vi.resetModules();
+    vi.doMock('../config.js', () => ({ loadConfig: () => ({ appletPlanning: true }) }));
+    const { createAppletTool } = await import('./applet.js');
+    const planner = vi.fn(async () => ({ planned: true as const, spec: '# Build plan' }));
+    const tool = createAppletTool(undefined, { plan: planner });
+    const run = tool.execute as (a: unknown, o: unknown) => Promise<string>;
+
+    expect(await run({ action: 'plan', name: 'X' }, {})).toMatch(/^Error:/);
+    expect(await run({ action: 'plan', name: 'X', intent: { goal: '  ' } }, {})).toContain(
+      'interview',
+    );
+    expect(planner).not.toHaveBeenCalled();
+  });
+
+  it('returns the spec, and names the reason when planning did not run', async () => {
+    vi.resetModules();
+    vi.doMock('../config.js', () => ({ loadConfig: () => ({ appletPlanning: true }) }));
+    const { createAppletTool } = await import('./applet.js');
+    const run = (planned: boolean) =>
+      (
+        createAppletTool(undefined, {
+          plan: async () =>
+            planned
+              ? { planned: true as const, spec: '# Build plan for "X"' }
+              : { planned: false as const, reason: 'pool_exhausted' },
+        }).execute as (a: unknown, o: unknown) => Promise<string>
+      )({ action: 'plan', name: 'X', intent: { goal: 'z' } }, {});
+
+    expect(await run(true)).toContain('# Build plan for "X"');
+    const failed = await run(false);
+    expect(failed).toContain('pool_exhausted');
+    // A failed plan must never block the build — the refusal has to tell the
+    // model to go ahead, or it retries a call that will fail the same way.
+    expect(failed).toContain('one input, one transformation, one useful result');
   });
 });
