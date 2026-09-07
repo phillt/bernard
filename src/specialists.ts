@@ -75,7 +75,22 @@ export interface Specialist {
   updatedAt: string;
   /** Optional. Defaults to 'persona' for back-compat. */
   kind?: SpecialistKind;
-  /** For tool-wrapper/meta specialists, the tool names exposed to the child agent. */
+  /**
+   * The tool names exposed to the child agent — for EVERY kind, since #507.
+   *
+   * It was wrapper-only in practice rather than by design: `buildChildTools`
+   * was reached from `tool_wrapper_run` and applet dispatch, and
+   * `specialistDefinition.tools` never read the field, so a `persona` declaring
+   * one received the whole worker registry anyway. `createSpecialistTool` still
+   * REQUIRES it on a `tool-wrapper`/`meta` (an unscoped one is handed nothing
+   * and is inert); on a `persona` it stays optional, and absent means
+   * everything the resolved surface allows.
+   *
+   * An EMPTY array reads as absent on the persona path and as "no tools" on the
+   * wrapper path. Not an inconsistency: the creation boundary refuses an
+   * unscoped wrapper, so `[]` there is unreachable, while personas carry `[]`
+   * from before anything read the field at all.
+   */
   targetTools?: string[];
   /** Correct usage patterns used for few-shot priming. */
   goodExamples?: SpecialistExample[];
