@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { MEMORY_DIR } from './paths.js';
 import { atomicWriteFileSync } from './fs-utils.js';
-import { splitFrontMatter } from './front-matter.js';
+import { splitFrontMatter, normalizeFrontMatterValue } from './front-matter.js';
 
 /** @internal */
 export function sanitizeKey(key: string): string {
@@ -102,7 +102,10 @@ function parseMemoryFile(source: string): ParsedMemoryFile {
  * collision check, so the two always compare like with like.
  */
 function toSingleLine(value: string): string {
-  return value.replace(/[^\S ]+|\p{Cc}+/gu, ' ').trim();
+  // Normalized the way the READER normalizes, not merely flattened. Writing a
+  // value the parser would hand back differently is what made a quoted key
+  // un-rewritable: it collided with itself on every subsequent write.
+  return normalizeFrontMatterValue(value.replace(/[^\S ]+|\p{Cc}+/gu, ' '));
 }
 
 function serializeMemory(rec: MemoryRecord): string {

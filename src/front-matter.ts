@@ -41,6 +41,26 @@ const FENCE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 const FIELD = /^([a-zA-Z]+):\s*(.*)$/;
 
 /**
+ * How a field's value is read: trimmed, with one layer of surrounding quotes
+ * removed.
+ *
+ * **Exported so a WRITER can apply the same rule.** It was private, and the
+ * asymmetry that created was a real defect: `memory.ts` serialized a raw key
+ * verbatim and compared the incoming key verbatim, while the read side stripped
+ * quotes — so a key of `"foo"` was written as `key: "foo"`, read back as `foo`,
+ * and every later rewrite of that same key raised a collision against itself.
+ * The record became permanently un-rewritable, and the model's only escape was
+ * to invent a second key — creating exactly the duplicate the collision check
+ * exists to prevent.
+ *
+ * A writer that normalizes before serializing cannot drift from the reader,
+ * which is why this is one function rather than a rule stated twice.
+ */
+export function normalizeFrontMatterValue(raw: string): string {
+  return raw.trim().replace(/^["']|["']$/g, '');
+}
+
+/**
  * Splits a leading `---` fence off a source string.
  *
  * Returns `null` when there is no fence at all, which is distinct from a fence
@@ -56,7 +76,7 @@ export function splitFrontMatter(source: string): FrontMatter | null {
   const fields: Record<string, string> = {};
   for (const line of match[1].split(/\r?\n/)) {
     const kv = FIELD.exec(line.trim());
-    if (kv) fields[kv[1]] = kv[2].trim().replace(/^["']|["']$/g, '');
+    if (kv) fields[kv[1]] = normalizeFrontMatterValue(kv[2]);
   }
   return { fields, body: source.slice(match[0].length) };
 }

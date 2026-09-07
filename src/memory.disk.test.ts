@@ -144,6 +144,30 @@ describe('key collisions are refused, not silently overwritten', () => {
     expect(() => store.writeMemory('foobar', 'second')).toThrow(/foo bar/);
   });
 
+  it('a key with literal quotes stays rewritable', async () => {
+    // The write and read paths normalized asymmetrically: `splitFrontMatter`
+    // strips one layer of surrounding quotes, and the writer did not. So a key
+    // of `"foo"` was stored as `key: "foo"`, read back as `foo`, and every
+    // later rewrite collided with itself — the record became permanently
+    // un-rewritable, and the model's only escape was to invent a second key,
+    // creating exactly the duplicate the check exists to prevent. Both sides go
+    // through `normalizeFrontMatterValue` now.
+    const store = new MemoryStore();
+    store.writeMemory('"quoted"', 'first');
+    expect(() => store.writeMemory('"quoted"', 'second')).not.toThrow();
+    expect(store.readMemory('"quoted"')).toBe('second');
+  });
+
+  it('still refuses a genuinely different key on the same file', () => {
+    // The normalization must not swallow the collision check it sits next to.
+    // `foo bar` and `foo.bar` both sanitize to `foobar.md`, and neither is a
+    // quoting variant of the other — so normalizing quotes must not make them
+    // look like the same key.
+    const store = new MemoryStore();
+    store.writeMemory('foo bar', 'first');
+    expect(() => store.writeMemory('foo.bar', 'second')).toThrow(MemoryKeyCollisionError);
+  });
+
   it('still allows rewriting the same key', () => {
     const store = new MemoryStore();
     store.writeMemory('note', 'first');
