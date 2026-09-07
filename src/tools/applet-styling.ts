@@ -165,7 +165,3 @@ export function makeAppletStyler(ctx: AgentContext): AppletStyler {
     }
   };
 }
-
-// The composed factory that used to live here is now
-// `applet-ctx-tools.ts`'s `createMainAppletTool`, which wires the planning pass
-// alongside this one. This module keeps only the half it is named for.

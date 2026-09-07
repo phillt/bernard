@@ -276,11 +276,12 @@ describe('the applet planners (#13)', () => {
     // Read off the zod enum rather than retyped. A fifth type in the prompt is a
     // plan the manifest cannot express; a missing one is a plan that reaches for
     // `string` where an enum would have made the action uninjectable.
-    const { ArgSpecSchema } = await import('../apps/manifest.js');
-    const shape = (
-      ArgSpecSchema as unknown as { _def: { schema?: { shape: Record<string, any> } } }
-    )._def.schema?.shape;
-    const types: string[] = (shape?.type?._def?.values ?? shape?.type?.options) as string[];
+    // `ArgSpecFields` is exported for exactly this. The refinement on
+    // `ArgSpecSchema` makes it a `ZodEffects`, so reading `.shape` there means
+    // reaching through `_def` — which breaks silently on a zod upgrade, and a
+    // silently-empty type list makes this whole assertion vacuous.
+    const { ArgSpecFields } = await import('../apps/manifest.js');
+    const types: readonly string[] = ArgSpecFields.shape.type.options;
     expect(types.length).toBeGreaterThan(0);
     const prompt = load('applet-data-planner').systemPrompt;
     for (const t of types) expect(prompt, `does not name the \`${t}\` type`).toContain(`\`${t}\``);

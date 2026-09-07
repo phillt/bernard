@@ -134,6 +134,20 @@ export const PROBES = [
  */
 export const PLAIN_LANGUAGE_RULE = 'Reading age nine';
 
+/**
+ * What "the smallest coherent thing" actually means, in the words every surface
+ * uses.
+ *
+ * Stated in five places before this became a constant: the playbook's build
+ * step, both of `applet plan`'s fail-open returns, and `applet-architect`'s
+ * prompt and guidelines. Same argument as {@link PLAIN_LANGUAGE_RULE} — and
+ * this one matters more, because the two fail-open returns are the ONLY thing
+ * standing between the interview and an arbitrary page when the planning pass
+ * does not run. A copy that drifts there degrades exactly when the safety net
+ * is load-bearing.
+ */
+export const SMALLEST_THING_RULE = 'one input, one transformation, one useful result';
+
 /** Questions that must never be asked, and what to ask instead. */
 export const ANTI_PATTERNS: { avoid: string; instead: string; why: string }[] = [
   {
@@ -259,7 +273,7 @@ features instead of describing their week.
    Put what you are GUESSING in \`assumptions\` — that is what separates it from
    what you were told.
 3. Build what the plan says. It is already the smallest coherent thing:
-   one input, one transformation, one useful result.
+   ${SMALLEST_THING_RULE}.
    Not a settings screen, not a database, not five actions. Where the plan left
    a section out, decide it yourself rather than widening the scope to cover it.
 4. It opens by itself. Then ask ONE question against the real thing:

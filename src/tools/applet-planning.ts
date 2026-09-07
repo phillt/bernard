@@ -1,8 +1,9 @@
 import { dispatchToolWrapper } from './tool-wrapper-run.js';
 import { isDispatchCancellation } from '../error-taxonomy.js';
+import { capSubagentResult } from './result-cap.js';
 import { debugLog } from '../logger.js';
-import { INTENT_FIELDS, INTENT_FIELD_LABELS } from '../apps/brief.js';
-import type { IntentField } from '../apps/brief.js';
+import { renderIntentLines } from '../apps/brief.js';
+import type { AppletBrief } from '../apps/brief.js';
 import type { AgentContext } from '../framework/context.js';
 
 /**
@@ -15,12 +16,25 @@ import type { AgentContext } from '../framework/context.js';
  * result was plausible and arbitrary, and structural mistakes surfaced only
  * when a button was clicked.
  *
- * The applet path could not reach either planner Bernard already owns, and each
- * of three facts is independently sufficient: `applet-styler` is scoped to two
- * tools and `plan` is not one of them, `toolWrapperDefinition` returns a
- * `NormalStrategy` that neither the ReAct nor the PlanReconcile wrapper can
- * attach to, and `dispatchToolWrapper` passes no `planStore`, so `enforcePlan`
- * returns on its first line. `runPAC` has two call sites and neither is here.
+ * ## Why not the `plan` tool Bernard already has
+ *
+ * Because they are different kinds of object, and that — not the plumbing — is
+ * the reason. A `plan` step is `{description, verification}`: a turn-scoped
+ * EXECUTION LEDGER whose every step must reach a terminal state, with `done`
+ * requiring a `signoff` attesting the verification was performed. What a planner
+ * produces here is a DESIGN SPECIFICATION — scope, controls and states, store
+ * keys, dispatch tiers — which outlives the turn, has no verification criterion
+ * and nothing to sign off. `enforcePlan` would re-prompt the model to mark "the
+ * applet stores readings under `reading:<iso>`" as done. Forcing a spec into a
+ * step ledger is the shallower change wearing a deeper one's clothes.
+ *
+ * There are also mechanical blockers, and they are a FOOTNOTE rather than the
+ * argument: `toolWrapperDefinition` constructs a `NormalStrategy` directly
+ * instead of calling `buildStrategy`, so neither strategy wrapper can attach;
+ * and `dispatchToolWrapper` passes no `planStore`, so `enforcePlan` returns on
+ * its first line. Both are two-line fixes. They are recorded so that someone who
+ * removes them for unrelated reasons does not conclude this module should be
+ * deleted — the category argument above is what keeps it.
  *
  * ## Why this module rather than a line in `applet.ts`
  *
@@ -71,7 +85,7 @@ export interface PlanTarget {
   /** One line on what it is for. */
   description: string;
   /** The brief's intent model. Partial by design: an empty field is honest. */
-  intent: Partial<Record<IntentField, string>>;
+  intent: AppletBrief['intent'];
 }
 
 /**
@@ -89,17 +103,14 @@ export const DATA_PLANNER_SPECIALIST_ID = 'applet-data-planner';
 /**
  * The brief's intent, rendered for a planner.
  *
- * Iterates {@link INTENT_FIELDS} rather than `Object.entries(intent)` so the
- * order is the record's, not insertion order off a model-supplied object — two
- * planners reading the same brief in different orders is a difference with no
- * meaning. Empty fields are dropped rather than rendered blank: "we did not ask"
- * and "they had no answer" look identical once written down, and a planner is
- * told separately to say when a field it needed was missing.
+ * Delegates which fields are shown, and in what order, to
+ * {@link renderIntentLines} — the same helper `renderBrief` uses. Two copies of
+ * that rule had already diverged on trimming and on bolding, and the ordering
+ * half is load-bearing: two planners reading one brief in different orders is a
+ * difference with no meaning.
  */
-function renderIntent(intent: Partial<Record<IntentField, string>>): string {
-  const rows = INTENT_FIELDS.filter((f) => intent[f]?.trim()).map(
-    (f) => `- ${INTENT_FIELD_LABELS[f]}: ${intent[f]!.trim()}`,
-  );
+function renderIntent(intent: AppletBrief['intent']): string {
+  const rows = renderIntentLines(intent);
   return rows.length > 0
     ? rows.join('\n')
     : '(nothing recorded — say so rather than inventing one)';
@@ -143,17 +154,38 @@ export function buildPlannerBrief(target: PlanTarget, scope: string, job: string
 type Section = { ok: true; body: string } | { ok: false; reason: string };
 
 /**
- * Renders a wrapper result as a section body.
+ * Renders a wrapper result as a section body, bounded.
  *
  * A structured `result` is an object, so it is stringified rather than
  * interpolated — `String({})` is `[object Object]`, which reads as a plausible
  * section and carries nothing. A string result passes through, since a
  * specialist that answered in prose has still answered.
+ *
+ * ## Why this is capped, when the styler's equivalent is not
+ *
+ * `dispatchToolWrapper` returns an UNCAPPED `WrapperResult`; the
+ * `SUBAGENT_RESULT_MAX_CHARS` cap lives in `renderWrapperParentView`, which only
+ * the `tool_wrapper_run` TOOL path calls. `makeAppletStyler` never hit that
+ * because it takes `result` only when it is a string and never returns it to the
+ * model. This is the first path to route a structured wrapper result straight
+ * into a model-visible tool return, and it does so three times in one string.
+ *
+ * All three planners declare `structuredOutput`, so every body takes the
+ * stringify branch, and each can be a full `maxTokens` response — roughly 16 KB
+ * compact. Uncapped and pretty-printed, one spec reached an estimated 50-70 KB.
+ * Nothing downstream saves it: `truncateToolResults` bounds history at
+ * `MAX_TOOL_RESULT_CHARS` on the way IN, so the full payload still sits in
+ * context for the rest of the turn, and the next turn sees it chopped
+ * mid-token.
+ *
+ * Compact rather than indented, because indentation is the one part of the
+ * payload a model does not need, and on these shapes — arrays of small flat
+ * objects — it is 30-40% of the bytes.
  */
 function sectionBody(result: unknown): string {
-  if (typeof result === 'string') return result.trim();
+  if (typeof result === 'string') return capSubagentResult(result.trim());
   try {
-    return JSON.stringify(result, null, 2);
+    return capSubagentResult(JSON.stringify(result));
   } catch {
     return '';
   }

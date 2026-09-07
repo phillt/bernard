@@ -15,24 +15,23 @@ import type { AgentContext } from '../framework/context.js';
  * two `make*` halves stay in their own modules, each next to the brief it
  * builds and the specialist it routes to.
  *
+ * It exists as its own module for one reason: `main.ts` reaches it through a
+ * single deferred `import()`, and folding the two `make*` halves in here keeps
+ * that one edge rather than three. Each half stays beside the brief it builds
+ * and the specialist it routes to.
+ *
  * `seed: false` because `createTools` already constructed a seeding registry
  * this same turn, so re-seeding would be filesystem work for a result already on
  * disk. Schema and description are untouched, so the tool block stays
  * byte-identical and the prompt cache is unaffected.
  *
- * **The absence of both callbacks everywhere else is the recursion guard.**
- * `createTools` is ctx-free and so cannot build either, which means the `applet`
- * instance a dispatched specialist receives can neither style nor plan. Only
- * this one can. That is load-bearing rather than incidental — extracting a
- * shared builder that `tool-wrapper-run.ts` could also call would recreate the
- * recursion — so it is asserted against the registry `createTools` actually
- * returns rather than left to a comment.
+ * The recursion guard that makes both passes safe is argued once, in
+ * `applet-planning.ts`; it is not restated here.
  */
 export function createMainAppletTool(ctx: AgentContext) {
-  return createAppletTool(
-    new AppRegistry({ seed: false }),
-    ctx.toolOptions.requestPermissionConsent,
-    makeAppletStyler(ctx),
-    makeAppletPlanner(ctx),
-  );
+  return createAppletTool(new AppRegistry({ seed: false }), {
+    requestConsent: ctx.toolOptions.requestPermissionConsent,
+    style: makeAppletStyler(ctx),
+    plan: makeAppletPlanner(ctx),
+  });
 }
