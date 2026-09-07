@@ -526,6 +526,29 @@ describe('task tool', () => {
     );
   });
 
+  it('withholds scratch notes from a delegated task (#510)', async () => {
+    // Scratch is a scratchpad for the session the CALLER is in, not for a task
+    // delegated out of it. `task` is the only definition that asked for this,
+    // and it is the one thing a careless collapse of the four `searchRag`
+    // copies would have dropped — nothing asserted it before this.
+    mockGenerateText.mockResolvedValue({ text: 'Done' });
+    memoryStore.writeScratch('working-notes', 'SCRATCH-MARKER');
+
+    const taskTool = createTaskTool(makeCtx(makeConfig(), toolOptions, memoryStore));
+    await taskTool.execute(
+      { task: 'do it' },
+      { toolCallId: '1', messages: [], abortSignal: undefined as any },
+    );
+
+    const call = mockGenerateText.mock.calls[0][0];
+    const text = (call.messages || [])
+      .filter((m: any) => m.role === 'user' && typeof m.content === 'string')
+      .map((m: any) => m.content)
+      .join('\n');
+    expect(text).not.toContain('SCRATCH-MARKER');
+    expect(text).not.toContain('<scratch_notes>');
+  });
+
   it('gracefully degrades when RAG search throws', async () => {
     mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
     const mockRagStore = {

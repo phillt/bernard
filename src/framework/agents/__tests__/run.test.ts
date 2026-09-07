@@ -323,6 +323,103 @@ describe('runDefinition wrapIterate + seedMessages getter', () => {
   });
 });
 
+describe('runDefinition retrieval (#510)', () => {
+  /** A strategy that iterates twice, so per-dispatch and per-iterate differ. */
+  class TwiceStrategy {
+    async run(sctx: { iterate: (o: { extra: unknown[] }) => Promise<unknown> }) {
+      await sctx.iterate({ extra: [] });
+      return sctx.iterate({ extra: [] }) as never;
+    }
+  }
+
+  function ctxWithRag(search: ReturnType<typeof vi.fn>): AgentContext {
+    return { ...makeCtx(), rag: { search } } as unknown as AgentContext;
+  }
+
+  it('searches once per dispatch even when the strategy iterates twice', async () => {
+    // The property the refactor exists for, and the ONLY shape that can
+    // observe it: `contextInputs` runs inside `innerIterate`, so with retrieval
+    // there a re-iterating strategy searched again on every pass. A
+    // single-`generateText` test passes either way and proves nothing.
+    const search = vi.fn().mockResolvedValue([{ fact: 'f', similarity: 1, domain: 'general' }]);
+    (buildContextMessage as unknown as ReturnType<typeof vi.fn>).mockReturnValue(undefined);
+
+    await runDefinition(
+      ctxWithRag(search),
+      fakeDefinition({
+        retrievalQuery: (input) => input.text,
+        strategy: () => new TwiceStrategy() as never,
+      }),
+      { text: 'hi' },
+    );
+
+    expect(buildContextMessage).toHaveBeenCalledTimes(2);
+    expect(search).toHaveBeenCalledTimes(1);
+  });
+
+  it('hands the retrieved results to the context message', async () => {
+    const hits = [{ fact: 'recalled', similarity: 0.9, domain: 'general' }];
+    const search = vi.fn().mockResolvedValue(hits);
+    (buildContextMessage as unknown as ReturnType<typeof vi.fn>).mockReturnValue(undefined);
+
+    await runDefinition(
+      ctxWithRag(search),
+      fakeDefinition({ retrievalQuery: (input) => input.text }),
+      { text: 'hi' },
+    );
+
+    const args = (buildContextMessage as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(args.ragResults).toEqual(hits);
+  });
+
+  it('lets a definition that supplies its own ragResults win', async () => {
+    // `main` applies stickiness and provenance the runner cannot see, and
+    // `cron` pre-fetches before its MCP connect. Both hand results in through
+    // `contextInputs`, so the merge is `extras.ragResults ?? retrieved` — this
+    // is the test that fails if that order is flipped.
+    const own = [{ fact: 'from the definition', similarity: 1, domain: 'general' }];
+    const search = vi
+      .fn()
+      .mockResolvedValue([{ fact: 'from the runner', similarity: 1, domain: 'general' }]);
+    (buildContextMessage as unknown as ReturnType<typeof vi.fn>).mockReturnValue(undefined);
+
+    await runDefinition(
+      ctxWithRag(search),
+      fakeDefinition({
+        retrievalQuery: (input) => input.text,
+        contextInputs: () => ({ ragResults: own }),
+      }),
+      { text: 'hi' },
+    );
+
+    const args = (buildContextMessage as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(args.ragResults).toEqual(own);
+  });
+
+  it('does not search for a definition that declares no query', async () => {
+    const search = vi.fn().mockResolvedValue([]);
+    (buildContextMessage as unknown as ReturnType<typeof vi.fn>).mockReturnValue(undefined);
+
+    await runDefinition(ctxWithRag(search), fakeDefinition(), { text: 'hi' });
+
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it('does not render a recalled block when the search throws', async () => {
+    const search = vi.fn().mockRejectedValue(new Error('embedding provider unavailable'));
+    (buildContextMessage as unknown as ReturnType<typeof vi.fn>).mockReturnValue(undefined);
+
+    await runDefinition(
+      ctxWithRag(search),
+      fakeDefinition({ retrievalQuery: (input) => input.text }),
+      { text: 'hi' },
+    );
+
+    const args = (buildContextMessage as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(args.ragResults).toBeUndefined();
+  });
+});
+
 describe('runDefinition framework-default context injection (issue #143)', () => {
   it('injects memory + scratch by default when contextInputs is omitted', async () => {
     const def = fakeDefinition(); // no contextInputs

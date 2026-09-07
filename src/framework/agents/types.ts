@@ -255,6 +255,21 @@ export interface AgentDefinition<TInput = unknown, TFormatted = unknown> {
     | null
     | Promise<Partial<Omit<ContextMessageInputs, 'memoryStore'>> | null>;
 
+  /**
+   * The query this dispatch retrieves knowledge for, or `null` for none (#510).
+   *
+   * Declared rather than derived, for the reason `toolSurface` is: a definition
+   * states its own intent and the runner resolves it once, beside
+   * `resolveToolSurface`. Absent means **no retrieval** — the pre-#510 behaviour
+   * of every definition that did not search, so omitting it cannot silently
+   * start one.
+   *
+   * `main` and `cron` deliberately declare none: both already supply
+   * `ragResults` through `contextInputs`, and `getContextMessages` prefers what
+   * the definition supplied. See `retrieval.ts` for why neither should move.
+   */
+  retrievalQuery?(input: TInput): string | null;
+
   /** Hooks composed onto onStepFinish (output, token-stats, cron-step-recorder, etc.). */
   hooks(ctx: AgentContext, input: TInput): AgentHook[];
 

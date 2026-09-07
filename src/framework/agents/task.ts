@@ -3,13 +3,12 @@ import type { CoreMessage } from 'ai';
 import { buildTaskUserMessage } from './user-message.js';
 import type { WithAttachments } from './user-message.js';
 import type { BernardConfig } from '../../config.js';
-import { debugLog } from '../../logger.js';
 import { extractJsonBlock, nullableOptional } from '../../structured-output.js';
 import { createTools } from '../../tools/index.js';
-import type { AgentContext } from '../context.js';
 import { outputHook } from '../hooks/output.js';
 import { NormalStrategy } from '../strategies/normal.js';
 import type { AgentDefinition, FormatMeta } from './types.js';
+import { retrievalQueryFor } from './retrieval.js';
 
 export const TASK_SYSTEM_PROMPT = `You are a task executor for Bernard, a CLI AI assistant. You have been given a focused, isolated task.
 
@@ -165,11 +164,13 @@ export const taskDefinition: AgentDefinition<TaskInput, TaskResult> = {
     return TASK_SYSTEM_PROMPT + autoContext;
   },
 
-  async contextInputs(ctx, input) {
-    return {
-      ragResults: await searchRag(ctx, input.task),
-      includeScratch: false,
-    };
+  retrievalQuery: retrievalQueryFor,
+
+  // Kept solely for `includeScratch: false` — the one thing a careless collapse
+  // of the four `searchRag` copies would have dropped. Scratch is a scratchpad
+  // for the session the caller is in, not for a delegated task.
+  contextInputs() {
+    return { includeScratch: false };
   },
 
   async tools(ctx, _input, surface) {
@@ -210,17 +211,3 @@ export const taskDefinition: AgentDefinition<TaskInput, TaskResult> = {
     return wrapTaskResult(result.text, meta);
   },
 };
-
-async function searchRag(ctx: AgentContext, task: string) {
-  if (!ctx.rag) return undefined;
-  try {
-    const results = await ctx.rag.search(task);
-    if (results.length > 0) {
-      debugLog('task:rag', { query: task.slice(0, 100), results: results.length });
-    }
-    return results;
-  } catch (err) {
-    debugLog('task:rag:error', err instanceof Error ? err.message : String(err));
-    return undefined;
-  }
-}
