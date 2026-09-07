@@ -1,17 +1,40 @@
 import { z } from 'zod';
 import type { MemoryStore } from '../memory.js';
+import { MemoryKeyCollisionError } from '../memory.js';
 import { MEMORY_DIR } from '../paths.js';
 import type { BernardTool } from '../framework/tools/types.js';
 import { ok, err } from '../framework/tools/types.js';
 import type { ProvenanceStore } from '../provenance.js';
 
+/**
+ * Split from the scratch tool's schema with #513.
+ *
+ * They shared one object, so adding `supersede` to the enum would have
+ * advertised it on `scratch` as well — where it means nothing, since scratch is
+ * an in-memory map discarded at session end and has no supersession to record.
+ */
 const MEMORY_PARAMETERS = z.object({
+  action: z
+    .enum(['list', 'read', 'write', 'delete', 'supersede'])
+    .describe('The action to perform'),
+  key: z.string().optional().describe('The memory key (required for read/write/delete/supersede)'),
+  content: z.string().optional().describe('The content to write (required for write)'),
+  replacement: z
+    .string()
+    .optional()
+    .describe(
+      'For supersede: the key of the memory that replaces this one. It must already exist.',
+    ),
+});
+
+const SCRATCH_PARAMETERS = z.object({
   action: z.enum(['list', 'read', 'write', 'delete']).describe('The action to perform'),
-  key: z.string().optional().describe('The memory key (required for read/write/delete)'),
+  key: z.string().optional().describe('The scratch key (required for read/write/delete)'),
   content: z.string().optional().describe('The content to write (required for write)'),
 });
 
 type MemoryArgs = z.infer<typeof MEMORY_PARAMETERS>;
+type ScratchArgs = z.infer<typeof SCRATCH_PARAMETERS>;
 
 /**
  * Creates the persistent memory tool backed by on-disk markdown files.
@@ -43,12 +66,12 @@ export function createMemoryTool(
       // strict would pop a confirm menu on every list — both intolerable.
       isWriteAction: (args) => {
         const action = (args as { action?: string } | undefined)?.action;
-        return action === 'write' || action === 'delete';
+        return action === 'write' || action === 'delete' || action === 'supersede';
       },
     },
-    description: `Persistent memory that survives across sessions. Use this to remember user preferences, project knowledge, or anything worth recalling later. Stored as files on disk at ${MEMORY_DIR}.`,
+    description: `Persistent memory that survives across sessions. Use this to remember user preferences, project knowledge, or anything worth recalling later. Stored as files on disk at ${MEMORY_DIR}. When a memory is replaced by a newer one, use action 'supersede' rather than 'delete': the retired note stops being shown but stays on disk, so a wrong call costs nothing.`,
     parameters: MEMORY_PARAMETERS,
-    execute: async ({ action, key, content }) => {
+    execute: async ({ action, key, content, replacement }) => {
       switch (action) {
         case 'list': {
           const keys = memoryStore.listMemory();
@@ -76,8 +99,40 @@ export function createMemoryTool(
             return err({ type: 'invalid_args', message: 'key is required for write action.' });
           if (!content)
             return err({ type: 'invalid_args', message: 'content is required for write action.' });
-          memoryStore.writeMemory(key, content);
+          try {
+            memoryStore.writeMemory(key, content);
+          } catch (e) {
+            // A collision is a call-shape mistake the model can fix by picking
+            // a distinct key, so it comes back as a tool error with the
+            // conflicting key named rather than as a throw out of `execute`.
+            // `invalid_args` is what `error-taxonomy` classifies as correctable.
+            if (e instanceof MemoryKeyCollisionError)
+              return err({ type: 'invalid_args', message: e.message });
+            throw e;
+          }
           return ok(`Memory "${key}" saved.`);
+        }
+        case 'supersede': {
+          if (!key)
+            return err({ type: 'invalid_args', message: 'key is required for supersede action.' });
+          if (!replacement)
+            return err({
+              type: 'invalid_args',
+              message: 'replacement is required for supersede action.',
+            });
+          try {
+            const done = memoryStore.supersede(key, replacement);
+            if (!done) return ok(`No memory found for key "${key}".`);
+          } catch (e) {
+            return err({
+              type: 'invalid_args',
+              message: e instanceof Error ? e.message : String(e),
+            });
+          }
+          return ok(
+            `Memory "${key}" retired in favour of "${replacement}". ` +
+              `It is no longer shown, and its file is still on disk.`,
+          );
         }
         case 'delete': {
           if (!key)
@@ -104,7 +159,7 @@ export function createMemoryTool(
 export function createScratchTool(
   memoryStore: MemoryStore,
   provenance?: ProvenanceStore,
-): BernardTool<MemoryArgs, string> {
+): BernardTool<ScratchArgs, string> {
   return {
     meta: {
       name: 'scratch',
@@ -121,7 +176,7 @@ export function createScratchTool(
     },
     description:
       'Session scratch notes for tracking complex task progress, intermediate findings, and working plans. These notes survive context compression but are discarded when the session ends. Use this to keep track of multi-step work within a single session.',
-    parameters: MEMORY_PARAMETERS,
+    parameters: SCRATCH_PARAMETERS,
     execute: async ({ action, key, content }) => {
       switch (action) {
         case 'list': {
