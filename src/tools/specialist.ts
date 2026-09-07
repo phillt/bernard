@@ -43,11 +43,24 @@ function protectedOrThrow(err: unknown): string {
 }
 
 /**
- * A `tool-wrapper` / `meta` specialist that names no `targetTools` is now inert
- * rather than over-broad — `buildChildTools` hands it an empty registry (#331) —
- * so reject it where it is created. Nothing validated this before, which is
- * exactly why the permissive default had to exist. `persona` is unaffected: it
- * never reaches `buildChildTools`.
+ * Rejects the two `targetTools` shapes no producer ever means.
+ *
+ * A `tool-wrapper` / `meta` that names none is inert rather than over-broad —
+ * `buildChildTools` hands it an empty registry (#331) — so it is refused where
+ * it is created. Nothing validated this before, which is exactly why the
+ * permissive default had to exist.
+ *
+ * **A `persona` declaring `[]` is refused too, since #507.** Personas now reach
+ * `buildChildTools` (the comment here used to say they never do, and that is
+ * how it went stale), where a non-empty list is a fence and an empty one is
+ * read as "unscoped" — because `[]` is a value nothing ever chose. A real
+ * install carries one: a record with `targetTools: []` whose own system prompt
+ * says to use the browser-control MCP tools. Refusing it at creation is what
+ * stops the population growing; the dispatch's `debugLog` is then a migration
+ * aid for the records that predate this rather than a permanent report.
+ *
+ * An ABSENT list stays legal on a persona, and means every tool the resolved
+ * surface allows — the back-compat path 28 of 30 real personas take.
  *
  * Returns an error string, or `null` when the combination is fine.
  */
@@ -56,6 +69,12 @@ function targetToolsScopeError(
   targetTools: string[] | undefined,
 ): string | null {
   const effective = kind ?? 'persona';
+  if (effective === 'persona') {
+    return targetTools?.length === 0
+      ? `Error: targetTools: [] is not a scope — omit the field to give this specialist every ` +
+          `tool its dispatch allows, or name the tools it may use, e.g. targetTools: ["web_search"].`
+      : null;
+  }
   if (effective !== 'tool-wrapper' && effective !== 'meta') return null;
   if (targetTools && targetTools.length > 0) return null;
   return (

@@ -1,7 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { AgentContext } from '../../context.js';
 import { specialistDefinition } from '../specialist.js';
-import { makeCtx, toolsOf, RAW_MCP_TOOLS, DELEGATE_TOOLS } from './_mcp-delegation-fixture.js';
+import {
+  makeCtx,
+  toolsOf,
+  inputFor,
+  CREATE_TOOLS_DEFINITIONS,
+  RAW_MCP_TOOLS,
+  DELEGATE_TOOLS,
+} from './_mcp-delegation-fixture.js';
 
 /**
  * A persona's `targetTools` is a fence now, not a label (#507).
@@ -41,17 +48,16 @@ function ctxWith(
   record: { targetTools?: string[] } | undefined,
   opts: { delegation?: boolean; coordinatorMode?: 'on' | 'off' } = {},
 ): AgentContext {
-  const base = makeCtx(opts.delegation ?? false);
-  return {
-    ...base,
-    ...(opts.coordinatorMode
-      ? { config: { ...base.config, coordinatorMode: opts.coordinatorMode } }
-      : {}),
+  const base = makeCtx(opts.delegation ?? false, {
     stores: {
-      ...base.stores,
       specialists: { get: (id: string) => (id === SPECIALIST_ID ? record : undefined) },
     },
-  } as unknown as AgentContext;
+  } as never);
+  return (
+    opts.coordinatorMode
+      ? { ...base, config: { ...base.config, coordinatorMode: opts.coordinatorMode } }
+      : base
+  ) as AgentContext;
 }
 
 async function registryFor(
@@ -69,21 +75,17 @@ async function registryFor(
 
 describe('a persona specialist is scoped by its own targetTools', () => {
   it('holds exactly what it declares, plus the reasoning tools', async () => {
-    // An EXACT set, not a `toContain` pair: the bug was extra tools, so the
-    // assertion has to be able to fail on presence.
+    // An EXACT set, not `toContain` plus a list of `not.toContain`: the bug was
+    // EXTRA tools, so the assertion has to be able to fail on presence — and
+    // once it is exact it already says that `shell`, `file_write`, `web_read`
+    // and every MCP delegate are gone, and that `plan`/`think` survived. Three
+    // earlier tests restated those weaker forms and could not fail while this
+    // one passed.
     expect(await registryFor({ targetTools: ['web_search'] })).toEqual([
       'plan',
       'think',
       'web_search',
     ]);
-  });
-
-  it('drops the tools the record does not name', async () => {
-    const names = await registryFor({ targetTools: ['web_search'] });
-    // Named individually as well, because these are the ones that made the
-    // gap a scoping hole rather than a tidiness one.
-    for (const withheld of ['shell', 'file_write', 'file_edit_lines', 'web_read', 'memory'])
-      expect(names).not.toContain(withheld);
   });
 
   it('leaves a record that declares nothing completely unchanged', async () => {
@@ -107,9 +109,8 @@ describe('a persona specialist is scoped by its own targetTools', () => {
   it('says so when a record carries an empty list', async () => {
     // `[]` is a value no one decided; the log is what keeps it from being
     // silent as well as inert.
-    const { debugLog } = await import('../../../logger.js');
-    const spy = vi.spyOn(await import('../../../logger.js'), 'debugLog');
-    void debugLog;
+    const logger = await import('../../../logger.js');
+    const spy = vi.spyOn(logger, 'debugLog');
     await registryFor({ targetTools: [] });
     expect(spy.mock.calls.some(([tag]) => tag === 'specialist:target-tools-empty')).toBe(true);
     spy.mockRestore();
@@ -117,25 +118,17 @@ describe('a persona specialist is scoped by its own targetTools', () => {
 });
 
 describe('scoping and MCP delegation compose', () => {
-  it('resolves a raw MCP name while delegation is ON', async () => {
-    // The reason the lookup is the surface PLUS `ctx.mcp.tools`. With
-    // delegation on, `surface.mcpTools` holds only `delegate_*` keys, so a
-    // record naming a real MCP tool would resolve against nothing and be
-    // dropped with only a debug line to show for it.
-    expect(await registryFor({ targetTools: [RAW_MCP_TOOLS[0]] }, { delegation: true })).toEqual(
-      [RAW_MCP_TOOLS[0], 'plan', 'think'].sort(),
-    );
-  });
-
-  it('resolves a delegate name while delegation is ON', async () => {
-    expect(await registryFor({ targetTools: [DELEGATE_TOOLS[0]] }, { delegation: true })).toEqual(
-      [DELEGATE_TOOLS[0], 'plan', 'think'].sort(),
-    );
-  });
-
-  it('resolves a raw MCP name while delegation is OFF', async () => {
-    expect(await registryFor({ targetTools: [RAW_MCP_TOOLS[0]] }, { delegation: false })).toEqual(
-      [RAW_MCP_TOOLS[0], 'plan', 'think'].sort(),
+  // The reason the lookup is the surface PLUS `ctx.mcp.tools`. With delegation
+  // on, `surface.mcpTools` holds only `delegate_*` keys, so a record naming a
+  // real MCP tool would resolve against nothing and be dropped with only a
+  // debug line to show for it.
+  it.each([
+    ['a raw MCP name, delegation ON', RAW_MCP_TOOLS[0], true],
+    ['a delegate name, delegation ON', DELEGATE_TOOLS[0], true],
+    ['a raw MCP name, delegation OFF', RAW_MCP_TOOLS[0], false],
+  ])('resolves %s', async (_label, name, delegation) => {
+    expect(await registryFor({ targetTools: [name] }, { delegation })).toEqual(
+      [name, 'plan', 'think'].sort(),
     );
   });
 
@@ -147,18 +140,12 @@ describe('scoping and MCP delegation compose', () => {
 });
 
 describe('the reasoning tools sit outside the scope', () => {
-  it('keeps plan and think even when the record names neither', async () => {
-    // They are reasoning affordances, not capability grants: `plan` writes to a
-    // dispatch-scoped `PlanStore`, `think` is a scratchpad. Neither touches the
-    // world, no record anywhere names them, and `buildStrategy`'s enforcement
-    // loop re-prompts the model to resolve plan steps — which it can only do by
-    // calling `plan`. Filtering them out would break the strategy this same
-    // definition declares.
-    const names = await registryFor({ targetTools: ['web_search'] });
-    expect(names).toContain('plan');
-    expect(names).toContain('think');
-  });
-
+  // `plan` and `think` surviving the filter is already asserted by the exact-set
+  // test above. They are reasoning affordances rather than capability grants —
+  // `plan` writes to a dispatch-scoped `PlanStore`, `think` is a scratchpad,
+  // neither touches the world, no record anywhere names them, and
+  // `buildStrategy`'s enforcement loop re-prompts the model to resolve plan
+  // steps, which it can only do by calling `plan`.
   it('keeps evaluate under coordinator mode, and still adds it under a scope', async () => {
     expect(await registryFor({ targetTools: ['web_search'] }, { coordinatorMode: 'on' })).toEqual([
       'evaluate',
@@ -167,8 +154,53 @@ describe('the reasoning tools sit outside the scope', () => {
       'web_search',
     ]);
   });
+});
 
-  it('does not add evaluate when coordinator mode is off', async () => {
-    expect(await registryFor({ targetTools: ['web_search'] })).not.toContain('evaluate');
+/**
+ * Which definitions scope their registry by a specialist record — an exhaustive
+ * table, so a new one has to decide rather than inherit silence.
+ *
+ * This is the guard #510 built for retrieval and this fix did not have. The
+ * argument for putting scoping in `runDefinition` instead was "then no
+ * definition can forget"; that property is achievable by a test, which is this
+ * repo's own idiom (`tool-surface.test.ts`, `meta-coverage.test.ts`,
+ * `bundled-manifest.test.ts`) — and a runner-level hook would have had exactly
+ * one implementor while needing a second field to exempt `plan`/`think`/
+ * `evaluate`, i.e. two fields to express one policy.
+ *
+ * `tool-wrapper` is absent from `CREATE_TOOLS_DEFINITIONS` and scopes through
+ * `dispatchToolWrapper`, not through its definition, so it is not reachable
+ * here — stated because "the table is exhaustive" would otherwise be false.
+ */
+describe('which definitions scope by a specialist record', () => {
+  const SCOPES_BY_RECORD: Record<string, boolean> = {
+    sub: false,
+    task: false,
+    specialist: true,
+    'pac-actor': false,
+  };
+
+  it('every createTools definition has a pinned expectation', () => {
+    expect(CREATE_TOOLS_DEFINITIONS.map((d) => d.name).sort()).toEqual(
+      Object.keys(SCOPES_BY_RECORD).sort(),
+    );
+  });
+
+  it.each(CREATE_TOOLS_DEFINITIONS)('$name scopes by record as expected', async ({ name, def }) => {
+    // The same record is in the store for all four. Only a definition that
+    // READS it narrows; the rest are unaffected, which is what makes this a
+    // statement about the definition rather than about the fixture.
+    const ctx = makeCtx(false, {
+      stores: {
+        specialists: {
+          get: (id: string) => (id === SPECIALIST_ID ? { targetTools: ['web_search'] } : undefined),
+        },
+      },
+    } as never);
+    const scoped = Object.keys(
+      await toolsOf(def, ctx, { ...(inputFor(name) as object), specialistId: SPECIALIST_ID }),
+    );
+    const narrowed = !scoped.includes('shell');
+    expect(narrowed, name).toBe(SCOPES_BY_RECORD[name]);
   });
 });

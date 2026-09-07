@@ -96,12 +96,7 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
       // Scoped BEFORE the reasoning tools below are added, so those three sit
       // outside `targetTools` by construction rather than by every record
       // remembering to name them. See `scopeToTargetTools`.
-      ...scopeToTargetTools(
-        ctx,
-        input.specialistId,
-        ctx.stores.specialists.get(input.specialistId),
-        baseTools,
-      ),
+      ...scopeToTargetTools(ctx, input.specialistId, baseTools),
       plan: createPlanTool(input.planStore),
       think: createThinkTool(),
       ...(ctx.config.coordinatorMode === 'on'
@@ -199,14 +194,19 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
  * record may name a raw MCP tool or a delegate — so both are offered to the
  * lookup. This widens only what a name may RESOLVE to: `buildChildTools` still
  * admits nothing that was not named, so nothing unnamed rides in on the merge.
+ *
+ * The two sibling call sites answer the same question differently and for good
+ * reasons: `tool-wrapper-run.ts:322-327` passes the raw bag EXCLUSIVELY because
+ * every record reaching it is scoped, and `apps/dispatch.ts:47-49` does the same
+ * for an action's intersected allowlist. This is the one site where both
+ * spellings are live.
  */
 function scopeToTargetTools(
   ctx: AgentContext,
   specialistId: string,
-  specialist: { targetTools?: string[] } | undefined,
   baseTools: Record<string, Tool>,
 ): Record<string, Tool> {
-  const targets = specialist?.targetTools;
+  const targets = ctx.stores.specialists.get(specialistId)?.targetTools;
   if (!targets || targets.length === 0) {
     // Named, because the whole point of not honouring `[]` is that it is a
     // state nobody chose — and one that is inert AND silent is how it stays
