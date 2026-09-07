@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { definitions, registerBuiltinDefinitions } from '../index.js';
 import { mcpDelegateDefinition } from '../mcp-delegate.js';
-import { resolveRetrieval, retrievalQueryFor } from '../retrieval.js';
+import { resolveRetrieval, retrievalQueryFor, MAX_RETRIEVAL_QUERY_CHARS } from '../retrieval.js';
+import { DEFAULT_MAX_QUERY_CHARS } from '../../../rag-query.js';
 import type { AgentContext } from '../../context.js';
 import type { AgentDefinition } from '../types.js';
 
@@ -26,24 +27,34 @@ function allDefinitions(): Array<{ name: string; def: AgentDefinition<any, any> 
 }
 
 /**
- * Who retrieves, and who does not.
+ * How each definition gets its recalled context. Three states, not two.
  *
- * `main` and `cron` are `false` **because they already retrieve elsewhere**, not
- * because they go without: `main` searches in the `Agent` class with stickiness
- * and provenance the runner cannot see, and `cron` pre-fetches in `headless.ts`
- * before its MCP connect. Both hand results in through `contextInputs`.
+ * A boolean collapsed the two `false`s into one word meaning opposite things:
+ * `main` and `cron` DO retrieve — just not here — while `pac-critic` and
+ * `tool-wrapper` deliberately go without. A reader adding a definition had to
+ * go read `retrieval.ts`'s prose to tell "already covered elsewhere" from "goes
+ * without", which is the special case that rots.
+ *
+ *  - `runner` — `runDefinition` resolves it, once per dispatch.
+ *  - `input`  — the caller retrieves and supplies `ragResults` on `TInput`.
+ *    `main` searches in the `Agent` class with `applyStickiness`,
+ *    `provenance.add` and `previousRAGFacts`, all turn-scoped and invisible to
+ *    the runner; `cron` searches in `headless.ts`, deliberately BEFORE
+ *    `mcpManager.connect()` so the cold embedding load overlaps a measured
+ *    ~1.1-1.6 s connect. Neither should move.
+ *  - `none`   — nothing retrieves, on purpose.
  */
-const EXPECTED: Record<string, boolean> = {
-  main: false,
-  sub: true,
-  task: true,
-  specialist: true,
-  'tool-wrapper': false,
-  cron: false,
-  'pac-planner': false,
-  'pac-actor': true,
-  'pac-critic': false,
-  'mcp-delegate': false,
+const EXPECTED: Record<string, 'runner' | 'input' | 'none'> = {
+  main: 'input',
+  sub: 'runner',
+  task: 'runner',
+  specialist: 'runner',
+  'tool-wrapper': 'none',
+  cron: 'input',
+  'pac-planner': 'none',
+  'pac-actor': 'runner',
+  'pac-critic': 'none',
+  'mcp-delegate': 'none',
 };
 
 describe('which definitions retrieve', () => {
@@ -58,7 +69,20 @@ describe('which definitions retrieve', () => {
   });
 
   it.each(allDefinitions())('$name declares retrieval as expected', ({ name, def }) => {
-    expect(Boolean(def.retrievalQuery), name).toBe(EXPECTED[name]);
+    expect(Boolean(def.retrievalQuery), name).toBe(EXPECTED[name] === 'runner');
+  });
+
+  it('the two definitions that retrieve elsewhere are exactly the two whose input carries it', () => {
+    // The partition that makes `input` a fact rather than a note: a definition
+    // either declares `retrievalQuery` or its caller supplies `ragResults` —
+    // never both, and never neither by accident. This fails the day someone
+    // gives `main` a `retrievalQuery` thinking its `false` meant "does not
+    // retrieve".
+    for (const [name, mode] of Object.entries(EXPECTED)) {
+      const def = allDefinitions().find((d) => d.name === name)!.def;
+      if (mode === 'input') expect(def.retrievalQuery, name).toBeUndefined();
+      if (mode === 'runner') expect(def.retrievalQuery, name).toBeDefined();
+    }
   });
 
   it('pac-critic retrieves nothing, keeping its deliberate opt-out whole', () => {
@@ -95,6 +119,38 @@ describe('the query a dispatch retrieves for', () => {
 
   it('ignores a whitespace-only context rather than appending a blank line', () => {
     expect(retrievalQueryFor({ task: 'a', context: '  ' })).toBe('a');
+  });
+
+  it('is bounded, which the dispatch path never was', () => {
+    // `sub.ts` called `ctx.rag.search(input.task)` raw and `embedQuery` bounds
+    // nothing, so this is a bound that was never there rather than one being
+    // discarded — and appending caller-written `context`, declared
+    // `z.string().optional()` with no `.max()`, is what makes its absence
+    // matter.
+    const q = retrievalQueryFor({ task: 'a'.repeat(50), context: 'b'.repeat(5000) });
+    expect(q!.length).toBeLessThanOrEqual(MAX_RETRIEVAL_QUERY_CHARS);
+  });
+
+  it('cuts the context, never the task', () => {
+    // The embedder truncates at 256 word pieces whatever is sent, so the
+    // priority order decides what survives. Context is supporting detail; a
+    // task cut in half retrieves for a different question.
+    const task = 'find the failing test';
+    const q = retrievalQueryFor({ task, context: 'z'.repeat(5000) })!;
+    expect(q.startsWith(task)).toBe(true);
+    expect(q.length).toBe(MAX_RETRIEVAL_QUERY_CHARS);
+  });
+
+  it('bounds an over-long task on its own', () => {
+    const q = retrievalQueryFor({ task: 'a'.repeat(5000) })!;
+    expect(q.length).toBe(MAX_RETRIEVAL_QUERY_CHARS);
+  });
+
+  it('uses the same budget the interactive path does', () => {
+    // The literal is local because `rag-query.ts` reaches `context.ts` — the
+    // edge `token-estimate.ts` exists to refuse — so it is pinned here instead,
+    // the way `docs-store.ts`'s MAX_DOC_CHARS is.
+    expect(MAX_RETRIEVAL_QUERY_CHARS).toBe(DEFAULT_MAX_QUERY_CHARS);
   });
 });
 

@@ -48,25 +48,58 @@ import type { RAGSearchResult } from '../../rag.js';
  * behaviour change rather than a move, and it is the intended one.
  */
 
-/** The shape a definition's input must have for its query to be built. */
-export interface RetrievalInput {
-  task?: string;
-  context?: string;
-}
+/**
+ * A dispatch's retrieval query is bounded, and the bound is stated here.
+ *
+ * The interactive path bounds its query at `DEFAULT_MAX_QUERY_CHARS` inside
+ * `buildRAGQuery`; the dispatch paths never did — `sub.ts` called
+ * `ctx.rag.search(input.task)` raw, and `RAGStore.embedQuery` applies no bound
+ * of its own. So this is not a bound being discarded, it is one that was never
+ * there, and appending `input.context` is the change that makes its absence
+ * matter: `subagent.ts` declares `context: z.string().optional()` with no
+ * `.max()`, so a caller can hand over an arbitrarily long string.
+ *
+ * The literal is local rather than imported. `rag-query.ts` reaches `context.ts`
+ * — the edge `token-estimate.ts` exists to refuse — so the repo's own answer is
+ * a local constant pinned by a test against the real one, exactly as
+ * `docs-store.ts`'s `MAX_DOC_CHARS` is pinned.
+ */
+export const MAX_RETRIEVAL_QUERY_CHARS = 1000;
 
 /**
  * The query a dispatch retrieves for: its task, plus the context the caller
  * wrote alongside it.
  *
+ * **Task first, and it is never the part that gets cut.** The embedder
+ * truncates at 256 word pieces regardless of what is sent, so the priority
+ * order decides what survives — the same reason `buildRAGQuery` puts current
+ * input last for a model that attends to later tokens, applied to a truncation
+ * boundary instead. Context is supporting detail; a task cut in half retrieves
+ * for a different question.
+ *
+ * Not `renderTaskText` (`user-message.ts`), which joins the same two fields as
+ * `Task: …\n\nContext: …`. Those labels are prompt scaffolding and would be
+ * embedded as content here; this also trims and returns `null` for an empty
+ * task. Recorded because a future consolidation onto the shared renderer is the
+ * obvious-looking move and would silently put prompt labels into every
+ * dispatch's embedding query.
+ *
  * Exported so a definition declares `retrievalQuery: retrievalQueryFor` rather
- * than four copies of the same two-line join — the duplication this module
- * exists to end, reintroduced one level up.
+ * than four copies of the same join. It is a function rather than a `retrieves:
+ * true` flag so the input shape stays checked per definition — a flag would
+ * move `task`/`context` knowledge into the runner and silently start retrieval
+ * for `tool-wrapper`, `pac-planner`, `pac-critic` and `mcp-delegate`, whose
+ * inputs all match that shape. `pac-critic`'s opt-out would be defeated by the
+ * mechanism meant to unify.
  */
-export function retrievalQueryFor(input: RetrievalInput): string | null {
+export function retrievalQueryFor(input: { task?: string; context?: string }): string | null {
   const task = input.task?.trim();
   if (!task) return null;
+  const head = task.slice(0, MAX_RETRIEVAL_QUERY_CHARS);
   const context = input.context?.trim();
-  return context ? `${task}\n\n${context}` : task;
+  const room = MAX_RETRIEVAL_QUERY_CHARS - head.length - 2;
+  if (!context || room <= 0) return head;
+  return `${head}\n\n${context.slice(0, room)}`;
 }
 
 /**

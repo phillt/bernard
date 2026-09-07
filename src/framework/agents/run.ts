@@ -157,8 +157,21 @@ export async function runDefinition<TInput, TFormatted>(
   // place (#510). It used to sit in four definitions' `contextInputs`, which
   // runs inside `innerIterate` — so a multi-step dispatch re-searched on every
   // LLM call, and three of the four were the same twenty lines pasted.
-  const retrieved = await resolveRetrieval(ctx, def, input);
-  const rawTools = await Promise.resolve(def.tools(ctx, input, surface));
+  // Started together, because they are independent and both are slow — the
+  // pattern `headless.ts:229` already uses for this exact pair, and for the
+  // reason it gives: "the two are independent". Measured, `createTools` costs
+  // 144 ms on the first dispatch of a process (the deferred module loads #452
+  // exists to recover) and a search costs ~10 ms warm, ~230 ms when it persists
+  // access metadata. Awaiting retrieval first put the whole tool-module load
+  // strictly behind it.
+  //
+  // `Promise.all` rather than a deferred await: `def.retrievalQuery(input)` is
+  // called outside `resolveRetrieval`'s own try, so a definition-supplied thunk
+  // that throws would be an unhandled rejection if `def.tools` rejected first.
+  const [retrieved, rawTools] = await Promise.all([
+    resolveRetrieval(ctx, def, input),
+    Promise.resolve(def.tools(ctx, input, surface)),
+  ]);
   // Tools first, then the prompt that describes them: `task` interpolates
   // `Available tools: …` and used to build its own second registry to do it,
   // which had already drifted from the handed set.
