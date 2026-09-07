@@ -52,6 +52,10 @@ beforeEach(() => {
       calls.push(['supersede', `${k}->${r}`]);
       return true;
     },
+    retire: (k: string) => {
+      calls.push(['retire', k]);
+      return true;
+    },
     listScratch: () => ['s'],
     readScratch: () => 'note',
     writeScratch: (k: string) => {
@@ -87,6 +91,11 @@ describe('the read-only memory tool', () => {
     ['write', { action: 'write', key: 'a', content: 'x' }],
     ['delete', { action: 'delete', key: 'a' }],
     ['supersede', { action: 'supersede', key: 'a', replacement: 'b' }],
+    // #529's two additions, checked here on the day they were added rather
+    // than the day someone notices — a PAC Critic retiring a user's memory is
+    // the exact fail-open this file exists for.
+    ['retire', { action: 'retire', key: 'a' }],
+    ['a decided proposals call', { action: 'proposals', proposalId: 'p', decision: 'accepted' }],
   ])('rejects %s without reaching the store', async (_name, args) => {
     const r = await createReadOnlyMemoryTool(store).execute(args as never, {} as never);
     expect(r.status).toBe('error');

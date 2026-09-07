@@ -293,6 +293,19 @@ export interface BernardConfig {
    */
   voiceNormalizer: boolean;
   /**
+   * Look over persistent memory at session close and PROPOSE what it could
+   * shed (#529).
+   *
+   * Default ON, and it proposes rather than acts: every suggestion is surfaced
+   * at the next startup and applied only if the user agrees. Memory has one
+   * writer, it is model-driven, and nothing has ever removed an entry — so a
+   * store only grows, and at `MAX_PERSISTENT_MEMORY_CHARS` entries start being
+   * dropped by filename order (#528).
+   *
+   * Off disables the pass entirely; nothing is proposed and no model is called.
+   */
+  memoryConsolidation: boolean;
+  /**
    * Render the REPL in the terminal's alternate screen buffer (full-screen,
    * vim/htop style). On by default; set `BERNARD_FULLSCREEN=false` to fall back
    * to the legacy inline-scrollback rendering (e.g. dumb terminals / CI).
@@ -514,6 +527,7 @@ export function savePreferences(prefs: {
   voiceRate?: number;
   voiceWarmupMs?: number;
   voiceNormalizer?: boolean;
+  memoryConsolidation?: boolean;
 }): void {
   // Patch shape matches ProfileSettings exactly — keys present in `prefs`
   // (including explicit `undefined`s from resetOption / resetAllOptions) are
@@ -572,6 +586,7 @@ export function loadPreferences(): {
   voiceRate?: number;
   voiceWarmupMs?: number;
   voiceNormalizer?: boolean;
+  memoryConsolidation?: boolean;
 } {
   // Routes through the active profile in profiles.json (#207). Each field is
   // type-checked here so a malformed stored value falls through to undefined
@@ -637,6 +652,8 @@ export function loadPreferences(): {
     voiceWarmupMs: typeof parsed.voiceWarmupMs === 'number' ? parsed.voiceWarmupMs : undefined,
     voiceNormalizer:
       typeof parsed.voiceNormalizer === 'boolean' ? parsed.voiceNormalizer : undefined,
+    memoryConsolidation:
+      typeof parsed.memoryConsolidation === 'boolean' ? parsed.memoryConsolidation : undefined,
   };
 }
 
@@ -1050,6 +1067,7 @@ export function loadConfig(overrides?: {
   voiceRate?: number;
   voiceWarmupMs?: number;
   voiceNormalizer?: boolean;
+  memoryConsolidation?: boolean;
 }): BernardConfig {
   // Load .env from cwd first, then XDG config dir, then legacy ~/.bernard/
   const cwdEnv = path.join(process.cwd(), '.env');
@@ -1355,6 +1373,16 @@ export function loadConfig(overrides?: {
   // Default-TRUE, so it copies promptRewriter's shape — NOT voiceTts's
   // `=== 'true' | '1'`, which is a default-false test.
   const rawVoiceNormalizer = process.env.BERNARD_VOICE_NORMALIZER;
+  // Default-TRUE, so it copies voiceNormalizer/promptRewriter's shape — NOT
+  // voiceTts's `=== 'true' | '1'`, which is a default-false test.
+  const rawMemoryConsolidation = process.env.BERNARD_MEMORY_CONSOLIDATION;
+  const memoryConsolidation =
+    overrides?.memoryConsolidation ??
+    prefs.memoryConsolidation ??
+    (rawMemoryConsolidation === undefined
+      ? true
+      : !(rawMemoryConsolidation === 'false' || rawMemoryConsolidation === '0'));
+
   const voiceNormalizer =
     overrides?.voiceNormalizer ??
     prefs.voiceNormalizer ??
@@ -1415,6 +1443,7 @@ export function loadConfig(overrides?: {
     voiceRate,
     voiceWarmupMs,
     voiceNormalizer,
+    memoryConsolidation,
     fullScreen,
     mouse,
   };
@@ -1502,6 +1531,7 @@ const PROFILE_SCOPED_KEYS: ReadonlyArray<keyof BernardConfig> = [
   'voiceRate',
   'voiceWarmupMs',
   'voiceNormalizer',
+  'memoryConsolidation',
 ];
 
 /**

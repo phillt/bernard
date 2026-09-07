@@ -39,6 +39,22 @@ export interface MemoryRecord {
   writtenAt?: string;
   /** The key that replaced this one. Set means "do not render me"; see {@link MemoryStore.listMemory}. */
   supersededBy?: string;
+  /**
+   * ISO 8601. Set means this was retired in favour of **nothing** — see
+   * {@link MemoryStore.retire}.
+   *
+   * A separate field from {@link supersededBy}, not a `supersededBy: null`,
+   * because they are different facts. "X replaced this" points somewhere and
+   * tells a reader where to look; "this was never worth keeping" points
+   * nowhere. `supersede()` requires an existing replacement and throws without
+   * one, deliberately, so a one-off record — a log of a specific email sent in
+   * May, "that's an image I uploaded, that can be ignored" — has no way to be
+   * expressed through it.
+   *
+   * Both are filtered by `listMemory()` on the same terms and undone the same
+   * way: delete one front-matter line.
+   */
+  retiredAt?: string;
 }
 
 /**
@@ -64,8 +80,12 @@ type ParsedMemoryFile = Partial<MemoryRecord> & { content: string };
  * `serializeMemory` and by nothing else, so no hand-authored fence carries one
  * by accident.
  */
-const KNOWN_FIELDS = ['key', 'writtenAt', 'supersededBy'] as const;
-const DISCRIMINATORS: ReadonlyArray<(typeof KNOWN_FIELDS)[number]> = ['writtenAt', 'supersededBy'];
+const KNOWN_FIELDS = ['key', 'writtenAt', 'supersededBy', 'retiredAt'] as const;
+const DISCRIMINATORS: ReadonlyArray<(typeof KNOWN_FIELDS)[number]> = [
+  'writtenAt',
+  'supersededBy',
+  'retiredAt',
+];
 
 /**
  * Parses one memory file.
@@ -112,6 +132,7 @@ function serializeMemory(rec: MemoryRecord): string {
   const lines = ['---', `key: ${toSingleLine(rec.key)}`];
   if (rec.writtenAt) lines.push(`writtenAt: ${rec.writtenAt}`);
   if (rec.supersededBy) lines.push(`supersededBy: ${toSingleLine(rec.supersededBy)}`);
+  if (rec.retiredAt) lines.push(`retiredAt: ${toSingleLine(rec.retiredAt)}`);
   lines.push('---');
   return lines.join('\n') + '\n' + rec.content;
 }
@@ -235,7 +256,10 @@ export class MemoryStore {
     const out: Array<{ key: string; parsed: ParsedMemoryFile; mtimeMs: number }> = [];
     for (const key of this.listAllMemory()) {
       const loaded = this.load(key);
-      if (loaded && !loaded.parsed.supersededBy) out.push({ key, ...loaded });
+      // `retiredAt` and `supersededBy` are filtered on the same terms: both mean
+      // "do not render me", and they differ only in whether they point anywhere.
+      if (loaded && !loaded.parsed.supersededBy && !loaded.parsed.retiredAt)
+        out.push({ key, ...loaded });
     }
     return out;
   }
@@ -290,6 +314,7 @@ export class MemoryStore {
       content: parsed.content,
       writtenAt: parsed.writtenAt ?? new Date(mtimeMs).toISOString(),
       ...(parsed.supersededBy ? { supersededBy: parsed.supersededBy } : {}),
+      ...(parsed.retiredAt ? { retiredAt: parsed.retiredAt } : {}),
     };
   }
 
@@ -327,6 +352,7 @@ export class MemoryStore {
         // un-retire it. Un-retiring is `supersede`'s business, or one deleted
         // front-matter line.
         ...(existing?.supersededBy ? { supersededBy: existing.supersededBy } : {}),
+        ...(existing?.retiredAt ? { retiredAt: existing.retiredAt } : {}),
       }),
     );
     this.cache.delete(filePath);
@@ -379,6 +405,39 @@ export class MemoryStore {
     atomicWriteFileSync(
       filePath,
       serializeMemory({ ...record, supersededBy: toSingleLine(replacement) }),
+    );
+    this.cache.delete(filePath);
+    return true;
+  }
+
+  /**
+   * Records that `key` is no longer worth keeping, in favour of nothing.
+   *
+   * The counterpart to {@link supersede}, and a separate method for the reason
+   * {@link MemoryRecord.retiredAt} is a separate field: `supersede` requires an
+   * existing replacement and throws without one, so a one-off record has no way
+   * to be expressed through it. Measured on a real store, that is the category
+   * that matters — logs of specific emails sent in May, "that's an image I
+   * uploaded, that can be ignored" — 29% of the bytes against 0.9% for genuine
+   * duplicates.
+   *
+   * Archive, not delete, on #373's argument and on the same terms as
+   * `supersede`: the file stays exactly where it is, stops being listed, and
+   * one deleted front-matter line undoes it. A retired record costs zero
+   * context because it is not rendered, so there is no pressure to unlink — and
+   * deletion is irreversible on content the user wrote.
+   *
+   * Returns `false` when `key` does not exist. Re-retiring keeps the ORIGINAL
+   * timestamp: when it stopped being shown is the fact worth having, and a
+   * second call should not quietly restate it as today.
+   */
+  retire(key: string): boolean {
+    const record = this.readRecord(key);
+    if (!record) return false;
+    const filePath = this.filePath(key);
+    atomicWriteFileSync(
+      filePath,
+      serializeMemory({ ...record, retiredAt: record.retiredAt ?? new Date().toISOString() }),
     );
     this.cache.delete(filePath);
     return true;

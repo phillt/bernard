@@ -90,6 +90,7 @@ export function appletDataDir(appId: string): string {
 export const SPECIALIST_CANDIDATES_DIR = path.join(DATA_DIR, 'specialist-candidates');
 export const CORRECTION_CANDIDATES_DIR = path.join(DATA_DIR, 'correction-candidates');
 export const APPLET_CANDIDATES_DIR = path.join(DATA_DIR, 'applet-candidates');
+export const MEMORY_CANDIDATES_DIR = path.join(DATA_DIR, 'memory-candidates');
 
 /**
  * Per-applet design briefs — intent and decisions (#463).
@@ -146,6 +147,17 @@ export const CRON_PID_FILE = path.join(STATE_DIR, 'cron-daemon.pid');
 export const CRON_LOG_FILE = path.join(STATE_DIR, 'cron-daemon.log');
 /** Applet host process state (#421), mirroring the cron daemon's pair. */
 export const APPLET_HOST_PID_FILE = path.join(STATE_DIR, 'applet-host.pid');
+/**
+ * One ISO timestamp: when the memory-consolidation pass last ran.
+ *
+ * State rather than data — it says nothing about the user's memories, only
+ * about when Bernard last looked at them, and losing it costs one redundant
+ * pass. A content hash was the alternative and is not needed: #513 already
+ * stamps every write, so `max(writtenAt) <= lastRun` answers "has anything
+ * changed" with the metadata that exists, and the same comparison per record
+ * answers "is this too fresh to judge".
+ */
+export const MEMORY_CONSOLIDATED_MARKER = path.join(STATE_DIR, '.memory-consolidated');
 export const APPLET_HOST_LOG_FILE = path.join(STATE_DIR, 'applet-host.log');
 /**
  * Per-applet port and session token (#421).

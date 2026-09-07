@@ -49,6 +49,31 @@ vi.mock('./specialist-detector.js', () => ({
   detectSpecialistCandidate: (...args: any[]) => mockDetectSpecialistCandidate(...args),
 }));
 
+const mockConsolidationInputs = vi.fn(() => [] as Array<{ key: string; writtenAt?: string }>);
+const mockProposeConsolidation = vi.fn(async () => [] as unknown[]);
+const mockMemoryCandidateList = vi.fn(() => [] as unknown[]);
+const mockMemoryCandidateListPending = vi.fn(() => [] as unknown[]);
+const mockMemoryCandidateCreate = vi.fn();
+
+vi.mock('./memory.js', () => ({
+  MemoryStore: vi.fn().mockImplementation(() => ({})),
+}));
+
+vi.mock('./memory-consolidation.js', () => ({
+  consolidationInputs: (...a: any[]) => mockConsolidationInputs(...(a as [])),
+  proposeConsolidation: (...a: any[]) => mockProposeConsolidation(...(a as [])),
+}));
+
+vi.mock('./memory-candidates.js', () => ({
+  MemoryCandidateStore: vi.fn().mockImplementation(() => ({
+    list: mockMemoryCandidateList,
+    listPending: mockMemoryCandidateListPending,
+    create: mockMemoryCandidateCreate,
+  })),
+  MAX_PENDING_MEMORY_CANDIDATES: 10,
+  isSuppressed: () => false,
+}));
+
 // Import after mocks are wired.
 import { runWorkerForFile } from './rag-worker.js';
 
@@ -86,6 +111,96 @@ describe('rag-worker (runWorkerForFile)', () => {
     } catch {
       // Ignore cleanup errors
     }
+  });
+
+  describe('memory consolidation arm (#529)', () => {
+    const write = (payload: Record<string, unknown>) =>
+      fs.writeFileSync(tempFile, JSON.stringify(payload));
+
+    it('runs with no transcript at all — its gate is memory, not RAG', async () => {
+      // The whole reason the spawn condition had to widen: `ragStore` is
+      // undefined unless `config.ragEnabled`, and memory has nothing to do
+      // with that setting.
+      mockConsolidationInputs.mockReturnValue([{ key: 'a', writtenAt: new Date().toISOString() }]);
+      write({ provider: 'anthropic', model: 'm', consolidateMemory: true });
+
+      await runWorkerForFile(tempFile);
+
+      expect(mockExtractDomainFacts).not.toHaveBeenCalled();
+      expect(mockProposeConsolidation).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not run when the payload does not ask for it', async () => {
+      write({ serialized: 'x', provider: 'anthropic', model: 'm' });
+      await runWorkerForFile(tempFile);
+      expect(mockProposeConsolidation).not.toHaveBeenCalled();
+    });
+
+    it('queues a proposal rather than writing a memory', async () => {
+      // The invariant the two sibling arms already keep: the worker only ever
+      // enqueues. Nothing here touches the user's notes.
+      const proposal = { kind: 'stale', keys: ['one-off'], reason: 'r' };
+      mockConsolidationInputs.mockReturnValue([
+        { key: 'one-off', writtenAt: '2020-01-01T00:00:00.000Z' },
+      ]);
+      mockProposeConsolidation.mockResolvedValue([proposal]);
+      write({ provider: 'anthropic', model: 'm', consolidateMemory: true });
+
+      await runWorkerForFile(tempFile);
+
+      expect(mockMemoryCandidateCreate).toHaveBeenCalledWith(proposal, 'exit');
+    });
+
+    it('withholds records written since the last pass, rather than skipping the run', async () => {
+      // "Too fresh to judge" — proposing to retire something written this
+      // session is the fastest way to make a user turn this off.
+      const { MEMORY_CONSOLIDATED_MARKER } = await import('./paths.js');
+      fs.mkdirSync(path.dirname(MEMORY_CONSOLIDATED_MARKER), { recursive: true });
+      fs.writeFileSync(MEMORY_CONSOLIDATED_MARKER, '2024-01-01T00:00:00.000Z\n');
+      mockConsolidationInputs.mockReturnValue([
+        { key: 'old', writtenAt: '2023-06-01T00:00:00.000Z' },
+        { key: 'fresh', writtenAt: new Date().toISOString() },
+      ]);
+      write({ provider: 'anthropic', model: 'm', consolidateMemory: true });
+
+      await runWorkerForFile(tempFile);
+
+      const entries = mockProposeConsolidation.mock.calls[0][0] as Array<{ key: string }>;
+      expect(entries.map((e) => e.key)).toEqual(['old']);
+      fs.rmSync(MEMORY_CONSOLIDATED_MARKER, { force: true });
+    });
+
+    it('calls no model when nothing changed since the last pass', async () => {
+      const { MEMORY_CONSOLIDATED_MARKER } = await import('./paths.js');
+      fs.mkdirSync(path.dirname(MEMORY_CONSOLIDATED_MARKER), { recursive: true });
+      fs.writeFileSync(MEMORY_CONSOLIDATED_MARKER, new Date().toISOString() + '\n');
+      mockConsolidationInputs.mockReturnValue([
+        { key: 'old', writtenAt: '2023-06-01T00:00:00.000Z' },
+      ]);
+      write({ provider: 'anthropic', model: 'm', consolidateMemory: true });
+
+      await runWorkerForFile(tempFile);
+
+      expect(mockProposeConsolidation).not.toHaveBeenCalled();
+      fs.rmSync(MEMORY_CONSOLIDATED_MARKER, { force: true });
+    });
+
+    it('does not cost fact extraction its result when it throws', async () => {
+      // `allSettled`, not `all` — the reason the sibling arms are shaped this
+      // way, checked for the third.
+      mockConsolidationInputs.mockImplementation(() => {
+        throw new Error('boom');
+      });
+      write({ serialized: 'x', provider: 'anthropic', model: 'm', consolidateMemory: true });
+
+      await runWorkerForFile(tempFile);
+
+      expect(mockExtractDomainFacts).toHaveBeenCalled();
+      expect(mockAddFacts).toHaveBeenCalled();
+      expect(fs.existsSync(tempFile)).toBe(false);
+      mockConsolidationInputs.mockReset();
+      mockConsolidationInputs.mockReturnValue([]);
+    });
   });
 
   it('reads temp file, extracts domain facts, stores per-domain, and deletes temp file', async () => {

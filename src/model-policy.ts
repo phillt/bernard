@@ -32,7 +32,8 @@ export type ModelSite =
   | 'specialist-detector'
   | 'applet-detector'
   | 'claim-verifier'
-  | 'speech-normalizer';
+  | 'speech-normalizer'
+  | 'memory-consolidator';
 
 /**
  * Three-value runtime mode (#170, redesigned). The legacy `'off'` value is
@@ -410,6 +411,10 @@ const TEMPERATURE_ZERO_SITES: ReadonlySet<ModelSite> = new Set([
   // site — kept explicit rather than derived from `SITE_ROLE`, since the two
   // policies are independent and the overlap may not survive the next site.
   'speech-normalizer',
+  // Proposing that a user's own notes be retired must not depend on which way
+  // a sample fell. Two runs over an unchanged store should agree, or the
+  // startup notice becomes noise the user learns to dismiss.
+  'memory-consolidator',
 ]);
 
 /**

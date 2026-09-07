@@ -383,14 +383,15 @@ ambiguous in them skip the call entirely.
 
 ### Environment variables
 
-| Variable                   | Description                                                                                                                                                   | Default           |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
-| `BERNARD_VOICE`            | Enable TTS (`true` or `1`)                                                                                                                                    | `false`           |
-| `BERNARD_VOICE_BACKEND`    | Backend override (`auto`, `macos-say`, `spd-say`, `espeak-ng`, `espeak`, `windows-speech`)                                                                    | `auto`            |
-| `BERNARD_VOICE_VOICE`      | Named voice passed to the backend (`Daniel`, `en-us+f3`, …)                                                                                                   | (backend default) |
-| `BERNARD_VOICE_NORMALIZER` | Speak a natural spoken rendering rather than the literal text (see above)                                                                                     | `true`            |
-| `BERNARD_VOICE_RATE`       | Speech rate in words-per-minute                                                                                                                               | (backend default) |
-| `BERNARD_VOICE_WARMUP_MS`  | Silence played to wake a suspended audio sink before speaking, so the first words aren't clipped (Linux-only; needs `pw-play`/`paplay`/`aplay`; `0` disables) | `400`             |
+| Variable                       | Description                                                                                                                                                   | Default           |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| `BERNARD_VOICE`                | Enable TTS (`true` or `1`)                                                                                                                                    | `false`           |
+| `BERNARD_VOICE_BACKEND`        | Backend override (`auto`, `macos-say`, `spd-say`, `espeak-ng`, `espeak`, `windows-speech`)                                                                    | `auto`            |
+| `BERNARD_VOICE_VOICE`          | Named voice passed to the backend (`Daniel`, `en-us+f3`, …)                                                                                                   | (backend default) |
+| `BERNARD_VOICE_NORMALIZER`     | Speak a natural spoken rendering rather than the literal text (see above)                                                                                     | `true`            |
+| `BERNARD_MEMORY_CONSOLIDATION` | At session close, look over saved memories and suggest which have outlived their use (suggestions only — nothing changes unless you agree)                    | `true`            |
+| `BERNARD_VOICE_RATE`           | Speech rate in words-per-minute                                                                                                                               | (backend default) |
+| `BERNARD_VOICE_WARMUP_MS`      | Silence played to wake a suspended audio sink before speaking, so the first words aren't clipped (Linux-only; needs `pw-play`/`paplay`/`aplay`; `0` disables) | `400`             |
 
 > **First words getting clipped?** On Linux, PipeWire/PulseAudio suspends idle audio sinks (HDMI outputs especially take a few hundred ms to wake), so the first syllables play into a device that isn't ready yet. Bernard mitigates this by playing a brief silence to wake the sink before each utterance — tune or disable it with `BERNARD_VOICE_WARMUP_MS`. The deeper fix is to stop the sink suspending at all (e.g. set `session.suspend-timeout-seconds = 0` for your output in WirePlumber).
 

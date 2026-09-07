@@ -268,6 +268,36 @@ describe('memory tool: the #513 additions', () => {
     expect(out).toContain('foo bar');
   });
 
+  it('classifies every mutating action as a write, for both permission gates', () => {
+    // The fail-open #513 found in `readOnlyWrap`: a new mutating action that no
+    // gate classifies is one an unattended dispatch may make with nobody to
+    // ask. `retire` and a DECIDED `proposals` call both change state.
+    const isWrite = tool.meta.isWriteAction!;
+    expect(isWrite({ action: 'retire' } as never)).toBe(true);
+    expect(isWrite({ action: 'proposals', decision: 'accepted' } as never)).toBe(true);
+    expect(isWrite({ action: 'proposals', decision: 'declined' } as never)).toBe(true);
+    // A bare listing is not.
+    expect(isWrite({ action: 'proposals' } as never)).toBe(false);
+  });
+
+  it('retire reports the file surviving, which is the difference from delete', async () => {
+    const spy = vi.spyOn(store, 'retire').mockReturnValue(true);
+    const out = await runSerialized(tool, { action: 'retire', key: 'one-off' });
+    expect(spy).toHaveBeenCalledWith('one-off');
+    expect(out).toContain('still on disk');
+  });
+
+  it('retire requires a key', async () => {
+    const out = await runSerialized(tool, { action: 'retire' });
+    expect(out).toMatch(/^Error: /);
+  });
+
+  it('proposals requires a decision once an id is given', async () => {
+    const out = await runSerialized(tool, { action: 'proposals', proposalId: 'x' });
+    expect(out).toMatch(/^Error: /);
+    expect(out).toContain('decision is required');
+  });
+
   it('classifies supersede as a write for both permission gates', () => {
     // Without this the read-only block gate (#179) would let an unattended
     // dispatch retire a user's memories with nobody to ask.

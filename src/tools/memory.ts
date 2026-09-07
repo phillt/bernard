@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import type { MemoryStore } from '../memory.js';
 import { MemoryKeyCollisionError } from '../memory.js';
+import { MemoryCandidateStore } from '../memory-candidates.js';
+import { describeProposal } from '../memory-consolidation.js';
 import { MEMORY_DIR } from '../paths.js';
 import type { BernardTool } from '../framework/tools/types.js';
 import { ok, err } from '../framework/tools/types.js';
@@ -15,9 +17,12 @@ import type { ProvenanceStore } from '../provenance.js';
  */
 const MEMORY_PARAMETERS = z.object({
   action: z
-    .enum(['list', 'read', 'write', 'delete', 'supersede'])
+    .enum(['list', 'read', 'write', 'delete', 'supersede', 'retire', 'proposals'])
     .describe('The action to perform'),
-  key: z.string().optional().describe('The memory key (required for read/write/delete/supersede)'),
+  key: z
+    .string()
+    .optional()
+    .describe('The memory key (required for read/write/delete/supersede/retire)'),
   content: z.string().optional().describe('The content to write (required for write)'),
   replacement: z
     .string()
@@ -25,6 +30,16 @@ const MEMORY_PARAMETERS = z.object({
     .describe(
       'For supersede: the key of the memory that replaces this one. It must already exist.',
     ),
+  proposalId: z
+    .string()
+    .optional()
+    .describe(
+      'For proposals: the id shown in the Memory Housekeeping block, to mark accepted or declined.',
+    ),
+  decision: z
+    .enum(['accepted', 'declined'])
+    .optional()
+    .describe('For proposals: what the user decided about proposalId. Omit to just list them.'),
 });
 
 const SCRATCH_PARAMETERS = z.object({
@@ -66,12 +81,23 @@ export function createMemoryTool(
       // strict would pop a confirm menu on every list — both intolerable.
       isWriteAction: (args) => {
         const action = (args as { action?: string } | undefined)?.action;
-        return action === 'write' || action === 'delete' || action === 'supersede';
+        // `retire` and a decided `proposals` call are writes. Omitting either
+        // is the fail-open #513 found in `readOnlyWrap`: a new mutating action
+        // that no gate classifies is one an unattended dispatch may make with
+        // nobody to ask. A bare `proposals` read is not a write.
+        return (
+          action === 'write' ||
+          action === 'delete' ||
+          action === 'supersede' ||
+          action === 'retire' ||
+          (action === 'proposals' &&
+            (args as { decision?: string } | undefined)?.decision !== undefined)
+        );
       },
     },
-    description: `Persistent memory that survives across sessions. Use this to remember user preferences, project knowledge, or anything worth recalling later. Stored as files on disk at ${MEMORY_DIR}. When a memory is replaced by a newer one, use action 'supersede' rather than 'delete': the retired note stops being shown but stays on disk, so a wrong call costs nothing.`,
+    description: `Persistent memory that survives across sessions. Use this for things that stay TRUE and will matter again: user preferences, standing instructions, project knowledge, contact details. Do NOT save a record of something that merely happened — a message you already sent, a link you already followed, a file the user mentioned once. Those cost context on every request forever and help no future turn. Stored as files on disk at ${MEMORY_DIR}. When a memory is replaced by a newer one use action 'supersede'; when one is simply spent and nothing replaces it use 'retire'. Prefer either over 'delete': the note stops being shown but stays on disk, so a wrong call costs nothing.`,
     parameters: MEMORY_PARAMETERS,
-    execute: async ({ action, key, content, replacement }) => {
+    execute: async ({ action, key, content, replacement, proposalId, decision }) => {
       switch (action) {
         case 'list': {
           const keys = memoryStore.listMemory();
@@ -133,6 +159,40 @@ export function createMemoryTool(
             `Memory "${key}" retired in favour of "${replacement}". ` +
               `It is no longer shown, and its file is still on disk.`,
           );
+        }
+        case 'retire': {
+          if (!key)
+            return err({ type: 'invalid_args', message: 'key is required for retire action.' });
+          if (!memoryStore.retire(key)) return ok(`No memory found for key "${key}".`);
+          return ok(
+            `Memory "${key}" retired. It is no longer shown, and its file is still on disk.`,
+          );
+        }
+        case 'proposals': {
+          const store = new MemoryCandidateStore();
+          if (!proposalId) {
+            const pending = store.listPending();
+            if (pending.length === 0) return ok('No memory suggestions pending.');
+            return ok(
+              `Pending memory suggestions:\n${pending
+                .map((c) => `  (${c.id}) ${describeProposal(c.proposal)}`)
+                .join('\n')}`,
+            );
+          }
+          if (!decision)
+            return err({
+              type: 'invalid_args',
+              message: 'decision is required when proposalId is given.',
+            });
+          // `decline`, not `updateStatus(id, 'rejected')`. Same status, but it
+          // stamps `decidedAt`, which is what starts the cooldown — a
+          // hand-flipped status is a decline that suppresses nothing.
+          const done =
+            decision === 'declined'
+              ? store.decline(proposalId)
+              : store.updateStatus(proposalId, 'accepted');
+          if (!done) return ok(`No memory suggestion found with id "${proposalId}".`);
+          return ok(`Memory suggestion "${proposalId}" marked ${decision}.`);
         }
         case 'delete': {
           if (!key)
