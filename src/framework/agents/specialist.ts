@@ -13,6 +13,7 @@ import { createEvaluateTool } from '../../tools/evaluate.js';
 import type { AgentContext } from '../context.js';
 import { outputHook } from '../hooks/output.js';
 import { buildStrategy } from '../strategies/build-strategy.js';
+import { retrievalQueryFor } from './retrieval.js';
 import { buildChildTools } from './tool-wrapper.js';
 import type { AgentDefinition, ResolvedModel } from './types.js';
 import { makeLastStepTextOnly } from './task.js';
@@ -63,6 +64,8 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
   repairLabel: 'specialist',
   prefix: (input) => `spec:${input.slotId}`,
 
+  retrievalQuery: retrievalQueryFor,
+
   systemPrompt(ctx, input) {
     const specialist = ctx.stores.specialists.get(input.specialistId);
     if (!specialist) {
@@ -74,10 +77,6 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
     }
     systemPrompt += SPECIALIST_EXECUTION_RULES;
     return systemPrompt;
-  },
-
-  async contextInputs(ctx, input) {
-    return { ragResults: await searchRagForSpecialist(ctx, input) };
   },
 
   async tools(ctx, input, surface) {
@@ -220,21 +219,4 @@ function scopeToTargetTools(
     { ...baseTools, ...ctx.mcp.tools },
     ctx.mcp.resolveAlias,
   );
-}
-
-async function searchRagForSpecialist(ctx: AgentContext, input: SpecialistInput) {
-  if (!ctx.rag) return undefined;
-  try {
-    const ragResults = await ctx.rag.search(input.task);
-    if (ragResults.length > 0) {
-      debugLog('specialist:rag', {
-        query: input.task.slice(0, 100),
-        results: ragResults.length,
-      });
-    }
-    return ragResults;
-  } catch (err) {
-    debugLog('specialist:rag:error', err instanceof Error ? err.message : String(err));
-    return undefined;
-  }
 }

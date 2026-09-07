@@ -1,15 +1,14 @@
 import type { CoreMessage, Tool } from 'ai';
 import { attachTo } from './user-message.js';
 import type { WithAttachments } from './user-message.js';
-import { debugLog } from '../../logger.js';
 import { appendActivitySummary } from '../../tools/activity-summary.js';
 import { createTools } from '../../tools/index.js';
-import type { AgentContext } from '../context.js';
 import { outputHook } from '../hooks/output.js';
 import { NormalStrategy } from '../strategies/normal.js';
 import { makeLastStepTextOnly } from './task.js';
 import { SUBAGENT_STEP_RATIO } from './sub.js';
 import type { AgentDefinition } from './types.js';
+import { retrievalQueryFor } from './retrieval.js';
 
 /**
  * Fraction of the sub-agent's per-call budget allocated to the Actor phase of
@@ -66,9 +65,7 @@ export const pacActorDefinition: AgentDefinition<PacActorInput, string> = {
     return PAC_ACTOR_SYSTEM_PROMPT;
   },
 
-  async contextInputs(ctx, input) {
-    return { ragResults: await searchRag(ctx, input.task) };
-  },
+  retrievalQuery: retrievalQueryFor,
 
   async tools(ctx, input, surface) {
     // A caller-scoped registry (e.g. MCP delegation escalation) wins, keeping
@@ -128,17 +125,3 @@ export const pacActorDefinition: AgentDefinition<PacActorInput, string> = {
     return appendActivitySummary(result.text, result.steps as unknown[], 'subagent', meta);
   },
 };
-
-async function searchRag(ctx: AgentContext, task: string) {
-  if (!ctx.rag) return undefined;
-  try {
-    const results = await ctx.rag.search(task);
-    if (results.length > 0) {
-      debugLog('subagent:rag', { query: task.slice(0, 100), results: results.length });
-    }
-    return results;
-  } catch (err) {
-    debugLog('subagent:rag:error', err instanceof Error ? err.message : String(err));
-    return undefined;
-  }
-}

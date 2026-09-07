@@ -1,15 +1,14 @@
 import type { CoreMessage } from 'ai';
 import { buildTaskUserMessage } from './user-message.js';
 import type { WithAttachments } from './user-message.js';
-import { debugLog } from '../../logger.js';
 import { capSubagentResult } from '../../tools/result-cap.js';
 import { appendActivitySummary } from '../../tools/activity-summary.js';
 import { makeLastStepTextOnly } from './task.js';
 import { createTools } from '../../tools/index.js';
-import type { AgentContext } from '../context.js';
 import { outputHook } from '../hooks/output.js';
 import { NormalStrategy } from '../strategies/normal.js';
 import type { AgentDefinition } from './types.js';
+import { retrievalQueryFor } from './retrieval.js';
 
 /**
  * Ratio (relative to `config.maxSteps`) used as the sub-agent's step budget.
@@ -62,9 +61,7 @@ export const subAgentDefinition: AgentDefinition<SubAgentInput, string> = {
     return SUB_AGENT_SYSTEM_PROMPT;
   },
 
-  async contextInputs(ctx, input) {
-    return { ragResults: await searchRag(ctx, input.task) };
-  },
+  retrievalQuery: retrievalQueryFor,
 
   async tools(ctx, _input, surface) {
     return await createTools(
@@ -106,17 +103,3 @@ export const subAgentDefinition: AgentDefinition<SubAgentInput, string> = {
     );
   },
 };
-
-async function searchRag(ctx: AgentContext, task: string) {
-  if (!ctx.rag) return undefined;
-  try {
-    const results = await ctx.rag.search(task);
-    if (results.length > 0) {
-      debugLog('subagent:rag', { query: task.slice(0, 100), results: results.length });
-    }
-    return results;
-  } catch (err) {
-    debugLog('subagent:rag:error', err instanceof Error ? err.message : String(err));
-    return undefined;
-  }
-}

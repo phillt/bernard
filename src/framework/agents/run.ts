@@ -23,6 +23,7 @@ import type { StepFinishPayload } from '../hooks/types.js';
 import { runAgent, type AgentResult, type AgentSpec } from '../runner.js';
 import type { IterateFn, IterateOpts, StrategyContext } from '../strategies/types.js';
 import { resolveToolSurface } from './tool-surface.js';
+import { resolveRetrieval } from './retrieval.js';
 import { visionRefusal } from './vision-gate.js';
 import { seedBudgetRefusal } from './seed-budget.js';
 import { hasImagePart, isVisionCapableModel, stripImagesFromHistory } from '../../image.js';
@@ -152,7 +153,25 @@ export async function runDefinition<TInput, TFormatted>(
   // a missed call site failed silently and expensively. Deciding here makes the
   // definitions consumers of the answer rather than five copies of the rule.
   const surface = resolveToolSurface(ctx, def);
-  const rawTools = await Promise.resolve(def.tools(ctx, input, surface));
+  // Retrieval, resolved once per dispatch for the same reason and in the same
+  // place (#510). It used to sit in four definitions' `contextInputs`, which
+  // runs inside `innerIterate` — so a multi-step dispatch re-searched on every
+  // LLM call, and three of the four were the same twenty lines pasted.
+  // Started together, because they are independent and both are slow — the
+  // pattern `headless.ts:229` already uses for this exact pair, and for the
+  // reason it gives: "the two are independent". Measured, `createTools` costs
+  // 144 ms on the first dispatch of a process (the deferred module loads #452
+  // exists to recover) and a search costs ~10 ms warm, ~230 ms when it persists
+  // access metadata. Awaiting retrieval first put the whole tool-module load
+  // strictly behind it.
+  //
+  // `Promise.all` rather than a deferred await: `def.retrievalQuery(input)` is
+  // called outside `resolveRetrieval`'s own try, so a definition-supplied thunk
+  // that throws would be an unhandled rejection if `def.tools` rejected first.
+  const [retrieved, rawTools] = await Promise.all([
+    resolveRetrieval(ctx, def, input),
+    Promise.resolve(def.tools(ctx, input, surface)),
+  ]);
   // Tools first, then the prompt that describes them: `task` interpolates
   // `Available tools: …` and used to build its own second registry to do it,
   // which had already drifted from the handed set.
@@ -372,6 +391,11 @@ export async function runDefinition<TInput, TFormatted>(
     if (extras === null) return [];
     const msg = buildContextMessage({
       ...extras,
+      // A definition that supplied its own results wins: `main` applies
+      // stickiness and provenance the runner cannot see, and `cron` pre-fetches
+      // before its MCP connect. `?? retrieved` rather than the other order for
+      // exactly that reason.
+      ragResults: extras.ragResults ?? retrieved,
       memoryStore: ctx.stores.memory,
       includeScratch: extras.includeScratch ?? true,
     });

@@ -329,6 +329,33 @@ describe('subagent tool', () => {
     expect(call.system).not.toContain('User prefers dark mode');
   });
 
+  it('retrieves for the context the caller wrote, not the task alone (#510)', async () => {
+    // The change that pays for the retrieval collapse. Every one of the three
+    // `searchRag` copies searched `input.task` and dropped `input.context` —
+    // the string the caller wrote precisely to say what the task is about.
+    mockGenerateText.mockResolvedValue({ text: 'Done' });
+    const search = vi.fn().mockResolvedValue([]);
+
+    const agentTool = createSubAgentTool(
+      makeCtx(makeConfig(), toolOptions, memoryStore, { rag: { search } as any }),
+    );
+    await agentTool.execute!(
+      { task: 'fix the build', context: 'it fails on node 22 only' },
+      { toolCallId: '1', messages: [], abortSignal: undefined as any },
+    );
+
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(search.mock.calls[0][0]).toContain('fix the build');
+    expect(search.mock.calls[0][0]).toContain('it fails on node 22 only');
+  });
+
+  // The sibling property — one search per DISPATCH rather than per model call —
+  // is in `framework/agents/__tests__/run.test.ts`, not here. A single mocked
+  // `generateText` means `innerIterate` runs once whatever the runner does, so
+  // an assertion at this level passes with retrieval back inside
+  // `contextInputs` and proves nothing. Observing it needs a strategy that
+  // iterates twice.
+
   it('includes persistent memory in context message', async () => {
     mockGenerateText.mockResolvedValue({ text: 'Done' });
     vi.mocked(fs.readdirSync).mockReturnValue(['prefs.md'] as any);
