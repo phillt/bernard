@@ -3,6 +3,10 @@ import type { BernardConfig } from '../config.js';
 import type { ToolOptions } from './types.js';
 
 vi.mock('node:fs', () => ({
+  // `statSync` backs `MemoryStore`'s stat-validated read cache (#513): a
+  // separate bernard process writing memory while this one is open must be
+  // seen, so the cache is validated rather than write-invalidated.
+  statSync: vi.fn(() => ({ mtimeMs: 1 })),
   mkdirSync: vi.fn(),
   readdirSync: vi.fn(() => []),
   existsSync: vi.fn(() => false),

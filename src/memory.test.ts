@@ -1,12 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { sanitizeKey, MemoryStore, loadRewriterHints, saveRewriterHint } from './memory.js';
 
+// `statSync` and `renameSync` joined the mock with #513: reads go through a
+// stat-validated cache, and writes go through `atomicWriteFileSync`. This file
+// tests CALL SHAPE against a mocked filesystem; the on-disk format, the cache
+// and supersession are in `memory.disk.test.ts` against a real directory,
+// because a mock cannot honestly answer what a round trip produces.
 vi.mock('node:fs', () => ({
   mkdirSync: vi.fn(),
   readdirSync: vi.fn(() => []),
   existsSync: vi.fn(() => false),
   readFileSync: vi.fn(() => ''),
   writeFileSync: vi.fn(),
+  renameSync: vi.fn(),
+  statSync: vi.fn(() => ({ mtimeMs: 1 })),
   unlinkSync: vi.fn(),
 }));
 
@@ -119,12 +126,20 @@ describe('MemoryStore', () => {
       expect(store.readMemory('missing')).toBeNull();
     });
 
-    it('writeMemory writes file with sanitized key', () => {
+    it('writeMemory writes atomically, to a file named by the sanitized key', () => {
+      // Write-to-`.tmp`-then-rename, via `atomicWriteFileSync` (#513). This was
+      // the one store in the repo still doing a bare `writeFileSync`, with
+      // `saveRewriterHint` performing a read-modify-write on top of it — the
+      // exact hazard `apps/brief-store.ts` and `paths.ts` both call out.
       store.writeMemory('my-key', 'content');
       expect(fs.writeFileSync).toHaveBeenCalledWith(
-        expect.stringContaining('my-key.md'),
-        'content',
+        expect.stringContaining('my-key.md.tmp'),
+        expect.stringContaining('content'),
         'utf-8',
+      );
+      expect(fs.renameSync).toHaveBeenCalledWith(
+        expect.stringContaining('my-key.md.tmp'),
+        expect.stringContaining('my-key.md'),
       );
     });
 

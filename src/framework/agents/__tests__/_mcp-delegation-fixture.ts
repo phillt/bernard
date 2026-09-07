@@ -57,6 +57,13 @@ export function makeCtx(
   overrides: Partial<AgentContext> = {},
 ): AgentContext {
   const noopStore = new Proxy({}, { get: () => () => [] });
+  const baseStores = {
+    memory: { clearScratch: () => {} },
+    routines: noopStore,
+    specialists: noopStore,
+    candidates: noopStore,
+    toolProfiles: { list: () => [] },
+  };
   return {
     config: baseConfig(mcpDelegation),
     toolOptions: {},
@@ -68,17 +75,21 @@ export function makeCtx(
       serverNames: ['google', 'slack'],
       serverTools: FIXTURE_SERVER_TOOLS,
     },
-    stores: {
-      memory: { clearScratch: () => {} },
-      routines: noopStore,
-      specialists: noopStore,
-      candidates: noopStore,
-      toolProfiles: { list: () => [] },
-    },
+    stores: baseStores,
     provenance: undefined,
     verification: { record: () => {} },
     policyDecision: undefined,
     ...overrides,
+    // `stores` is merged one level deeper than the rest, because the shallow
+    // spread was a trap: a caller overriding ONE store silently dropped
+    // routines/candidates/toolProfiles and so changed what `createTools` builds.
+    // Two test files had independently discovered that and hand-rolled the
+    // merge — the per-file copy this fixture exists to prevent. Every other
+    // field stays a wholesale replace, which is what
+    // `child.mcp-delegation.test.ts`'s dropped-`serverTools` case needs.
+    ...(overrides.stores
+      ? { stores: { ...(baseStores as object), ...(overrides.stores as object) } }
+      : {}),
   } as unknown as AgentContext;
 }
 

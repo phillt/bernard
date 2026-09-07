@@ -913,7 +913,10 @@ describe('createSpecialistTool', () => {
       expect(result).toContain('must declare targetTools');
     });
 
-    it('leaves persona alone — it never reaches buildChildTools', async () => {
+    it('lets a persona omit targetTools, which means every tool its dispatch allows', async () => {
+      // The test name used to say "it never reaches buildChildTools". Since
+      // #507 it does — an ABSENT list is what still means "unscoped", and 28 of
+      // 30 personas on a real install take this path.
       const result = await tool.execute(
         {
           action: 'create',
@@ -921,6 +924,45 @@ describe('createSpecialistTool', () => {
           name: 'Persona',
           description: 'No tools named, and that is fine',
           systemPrompt: 'You are a persona.',
+        },
+        {} as any,
+      );
+      expect(result).toContain('created');
+    });
+
+    it('refuses a persona declaring targetTools: [], which is a state nobody means', async () => {
+      // `buildChildTools` reads `[]` and `undefined` identically (#331), which
+      // is right for a wrapper — the creation boundary refuses an unscoped one,
+      // so the case is unreachable — and wrong for a persona, where nothing
+      // ever refused it. A real install carries one such record whose own
+      // prompt says to use the browser-control MCP tools; reading its `[]` as a
+      // scope would leave it running and answering badly. Refusing at creation
+      // is what stops the population growing, and it fixes every surface
+      // (`/specialists`, the tool's `read`, `agent-builder`) rather than the
+      // dispatch alone.
+      const result = await tool.execute(
+        {
+          action: 'create',
+          id: 'empty-scope-persona',
+          name: 'Empty Scope',
+          description: 'Declares an empty list',
+          systemPrompt: 'You are a persona.',
+          targetTools: [],
+        },
+        {} as any,
+      );
+      expect(result).toContain('not a scope');
+    });
+
+    it('still creates a persona that names real tools', async () => {
+      const result = await tool.execute(
+        {
+          action: 'create',
+          id: 'scoped-persona',
+          name: 'Scoped',
+          description: 'Names two tools',
+          systemPrompt: 'You are scoped.',
+          targetTools: ['web_search', 'web_read'],
         },
         {} as any,
       );
