@@ -16,7 +16,13 @@ const mockMcpManager = vi.hoisted(() => ({
 const mockRagSearch = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 const mockRagFlush = vi.hoisted(() => vi.fn());
 const mockRagStoreCtor = vi.hoisted(() =>
-  vi.fn(() => ({ search: mockRagSearch, flush: mockRagFlush })),
+  vi.fn(() => {
+    // `scoped` is part of the real store's surface, so the fake carries it and
+    // returns itself for an absent scope — exactly what `RAGStore.scoped` does.
+    const store: any = { search: mockRagSearch, flush: mockRagFlush };
+    store.scoped = vi.fn(() => store);
+    return store;
+  }),
 );
 
 const mockRunDefinition = vi.hoisted(() =>
@@ -102,9 +108,11 @@ beforeEach(() => {
   mockRagSearch.mockResolvedValue([]);
   mockRagFlush.mockClear();
   mockRunDefinition.mockResolvedValue({ formatted: 'done', stepLimitHit: false });
-  mockRagStoreCtor.mockImplementation(
-    () => ({ search: mockRagSearch, flush: mockRagFlush }) as any,
-  );
+  mockRagStoreCtor.mockImplementation(() => {
+    const store: any = { search: mockRagSearch, flush: mockRagFlush };
+    store.scoped = vi.fn(() => store);
+    return store;
+  });
 });
 
 describe('resolvePosture', () => {
@@ -235,6 +243,7 @@ describe('runHeadless', () => {
     mockRagStoreCtor.mockImplementation(
       () => ({ search: mockRagSearch, flush: mockRagFlush, scoped }) as any,
     );
+    // (a bespoke fake here, because this case needs the two stores to differ)
     const buildInput = vi.fn().mockReturnValue({});
     await runHeadless(
       opts({ buildInput, ragQuery: 'why', scope: { knowledgeScope: ['general'] } }),
@@ -247,14 +256,15 @@ describe('runHeadless', () => {
   // The default, pinned as a decision rather than left as an absence. Unset
   // means unscoped, matching `toolMode`'s house rule that an unset field
   // preserves legacy behaviour and the author opts in.
+  // Asserted behaviourally rather than as "scoped was not called": the absent
+  // scope is resolved in ONE place — `scoped()` itself returns the receiver —
+  // so the fact worth pinning is that the unscoped search is the one that ran.
   it('leaves the search unscoped when no scope is declared', async () => {
-    const scoped = vi.fn();
-    mockRagStoreCtor.mockImplementation(
-      () => ({ search: mockRagSearch, flush: mockRagFlush, scoped }) as any,
-    );
-    await runHeadless(opts({ ragQuery: 'why' }));
-    expect(scoped).not.toHaveBeenCalled();
-    expect(mockRagSearch).toHaveBeenCalled();
+    const buildInput = vi.fn().mockReturnValue({});
+    mockRagSearch.mockResolvedValue([{ id: 'f1', text: 'unscoped' }]);
+    await runHeadless(opts({ buildInput, ragQuery: 'why' }));
+    expect(mockRagSearch).toHaveBeenCalledWith('why');
+    expect(buildInput.mock.calls[0][0].ragResults).toEqual([{ id: 'f1', text: 'unscoped' }]);
   });
 
   // Not merely "does not search": the RAGStore constructor reads and parses the

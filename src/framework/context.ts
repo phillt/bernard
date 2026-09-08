@@ -8,7 +8,7 @@ import { ToolProfileStore } from '../tool-profiles.js';
 import type { RAGStore } from '../rag.js';
 import type { PolicyDecision } from '../policy/types.js';
 import type { ToolOptions } from '../tools/types.js';
-import type { TokenStatsTarget } from './hooks/token-stats.js';
+import { makeUsageRecorder, type TokenStatsTarget } from './hooks/token-stats.js';
 import { ProvenanceStore } from '../provenance.js';
 import { VerificationStore } from '../agent-status.js';
 import { VerificationTracker } from '../verification-tracker.js';
@@ -201,12 +201,40 @@ export function scopeContext(ctx: AgentContext, profile: DispatchProfile): Agent
   // already-scoped context can only ever narrow further. That is what lets
   // `tool-wrapper-run.ts` scope early for its pre-assembled child tools and
   // still let `runDefinition` re-derive.
+  // **The two axes stay independent**, which is why the memory arm keeps a
+  // guard of its own rather than leaning on `scoped(undefined)` returning the
+  // receiver: a knowledge-only fence must not reach for the memory store at
+  // all. `rag` needs no such guard — it is already reached conditionally.
   return {
     ...ctx,
     stores:
       memoryScope === undefined
         ? ctx.stores
         : { ...ctx.stores, memory: ctx.stores.memory.scoped(memoryScope) },
-    rag: knowledgeScope === undefined ? ctx.rag : ctx.rag?.scoped(knowledgeScope),
+    rag: ctx.rag?.scoped(knowledgeScope),
+  };
+}
+
+/**
+ * Gives a dispatch's tools a handle for reporting LLM spend they make
+ * themselves (#373).
+ *
+ * `ToolExecOptions` carries no usage handle, so a tool that calls a model has
+ * nowhere to report what it cost. This puts one on `ToolOptions` — the bag that
+ * already exists for per-dispatch callbacks a tool may reach back through —
+ * rather than on `CreateToolsOptions`, which is a decision about which built-in
+ * SURFACE a dispatch receives and is guarded by a prompt-cache byte-stability
+ * rule that a per-dispatch closure has to argue its way past.
+ *
+ * Derived here, beside {@link scopeContext}, for the reason that one gives:
+ * `runDefinition` is the single place with both a `ctx` and a route to every
+ * definition, so no dispatch site has to remember. Returns `ctx` unchanged when
+ * there is nothing to record to, or when a caller already supplied one.
+ */
+export function withUsageRecorder(ctx: AgentContext): AgentContext {
+  if (!ctx.statsTarget || ctx.toolOptions.onUsage) return ctx;
+  return {
+    ...ctx,
+    toolOptions: { ...ctx.toolOptions, onUsage: makeUsageRecorder(ctx.statsTarget) },
   };
 }

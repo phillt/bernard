@@ -18,7 +18,7 @@ import { generateText } from 'ai';
 import { MemoryStore } from '../../../memory.js';
 import { RAGStore } from '../../../rag.js';
 import { declaredScope, resolveDispatchProfile } from '../dispatch-profile.js';
-import { scopeContext } from '../../context.js';
+import { scopeContext, withUsageRecorder } from '../../context.js';
 import { runDefinition } from '../run.js';
 import { NormalStrategy } from '../../strategies/normal.js';
 import { createMemoryTool, createScratchTool } from '../../../tools/memory.js';
@@ -129,10 +129,15 @@ describe('scopeContext', () => {
 
   it('narrows RAG independently of memory', () => {
     const ctx = ctxWith(new MemoryStore(), new RAGStore());
-    expect(scopeContext(ctx, { knowledgeScope: ['general'] }).rag?.domainScopeOf()).toEqual([
-      'general',
-    ]);
-    expect(scopeContext(ctx, { memoryScope: ['x'] }).rag?.domainScopeOf()).toBeNull();
+    // A knowledge-only fence must not reach for the memory store, and a
+    // memory-only fence must leave `rag` alone — asserted by identity, which is
+    // what the two independent guards in `scopeContext` buy.
+    const knowledgeOnly = scopeContext(ctx, { knowledgeScope: ['general'] });
+    expect(knowledgeOnly.rag).not.toBe(ctx.rag);
+    expect(knowledgeOnly.stores).toBe(ctx.stores);
+    const memoryOnly = scopeContext(ctx, { memoryScope: ['x'] });
+    expect(memoryOnly.rag).toBe(ctx.rag);
+    expect(memoryOnly.stores.memory).not.toBe(ctx.stores.memory);
   });
 
   it('is idempotent, which is what lets two readers apply the same scope', () => {
@@ -141,7 +146,7 @@ describe('scopeContext', () => {
     const ctx = ctxWith(seededMemory());
     const once = scopeContext(ctx, { memoryScope: ['proj-*'] });
     const twice = scopeContext(once, { memoryScope: ['proj-*'] });
-    expect(twice.stores.memory.scopeOf()).toEqual(['proj-*']);
+    expect(twice.stores.memory.readMemory('proj-brief')).toContain('the granted note');
     expect(twice.stores.memory.readMemory('secrets')).toBeNull();
   });
 });
@@ -300,6 +305,53 @@ describe('runDefinition fences the dispatch it runs', () => {
     expect(JSON.stringify(res)).toMatch(/outside this agent's scope/);
   });
 
+  /**
+   * A caller-applied fence must reach the record too.
+   *
+   * `runHeadless` scopes cron from a `CronJob`, which is not a specialist
+   * record — so `cronDefinition` has no `recordId`, `resolveDispatchProfile`
+   * returns the empty profile, and without `declaredScope` the one field that
+   * exists to distinguish a fence from a bad retrieval would read "unscoped"
+   * for exactly the unattended dispatch where the confusion costs most.
+   */
+  it('records a fence the CALLER applied, which no record declares', async () => {
+    const { clearDispatchContexts, enableDispatchContextRecording, getDispatchContexts } =
+      await import('../../../dispatch-context-history.js');
+    clearDispatchContexts();
+    enableDispatchContextRecording();
+    const ctx = scopedCtx(seededMemory());
+    // A definition with no `recordId` — cron's shape.
+    const def = { ...fenced(), recordId: undefined } as never;
+    await runDefinition(ctx, def, { specialistId: 'spec' } as never, {
+      declaredScope: { knowledgeScope: ['general'] },
+    });
+    const row = getDispatchContexts().at(-1);
+    expect(row?.knowledgeScope).toEqual(['general']);
+    expect(row?.memoryScope).toBeUndefined();
+  });
+
+  /**
+   * The WIRING, not the helper in isolation.
+   *
+   * The three cases above all pass with `runDefinition` never calling it —
+   * which is exactly how a plumbing hop goes missing. This asserts on what the
+   * definition's `tools()` is actually handed.
+   */
+  it('reaches the registry a dispatch builds', async () => {
+    let seen: unknown;
+    const def = {
+      ...fenced(),
+      recordId: undefined,
+      tools: (c: AgentContext) => {
+        seen = c.toolOptions.onUsage;
+        return {};
+      },
+    } as never;
+    const ctx = { ...scopedCtx(seededMemory()), statsTarget: {} } as unknown as AgentContext;
+    await runDefinition(ctx, def, { specialistId: 'spec' } as never);
+    expect(typeof seen).toBe('function');
+  });
+
   it('records the fence it ran under, so a short memory list is explicable', async () => {
     const { clearDispatchContexts, enableDispatchContextRecording, getDispatchContexts } =
       await import('../../../dispatch-context-history.js');
@@ -371,4 +423,43 @@ describe('every definition honours a scoped context', () => {
       for (const out of await outOfScopeReads(def)) expect(out).not.toContain(SENTINEL);
     },
   );
+});
+
+/**
+ * A tool that calls a model can report what it cost (#373).
+ *
+ * `ToolExecOptions` carries no usage handle, so the spend a tool makes from
+ * inside its own `execute` had nowhere to go. This lives on `ToolOptions` — the
+ * bag that already exists for per-dispatch callbacks — rather than on
+ * `CreateToolsOptions`, which is a decision about which built-in SURFACE a
+ * dispatch receives.
+ *
+ * Pinned because nothing asserted the WIRING: the recorder was tested at
+ * `checkContradiction`, and the path from a dispatch to the memory tool that
+ * calls it was three plumbing hops with no test between them.
+ */
+describe('withUsageRecorder', () => {
+  function ctxWith(over: Partial<AgentContext>): AgentContext {
+    return { toolOptions: {}, ...over } as AgentContext;
+  }
+
+  it('is the identity when there is nothing to record to', () => {
+    const ctx = ctxWith({});
+    expect(withUsageRecorder(ctx)).toBe(ctx);
+  });
+
+  it('gives the tools a recorder when the dispatch has a stats target', () => {
+    const ctx = withUsageRecorder(ctxWith({ statsTarget: {} as never }));
+    expect(typeof ctx.toolOptions.onUsage).toBe('function');
+  });
+
+  // Fail-closed by omission, the doctrine `ToolOptions` already documents:
+  // absent, the spend is unrecorded rather than unmade.
+  it('never replaces one a caller already supplied', () => {
+    const onUsage = () => {};
+    const ctx = withUsageRecorder(
+      ctxWith({ statsTarget: {} as never, toolOptions: { onUsage } as never }),
+    );
+    expect(ctx.toolOptions.onUsage).toBe(onUsage);
+  });
 });

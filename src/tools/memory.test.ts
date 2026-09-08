@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMemoryTool, createScratchTool } from './memory.js';
-import { MemoryKeyCollisionError } from '../memory.js';
+import { MemoryKeyCollisionError, MemorySupersedeError } from '../memory.js';
 import { MemoryStore } from '../memory.js';
 
 vi.mock('node:fs', () => ({
@@ -244,8 +244,11 @@ describe('memory tool: the #513 additions', () => {
   });
 
   it('supersede reports a store refusal as a tool error rather than throwing', async () => {
+    // The store's own typed error, not a bare `Error`. That type is what lets
+    // the tool map it in ONE guard: the catch-all this replaced also swallowed
+    // `MemoryScopeError` and reported a fence refusal as a call-shape mistake.
     vi.spyOn(store, 'supersede').mockImplementation(() => {
-      throw new Error('no memory with that key exists');
+      throw new MemorySupersedeError('no memory with that key exists');
     });
     const out = await runSerialized(tool, {
       action: 'supersede',

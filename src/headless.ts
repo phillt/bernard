@@ -249,11 +249,15 @@ export async function runHeadless<TInput, TFormatted>(
     // Scoped BEFORE the search, not after: this one runs ahead of
     // `assembleContext` (deliberately, to overlap the MCP connect), so it is
     // the one retrieval a ctx-level fence cannot reach.
-    const searchStore = scope.knowledgeScope ? ragStore?.scoped(scope.knowledgeScope) : ragStore;
-    ragSearch = searchStore?.search(ragQuery).catch((err: unknown) => {
-      debugLog(`${debugLabel}:rag:error`, err instanceof Error ? err.message : String(err));
-      return undefined;
-    });
+    // `scoped(undefined)` returns the receiver, so this needs no guard of its
+    // own — one place decides what an absent scope means.
+    ragSearch = ragStore
+      ?.scoped(scope.knowledgeScope)
+      .search(ragQuery)
+      .catch((err: unknown) => {
+        debugLog(`${debugLabel}:rag:error`, err instanceof Error ? err.message : String(err));
+        return undefined;
+      });
   }
 
   const mcpManager = new MCPManager();
@@ -355,6 +359,10 @@ export async function runHeadless<TInput, TFormatted>(
     const input = await buildInput(env);
     const { formatted, stepLimitHit } = await runDefinition(ctx, opts.definition(), input, {
       abortSignal: abort.signal,
+      // Reporting only — `ctx` above is already narrowed. Without it a cron
+      // job's fence is invisible in the dispatch record, because a `CronJob` is
+      // not a specialist record and `resolveDispatchProfile` cannot see one.
+      declaredScope: scope,
     });
     return { ok: true, formatted, env, startedAt, timings: timings(), stepLimitHit };
   } catch (err: unknown) {

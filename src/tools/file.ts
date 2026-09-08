@@ -1,11 +1,12 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { MAX_VERIFY_TEXT } from '../provenance.js';
+import { atomicWriteFileSyncUnique } from '../fs-utils.js';
 import { attachMeta } from '../framework/tools/adapter.js';
 import type { VerifyOutcome } from '../framework/tools/types.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import type { ProvenanceStore } from '../provenance.js';
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
@@ -180,32 +181,6 @@ function splitLines(content: string): string[] {
   // If file ends with \n, don't count the empty trailing element
   if (lines[lines.length - 1] === '') lines.pop();
   return lines;
-}
-
-/**
- * Writes `content` to `absPath` via a uniquely-named temp file and a rename,
- * so a crash mid-write never leaves a half-written file where a whole one was.
- *
- * Returns an error message, or `null` on success.
- *
- * Not `fs-utils.ts`' `atomicWriteFileSync`: that uses a fixed `.tmp` suffix
- * (two concurrent writers to one path would collide) and leaves the temp file
- * behind when the rename fails.
- */
-function atomicWrite(absPath: string, content: string): string | null {
-  const tmpPath = `${absPath}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
-  try {
-    fs.writeFileSync(tmpPath, content, 'utf-8');
-    fs.renameSync(tmpPath, absPath);
-    return null;
-  } catch (err: unknown) {
-    try {
-      fs.unlinkSync(tmpPath);
-    } catch {
-      // Best-effort cleanup
-    }
-    return `Write failed: ${err instanceof Error ? err.message : String(err)}`;
-  }
 }
 
 /**
@@ -445,7 +420,7 @@ export function createFileTools(provenance?: ProvenanceStore) {
               fs.mkdirSync(parent, { recursive: true });
             }
 
-            const writeError = atomicWrite(absPath, content);
+            const writeError = atomicWriteFileSyncUnique(absPath, content);
             if (writeError) return { error: writeError };
 
             return {
@@ -647,20 +622,8 @@ export function createFileTools(provenance?: ProvenanceStore) {
               lines.length > 0
                 ? lines.join(lineEnding) + (hadTrailingNewline ? lineEnding : '')
                 : '';
-            const tmpPath = `${absPath}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
-
-            try {
-              fs.writeFileSync(tmpPath, newContent, 'utf-8');
-              fs.renameSync(tmpPath, absPath);
-            } catch (writeErr: unknown) {
-              try {
-                fs.unlinkSync(tmpPath);
-              } catch {
-                // Best-effort cleanup
-              }
-              const msg = writeErr instanceof Error ? writeErr.message : String(writeErr);
-              return { error: `Write failed: ${msg}` };
-            }
+            const writeErr = atomicWriteFileSyncUnique(absPath, newContent);
+            if (writeErr) return { error: writeErr };
 
             const newHash = hashContent(newContent);
             const diff = generateDiffSummary(oldLines, edits);

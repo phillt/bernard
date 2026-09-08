@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { MEMORY_DIR } from './paths.js';
 import { atomicWriteFileSync } from './fs-utils.js';
 import { splitFrontMatter, normalizeFrontMatterValue } from './front-matter.js';
+import { scopeList } from './text.js';
 
 /** @internal */
 export function sanitizeKey(key: string): string {
@@ -114,6 +115,23 @@ function parseMemoryFile(source: string): ParsedMemoryFile {
  * A tool error rather than a silent skip: the model asked to save something and
  * must be told it did not happen, in words it can act on.
  */
+/**
+ * Thrown when a supersession cannot be made: a self-reference, a replacement
+ * that does not exist, or a cycle.
+ *
+ * A named class rather than a bare `Error` so `tools/memory.ts` can map it in
+ * its one store-error guard. It used to be a plain `Error` caught by a
+ * catch-all at that call site — and that catch-all also swallowed
+ * {@link MemoryScopeError}, reporting a fence refusal as a call-shape mistake
+ * on the one action where the difference matters most.
+ */
+export class MemorySupersedeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MemorySupersedeError';
+  }
+}
+
 export class MemoryScopeError extends Error {
   constructor(
     readonly key: string,
@@ -121,7 +139,7 @@ export class MemoryScopeError extends Error {
   ) {
     super(
       `Memory key "${key}" is outside this agent's scope. It may only read and write: ` +
-        `${scope.length > 0 ? scope.join(', ') : '(nothing)'}.`,
+        `${scopeList(scope)}.`,
     );
     this.name = 'MemoryScopeError';
   }
@@ -310,16 +328,15 @@ export class MemoryStore {
     if (!patterns) return this;
     const base = this.scope;
     const next = base === null ? [...patterns] : patterns.filter((p) => keyInScope(p, base));
-    const view = new MemoryStore();
-    view.scratch = this.scratch;
-    view.cache = this.cache;
-    view.scope = next;
+    // `Object.create` + `Object.assign`, the idiom `RAGStore.scoped` uses, and
+    // for a reason beyond consistency: a hand-copied field list silently RESETS
+    // any field added to this class later to its initializer in every view.
+    // `scratch` and `cache` ride along by reference, which is the whole point
+    // of a view — but so does whatever comes next, without anyone remembering.
+    // It also skips `new MemoryStore()`'s `mkdirSync`.
+    const view = Object.create(MemoryStore.prototype) as MemoryStore;
+    Object.assign(view, this, { scope: next });
     return view;
-  }
-
-  /** The scope this instance carries, for reporting. `null` when unscoped. */
-  scopeOf(): readonly string[] | null {
-    return this.scope;
   }
 
   /** Whether this instance may see `key`. Always true for the unscoped store. */
@@ -329,9 +346,10 @@ export class MemoryStore {
 
   /** Refuses a write outside the fence. No-op when unscoped. */
   private assertWritable(key: string): void {
-    if (this.scope !== null && !keyInScope(key, this.scope)) {
-      throw new MemoryScopeError(key, this.scope);
-    }
+    // Through {@link allows}, not a second spelling of it: any change to what
+    // "in scope" means must not have to be made twice, and the throwing copy is
+    // the one that gates writes.
+    if (!this.allows(key)) throw new MemoryScopeError(key, this.scope ?? []);
   }
 
   // --- Persistent Memory (disk-backed) ---
@@ -518,10 +536,10 @@ export class MemoryStore {
     // clearer message. Kept for that, and said so rather than left reading as
     // load-bearing.
     if (sanitizeKey(key) === sanitizeKey(replacement)) {
-      throw new Error(`Memory "${key}" cannot supersede itself.`);
+      throw new MemorySupersedeError(`Memory "${key}" cannot supersede itself.`);
     }
     if (!this.load(replacement)) {
-      throw new Error(
+      throw new MemorySupersedeError(
         `Cannot supersede "${key}" with "${replacement}": no memory with that key exists.`,
       );
     }
@@ -533,7 +551,7 @@ export class MemoryStore {
     while (cursor) {
       const id = sanitizeKey(cursor);
       if (seen.has(id)) {
-        throw new Error(
+        throw new MemorySupersedeError(
           `Cannot supersede "${key}" with "${replacement}": that would form a supersession cycle.`,
         );
       }

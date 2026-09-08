@@ -1133,6 +1133,13 @@ describe('RAGStore domain scope (#511)', () => {
     mockProvider = createFakeProvider();
   });
 
+  /** Writes to the store file, ignoring the session-date sidecar. */
+  function writeCount(): number {
+    return vi
+      .mocked(fs.writeFileSync)
+      .mock.calls.filter((c) => String(c[0]).includes('memories.json')).length;
+  }
+
   async function seeded() {
     const { RAGStore } = await import('./rag.js');
     const store = new RAGStore({ maxMemories: 100, similarityThreshold: -1 });
@@ -1163,7 +1170,30 @@ describe('RAGStore domain scope (#511)', () => {
   it('narrowing is monotone — a second scope cannot widen the first', async () => {
     const store = await seeded();
     const view = store.scoped(['general']).scoped(['general', 'user-preferences']);
-    expect(view.domainScopeOf()).toEqual(['general']);
+    // Through what the view RETRIEVES rather than a scope accessor: the effect
+    // is the property, and the bookkeeping is not public.
+    const hits = await view.search('shared vocabulary');
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits.every((h) => h.domain === 'general')).toBe(true);
+  });
+
+  /**
+   * The two PRs in this wave interact here, and the interaction is silent.
+   *
+   * `scoped()` is a shallow clone, so a per-FIELD `dirty` flag would be copied
+   * into the view: the view's search marks the view dirty, the exit hooks call
+   * `flush()` on the ROOT, whose flag is still false, and #533's explicit-flush
+   * half stops applying to every scoped dispatch. Holding the state in one
+   * object shared by reference is what makes that unrepresentable.
+   */
+  it("a view's pending bookkeeping is flushed by the root store", async () => {
+    const store = await seeded();
+    store.flush();
+    const before = writeCount();
+    await store.scoped(['general']).search('shared vocabulary');
+    expect(writeCount()).toBe(before);
+    store.flush();
+    expect(writeCount()).toBeGreaterThan(before);
   });
 
   it('scoped(null) is the identity', async () => {

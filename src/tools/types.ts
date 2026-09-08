@@ -3,6 +3,7 @@ import type { RiskLevel } from '../risk.js';
 import type { PermissionRule } from '../tool-permissions.js';
 import type { WriteScope } from '../permissions/write-scope.js';
 import type { BreadthOption } from '../permissions/breadth.js';
+import type { UsageRecorder } from '../framework/hooks/token-stats.js';
 
 /**
  * Input passed to the unified pre-execution confirmation callback (issue #144).
@@ -183,6 +184,24 @@ export interface ToolOptions {
     signal?: AbortSignal,
     opts?: AskUserOptions,
   ) => Promise<AskUserBatchResult>;
+  /**
+   * Records LLM spend made from INSIDE a tool's `execute` (#373).
+   *
+   * `ToolExecOptions` carries `{toolCallId, abortSignal, messages}` and no
+   * usage handle, so a tool that calls a model has nowhere to report what it
+   * cost — the exact defect `claim-verifier` complains about, one layer down.
+   *
+   * Here rather than on `CreateToolsOptions`, which is a decision about which
+   * built-in SURFACE a dispatch receives and is guarded by a prompt-cache
+   * byte-stability rule a per-dispatch closure has to argue its way past. This
+   * bag is the one that already exists for per-dispatch callbacks a tool may
+   * reach back through, with the same fail-closed-by-omission doctrine: absent,
+   * the spend is unrecorded rather than unmade.
+   *
+   * Supplied by `resolveToolSurface`, the one place with both a `ctx` and a
+   * route to every definition, so no dispatch site has to remember.
+   */
+  onUsage?: UsageRecorder;
   /**
    * Ask the user to allow or deny what an applet just declared it needs
    * (#467, #468).

@@ -166,11 +166,14 @@ vi.mock('../memory.js', async (importOriginal) => ({
 // Mock RAGStore
 const mockRagSearch = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 const mockRagScoped = vi.hoisted(() => vi.fn());
+// `scoped` is part of the real store's surface, and returns the receiver for an
+// absent scope — the fake carries both facts.
 const mockRagStoreInstance: any = vi.hoisted(() => ({
   search: mockRagSearch,
   flush: vi.fn(),
   scoped: mockRagScoped,
 }));
+mockRagScoped.mockImplementation(() => mockRagStoreInstance);
 
 vi.mock('../rag.js', () => ({
   RAGStore: vi.fn(() => mockRagStoreInstance),
@@ -705,7 +708,7 @@ describe('cron knowledge scope (#511)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockRagSearch.mockResolvedValue([]);
-    mockRagScoped.mockReturnValue({ search: mockRagSearch, flush: vi.fn() });
+    mockRagScoped.mockImplementation(() => mockRagStoreInstance);
     mockMemoryStore.getAllMemoryContents.mockReturnValue(new Map());
     mockMemoryStore.getAllScratchContents.mockReturnValue(new Map());
     vi.mocked(loadConfig).mockReturnValue({
@@ -719,9 +722,11 @@ describe('cron knowledge scope (#511)', () => {
     } as never);
   });
 
+  // `scoped(undefined)` returns the receiver, so the fact worth pinning is that
+  // the search ran against the whole index rather than that a call was skipped.
   it('a job that declares nothing runs unscoped', async () => {
     await runJob(testJob, vi.fn());
-    expect(mockRagScoped).not.toHaveBeenCalled();
+    expect(mockRagScoped).toHaveBeenCalledWith(undefined);
   });
 
   it('a declared knowledgeScope reaches the search', async () => {

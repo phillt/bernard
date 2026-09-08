@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { MemoryStore } from '../memory.js';
-import { MemoryKeyCollisionError, MemoryScopeError } from '../memory.js';
+import { MemoryKeyCollisionError, MemoryScopeError, MemorySupersedeError } from '../memory.js';
 import { MemoryCandidateStore } from '../memory-candidates.js';
 import { describeProposal } from '../memory-proposal.js';
 import { MEMORY_DIR } from '../paths.js';
@@ -139,10 +139,10 @@ async function contradictionNote(
     // Archive, never delete. `supersede` writes one front-matter line and
     // leaves the file where the user can find it, so undoing it is deleting
     // that line. It needs the replacement to exist, which is why the caller
-    // runs all of this AFTER the write.
+    // runs all of this AFTER the write — see the call site.
     const retire = (key: string, replacement: string): boolean => {
       try {
-        return store.supersede(key, replacement) !== null;
+        return store.supersede(key, replacement);
       } catch {
         return false;
       }
@@ -202,19 +202,22 @@ async function contradictionNote(
 }
 
 /**
- * Turns a fence refusal into a tool ERROR instead of a throw (#511).
+ * Turns a store's typed throw into a tool ERROR (#511).
  *
- * `MemoryStore` throws `MemoryScopeError` on an out-of-scope write, and a throw
- * out of `execute` becomes an AI SDK `ToolExecutionError` that takes the whole
- * dispatch down. As an error result the model is told, in words it can act on,
- * that the write did not happen and which keys it may use — which is what that
- * error's own docstring promises.
+ * `MemoryStore` throws `MemoryScopeError` on an out-of-scope write,
+ * `MemoryKeyCollisionError` when two raw keys address one file, and
+ * `MemorySupersedeError` when a supersession cannot be made. A throw out of
+ * `execute` becomes an AI SDK `ToolExecutionError` that takes the whole dispatch
+ * down; as an error result the model is told, in words it can act on, that the
+ * write did not happen and what to do instead.
  *
- * Wrapped at the RETURN rather than around each `execute` body, so the diff is
- * one line per tool instead of re-indenting two switch statements — and so a
- * later action cannot be added outside the guard.
+ * **One guard, not one per action.** The three inline `try`s this replaces had
+ * already produced the failure they invite: `supersede`'s catch-all reported a
+ * FENCE refusal as `invalid_args`, on the one action where the difference
+ * matters most. Wrapping at the RETURN rather than around each `execute` body
+ * also means a later action cannot be added outside it.
  */
-function scopeGuarded<A, R>(t: BernardTool<A, R>): BernardTool<A, R> {
+function storeErrorGuard<A, R>(t: BernardTool<A, R>): BernardTool<A, R> {
   return {
     ...t,
     execute: async (args, opts) => {
@@ -222,6 +225,11 @@ function scopeGuarded<A, R>(t: BernardTool<A, R>): BernardTool<A, R> {
         return await t.execute(args, opts);
       } catch (e) {
         if (e instanceof MemoryScopeError) return err({ type: 'permission', message: e.message });
+        // A collision is a call-shape mistake the model can fix by picking a
+        // distinct key, so it comes back named rather than as a throw.
+        // `invalid_args` is what `error-taxonomy` classifies as correctable.
+        if (e instanceof MemoryKeyCollisionError || e instanceof MemorySupersedeError)
+          return err({ type: 'invalid_args', message: e.message });
         throw e;
       }
     },
@@ -237,7 +245,7 @@ export function createMemoryTool(
     onUsage?: UsageRecorder;
   },
 ): BernardTool<MemoryArgs, string> {
-  return scopeGuarded({
+  return storeErrorGuard({
     meta: {
       name: 'memory',
       kind: 'write',
@@ -298,20 +306,18 @@ export function createMemoryTool(
             return err({ type: 'invalid_args', message: 'key is required for write action.' });
           if (!content)
             return err({ type: 'invalid_args', message: 'content is required for write action.' });
-          // Before the write, never instead of it (#373). Whatever this
-          // returns, the note is saved below.
+          // A collision throws; `storeErrorGuard` maps it to `invalid_args`.
+          memoryStore.writeMemory(key, content);
+          // **After the write, never before it (#373), and the ordering is a
+          // correctness constraint rather than a preference.** `supersede`
+          // refuses a replacement that does not exist, so run ahead of the
+          // write every acting verdict falls through to "both are kept" — the
+          // check spends a full round trip and can only ever produce a
+          // sentence, indistinguishable from the model having declined. It
+          // also means a write that fails its collision guard costs no model
+          // call at all. Whatever this returns, the note above is already
+          // saved; this only decides which of the two stays visible.
           const note = await contradictionNote({ key, content }, memoryStore, deps);
-          try {
-            memoryStore.writeMemory(key, content);
-          } catch (e) {
-            // A collision is a call-shape mistake the model can fix by picking
-            // a distinct key, so it comes back as a tool error with the
-            // conflicting key named rather than as a throw out of `execute`.
-            // `invalid_args` is what `error-taxonomy` classifies as correctable.
-            if (e instanceof MemoryKeyCollisionError)
-              return err({ type: 'invalid_args', message: e.message });
-            throw e;
-          }
           return ok(`Memory "${key}" saved.${note}`);
         }
         case 'supersede': {
@@ -322,15 +328,12 @@ export function createMemoryTool(
               type: 'invalid_args',
               message: 'replacement is required for supersede action.',
             });
-          try {
-            const done = memoryStore.supersede(key, replacement);
-            if (!done) return ok(`No memory found for key "${key}".`);
-          } catch (e) {
-            return err({
-              type: 'invalid_args',
-              message: e instanceof Error ? e.message : String(e),
-            });
-          }
+          // No inline catch. A catch-all here SHADOWED the guard: a
+          // `MemoryScopeError` raised by the fence inside `supersede` was
+          // reported as `invalid_args`, on the one action where the model most
+          // needs to be told it was fenced rather than that it called wrong.
+          if (!memoryStore.supersede(key, replacement))
+            return ok(`No memory found for key "${key}".`);
           return ok(
             `Memory "${key}" retired in favour of "${replacement}". ` +
               `It is no longer shown, and its file is still on disk.`,
@@ -398,7 +401,7 @@ export function createScratchTool(
   memoryStore: MemoryStore,
   provenance?: ProvenanceStore,
 ): BernardTool<ScratchArgs, string> {
-  return scopeGuarded({
+  return storeErrorGuard({
     meta: {
       name: 'scratch',
       kind: 'write',

@@ -4,6 +4,7 @@ import { getEmbeddingProvider, cosineSimilarity } from './embeddings.js';
 import { debugLog } from './logger.js';
 import { DEFAULT_DOMAIN } from './domains.js';
 import { RAG_DIR, MEMORIES_FILE, LAST_SESSION_FILE } from './paths.js';
+import { atomicWriteFileSyncUnique } from './fs-utils.js';
 
 /** Maximum results returned per domain before merging. */
 export const DEFAULT_TOP_K_PER_DOMAIN = 5;
@@ -148,17 +149,25 @@ export class RAGStore {
    * Losing an unflushed bump costs at most one TTL extension. `addFacts`,
    * `clear` and `deleteByIds` write CONTENT and stay eager — a crash must not
    * lose a fact, only the note that a fact was useful.
-   */
-  private dirty = false;
-  /**
-   * Debounce timer for {@link flush}.
    *
-   * `unref`ed, following `inbox/watcher.ts`, so a pending flush can never be
-   * the reason a process will not exit — which also means the timer alone is
-   * not a guarantee, and every exit path must call {@link flush} explicitly.
-   * Both halves are required; neither is sufficient.
+   * **Held in one object shared by reference, the way `memories` is.** A
+   * scoped view (#511) is a shallow clone, so a per-field `dirty` flag would be
+   * COPIED into the view: the view's search would mark the view dirty, the exit
+   * hooks would call `flush()` on the root, whose flag is still false, and the
+   * explicit half of the "both halves are required" contract below would
+   * silently stop applying to every scoped dispatch. A copied `flushTimer` is
+   * worse — a view's `markDirty` would see the root's live handle, early-return,
+   * and never schedule its own.
+   *
+   * The timer is `unref`ed, following `inbox/watcher.ts`, so a pending flush can
+   * never be the reason a process will not exit — which also means the timer
+   * alone is not a guarantee, and every exit path must call {@link flush}
+   * explicitly. Both halves are required; neither is sufficient.
    */
-  private flushTimer: NodeJS.Timeout | null = null;
+  private persistState: { dirty: boolean; timer: NodeJS.Timeout | null } = {
+    dirty: false,
+    timer: null,
+  };
   /**
    * Domains this instance may retrieve from, or `null` for the unscoped store
    * (#511).
@@ -205,13 +214,10 @@ export class RAGStore {
     const base = this.domainScope;
     const next = base === null ? [...domains] : domains.filter((d) => base.includes(d));
     const view = Object.create(RAGStore.prototype) as RAGStore;
+    // `persistState` rides along in the spread, by reference — which is the
+    // point: a view's access bookkeeping must reach the root's `flush()`.
     Object.assign(view, this, { domainScope: next, turnSearchCache: new Map() });
     return view;
-  }
-
-  /** The domains this instance may retrieve from. `null` when unscoped. */
-  domainScopeOf(): readonly string[] | null {
-    return this.domainScope;
   }
 
   /** Delete .pending-*.json temp files older than 1 hour (handles crashed workers). */
@@ -713,14 +719,15 @@ export class RAGStore {
    * matters is the explicit one at each exit hook.
    */
   private markDirty(): void {
-    this.dirty = true;
-    if (this.flushTimer) return;
-    this.flushTimer = setTimeout(() => {
-      this.flushTimer = null;
+    const st = this.persistState;
+    st.dirty = true;
+    if (st.timer) return;
+    st.timer = setTimeout(() => {
+      st.timer = null;
       this.flush();
     }, FLUSH_DEBOUNCE_MS);
     // Never keep the process alive for bookkeeping.
-    this.flushTimer.unref?.();
+    st.timer.unref?.();
   }
 
   /**
@@ -732,32 +739,35 @@ export class RAGStore {
    * Idempotent and cheap when nothing is dirty.
    */
   flush(): void {
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer);
-      this.flushTimer = null;
+    const st = this.persistState;
+    if (st.timer) {
+      clearTimeout(st.timer);
+      st.timer = null;
     }
-    if (!this.dirty) return;
+    if (!st.dirty) return;
     this.persist();
   }
 
-  /** Persist memories to disk atomically (write to tmp, then rename). */
+  /**
+   * Persist memories to disk atomically (write to tmp, then rename).
+   *
+   * Through `atomicWriteFileSyncUnique`, not a hand-rolled pair (#533). A
+   * UNIQUE temp name is required here rather than `fs-utils`' fixed `.tmp`
+   * suffix: four processes write this file — the REPL, the detached exit
+   * worker, the cron daemon and `bernard facts` — so a shared temp path means
+   * two concurrent persists write the same file and rename it twice, and
+   * debouncing widens the window that makes it matter.
+   *
+   * **The unlink-on-failure half is what makes a unique name safe**, and is why
+   * the shared helper is worth reaching for rather than copying it a fifth
+   * time. A fixed suffix left one orphan that the next write overwrote; a
+   * unique one leaves a distinct ~31 MB file per failure, and
+   * {@link cleanupStaleTemp} sweeps only `.pending-*.json`, so nothing would
+   * ever collect them.
+   */
   private persist(): void {
-    this.dirty = false;
-    try {
-      // A UNIQUE temp name, not a fixed `.tmp` suffix (#533). Four processes
-      // write this file — the REPL, the detached exit worker, the cron daemon
-      // and `bernard facts` — and a shared temp path means two concurrent
-      // persists write the same file and rename it twice. `tools/file.ts`
-      // documents avoiding `fs-utils`' fixed-suffix helper for exactly this.
-      // Debouncing widens the window that makes it matter.
-      const tmpFile = `${MEMORIES_FILE}.${process.pid}.${Date.now().toString(36)}.tmp`;
-      fs.writeFileSync(tmpFile, JSON.stringify(this.memories), 'utf-8');
-      fs.renameSync(tmpFile, MEMORIES_FILE);
-    } catch (err) {
-      debugLog(
-        'rag:persist',
-        `Failed to persist memories: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
+    this.persistState.dirty = false;
+    const failure = atomicWriteFileSyncUnique(MEMORIES_FILE, JSON.stringify(this.memories));
+    if (failure) debugLog('rag:persist', `Failed to persist memories: ${failure}`);
   }
 }

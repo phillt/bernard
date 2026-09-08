@@ -141,8 +141,10 @@ describe('narrowing is monotone', () => {
     const store = new MemoryStore();
     store.writeMemory('proj-a', 'alpha');
     store.writeMemory('other', 'o');
+    // Asserted through what the view can REACH, not through a scope accessor:
+    // the effect is the property, and the bookkeeping is not public.
     const narrow = store.scoped(['proj-*']).scoped(['proj-a', 'other']);
-    expect(narrow.scopeOf()).toEqual(['proj-a']);
+    expect(narrow.readMemory('proj-a')).toContain('alpha');
     expect(narrow.readMemory('other')).toBeNull();
   });
 
@@ -151,15 +153,17 @@ describe('narrowing is monotone', () => {
     // `runDefinition` re-derives the same scope from the same record. That is
     // only safe because the second application is a no-op.
     const store = new MemoryStore();
-    const once = store.scoped(['proj-*']);
-    expect(once.scoped(['proj-*']).scopeOf()).toEqual(['proj-*']);
+    store.writeMemory('proj-a', 'alpha');
+    store.writeMemory('other', 'o');
+    const twice = store.scoped(['proj-*']).scoped(['proj-*']);
+    expect(twice.readMemory('proj-a')).toContain('alpha');
+    expect(twice.readMemory('other')).toBeNull();
   });
 
   it('an empty scope is deny-all, not "declared nothing"', () => {
     const store = new MemoryStore();
     store.writeMemory('proj-a', 'alpha');
     const none = store.scoped([]);
-    expect(none.scopeOf()).toEqual([]);
     expect(none.listMemory()).toEqual([]);
     expect(none.readMemory('proj-a')).toBeNull();
   });
@@ -200,5 +204,42 @@ describe('scratch is shared, not blanked', () => {
   it('refuses an out-of-scope scratch write', () => {
     const store = new MemoryStore();
     expect(() => store.scoped(['proj-*']).writeScratch('other', 'x')).toThrow(MemoryScopeError);
+  });
+});
+
+/**
+ * The refusal reaches the model as a PERMISSION error, on every action.
+ *
+ * `supersede` used to carry a catch-all that reported anything thrown as
+ * `invalid_args` — so a fence refusal raised inside it was reported as a
+ * call-shape mistake, on the one action where the difference matters most: the
+ * model would retry with a different spelling forever rather than learn it was
+ * fenced.
+ */
+describe('a fence refusal is reported as a fence', () => {
+  let createMemoryTool: typeof import('./tools/memory.js').createMemoryTool;
+
+  beforeEach(async () => {
+    createMemoryTool = (await import('./tools/memory.js')).createMemoryTool;
+  });
+
+  async function refuse(args: Record<string, unknown>): Promise<string> {
+    const store = new MemoryStore();
+    store.writeMemory('proj-a', 'alpha');
+    store.writeMemory('secrets', 'x');
+    const tool = createMemoryTool(store.scoped(['proj-*']));
+    const r = await tool.execute(args as never, {} as never);
+    return JSON.stringify(r);
+  }
+
+  it.each([
+    ['write', { action: 'write', key: 'secrets', content: 'x' }],
+    ['delete', { action: 'delete', key: 'secrets' }],
+    ['retire', { action: 'retire', key: 'secrets' }],
+    ['supersede', { action: 'supersede', key: 'secrets', replacement: 'proj-a' }],
+  ])('%s', async (_name, args) => {
+    const out = await refuse(args);
+    expect(out).toContain('permission');
+    expect(out).toMatch(/outside this agent's scope/);
   });
 });

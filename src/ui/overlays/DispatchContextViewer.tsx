@@ -3,7 +3,7 @@ import { Box, Text, useInput } from 'ink';
 import { useDimensionsCtx } from '../DimensionsContext.js';
 import { getDispatchContexts, type DispatchContextRecord } from '../../dispatch-context-history.js';
 import { getThemeColors } from '../../theme.js';
-import { truncate } from '../../text.js';
+import { truncate, scopeList } from '../../text.js';
 import { formatTokenCount } from '../../output.js';
 // The chars→tokens divisor, not a third spelled-out `/ 4`: that helper exists
 // so the caller's estimate and `emergencyTruncate`'s answer cannot disagree,
@@ -174,14 +174,8 @@ function detailBody(r: DispatchContextRecord): string {
   // the wrong conclusion (#511).
   if (r.memoryScope || r.knowledgeScope) {
     parts.push('', 'Scoped to:');
-    if (r.memoryScope) {
-      parts.push(`  memory: ${r.memoryScope.length > 0 ? r.memoryScope.join(', ') : '(none)'}`);
-    }
-    if (r.knowledgeScope) {
-      parts.push(
-        `  knowledge: ${r.knowledgeScope.length > 0 ? r.knowledgeScope.join(', ') : '(none)'}`,
-      );
-    }
+    if (r.memoryScope) parts.push(`  memory: ${scopeList(r.memoryScope)}`);
+    if (r.knowledgeScope) parts.push(`  knowledge: ${scopeList(r.knowledgeScope)}`);
   }
   if (r.retrievalQuery) {
     parts.push('', 'Retrieved for:', `  ${r.retrievalQuery}`);

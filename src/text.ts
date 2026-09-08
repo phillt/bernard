@@ -34,6 +34,23 @@ export function nameList(names: string[], limit = 3): string {
 }
 
 /**
+ * A knowledge fence, rendered for a human (#511).
+ *
+ * Deliberately NOT {@link nameList}: a fence must be shown WHOLE. `+N more`
+ * would hide the very entries someone is reading the line to check, and the one
+ * thing worse than a fence you cannot see is a fence you think you can.
+ *
+ * The empty case is the reason this is shared rather than inlined a fourth
+ * time. `[]` is a real posture — deny-all — so it must read as one; the three
+ * existing sites had already spelled it two different ways (`(nothing)` in the
+ * refusal and in `specialist inspect`, `(none)` in the dispatch viewer) on the
+ * day the idiom was introduced.
+ */
+export function scopeList(patterns: readonly string[]): string {
+  return patterns.length > 0 ? patterns.join(', ') : '(nothing)';
+}
+
+/**
  * Conservative range of C1 control characters (U+0080–U+009F).
  * These are invisible bytes that appear in strings incorrectly decoded as
  * Latin-1 (ISO-8859-1) when the content was actually UTF-8.  They never

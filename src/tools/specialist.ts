@@ -24,6 +24,7 @@ import {
   DISPATCH_TOOL_SURFACES,
   MAX_STEP_RATIO,
 } from '../framework/agents/dispatch-profile.js';
+import { scopeList } from '../text.js';
 
 const goodExampleSchema = z.object({
   input: z.string(),
@@ -517,7 +518,7 @@ export function createSpecialistTool(
               ['knowledgeScope', record.knowledgeScope, profile.knowledgeScope],
             ] as const) {
               if (resolved === undefined) continue;
-              lines.push(`${label}: ${resolved.length > 0 ? resolved.join(', ') : '(nothing)'}`);
+              lines.push(`${label}: ${scopeList(resolved)}`);
               const dropped = Array.isArray(declared) ? declared.length - resolved.length : null;
               if (dropped === null) {
                 lines.push(`  ⚠ declared ${label} is not a list, so this dispatch reads nothing`);

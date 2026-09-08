@@ -27,8 +27,8 @@ import type { StepFinishPayload } from '../hooks/types.js';
 import { runAgent, newDispatchId, type AgentResult, type AgentSpec } from '../runner.js';
 import type { IterateFn, IterateOpts, StrategyContext } from '../strategies/types.js';
 import { resolveToolSurface } from './tool-surface.js';
-import { resolveDispatchProfile } from './dispatch-profile.js';
-import { scopeContext } from '../context.js';
+import { resolveDispatchProfile, type DispatchProfile } from './dispatch-profile.js';
+import { scopeContext, withUsageRecorder } from '../context.js';
 import { recordDispatchContext } from '../../dispatch-context-history.js';
 import { resolveRetrieval } from './retrieval.js';
 import { visionRefusal } from './vision-gate.js';
@@ -99,6 +99,26 @@ export interface RunDefinitionOpts {
    * the `main` layer in `bernard usage` / the UsageViewer.
    */
   telemetrySite?: string;
+  /**
+   * A knowledge fence the CALLER has already applied to `ctx` (#511).
+   *
+   * Reporting only — the ctx handed in is already narrowed, so this changes
+   * nothing about what the dispatch can reach. It exists because
+   * `DispatchContextRecord` must name the fence and `resolveDispatchProfile`
+   * cannot always see it: a `CronJob` is not a specialist record, so
+   * `cronDefinition` has no `recordId` and a job fenced through
+   * `RunHeadlessOpts.scope` would be recorded as unscoped — the worst possible
+   * gap for a field whose whole purpose is that a fence and a bad retrieval
+   * look identical from outside.
+   *
+   * Deliberately NOT a second application point. Reading the applied fence back
+   * off the scoped stores would be the more general answer and was tried: it
+   * requires every memory and RAG test double in the tree — around thirty of
+   * them — to grow a scope accessor to satisfy one diagnostic line, which is the
+   * design telling you the runner should not interrogate a store to find out
+   * what it was told.
+   */
+  declaredScope?: Pick<DispatchProfile, 'memoryScope' | 'knowledgeScope'>;
 }
 
 export interface RunDefinitionResult<TFormatted> {
@@ -176,7 +196,12 @@ export async function runDefinition<TInput, TFormatted>(
   // unrepresentable rather than merely discouraged, and `scopeContext` returns
   // `rootCtx` unchanged when nothing is declared, so `main` keeps object
   // identity and the prompt-cache prefix is untouched.
-  const ctx = scopeContext(rootCtx, profile);
+  const ctx = withUsageRecorder(scopeContext(rootCtx, profile));
+  // What this dispatch is fenced to, for the record only. The two terms cannot
+  // both be set today — a caller supplies one exactly when there is no record
+  // to declare it — and if they ever could, the applied fence is their
+  // intersection, since `scopeContext` narrows monotonically at each site.
+  const fence = { ...profile, ...(opts.declaredScope ?? {}) };
   const { config } = ctx;
   const surface = resolveToolSurface(ctx, def, profile);
   // Retrieval, resolved once per dispatch for the same reason and in the same
@@ -552,12 +577,14 @@ export async function runDefinition<TInput, TFormatted>(
         // definition's thunk and claiming a query for a dispatch that searched
         // nothing.
         ...(retrieved.query ? { retrievalQuery: retrieved.query } : {}),
-        // From the resolved profile, not from the store: what the record was
-        // GRANTED is the fact that explains a short `memoryKept`, and reading
-        // it back off the scoped store would only restate what the store then
-        // let through (#511).
-        ...(profile.memoryScope ? { memoryScope: profile.memoryScope } : {}),
-        ...(profile.knowledgeScope ? { knowledgeScope: profile.knowledgeScope } : {}),
+        // The RECORD's fence, which is the union of what the record declared
+        // and what the caller already applied — see `RunDefinitionOpts.
+        // declaredScope`. Without the second term a cron job's fence is
+        // invisible in the one record that exists to explain a short memory
+        // list, because a `CronJob` is not a specialist record and
+        // `resolveDispatchProfile` cannot see it.
+        ...(fence.memoryScope ? { memoryScope: fence.memoryScope } : {}),
+        ...(fence.knowledgeScope ? { knowledgeScope: fence.knowledgeScope } : {}),
       });
     }
     const r = await runAgent({

@@ -5,8 +5,7 @@ import { usageRecordFromSite, type UsageRecorder } from './framework/hooks/token
 import { parseStructuredOutput } from './structured-output.js';
 import { debugLog, traceLlm } from './logger.js';
 import type { BernardConfig } from './config.js';
-import type { ConsolidationInput } from './memory-consolidation.js';
-import { MAX_PERSISTENT_MEMORY_CHARS } from './context-message.js';
+import { renderMemoryCorpus, type ConsolidationInput } from './memory-consolidation.js';
 
 /**
  * Noticing, at write time, that a new memory disagrees with one already saved
@@ -75,12 +74,6 @@ export const NO_CONTRADICTION: ContradictionVerdict = Object.freeze({ kind: 'non
 /** A verdict is one small object; a list would be a different question. */
 const MAX_TOKENS = 400;
 
-/**
- * Below this there is nothing to contradict, and the call is pure cost.
- * One existing entry is enough — the failure needs only two records.
- */
-const MIN_ENTRIES = 1;
-
 const ResponseSchema = z.object({
   verdict: z.enum(['none', 'supersede', 'ask']),
   key: z.string().optional(),
@@ -104,26 +97,23 @@ NEVER report a contradiction between:
 
 The reason is one short sentence, addressed to the user, naming what disagrees.`;
 
-/** Renders the incoming note plus the existing corpus, bounded. */
+/**
+ * Renders the incoming note plus the existing corpus, bounded.
+ *
+ * Through #529's `renderMemoryCorpus` rather than a second budget loop — this
+ * would have been the fourth in the tree, and #528's own finding was that two
+ * such measures had already drifted apart. The incoming note goes in as `head`
+ * so it is CHARGED against the budget: it is caller-supplied and unbounded, and
+ * a head that did not count could push the whole message past the cap.
+ */
 function buildUserContent(
   key: string,
   content: string,
   existing: ConsolidationInput[],
 ): { content: string; included: number } {
-  const head = `## The note about to be saved\n\n### ${key}\n${content}\n\n## Already saved\n`;
-  const parts: string[] = [head];
-  let used = head.length;
-  let included = 0;
-  for (const e of existing) {
-    // Whole records only, the rule `buildUserContent` follows in #529: a note
-    // cut in half can read as saying the opposite of what it says.
-    const block = `\n### ${e.key}\n${e.content}\n`;
-    if (used + block.length > MAX_PERSISTENT_MEMORY_CHARS) break;
-    parts.push(block);
-    used += block.length;
-    included++;
-  }
-  return { content: parts.join(''), included };
+  return renderMemoryCorpus(existing, {
+    head: `## The note about to be saved\n\n### ${key}\n${content}\n\n## Already saved\n\n`,
+  });
 }
 
 /**
@@ -140,7 +130,9 @@ export async function checkContradiction(
   opts: { abortSignal?: AbortSignal; onUsage?: UsageRecorder } = {},
 ): Promise<ContradictionVerdict> {
   const others = existing.filter((e) => e.key !== incoming.key);
-  if (others.length < MIN_ENTRIES) return NO_CONTRADICTION;
+  // Nothing to contradict, so the call would be pure cost. One existing entry
+  // is enough — the failure this exists to catch needs only two records.
+  if (others.length === 0) return NO_CONTRADICTION;
 
   const { content: userContent, included } = buildUserContent(
     incoming.key,

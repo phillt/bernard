@@ -143,6 +143,14 @@ export interface Specialist {
    * from `targetToolsScopeError`'s rejection of `targetTools: []` — correctly,
    * because "no tools" is incoherent while "verify against the task and nothing
    * else" is a coherent posture. Validated at resolution, never trusted.
+   *
+   * **Not on `CreateSpecialistInput`, deliberately.** The `specialist` tool's
+   * schema does not expose it — `SpecialistUpdates` clears a field with a
+   * sentinel and an array has none that is not already meaningful, since `[]`
+   * must mean deny-all and so cannot also mean clear. Day-one authoring is
+   * hand-edited JSON, which goes through this type; adding the field to the
+   * create input would leave a plumbed-looking route nobody can reach and
+   * would read as "already done" to whoever lands the authoring surface.
    */
   memoryScope?: string[];
   /**
@@ -218,10 +226,6 @@ export interface CreateSpecialistInput {
   strategy?: 'normal' | 'react';
   /** See {@link Specialist.toolSurface}. */
   toolSurface?: 'full' | 'worker';
-  /** See {@link Specialist.memoryScope}. */
-  memoryScope?: string[];
-  /** See {@link Specialist.knowledgeScope}. */
-  knowledgeScope?: string[];
   goodExamples?: SpecialistExample[];
   badExamples?: SpecialistBadExample[];
   structuredOutput?: boolean;
@@ -582,8 +586,6 @@ export class SpecialistStore {
       ...(input.stepRatio !== undefined ? { stepRatio: input.stepRatio } : {}),
       ...(input.strategy !== undefined ? { strategy: input.strategy } : {}),
       ...(input.toolSurface !== undefined ? { toolSurface: input.toolSurface } : {}),
-      ...(input.memoryScope !== undefined ? { memoryScope: input.memoryScope } : {}),
-      ...(input.knowledgeScope !== undefined ? { knowledgeScope: input.knowledgeScope } : {}),
       ...(input.goodExamples !== undefined ? { goodExamples: input.goodExamples } : {}),
       ...(input.badExamples !== undefined ? { badExamples: input.badExamples } : {}),
       ...(input.structuredOutput !== undefined ? { structuredOutput: input.structuredOutput } : {}),
