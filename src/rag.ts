@@ -84,6 +84,22 @@ export interface RAGMemory {
   accessCount: number;
   /** ISO 8601 timestamp of the most recent search hit. */
   lastAccessed?: string;
+  /**
+   * How many times this fact has been LEARNED AGAIN — i.e. re-extracted and
+   * met the dedup threshold against this record (#525).
+   *
+   * **A separate counter from {@link accessCount}, deliberately.** They measure
+   * different things: `accessCount` is "was retrieved", which says a fact is
+   * topically adjacent to what people ask about; this is "was observed again",
+   * which is the strongest available evidence that a fact is *durable*. #372
+   * makes the same distinction, and is about to cap and decay `accessCount`
+   * specifically to break an entrenchment loop that retrieval creates — folding
+   * observations into it would cap and decay them for a reason that has nothing
+   * to do with them.
+   *
+   * Absent on every record written before this, and read as 0.
+   */
+  observedCount?: number;
   /** ISO 8601 timestamp after which the memory is eligible for expiration pruning. */
   expiresAt?: string;
 }
@@ -313,18 +329,37 @@ export class RAGStore {
     }
 
     let added = 0;
+    let reinforced = 0;
     const now = new Date().toISOString();
+    const nowMs = Date.now();
 
     for (let i = 0; i < facts.length; i++) {
       const fact = facts[i];
       const embedding = embeddings[i];
 
-      // Deduplicate: skip if too similar to an existing memory
-      const isDuplicate = this.memories.some(
+      // Deduplicate — but reinforce the survivor rather than discarding the
+      // observation (#525). `find`, not `some`. The survivor has to be in scope to be
+      // reinforced, and `some` deliberately discards it — which is the whole
+      // shape of the defect: the newcomer was dropped and the record it
+      // collided with gained nothing, so re-learning a fact across ten sessions
+      // was indistinguishable from learning it once.
+      //
+      // Note the scan is over the whole unscoped array and crosses domains, so
+      // a fact can collide with a survivor filed under a different domain.
+      // That was always true; reinforcing makes it visible where discarding
+      // hid it, and `rag:dedup` now names both domains for exactly that reason.
+      const survivor = this.memories.find(
         (m) => cosineSimilarity(m.embedding, embedding) > DEDUP_THRESHOLD,
       );
-      if (isDuplicate) {
-        debugLog('rag:dedup', `Skipping duplicate fact: ${fact.slice(0, 80)}`);
+      if (survivor) {
+        this.reinforce(survivor, source, now, nowMs);
+        debugLog('rag:dedup', {
+          fact: fact.slice(0, 80),
+          survivor: survivor.id,
+          observedCount: survivor.observedCount,
+          sameDomain: survivor.domain === domain,
+        });
+        reinforced++;
         continue;
       }
 
@@ -347,9 +382,16 @@ export class RAGStore {
       // New facts could change search results — invalidate the per-turn caches
       // so subsequent same-turn lookups pick them up (#171).
       this.clearTurnCache();
+    } else if (reinforced > 0) {
+      // Reinforcement changes decay metadata, not content — so it takes the
+      // DEBOUNCED path (#533) rather than the eager one `added` uses. A crash
+      // must not lose a fact; losing the note that a fact was observed again
+      // costs one TTL extension. The turn caches are untouched deliberately:
+      // no fact was added or removed, so no search result can have changed.
+      this.markDirty();
     }
 
-    debugLog('rag:addFacts', { added, total: this.memories.length, domain });
+    debugLog('rag:addFacts', { added, reinforced, total: this.memories.length, domain });
     return added;
   }
 
@@ -545,7 +587,8 @@ export class RAGStore {
       const daysLeft = m.expiresAt
         ? Math.max(0, Math.ceil((new Date(m.expiresAt).getTime() - now) / 86400000))
         : '?';
-      return `[${date}] [${m.domain}] (accessed ${m.accessCount}x, expires in ${daysLeft}d) ${m.fact}`;
+      const observed = m.observedCount ? `, observed ${m.observedCount}x` : '';
+      return `[${date}] [${m.domain}] (accessed ${m.accessCount}x${observed}, expires in ${daysLeft}d) ${m.fact}`;
     });
   }
 
@@ -660,7 +703,18 @@ export class RAGStore {
       const ageMs = now - new Date(m.createdAt).getTime();
       const recency = Math.pow(0.5, ageMs / halfLifeMs);
       const access = Math.log2(m.accessCount + 1);
-      return { memory: m, score: recency + access };
+      // **Repetition outweighs retrieval, and that is the point of #525.**
+      // `accessCount` says a fact is topically adjacent to what gets asked;
+      // `observedCount` says it was independently learned again, which is the
+      // stronger evidence that it is durable. Weighted above retrieval rather
+      // than merely added, so a fact observed twice beats one retrieved twice.
+      //
+      // It has a reader here on purpose. `source` and `lastAccessed` are both
+      // written by this store and read by NOTHING, and a third write-only field
+      // would be the same defect: the observation would be recorded and still
+      // could not save the record from a prune.
+      const observed = Math.log2((m.observedCount ?? 0) + 1) * 2;
+      return { memory: m, score: recency + access + observed };
     });
 
     scored.sort((a, b) => b.score - a.score);
@@ -858,6 +912,38 @@ export class RAGStore {
     }, FLUSH_DEBOUNCE_MS);
     // Never keep the process alive for bookkeeping.
     st.timer.unref?.();
+  }
+
+  /**
+   * Credits a record for having been observed again (#525).
+   *
+   * **Not `bumpAccess`.** That one records a RETRIEVAL and drives the
+   * entrenchment loop #372 is about — retrieved, bumped, more likely retrieved.
+   * This records an independent OBSERVATION, which is the strongest evidence
+   * available that a fact is durable, and it must not be swept up by the cap
+   * and decay #372 applies to `accessCount`.
+   *
+   * The TTL extension is shared in spirit but computed off `observedCount`, so
+   * a fact re-learned across many sessions outlives one that was merely
+   * retrieved often. Monotone: an extension never shortens an existing expiry.
+   *
+   * `source` is updated because the newer observation is the better-evidenced
+   * one — a fact re-observed at exit has stronger provenance than the same
+   * fact from a compression pass. (`source` has no reader today; it is written
+   * so that when one arrives it describes the latest evidence, not the first.)
+   */
+  private reinforce(memory: RAGMemory, source: string, now: string, nowMs: number): void {
+    memory.observedCount = (memory.observedCount ?? 0) + 1;
+    memory.source = source;
+    memory.lastAccessed = now;
+    const extensionDays = Math.min(
+      this.ragTtlDays,
+      this.ragTtlDays * 0.5 + Math.log2(memory.observedCount + 1) * 7,
+    );
+    const newExpiry = nowMs + extensionDays * 86400000;
+    if (!memory.expiresAt || newExpiry > new Date(memory.expiresAt).getTime()) {
+      memory.expiresAt = new Date(newExpiry).toISOString();
+    }
   }
 
   /**
