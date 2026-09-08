@@ -1,4 +1,5 @@
 import { mcpToolSurface } from '../../tools/delegate.js';
+import { makeUsageRecorder } from '../hooks/token-stats.js';
 import type { AgentContext } from '../context.js';
 import type { AgentDefinition, ResolvedToolSurface } from './types.js';
 import type { DispatchProfile } from './dispatch-profile.js';
@@ -37,6 +38,10 @@ export function resolveToolSurface(
   profile: DispatchProfile = {},
 ): ResolvedToolSurface {
   return {
+    // Lets a tool that calls a model report what it cost (#373). Supplied here
+    // because this is the one place with a `ctx` that every definition's
+    // registry passes through — the same argument the surface itself makes.
+    ...(ctx.statsTarget ? { onUsage: makeUsageRecorder(ctx.statsTarget) } : {}),
     surface:
       profile.toolSurface ??
       def.toolSurface ??
