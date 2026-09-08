@@ -73,6 +73,7 @@ import { getLocalVersion, startupUpdateCheck, interactiveUpdate } from './update
 import { factsList, factsSearch, clearFacts } from './facts-cli.js';
 import { migrateFromLegacy } from './migrate.js';
 import { MCP_CONFIG_PATH, PROFILES_PATH, PREFS_PATH, RAG_DIR } from './paths.js';
+import { openCorpus } from './knowledge/manage.js';
 import * as fs from 'node:fs';
 import { listProfiles } from './profiles.js';
 import { MemoryStore } from './memory.js';
@@ -553,6 +554,10 @@ async function runInkRepl(args: {
     // `AgentContextMCP` can never be silently dropped here (#305).
     mcp: mcpSnapshot,
     rag: ragStore,
+    // Unconditional: constructing a corpus handle opens no database — it is a
+    // scope array and a stamp — so it costs a session with no libraries
+    // nothing, and the tool group builds nothing without one.
+    knowledge: openCorpus(),
     stores: {
       memory: memoryStore,
       routines: routineStore,

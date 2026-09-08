@@ -49,6 +49,8 @@ export interface DispatchContextRecord {
   memoryScope?: string[];
   /** The RAG domains this dispatch could retrieve from, when fenced (#511). */
   knowledgeScope?: string[];
+  /** Knowledge libraries this dispatch could read (#516). */
+  corpusScope?: string[];
 }
 
 function isStringArray(v: unknown): boolean {
@@ -72,7 +74,8 @@ function isDispatchContextRecord(entry: unknown): entry is DispatchContextRecord
     (e.memoryDropped === undefined || isStringArray(e.memoryDropped)) &&
     (e.retrievalQuery === undefined || typeof e.retrievalQuery === 'string') &&
     (e.memoryScope === undefined || isStringArray(e.memoryScope)) &&
-    (e.knowledgeScope === undefined || isStringArray(e.knowledgeScope))
+    (e.knowledgeScope === undefined || isStringArray(e.knowledgeScope)) &&
+    (e.corpusScope === undefined || isStringArray(e.corpusScope))
   );
 }
 
