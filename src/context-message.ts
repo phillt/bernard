@@ -46,6 +46,29 @@ export interface ContextMessageInputs {
    * which `[^Sn]` ids it can cite. Issue #173.
    */
   provenance?: ProvenanceStore;
+  /**
+   * Called with what this assembly actually decided (#512).
+   *
+   * An observer rather than a return value, and rather than a second exported
+   * function, for the reason `shapeMCPResult` takes one: this module is
+   * deliberately a pure function of its inputs, its single return is the
+   * message, and nothing here should be computed when nobody is listening.
+   * Omitted — every caller but `runDefinition` — and the assembly is
+   * byte-for-byte what it was.
+   *
+   * It exists because **`ContextViewer` is main-agent only**: `turnContext.push`
+   * happens at exactly one site inside `Agent.processInput`, so no sub-agent,
+   * task, specialist or cron dispatch's context decision is recorded anywhere.
+   */
+  onReport?: (report: ContextReport) => void;
+}
+
+/** What one context assembly decided. See {@link ContextMessageInputs.onReport}. */
+export interface ContextReport {
+  /** Rendered body length per emitted section, the same numbers `context:section-sizes` logs. */
+  sections: Record<string, number>;
+  /** The memory pack, when there was a store to pack. */
+  memory?: MemoryPack;
 }
 
 /** Per-section renderer signature. Returns either the section body (no wrapping tag) or null to skip. */
@@ -78,6 +101,12 @@ type SectionRenderer = () => string | null;
  */
 export function buildContextMessage(inputs: ContextMessageInputs): CoreMessage | null {
   const sections: { tag: string; body: string }[] = [];
+  // Packed here rather than inside the renderer so the DECISION is available to
+  // the observer as well as to the text — the renderer would otherwise be the
+  // only thing that ever knew which keys were dropped, and it throws that set
+  // away. Same number of store reads as before: one.
+  const memories = inputs.memoryStore?.getAllMemoryContents();
+  const pack = memories ? packMemory(memories, inputs.memoryPriority) : undefined;
 
   const renderers: { tag: string; render: SectionRenderer }[] = [
     { tag: 'current_datetime', render: () => renderCurrentDateTime(inputs.currentDateTime) },
@@ -95,7 +124,7 @@ export function buildContextMessage(inputs: ContextMessageInputs): CoreMessage |
     },
     {
       tag: 'persistent_memory',
-      render: () => renderPersistentMemory(inputs.memoryStore, inputs.memoryPriority),
+      render: () => renderPersistentMemory(memories, pack),
     },
     {
       tag: 'scratch_notes',
@@ -122,10 +151,12 @@ export function buildContextMessage(inputs: ContextMessageInputs): CoreMessage |
   // `recalled_context` and `available_sources` are all unbounded the same way.
   // Measures the FINAL body, so escaping and headings are included — summing raw
   // key/content lengths under-reports the real block.
-  debugLog(
-    'context:section-sizes',
-    Object.fromEntries(sections.map((s) => [s.tag, s.body.length])),
-  );
+  const sizes = Object.fromEntries(sections.map((s) => [s.tag, s.body.length]));
+  debugLog('context:section-sizes', sizes);
+  // Beside the log rather than instead of it: the log is the always-available
+  // trail for a session someone is already debugging, the report is the durable
+  // per-dispatch record (#512). They read the same numbers by construction.
+  inputs.onReport?.({ sections: sizes, ...(pack ? { memory: pack } : {}) });
 
   if (sections.length === 0) return null;
 
@@ -365,11 +396,8 @@ export function packMemory(memories: Map<string, string>, priority?: string[]): 
   return { kept, dropped, usedChars: used };
 }
 
-function renderPersistentMemory(memoryStore?: MemoryStore, priority?: string[]): string | null {
-  if (!memoryStore) return null;
-  const memories = memoryStore.getAllMemoryContents();
-  if (memories.size === 0) return null;
-  const pack = packMemory(memories, priority);
+function renderPersistentMemory(memories?: Map<string, string>, pack?: MemoryPack): string | null {
+  if (!memories || !pack || memories.size === 0) return null;
   const blocks = pack.kept.map((key) => memoryBlock(key, memories.get(key) ?? ''));
   if (pack.dropped.length > 0) {
     debugLog('context:memory-capped', {

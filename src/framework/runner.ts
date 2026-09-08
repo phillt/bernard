@@ -153,6 +153,18 @@ export interface AgentSpec {
    * `callId`. Useful for live-updating the result block under the call row.
    */
   onToolResult?: (event: { callId: string; toolName: string; result: unknown }) => void;
+  /**
+   * Fired once with the id this run is logged under, before any model call
+   * (#512).
+   *
+   * The runner mints the id, so it is the only thing that can hand it out — and
+   * a caller cannot get it from the ALS, because `runDefinition` assembles its
+   * context message *before* calling `runAgent` and would read whichever
+   * ancestor's scope it happens to be nested in. That would attribute a
+   * sub-agent's context decision to its parent's dispatch, which is worse than
+   * recording no id at all.
+   */
+  onDispatchId?: (dispatchId: string) => void;
 }
 
 /** Result type re-exported so callers needn't depend on `ai` directly. */
@@ -203,6 +215,7 @@ export async function runAgent(spec: AgentSpec): Promise<AgentResult> {
 }
 
 async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<AgentResult> {
+  spec.onDispatchId?.(dispatchId);
   const dispatchStartedAt = Date.now();
   const modelId = (spec.model as unknown as { modelId?: string }).modelId ?? String(spec.model);
   const debug = isDebugEnabled();

@@ -1,5 +1,9 @@
 import type { CoreMessage } from 'ai';
-import { buildContextMessage, type ContextMessageInputs } from '../../context-message.js';
+import {
+  buildContextMessage,
+  type ContextMessageInputs,
+  type ContextReport,
+} from '../../context-message.js';
 import { resolveSiteModel } from '../../model-policy.js';
 import {
   applyAnthropicPromptCache,
@@ -23,6 +27,7 @@ import type { StepFinishPayload } from '../hooks/types.js';
 import { runAgent, type AgentResult, type AgentSpec } from '../runner.js';
 import type { IterateFn, IterateOpts, StrategyContext } from '../strategies/types.js';
 import { resolveToolSurface } from './tool-surface.js';
+import { recordDispatchContext } from '../../dispatch-context-history.js';
 import { resolveRetrieval } from './retrieval.js';
 import { visionRefusal } from './vision-gate.js';
 import { seedBudgetRefusal } from './seed-budget.js';
@@ -168,6 +173,9 @@ export async function runDefinition<TInput, TFormatted>(
   // `Promise.all` rather than a deferred await: `def.retrievalQuery(input)` is
   // called outside `resolveRetrieval`'s own try, so a definition-supplied thunk
   // that throws would be an unhandled rejection if `def.tools` rejected first.
+  // Recorded alongside the assembly it fed (#512): the query is resolved once
+  // here and is otherwise invisible outside a debug log.
+  const retrievalQuery = def.retrievalQuery?.(input) ?? undefined;
   const [retrieved, rawTools] = await Promise.all([
     resolveRetrieval(ctx, def, input),
     Promise.resolve(def.tools(ctx, input, surface)),
@@ -391,6 +399,12 @@ export async function runDefinition<TInput, TFormatted>(
     if (extras === null) return [];
     const msg = buildContextMessage({
       ...extras,
+      // Recorded per assembly, so a sub-agent's own context decision is
+      // inspectable rather than invisible (#512). Held until `runAgent` hands
+      // back the id it logs under, one line below.
+      onReport: (report) => {
+        pendingReport = report;
+      },
       // A definition that supplied its own results wins: `main` applies
       // stickiness and provenance the runner cannot see, and `cron` pre-fetches
       // before its MCP connect. `?? retrieved` rather than the other order for
@@ -457,6 +471,7 @@ export async function runDefinition<TInput, TFormatted>(
   };
 
   let stepLimitHit = false;
+  let pendingReport: ContextReport | undefined;
   const innerIterate: IterateFn = async (iterOpts: IterateOpts) => {
     // Reset the partial-progress recorder for this LLM call. Any prior call's
     // messages have already been (or are about to be) pushed into persistent
@@ -487,6 +502,26 @@ export async function runDefinition<TInput, TFormatted>(
       system: cached.system,
       messages: cached.messages,
       maxSteps: callMaxSteps,
+      // One record per LLM call rather than per dispatch, and that is the right
+      // grain: a multi-step dispatch reassembles its context every iterate, and
+      // `agent:dispatch:start` is logged per call too — so the ids line up
+      // exactly with the session trace they are meant to be read beside.
+      onDispatchId: (dispatchId) => {
+        if (!pendingReport) return;
+        const report = pendingReport;
+        pendingReport = undefined;
+        recordDispatchContext({
+          dispatchId,
+          definitionId: def.id,
+          telemetrySite: modelInfo.site,
+          timestamp: Date.now(),
+          sections: report.sections,
+          ...(report.memory
+            ? { memoryKept: report.memory.kept, memoryDropped: report.memory.dropped }
+            : {}),
+          ...(retrievalQuery ? { retrievalQuery } : {}),
+        });
+      },
     });
     stepLimitHit = r.finishReason === 'tool-calls' && (r.steps?.length ?? 0) >= callMaxSteps;
     return r;
