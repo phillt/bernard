@@ -1095,6 +1095,7 @@ describe('RAGStore', () => {
       // Clear write mocks to only see search-triggered writes
       vi.mocked(fs.writeFileSync).mockClear();
 
+      const originalExpiry = new Date(memories[0].expiresAt).getTime();
       await store.search('fact about to expire with testing keywords');
       // The bump is in memory until something flushes it (#533) — the whole
       // point of the change. Asserting the extension still lands proves the
@@ -1108,11 +1109,52 @@ describe('RAGStore', () => {
       expect(writeCall).toBeDefined();
       const updatedData = persistedRecords(writeCall![1] as string);
 
+      // **The count still lands; the extension deliberately does not (#372).**
+      // This test previously asserted the opposite, and that contract WAS the
+      // entrenchment loop: `search` fires on every returned hit with no
+      // judgment involved, so extending here let a fact live forever by being
+      // topically adjacent to something. Observed on a real store: 31 stale
+      // facts at `accessCount` up to 40, due to expire in Sept–Oct and renewing
+      // indefinitely.
+      //
+      // The retrieval is still recorded — it is true, and the count feeds the
+      // prune score. What it no longer buys is life. Endorsement does, and
+      // arrives through `recordAccess` with the ids a curator kept after seeing
+      // every candidate; re-observation does too (#525).
       expect(updatedData[0].accessCount).toBe(1);
-      const newExpiry = new Date(updatedData[0].expiresAt).getTime();
-      // Extension with accessCount=1: min(45, 7 + log2(2)*3) = 10 days
-      // So newExpiry ≈ now + 10d, which is > original 3 days
-      expect(newExpiry).toBeGreaterThan(Date.now() + 9 * 86400000);
+      expect(new Date(updatedData[0].expiresAt).getTime()).toBe(originalExpiry);
+    });
+
+    it('recordAccess still extends, because endorsement is a judgment', async () => {
+      // The other half of the split. `recall-filter` calls this with the ids a
+      // curator explicitly KEPT after seeing all ~24 candidates in one prompt —
+      // no position bias, no unexposed-vs-negative entanglement — so it is a
+      // relevance judgment rather than topical adjacency, and it earns a TTL.
+      const soon = new Date(Date.now() + 3 * 86400000).toISOString();
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        JSON.stringify([
+          {
+            id: 'endorsed',
+            fact: 'a fact the curator kept',
+            embedding: fakeEmbed(['a fact the curator kept'])[0],
+            source: 'compression',
+            domain: 'general',
+            createdAt: new Date().toISOString(),
+            accessCount: 0,
+            expiresAt: soon,
+          },
+        ]),
+      );
+      const store = await createStore();
+      store.recordAccess(['endorsed']);
+      store.flush();
+      const call = vi
+        .mocked(fs.writeFileSync)
+        .mock.calls.filter((c) => /memories\.json\..*\.tmp$/.test(String(c[0])))
+        .at(-1)!;
+      const rec = persistedRecords(call[1] as string)[0];
+      expect(new Date(rec.expiresAt).getTime()).toBeGreaterThan(new Date(soon).getTime());
     });
 
     it('listFacts shows expiration in output', async () => {
@@ -1585,5 +1627,148 @@ describe('dedup reinforcement (#525)', () => {
     // which would poison the prune sort for the whole store.
     await s.addFacts(['a fact from before the field existed'], 'exit');
     expect(s.listFacts()[0]).toContain('observed 1x');
+  });
+});
+
+/**
+ * Breaking the entrenchment loop (#372).
+ *
+ * `search()` bumped every returned hit unconditionally and extended its TTL, so
+ * retrieval raised the score, a higher score meant a higher chance of
+ * retrieval, and nothing ever consulted whether the retrieval helped. Observed
+ * on a real store: 31 stale facts with `accessCount` up to 40, originally due
+ * to expire Sept–Oct, renewing indefinitely.
+ *
+ * Rejection-as-a-signal is deliberately NOT here — see the PR. The curator's
+ * drop is conditioned on the query rather than the fact, and the candidate pool
+ * is deliberately widened (0.28 against the store's 0.35), so most rejections
+ * are the widening working as designed.
+ */
+describe('scoring: the entrenchment loop (#372)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    vi.mocked(fs.readFileSync).mockReturnValue('[]');
+    mockProvider = createFakeProvider();
+  });
+
+  /** Seeds records with explicit ages, access counts and last-access times. */
+  function seed(
+    rows: Array<{
+      id: string;
+      fact: string;
+      ageDays: number;
+      access?: number;
+      lastAccessDays?: number;
+    }>,
+  ) {
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockReturnValue(
+      JSON.stringify(
+        rows.map((r) => ({
+          id: r.id,
+          fact: r.fact,
+          embedding: fakeEmbed([r.fact])[0],
+          source: 'compression',
+          domain: 'general',
+          createdAt: new Date(Date.now() - r.ageDays * 86400000).toISOString(),
+          accessCount: r.access ?? 0,
+          lastAccessed:
+            r.lastAccessDays === undefined
+              ? undefined
+              : new Date(Date.now() - r.lastAccessDays * 86400000).toISOString(),
+          expiresAt: new Date(Date.now() + 365 * 86400000).toISOString(),
+        })),
+      ),
+    );
+  }
+
+  async function pruneTo(n: number): Promise<string[]> {
+    const { RAGStore } = await import('./rag.js');
+    const store = new RAGStore({ maxMemories: n });
+    // `prune()` runs only from `addFacts` when something was added, so a
+    // scoring change has no effect until the next write.
+    await store.addFacts(['a brand new unrelated fact'], 'compression');
+    return store.listFacts();
+  }
+
+  it('caps access credit, so an incumbent cannot outrank on volume alone', async () => {
+    // Uncapped, `log2(40 + 1)` is 5.36 against a recency term bounded at 1.0 —
+    // by `accessCount` 40 recency is noise. Capped at 5 it tops out at ~2.58,
+    // and recency decides between two facts that have both been used.
+    //
+    // **Both are well past the newcomer window on purpose.** An earlier version
+    // compared against a 6-day-old fact, and the newcomer FLOOR rescued it
+    // whether or not the cap existed — so uncapping the credit survived the
+    // mutation check. Here the cap is the only thing that decides:
+    //
+    //   capped:   fresher 0.79 + 2.58 = 3.37   hoarder 0.63 + 2.58 = 3.21
+    //   uncapped: fresher 0.79 + 2.58 = 3.37   hoarder 0.63 + 5.36 = 5.99
+    seed([
+      {
+        id: 'hoarder',
+        fact: 'an older fact retrieved constantly',
+        ageDays: 60,
+        access: 40,
+        lastAccessDays: 0,
+      },
+      {
+        id: 'fresher',
+        fact: 'a newer fact used a few times',
+        ageDays: 30,
+        access: 5,
+        lastAccessDays: 0,
+      },
+    ]);
+    const kept = await pruneTo(1);
+    expect(kept.some((f) => f.includes('a newer fact used a few times'))).toBe(true);
+    expect(kept.some((f) => f.includes('an older fact retrieved constantly'))).toBe(false);
+  });
+
+  it('decays credit by how long ago the fact was last retrieved', async () => {
+    // A fact retrieved fifty times in March kept that credit forever. Decayed,
+    // an equally-accessed fact that has not been touched in six months loses to
+    // one touched yesterday — which is what `lastAccessed` is for, and this is
+    // that field's first reader.
+    seed([
+      { id: 'cold', fact: 'heavily used long ago', ageDays: 200, access: 5, lastAccessDays: 180 },
+      { id: 'warm', fact: 'equally used but recently', ageDays: 200, access: 5, lastAccessDays: 1 },
+    ]);
+    const kept = await pruneTo(2);
+    expect(kept.some((f) => f.includes('equally used but recently'))).toBe(true);
+    expect(kept.some((f) => f.includes('heavily used long ago'))).toBe(false);
+  });
+
+  it('protects a newcomer from an established incumbent', async () => {
+    // The observed asymmetry: five new facts at accessCount 0 against 31 at up
+    // to 40. Recency alone cannot rescue them — it is bounded at 1.0 while the
+    // access term was not.
+    seed([
+      {
+        id: 'incumbent',
+        fact: 'an entrenched old fact',
+        ageDays: 120,
+        access: 40,
+        lastAccessDays: 0,
+      },
+      { id: 'correction', fact: 'a correction written today', ageDays: 0, access: 0 },
+    ]);
+    const kept = await pruneTo(2);
+    expect(kept.some((f) => f.includes('a correction written today'))).toBe(true);
+  });
+
+  it('the newcomer window expires, so protection is not permanent', async () => {
+    seed([
+      {
+        id: 'incumbent',
+        fact: 'an entrenched old fact',
+        ageDays: 120,
+        access: 5,
+        lastAccessDays: 0,
+      },
+      { id: 'stale-newcomer', fact: 'a fact past its window', ageDays: 30, access: 0 },
+    ]);
+    const kept = await pruneTo(2);
+    expect(kept.some((f) => f.includes('a fact past its window'))).toBe(false);
   });
 });

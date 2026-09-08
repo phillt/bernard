@@ -23,6 +23,50 @@ const DEFAULT_MAX_MEMORIES = 5000;
 const DEDUP_THRESHOLD = 0.92;
 /** Half-life in days for the recency decay used in capacity-based pruning. */
 const PRUNE_HALF_LIFE_DAYS = 90;
+
+/**
+ * Accesses beyond this earn no further credit in the prune score (#372).
+ *
+ * `log2(accessCount + 1)` was unbounded while `recency` is bounded in (0,1], so
+ * a single access already outweighed maximum freshness and by `accessCount` 40
+ * recency was noise. Five is enough to mark a fact as load-bearing without
+ * making it immortal: capped, the term tops out at ~2.58.
+ */
+const ACCESS_CREDIT_CAP = 5;
+
+/**
+ * Half-life of accumulated access credit, in days (#372).
+ *
+ * Credit never decayed: a fact retrieved fifty times in March kept that credit
+ * forever. Decaying the CREDIT at scoring time rather than halving the stored
+ * counter is what keeps this a pure function of the record — no clock to run,
+ * no migration, and `accessCount` stays a true count of retrievals rather than
+ * a number that silently means something different after each sweep.
+ *
+ * It also gives `lastAccessed` its first reader. That field has been written by
+ * this store since it was created and read by nothing.
+ */
+const ACCESS_CREDIT_HALF_LIFE_DAYS = 30;
+
+/**
+ * How long a new fact is protected from being outcompeted (#372).
+ *
+ * The observed asymmetry: five new facts at `accessCount` 0 against 31 at up to
+ * 40. Recency alone cannot rescue them — it is bounded at 1.0 while the access
+ * term was not — so a correction written today lost to a fact that had merely
+ * been adjacent to a lot of questions. W-TinyLFU's admission window is the same
+ * idea; this is the cheap form of it, since Bernard prunes rarely and by score.
+ */
+const NEWCOMER_WINDOW_DAYS = 7;
+
+/**
+ * Score floor a fact inside its newcomer window is guaranteed.
+ *
+ * Set above the capped access ceiling (~2.58) on purpose: the window is
+ * worthless if a maxed-out incumbent still wins. It is a FLOOR rather than a
+ * bonus so it cannot stack with other terms into a runaway score.
+ */
+const NEWCOMER_FLOOR = 3;
 /** Maximum age of `.pending-*.json` temp files before cleanup (1 hour). */
 const STALE_TEMP_MAX_AGE_MS = 60 * 60 * 1000; // 1 hour
 /** Default time-to-live in days for newly created memories. */
@@ -444,9 +488,23 @@ export class RAGStore {
    * shared by {@link search} and {@link recordAccess}. Mutates `memory` in place;
    * the caller is responsible for persisting.
    */
-  private bumpAccess(memory: RAGMemory, now: string, nowMs: number): void {
+  /**
+   * Records that a fact was returned by a search.
+   *
+   * **Counting and extending are separate since #372**, because conflating them
+   * is the entrenchment loop: `search()` called this on *every* returned hit
+   * with no judgment involved, so retrieval bumped the score, a higher score
+   * meant a higher chance of retrieval, and nothing ever consulted whether the
+   * retrieval had helped. Observed on a real store: 31 stale facts with
+   * `accessCount` up to 40, due to expire in Sept–Oct and renewing forever.
+   *
+   * The count is still true — the fact *was* retrieved — so it is still
+   * recorded. What it no longer buys is life.
+   */
+  private bumpAccess(memory: RAGMemory, now: string, extendTtl: boolean, nowMs: number): void {
     memory.accessCount++;
     memory.lastAccessed = now;
+    if (!extendTtl) return;
 
     // Extend expiresAt: base of 7d + log scaling by access count, capped at half TTL
     const extensionDays = Math.min(
@@ -475,7 +533,11 @@ export class RAGStore {
     let touched = 0;
     for (const memory of this.memories) {
       if (wanted.has(memory.id)) {
-        this.bumpAccess(memory, now, nowMs);
+        // `true`: this is the endorsed path. `recall-filter` calls it with the
+        // ids a curator explicitly KEPT after seeing all ~24 candidates in one
+        // prompt, so it is a judgment about usefulness rather than topical
+        // adjacency — which is what earns a TTL extension.
+        this.bumpAccess(memory, now, true, nowMs);
         touched++;
       }
     }
@@ -549,11 +611,16 @@ export class RAGStore {
 
     debugLog('rag:search', { query: query.slice(0, 100), returned: capped.length });
 
-    // Update access metadata and extend expiration
+    // Count the retrieval; do NOT extend the TTL (#372).
+    //
+    // This fires on every returned hit with no judgment involved, so extending
+    // here is what let a fact live forever by being topically adjacent to
+    // something. Endorsement drives TTL, and endorsement arrives through
+    // `recordAccess` — the ids a curator kept after seeing every candidate.
     const now = new Date().toISOString();
     const nowMs = Date.now();
     for (const { memory } of capped) {
-      this.bumpAccess(memory, now, nowMs);
+      this.bumpAccess(memory, now, false, nowMs);
     }
     if (capped.length > 0) {
       this.markDirty();
@@ -702,7 +769,15 @@ export class RAGStore {
     const scored = this.memories.map((m) => {
       const ageMs = now - new Date(m.createdAt).getTime();
       const recency = Math.pow(0.5, ageMs / halfLifeMs);
-      const access = Math.log2(m.accessCount + 1);
+      // Capped, and decayed by how long ago the fact was last retrieved (#372).
+      // Uncapped and undecayed, this term was the entrenchment loop's payoff:
+      // unbounded credit that never expired, against a recency term bounded at
+      // 1.0. A fact with `accessCount` 40 from six months ago outranked a
+      // correction written today.
+      const credit = Math.log2(Math.min(m.accessCount, ACCESS_CREDIT_CAP) + 1);
+      const sinceAccessMs = m.lastAccessed ? now - new Date(m.lastAccessed).getTime() : ageMs;
+      const access =
+        credit * Math.pow(0.5, sinceAccessMs / (ACCESS_CREDIT_HALF_LIFE_DAYS * 86400000));
       // **Repetition outweighs retrieval, and that is the point of #525.**
       // `accessCount` says a fact is topically adjacent to what gets asked;
       // `observedCount` says it was independently learned again, which is the
@@ -714,7 +789,12 @@ export class RAGStore {
       // would be the same defect: the observation would be recorded and still
       // could not save the record from a prune.
       const observed = Math.log2((m.observedCount ?? 0) + 1) * 2;
-      return { memory: m, score: recency + access + observed };
+      const score = recency + access + observed;
+      // A floor, not a bonus: inside the window a fact cannot be outcompeted by
+      // an incumbent's accumulated credit, but it also cannot stack its way
+      // above one that genuinely scores higher.
+      const isNewcomer = ageMs < NEWCOMER_WINDOW_DAYS * 86400000;
+      return { memory: m, score: isNewcomer ? Math.max(score, NEWCOMER_FLOOR) : score };
     });
 
     scored.sort((a, b) => b.score - a.score);
