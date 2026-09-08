@@ -81,6 +81,7 @@ function fakeDefinition(
   return {
     id: 'fake',
     historyMode: 'ephemeral',
+    site: 'main',
     systemPrompt: () => 'SYS',
     tools: () => ({}),
     strategy: () => new NormalStrategy(),

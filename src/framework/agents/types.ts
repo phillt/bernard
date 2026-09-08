@@ -153,9 +153,17 @@ export interface AgentDefinition<TInput = unknown, TFormatted = unknown> {
    * Logical site this definition belongs to for the multi-model assignment
    * policy (#170). The default `resolveModel` in {@link runDefinition} passes
    * this to {@link resolveSiteModel}; definitions that supply their own
-   * `resolveModel` may ignore it. Defaults to `'main'` when omitted.
+   * `resolveModel` may ignore it.
+   *
+   * **Required, and that is the real fix rather than the two declarations that
+   * prompted it (#508).** It was optional with a `def.site ?? 'main'` default
+   * at three call sites, so a definition that simply did not mention a site
+   * billed its whole spend to the `main` layer of `bernard usage` — silently,
+   * and visible only as "the main agent is expensive". #299 paid for that once
+   * (`tool-wrapper:<id>`, `mcp:<server>`) and `specialist` was the second time.
+   * Requiring it makes the third a compile error rather than a wrong number.
    */
-  site?: import('../../model-policy.js').ModelSite;
+  site: import('../../model-policy.js').ModelSite;
 
   /**
    * Optional finer-grained label for token-ledger / session-telemetry attribution,

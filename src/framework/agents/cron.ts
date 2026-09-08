@@ -94,6 +94,10 @@ export interface CronInput {
 export const cronDefinition: AgentDefinition<CronInput, string> = {
   id: 'cron',
   historyMode: 'ephemeral',
+  // Explicit since `site` became required (#508). It was the default before,
+  // and a cron job really is a main-shaped agent — but it was the default by
+  // omission, which is what made the same omission on `specialist` invisible.
+  site: 'main',
   repairLabel: 'cron',
 
   systemPrompt(ctx, _input, tools) {
