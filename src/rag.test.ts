@@ -237,6 +237,100 @@ describe('RAGStore', () => {
     });
   });
 
+  /**
+   * A read must not rewrite the store (#533).
+   *
+   * `search()` ended with `persist()`, and `persist()` is a `JSON.stringify` of
+   * the whole array plus a write — measured at 188 ms on a real 3,664-record /
+   * 31 MB store, synchronous, on the turn's critical path, to record an
+   * `accessCount++`. These pin that the write is deferred and that the
+   * bookkeeping still survives.
+   */
+  describe('debounced access bookkeeping', () => {
+    /** Writes to the store file, ignoring the session-date sidecar. */
+    function storeWrites(): number {
+      return vi
+        .mocked(fs.writeFileSync)
+        .mock.calls.filter((c) => String(c[0]).includes('memories.json')).length;
+    }
+
+    it('a search that hits does not write', async () => {
+      const store = await createStore();
+      await store.addFacts(['User prefers dark mode with testing keywords'], 'test');
+      const before = storeWrites();
+
+      const results = await store.search('User prefers dark mode with testing keywords');
+
+      expect(results.length).toBeGreaterThan(0);
+      expect(storeWrites()).toBe(before);
+    });
+
+    it('flushes once for many dirtying searches', async () => {
+      // The whole point: a fan-out of dispatches coalesces into one write
+      // rather than front-loading one 31 MB rewrite each.
+      const store = await createStore();
+      await store.addFacts(['fact one with testing keywords'], 'test');
+      const before = storeWrites();
+
+      for (let i = 0; i < 5; i++) {
+        store.clearTurnCache(); // otherwise the per-turn cache short-circuits
+        await store.search('fact one with testing keywords');
+      }
+      expect(storeWrites()).toBe(before);
+
+      store.flush();
+      expect(storeWrites()).toBe(before + 1);
+    });
+
+    it('a flush with nothing pending is a no-op', async () => {
+      const store = await createStore();
+      const before = storeWrites();
+      store.flush();
+      store.flush();
+      expect(storeWrites()).toBe(before);
+    });
+
+    it('keeps writing content eagerly — only bookkeeping is deferred', async () => {
+      // `addFacts` writes a FACT. A crash must not lose it, only the note that
+      // a fact was useful.
+      const store = await createStore();
+      const before = storeWrites();
+      await store.addFacts(['a brand new fact'], 'test');
+      expect(storeWrites()).toBeGreaterThan(before);
+    });
+
+    it('does not hold the process open for bookkeeping', async () => {
+      // `unref`ed, so the debounce can never be why Bernard will not exit —
+      // which is also why every exit path flushes explicitly rather than
+      // trusting the timer.
+      const unref = vi.fn();
+      const spy = vi.spyOn(globalThis, 'setTimeout').mockReturnValue({ unref } as never);
+      try {
+        const store = await createStore();
+        await store.addFacts(['fact one with testing keywords'], 'test');
+        await store.search('fact one with testing keywords');
+        expect(unref).toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('writes to a unique temp path, not a shared one', async () => {
+      // Four processes write this file. A fixed `.tmp` suffix means two
+      // concurrent persists share one temp path and rename it twice;
+      // debouncing widens the window that makes it matter.
+      const store = await createStore();
+      await store.addFacts(['another fact'], 'test');
+      const temps = vi
+        .mocked(fs.writeFileSync)
+        .mock.calls.map((c) => String(c[0]))
+        .filter((p) => p.endsWith('.tmp'));
+      expect(temps.length).toBeGreaterThan(0);
+      for (const t of temps) expect(t).not.toMatch(/memories\.json\.tmp$/);
+      expect(temps[0]).toContain(String(process.pid));
+    });
+  });
+
   describe('addFacts', () => {
     it('stores facts with embeddings', async () => {
       const store = await createStore();
@@ -491,7 +585,10 @@ describe('RAGStore', () => {
   });
 
   describe('recordAccess', () => {
-    it('bumps access count and extends TTL for the given ids, then persists', async () => {
+    it('bumps access count and extends TTL for the given ids, deferring the write', async () => {
+      // It used to persist here — a 31 MB rewrite once per turn to record that
+      // the curator endorsed some facts (#533). It shares the debounce now
+      // rather than being the one bookkeeping path that still writes eagerly.
       const store = await createStore();
       await store.addFacts(['User prefers dark mode'], 'test');
       const [before] = store.listMemories();
@@ -501,6 +598,9 @@ describe('RAGStore', () => {
 
       const [after] = store.listMemories();
       expect(after.accessCount).toBe(before.accessCount + 1);
+      expect(vi.mocked(fs.writeFileSync).mock.calls.length).toBe(persistsBefore);
+
+      store.flush();
       expect(vi.mocked(fs.writeFileSync).mock.calls.length).toBeGreaterThan(persistsBefore);
     });
 
@@ -873,7 +973,7 @@ describe('RAGStore', () => {
       // Inspect the persisted data
       const writeCall = vi
         .mocked(fs.writeFileSync)
-        .mock.calls.find((c) => String(c[0]).includes('memories.json.tmp'));
+        .mock.calls.find((c) => /memories\.json\..*\.tmp$/.test(String(c[0])));
       expect(writeCall).toBeDefined();
       const persisted = persistedRecords(writeCall![1] as string);
       expect(persisted[0].expiresAt).toBeDefined();
@@ -996,11 +1096,15 @@ describe('RAGStore', () => {
       vi.mocked(fs.writeFileSync).mockClear();
 
       await store.search('fact about to expire with testing keywords');
+      // The bump is in memory until something flushes it (#533) — the whole
+      // point of the change. Asserting the extension still lands proves the
+      // debounce defers the write without losing the bookkeeping.
+      store.flush();
 
       // Get the persisted data after search
       const writeCall = vi
         .mocked(fs.writeFileSync)
-        .mock.calls.find((c) => String(c[0]).includes('memories.json.tmp'));
+        .mock.calls.find((c) => /memories\.json\..*\.tmp$/.test(String(c[0])));
       expect(writeCall).toBeDefined();
       const updatedData = persistedRecords(writeCall![1] as string);
 

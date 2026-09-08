@@ -54,6 +54,17 @@ interface StoredMemories {
   memories: RAGMemory[];
 }
 
+/**
+ * How long pending access bookkeeping may sit unwritten (#533).
+ *
+ * A backstop, not the mechanism: every exit path flushes explicitly, so this
+ * only covers a process that is killed rather than closed. Long enough that a
+ * burst of dispatches coalesces into one write, short enough that a SIGKILL
+ * loses at most a few seconds of decay metadata — which costs one TTL
+ * extension, not a fact.
+ */
+const FLUSH_DEBOUNCE_MS = 5_000;
+
 /** A single stored memory with its embedding vector and lifecycle metadata. */
 export interface RAGMemory {
   /** Unique identifier (timestamp + random suffix). */
@@ -157,9 +168,38 @@ export class RAGStore {
   private stamp: { model?: string; dimensions?: number } | null = null;
   /** A legacy store was read; write the stamp back on the next persist. */
   private needsStamp = false;
-  /** The mismatch is stated once per process, not once per query. */
   /** See {@link retrievalDisabledReason}. Non-null IS the once-per-process latch. */
   private disabledReason: string | null = null;
+  /**
+   * Access bookkeeping written but not yet flushed (#533).
+   *
+   * `search()` used to call {@link persist} on every hit, and `persist` is a
+   * `JSON.stringify` of the whole array plus a write. Measured on a real
+   * 3,664-record / 31 MB store: **188 ms to serialize**, ~27 ms to write, all
+   * synchronous on the main thread — so every search that returned anything
+   * froze the event loop for roughly a fifth of a second, to record an
+   * `accessCount++` and a timestamp. In the REPL that is Ink's render loop and
+   * the streaming reply. Across this machine's session logs: 174 searches, 26
+   * in the busiest single session — about 5.6 s of dead air in one
+   * conversation, none of it correctness.
+   *
+   * **What is deferred is bookkeeping, and only bookkeeping.** Every field
+   * {@link bumpAccess} touches is decay metadata: `accessCount`,
+   * `lastAccessed` (which has no reader anywhere in the repo) and `expiresAt`.
+   * Losing an unflushed bump costs at most one TTL extension. `addFacts`,
+   * `clear` and `deleteByIds` write CONTENT and stay eager — a crash must not
+   * lose a fact, only the note that a fact was useful.
+   */
+  private dirty = false;
+  /**
+   * Debounce timer for {@link flush}.
+   *
+   * `unref`ed, following `inbox/watcher.ts`, so a pending flush can never be
+   * the reason a process will not exit — which also means the timer alone is
+   * not a guarantee, and every exit path must call {@link flush} explicitly.
+   * Both halves are required; neither is sufficient.
+   */
+  private flushTimer: NodeJS.Timeout | null = null;
 
   constructor(config?: RAGStoreConfig) {
     this.topKPerDomain = config?.topKPerDomain ?? DEFAULT_TOP_K_PER_DOMAIN;
@@ -345,7 +385,11 @@ export class RAGStore {
     }
     if (touched > 0) {
       debugLog('rag:recordAccess', { requested: ids.length, touched });
-      this.persist();
+      // Shares the debounce rather than growing a second mechanism (#533).
+      // Once per turn is defensible on its own, but it writes the same fields
+      // for the same reason and should not be the one path that still costs a
+      // 31 MB rewrite.
+      this.markDirty();
     }
   }
 
@@ -416,7 +460,7 @@ export class RAGStore {
       this.bumpAccess(memory, now, nowMs);
     }
     if (capped.length > 0) {
-      this.persist();
+      this.markDirty();
     }
 
     const results = capped.map((s) => ({
@@ -743,11 +787,53 @@ export class RAGStore {
     }
   }
 
+  /**
+   * Records that access bookkeeping is pending, and schedules a flush (#533).
+   *
+   * The timer is a backstop for a long-lived process that never exits cleanly
+   * — the cron daemon, a REPL killed with SIGKILL. The flush that actually
+   * matters is the explicit one at each exit hook.
+   */
+  private markDirty(): void {
+    this.dirty = true;
+    if (this.flushTimer) return;
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null;
+      this.flush();
+    }, FLUSH_DEBOUNCE_MS);
+    // Never keep the process alive for bookkeeping.
+    this.flushTimer.unref?.();
+  }
+
+  /**
+   * Writes pending access bookkeeping, if any.
+   *
+   * Public because `persist` is private and had no external caller — there was
+   * no way for a process to say "I am about to exit". Callers: the REPL's
+   * cleanup save loop, `runHeadless`'s `finally`, and the exit worker.
+   * Idempotent and cheap when nothing is dirty.
+   */
+  flush(): void {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    if (!this.dirty) return;
+    this.persist();
+  }
+
   /** Persist memories to disk atomically (write to tmp, then rename). */
   private persist(): void {
+    this.dirty = false;
     this.needsStamp = false;
     try {
-      const tmpFile = MEMORIES_FILE + '.tmp';
+      // A UNIQUE temp name, not a fixed `.tmp` suffix (#533). Four processes
+      // write this file — the REPL, the detached exit worker, the cron daemon
+      // and `bernard facts` — and a shared temp path means two concurrent
+      // persists write the same file and rename it twice. `tools/file.ts`
+      // documents avoiding `fs-utils`' fixed-suffix helper for exactly this.
+      // Debouncing widens the window that makes it matter.
+      const tmpFile = `${MEMORIES_FILE}.${process.pid}.${Date.now().toString(36)}.tmp`;
       // Stamped, so a later reader can tell which model wrote these vectors
       // (#520). `CACHE_SCHEMA_VERSION` is the template for the shape; the
       // difference is what a mismatch DOES — see `modelMismatch`.

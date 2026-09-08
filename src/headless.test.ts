@@ -14,12 +14,17 @@ const mockMcpManager = vi.hoisted(() => ({
 }));
 
 const mockRagSearch = vi.hoisted(() => vi.fn().mockResolvedValue([]));
+const mockRagFlush = vi.hoisted(() => vi.fn());
 const mockRagStoreCtor = vi.hoisted(() =>
   // `retrievalDisabledReason` is on the real store's surface (#520):
   // `runHeadless` reads it and writes the reason to the run log, because
   // `RAGStore` deliberately does not print — a raw stderr write is the wrong
   // channel for the REPL, which owns the terminal.
-  vi.fn(() => ({ search: mockRagSearch, retrievalDisabledReason: () => null })),
+  vi.fn(() => ({
+    search: mockRagSearch,
+    flush: mockRagFlush,
+    retrievalDisabledReason: () => null,
+  })),
 );
 
 const mockRunDefinition = vi.hoisted(() =>
@@ -97,9 +102,15 @@ beforeEach(() => {
     resolveAlias: () => null,
   });
   mockRagSearch.mockResolvedValue([]);
+  mockRagFlush.mockClear();
   mockRunDefinition.mockResolvedValue({ formatted: 'done', stepLimitHit: false });
   mockRagStoreCtor.mockImplementation(
-    () => ({ search: mockRagSearch, retrievalDisabledReason: () => null }) as any,
+    () =>
+      ({
+        search: mockRagSearch,
+        flush: mockRagFlush,
+        retrievalDisabledReason: () => null,
+      }) as any,
   );
 });
 
@@ -237,6 +248,21 @@ describe('runHeadless', () => {
     mockRagSearch.mockRejectedValue(new Error('embedding backend down'));
     const res = await runHeadless(opts({ ragQuery: 'why' }));
     expect(res.ok).toBe(true);
+  });
+
+  it('flushes deferred RAG bookkeeping before the run ends (#533)', async () => {
+    // The store lives and dies with the run, so this `finally` is its only exit
+    // hook — a cron daemon runs many of these and never exits between them. The
+    // debounce timer is `unref`ed and cannot be relied on.
+    await runHeadless(opts({ ragQuery: 'why' }));
+    expect(mockRagFlush).toHaveBeenCalled();
+  });
+
+  it('flushes even when the run failed', async () => {
+    mockRunDefinition.mockRejectedValueOnce(new Error('boom'));
+    const res = await runHeadless(opts({ ragQuery: 'why' }));
+    expect(res.ok).toBe(false);
+    expect(mockRagFlush).toHaveBeenCalled();
   });
 
   it('continues without MCP tools when connect fails', async () => {
@@ -442,6 +468,7 @@ describe('runHeadless reports disabled retrieval', () => {
       () =>
         ({
           search: mockRagSearch,
+          flush: mockRagFlush,
           retrievalDisabledReason: () => 'written by other/model at 768',
         }) as any,
     );
