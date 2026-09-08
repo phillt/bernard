@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { MemoryStore } from '../memory.js';
-import { MemoryKeyCollisionError } from '../memory.js';
+import { MemoryKeyCollisionError, MemoryScopeError } from '../memory.js';
 import { MemoryCandidateStore } from '../memory-candidates.js';
 import { describeProposal } from '../memory-proposal.js';
 import { MEMORY_DIR } from '../paths.js';
@@ -201,6 +201,33 @@ async function contradictionNote(
   }
 }
 
+/**
+ * Turns a fence refusal into a tool ERROR instead of a throw (#511).
+ *
+ * `MemoryStore` throws `MemoryScopeError` on an out-of-scope write, and a throw
+ * out of `execute` becomes an AI SDK `ToolExecutionError` that takes the whole
+ * dispatch down. As an error result the model is told, in words it can act on,
+ * that the write did not happen and which keys it may use — which is what that
+ * error's own docstring promises.
+ *
+ * Wrapped at the RETURN rather than around each `execute` body, so the diff is
+ * one line per tool instead of re-indenting two switch statements — and so a
+ * later action cannot be added outside the guard.
+ */
+function scopeGuarded<A, R>(t: BernardTool<A, R>): BernardTool<A, R> {
+  return {
+    ...t,
+    execute: async (args, opts) => {
+      try {
+        return await t.execute(args, opts);
+      } catch (e) {
+        if (e instanceof MemoryScopeError) return err({ type: 'permission', message: e.message });
+        throw e;
+      }
+    },
+  };
+}
+
 export function createMemoryTool(
   memoryStore: MemoryStore,
   provenance?: ProvenanceStore,
@@ -210,7 +237,7 @@ export function createMemoryTool(
     onUsage?: UsageRecorder;
   },
 ): BernardTool<MemoryArgs, string> {
-  return {
+  return scopeGuarded({
     meta: {
       name: 'memory',
       kind: 'write',
@@ -357,7 +384,7 @@ export function createMemoryTool(
       }
     },
     serializeForModel: (r) => (r.status === 'ok' ? r.result : `Error: ${r.error.message}`),
-  };
+  });
 }
 
 /**
@@ -371,7 +398,7 @@ export function createScratchTool(
   memoryStore: MemoryStore,
   provenance?: ProvenanceStore,
 ): BernardTool<ScratchArgs, string> {
-  return {
+  return scopeGuarded({
     meta: {
       name: 'scratch',
       kind: 'write',
@@ -431,5 +458,5 @@ export function createScratchTool(
       }
     },
     serializeForModel: (r) => (r.status === 'ok' ? r.result : `Error: ${r.error.message}`),
-  };
+  });
 }

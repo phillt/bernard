@@ -28,6 +28,7 @@ import { runAgent, newDispatchId, type AgentResult, type AgentSpec } from '../ru
 import type { IterateFn, IterateOpts, StrategyContext } from '../strategies/types.js';
 import { resolveToolSurface } from './tool-surface.js';
 import { resolveDispatchProfile } from './dispatch-profile.js';
+import { scopeContext } from '../context.js';
 import { recordDispatchContext } from '../../dispatch-context-history.js';
 import { resolveRetrieval } from './retrieval.js';
 import { visionRefusal } from './vision-gate.js';
@@ -142,13 +143,12 @@ export interface RunDefinitionResult<TFormatted> {
  * happen here, not at the call sites.
  */
 export async function runDefinition<TInput, TFormatted>(
-  ctx: AgentContext,
+  rootCtx: AgentContext,
   def: AgentDefinition<TInput, TFormatted>,
   input: TInput,
   opts: RunDefinitionOpts = {},
 ): Promise<RunDefinitionResult<TFormatted>> {
-  const { config } = ctx;
-  const resolved = resolveModel(def, ctx, input, opts.overrides);
+  const resolved = resolveModel(def, rootCtx, input, opts.overrides);
 
   // Central tool-surface resolution (#315, #322). The built-in registry scope
   // (#253) and the MCP bag (#296/#305) are cross-cutting decisions about what
@@ -166,7 +166,18 @@ export async function runDefinition<TInput, TFormatted>(
   // no `ctx` and `resolveToolSurface` gets no `input`, so neither can reach the
   // record it is running. Cheap and total: no `recordId` on the definition, or
   // no record on disk, and it is a frozen empty object.
-  const profile = resolveDispatchProfile(ctx, def, input);
+  const profile = resolveDispatchProfile(rootCtx, def, input);
+
+  // The scope fence (#511), and the SHADOWING is the mechanism. Every `ctx`
+  // below this line is the scoped one without a single reference being
+  // touched — including `def.tools(ctx, …)`, where six of the ten
+  // `createTools` call sites read `ctx.stores.memory`. Shadowing rather than a
+  // second name makes "reach the unscoped context below this line"
+  // unrepresentable rather than merely discouraged, and `scopeContext` returns
+  // `rootCtx` unchanged when nothing is declared, so `main` keeps object
+  // identity and the prompt-cache prefix is untouched.
+  const ctx = scopeContext(rootCtx, profile);
+  const { config } = ctx;
   const surface = resolveToolSurface(ctx, def, profile);
   // Retrieval, resolved once per dispatch for the same reason and in the same
   // place (#510). It used to sit in four definitions' `contextInputs`, which
@@ -398,10 +409,21 @@ export async function runDefinition<TInput, TFormatted>(
     if (def.contextInputs) {
       try {
         extras = await Promise.resolve(def.contextInputs(ctx, input));
-      } catch {
+      } catch (err) {
         // Fail-soft: a thrown contextInputs (e.g. RAG search error) must not
         // abort the turn. Drop the extras and fall back to the framework
         // default memory + scratch contract.
+        //
+        // Logged rather than swallowed (#511). It widens `null` to `{}`, so a
+        // definition that opts OUT of the context block entirely — `pac-critic`
+        // returns `contextInputs: () => null` — silently starts rendering one
+        // if its thunk ever throws, which is a change of contract reported
+        // nowhere. Note the fence itself is unaffected either way: scoping
+        // happens above, on the store this line falls back to.
+        debugLog('context:inputs:failed', {
+          definition: def.id,
+          message: err instanceof Error ? err.message : String(err),
+        });
         extras = {};
       }
     }
@@ -530,6 +552,12 @@ export async function runDefinition<TInput, TFormatted>(
         // definition's thunk and claiming a query for a dispatch that searched
         // nothing.
         ...(retrieved.query ? { retrievalQuery: retrieved.query } : {}),
+        // From the resolved profile, not from the store: what the record was
+        // GRANTED is the fact that explains a short `memoryKept`, and reading
+        // it back off the scoped store would only restate what the store then
+        // let through (#511).
+        ...(profile.memoryScope ? { memoryScope: profile.memoryScope } : {}),
+        ...(profile.knowledgeScope ? { knowledgeScope: profile.knowledgeScope } : {}),
       });
     }
     const r = await runAgent({

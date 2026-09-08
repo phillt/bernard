@@ -159,6 +159,16 @@ export class RAGStore {
    * Both halves are required; neither is sufficient.
    */
   private flushTimer: NodeJS.Timeout | null = null;
+  /**
+   * Domains this instance may retrieve from, or `null` for the unscoped store
+   * (#511).
+   *
+   * The `domain` axis has existed, been populated and been ranked on since day
+   * one — `scoreAndRank` already GROUPS by it — and has never once been
+   * filtered on. This is the first reader. On a real store: `general` 1,217,
+   * `conversations` 935, `tool-usage` 1,131, `user-preferences` 381.
+   */
+  private domainScope: readonly string[] | null = null;
 
   constructor(config?: RAGStoreConfig) {
     this.topKPerDomain = config?.topKPerDomain ?? DEFAULT_TOP_K_PER_DOMAIN;
@@ -172,6 +182,36 @@ export class RAGStore {
     this.saveSessionDate();
     this.pruneExpired();
     RAGStore.cleanupStaleTemp();
+  }
+
+  /**
+   * A narrowed view of this store, restricted to the given domains (#511).
+   *
+   * Shares `memories` and the query-EMBEDDING cache by reference — it must:
+   * `search` mutates access metadata and the embedding is where the real cost
+   * is. It deliberately does **not** share {@link turnSearchCache}.
+   *
+   * **That omission is a fail-open hazard closed, not an optimisation skipped.**
+   * `turnSearchCache` is keyed on the verbatim query string ALONE. So `main`
+   * searching "deployment process" unscoped and caching fifteen results, then a
+   * scoped child searching the same string, would hand the child the *unscoped*
+   * results straight out of the cache — with no code path ever consulting a
+   * domain. A composite key would work and is a correctness question nobody
+   * re-checks; a view has no cache at all, is per-dispatch, and is discarded,
+   * so there is nothing to invalidate.
+   */
+  scoped(domains: readonly string[] | null | undefined): RAGStore {
+    if (!domains) return this;
+    const base = this.domainScope;
+    const next = base === null ? [...domains] : domains.filter((d) => base.includes(d));
+    const view = Object.create(RAGStore.prototype) as RAGStore;
+    Object.assign(view, this, { domainScope: next, turnSearchCache: new Map() });
+    return view;
+  }
+
+  /** The domains this instance may retrieve from. `null` when unscoped. */
+  domainScopeOf(): readonly string[] | null {
+    return this.domainScope;
   }
 
   /** Delete .pending-*.json temp files older than 1 hour (handles crashed workers). */
@@ -278,7 +318,15 @@ export class RAGStore {
     const topKPerDomain = overrides?.topKPerDomain ?? this.topKPerDomain;
     const maxResults = overrides?.maxResults ?? this.maxResults;
 
-    const scored = this.memories
+    // The filter goes in FRONT of the per-domain grouping below, so a scoped
+    // search is the same ranking over a smaller corpus rather than a truncation
+    // of a wider result (#511).
+    const corpus =
+      this.domainScope === null
+        ? this.memories
+        : this.memories.filter((m) => this.domainScope!.includes(m.domain));
+
+    const scored = corpus
       .map((m) => ({
         memory: m,
         similarity: cosineSimilarity(queryEmbedding, m.embedding),

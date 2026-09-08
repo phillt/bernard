@@ -155,15 +155,21 @@ const mockMemoryStore = vi.hoisted(() => ({
   getAllScratchContents: vi.fn().mockReturnValue(new Map()),
 }));
 
-vi.mock('../memory.js', () => ({
+// Partial: `dispatch-profile.ts` imports `isValidScopePattern` from this module
+// (#511), and a factory that replaces the module wholesale makes every such
+// import a load-time throw.
+vi.mock('../memory.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../memory.js')>()),
   MemoryStore: vi.fn(() => mockMemoryStore),
 }));
 
 // Mock RAGStore
 const mockRagSearch = vi.hoisted(() => vi.fn().mockResolvedValue([]));
-const mockRagStoreInstance = vi.hoisted(() => ({
+const mockRagScoped = vi.hoisted(() => vi.fn());
+const mockRagStoreInstance: any = vi.hoisted(() => ({
   search: mockRagSearch,
   flush: vi.fn(),
+  scoped: mockRagScoped,
 }));
 
 vi.mock('../rag.js', () => ({
@@ -682,5 +688,51 @@ describe('cron job wall clock (#326)', () => {
     });
     await runJob(baseJob, vi.fn());
     expect(seen).toBeInstanceOf(AbortSignal);
+  });
+});
+
+/**
+ * A job's own knowledge fence (#511), and the default it does NOT get.
+ *
+ * The default is the decision worth pinning. Deny-by-default is the stronger
+ * position in the abstract and is rejected here: silently blanking every
+ * existing job's memory surfaces as "the job answered worse", the quietest
+ * failure mode in this tree — and cron, with no operator watching, is where it
+ * would be quietest. So an unset field preserves legacy behaviour, matching
+ * `toolMode`'s own house rule, and the job author opts in.
+ */
+describe('cron knowledge scope (#511)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRagSearch.mockResolvedValue([]);
+    mockRagScoped.mockReturnValue({ search: mockRagSearch, flush: vi.fn() });
+    mockMemoryStore.getAllMemoryContents.mockReturnValue(new Map());
+    mockMemoryStore.getAllScratchContents.mockReturnValue(new Map());
+    vi.mocked(loadConfig).mockReturnValue({
+      provider: 'anthropic',
+      model: 'test',
+      maxTokens: 1024,
+      shellTimeout: 5000,
+      tokenWindow: 0,
+      ragEnabled: true,
+      theme: 'bernard',
+    } as never);
+  });
+
+  it('a job that declares nothing runs unscoped', async () => {
+    await runJob(testJob, vi.fn());
+    expect(mockRagScoped).not.toHaveBeenCalled();
+  });
+
+  it('a declared knowledgeScope reaches the search', async () => {
+    await runJob({ ...testJob, knowledgeScope: ['general'] } as never, vi.fn());
+    expect(mockRagScoped).toHaveBeenCalledWith(['general']);
+  });
+
+  // Through `declaredScope`, the same validator a specialist record goes
+  // through — so a job cannot declare a fence in a shape only cron honours.
+  it('a malformed knowledgeScope is deny-all, not unscoped', async () => {
+    await runJob({ ...testJob, knowledgeScope: 'general' } as never, vi.fn());
+    expect(mockRagScoped).toHaveBeenCalledWith([]);
   });
 });

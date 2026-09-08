@@ -134,6 +134,23 @@ export interface Specialist {
    * {@link targetTools}, which is a fence for every kind since #507.
    */
   toolSurface?: 'full' | 'worker';
+  /**
+   * Memory keys this specialist may read and write (#511).
+   *
+   * Exact keys, or prefixes ending in `*`. Absent means unscoped, which is what
+   * every record has today and what keeps this change a capability rather than
+   * a migration. **An empty array is honoured as deny-all**, which diverges
+   * from `targetToolsScopeError`'s rejection of `targetTools: []` — correctly,
+   * because "no tools" is incoherent while "verify against the task and nothing
+   * else" is a coherent posture. Validated at resolution, never trusted.
+   */
+  memoryScope?: string[];
+  /**
+   * RAG domains this specialist may retrieve from (#511).
+   *
+   * Validated against the domain registry. Absent means unscoped.
+   */
+  knowledgeScope?: string[];
   /** Correct usage patterns used for few-shot priming. */
   goodExamples?: SpecialistExample[];
   /** Failed usage patterns with their corrected form. */
@@ -201,6 +218,10 @@ export interface CreateSpecialistInput {
   strategy?: 'normal' | 'react';
   /** See {@link Specialist.toolSurface}. */
   toolSurface?: 'full' | 'worker';
+  /** See {@link Specialist.memoryScope}. */
+  memoryScope?: string[];
+  /** See {@link Specialist.knowledgeScope}. */
+  knowledgeScope?: string[];
   goodExamples?: SpecialistExample[];
   badExamples?: SpecialistBadExample[];
   structuredOutput?: boolean;
@@ -561,6 +582,8 @@ export class SpecialistStore {
       ...(input.stepRatio !== undefined ? { stepRatio: input.stepRatio } : {}),
       ...(input.strategy !== undefined ? { strategy: input.strategy } : {}),
       ...(input.toolSurface !== undefined ? { toolSurface: input.toolSurface } : {}),
+      ...(input.memoryScope !== undefined ? { memoryScope: input.memoryScope } : {}),
+      ...(input.knowledgeScope !== undefined ? { knowledgeScope: input.knowledgeScope } : {}),
       ...(input.goodExamples !== undefined ? { goodExamples: input.goodExamples } : {}),
       ...(input.badExamples !== undefined ? { badExamples: input.badExamples } : {}),
       ...(input.structuredOutput !== undefined ? { structuredOutput: input.structuredOutput } : {}),

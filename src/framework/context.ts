@@ -14,6 +14,7 @@ import { VerificationStore } from '../agent-status.js';
 import { VerificationTracker } from '../verification-tracker.js';
 import type { Check } from '../rubric.js';
 import type { ToolNameAliasResolver } from '../mcp-names.js';
+import type { DispatchProfile } from './agents/dispatch-profile.js';
 
 export interface AgentContextStores {
   memory: MemoryStore;
@@ -168,5 +169,44 @@ export function assembleContext(input: AssembleContextInput): AgentContext {
     verification: input.verification ?? new VerificationStore(),
     verificationTracker: input.verificationTracker ?? new VerificationTracker(),
     postWriteChecks: input.postWriteChecks ?? [],
+  };
+}
+
+/**
+ * Narrows a context to the knowledge a dispatch was granted (#511).
+ *
+ * A scope is a narrowing **view over the live store instance**, derived once in
+ * `runDefinition` onto a shadowed `ctx` — which is what makes one change fence
+ * both halves. The context block reads `ctx.stores.memory` through
+ * `contextInputs`; the `memory` / `scratch` tools read the same field through
+ * `def.tools(ctx, …)`. Neither `context-message.ts` nor `createTools` ever
+ * learns the word "scope", because the object they are handed is already the
+ * fenced one.
+ *
+ * `pac-critic` is the case that proves the fence is in the right place: it
+ * returns `contextInputs: () => null` (no memory block at all) *and* builds
+ * `createReadOnlyMemoryTool(ctx.stores.memory)` inside its own `tools()`. A
+ * fence in `getContextMessages` would miss it; a fence in `createTools` would
+ * miss it too. Only a fence on the store catches both, and the two wrappers
+ * compose — one fences actions, the other fences rows.
+ *
+ * **Returns `ctx` unchanged when nothing is declared**, so the overwhelmingly
+ * common path allocates nothing and `main` keeps object identity — which is
+ * what keeps its tool block byte-identical for the prompt cache (#269).
+ */
+export function scopeContext(ctx: AgentContext, profile: DispatchProfile): AgentContext {
+  const { memoryScope, knowledgeScope } = profile;
+  if (memoryScope === undefined && knowledgeScope === undefined) return ctx;
+  // Narrowing is monotone and idempotent in both stores, so re-scoping an
+  // already-scoped context can only ever narrow further. That is what lets
+  // `tool-wrapper-run.ts` scope early for its pre-assembled child tools and
+  // still let `runDefinition` re-derive.
+  return {
+    ...ctx,
+    stores:
+      memoryScope === undefined
+        ? ctx.stores
+        : { ...ctx.stores, memory: ctx.stores.memory.scoped(memoryScope) },
+    rag: knowledgeScope === undefined ? ctx.rag : ctx.rag?.scoped(knowledgeScope),
   };
 }

@@ -1115,3 +1115,77 @@ describe('RAGStore', () => {
     });
   });
 });
+
+/**
+ * The knowledge fence (#511).
+ *
+ * The `domain` axis has been populated and RANKED on since day one and never
+ * once filtered on — `scoreAndRank` already groups by it. So a scoped search is
+ * the same ranking over a smaller corpus, not a truncation of a wider result,
+ * and that distinction is what these pin: the filter has to go in FRONT of the
+ * grouping, or a scoped search returns whatever survived an unscoped top-k.
+ */
+describe('RAGStore domain scope (#511)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    vi.mocked(fs.readFileSync).mockReturnValue('[]');
+    mockProvider = createFakeProvider();
+  });
+
+  async function seeded() {
+    const { RAGStore } = await import('./rag.js');
+    const store = new RAGStore({ maxMemories: 100, similarityThreshold: -1 });
+    await store.addFacts(['shared vocabulary alpha'], 'test', 'general');
+    await store.addFacts(['shared vocabulary beta'], 'test', 'user-preferences');
+    return store;
+  }
+
+  it('a scoped view retrieves only from the domains it was granted', async () => {
+    const store = await seeded();
+    const view = store.scoped(['general']);
+    const hits = await view.search('shared vocabulary');
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits.every((h) => h.domain === 'general')).toBe(true);
+  });
+
+  it('the unscoped store still sees everything', async () => {
+    const store = await seeded();
+    const domains = new Set((await store.search('shared vocabulary')).map((h) => h.domain));
+    expect(domains).toEqual(new Set(['general', 'user-preferences']));
+  });
+
+  it('an empty scope retrieves nothing', async () => {
+    const store = await seeded();
+    expect(await store.scoped([]).search('shared vocabulary')).toEqual([]);
+  });
+
+  it('narrowing is monotone — a second scope cannot widen the first', async () => {
+    const store = await seeded();
+    const view = store.scoped(['general']).scoped(['general', 'user-preferences']);
+    expect(view.domainScopeOf()).toEqual(['general']);
+  });
+
+  it('scoped(null) is the identity', async () => {
+    const store = await seeded();
+    expect(store.scoped(null)).toBe(store);
+  });
+
+  /**
+   * The fail-open hazard neither #511 nor the audit had named.
+   *
+   * `turnSearchCache` is keyed on the query STRING alone. `main` searches
+   * "deployment process" unscoped and caches fifteen results; a scoped child
+   * searching the same string would get the UNSCOPED results straight out of
+   * the cache, with no code path ever consulting a domain. So a view carries no
+   * search cache — the embedding cache, where the real cost is, stays shared.
+   */
+  it('does not inherit the parent turn-search cache', async () => {
+    const store = await seeded();
+    // Warm the parent's cache with the unscoped answer for this exact query.
+    const unscoped = await store.search('shared vocabulary');
+    expect(unscoped.length).toBe(2);
+    const scoped = await store.scoped(['general']).search('shared vocabulary');
+    expect(scoped.every((h) => h.domain === 'general')).toBe(true);
+  });
+});

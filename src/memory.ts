@@ -109,18 +109,62 @@ function parseMemoryFile(source: string): ParsedMemoryFile {
 }
 
 /**
- * Collapses a front-matter value onto one line.
+ * Thrown when a scoped dispatch tries to write outside its fence (#511).
  *
- * Named `toSingleLine`, not `oneLine`: `reference-resolver.ts` already exports
- * an `oneLine(value, max)` that also TRUNCATES, and two functions sharing a
- * name while behaving differently is a trap for anyone grepping. Importing
- * across that boundary would be the wrong edge, so the fix is the name.
- *
- * A raw key is arbitrary text — the model derives them from URLs and file
- * paths — so a newline in one would close the fence early and turn the rest of
- * the key into body. Applied on write AND to the incoming key during the
- * collision check, so the two always compare like with like.
+ * A tool error rather than a silent skip: the model asked to save something and
+ * must be told it did not happen, in words it can act on.
  */
+export class MemoryScopeError extends Error {
+  constructor(
+    readonly key: string,
+    readonly scope: readonly string[],
+  ) {
+    super(
+      `Memory key "${key}" is outside this agent's scope. It may only read and write: ` +
+        `${scope.length > 0 ? scope.join(', ') : '(nothing)'}.`,
+    );
+    this.name = 'MemoryScopeError';
+  }
+}
+
+/**
+ * A scope pattern: an exact key, or a prefix ending in `*`.
+ *
+ * Deliberately tiny. Anything richer — a regex, a leading star, a path — is a
+ * language, and a fence written in a language is one nobody can read at a
+ * glance. The alphabet is {@link sanitizeKey}'s plus an optional trailing star,
+ * so a pattern outside it can never match a key that exists and is an authoring
+ * mistake rather than a rule.
+ */
+const SCOPE_PATTERN = /^[a-zA-Z0-9_-]+\*?$/;
+
+/** True when `pattern` is one this module will honour. */
+export function isValidScopePattern(pattern: unknown): pattern is string {
+  return typeof pattern === 'string' && SCOPE_PATTERN.test(pattern);
+}
+
+/**
+ * Whether a key is inside a scope.
+ *
+ * **Matched against the SANITIZED key, and that ordering is the correctness
+ * argument.** `MemoryStore` repairs names rather than rejecting them, and
+ * cannot stop — `CronNotesStore.sanitizeJobId` imports {@link sanitizeKey}, so
+ * changing it renames cron notes files. Given a repairing sanitizer, the only
+ * defensible place for a fence is downstream of the repair: `"pro j-secret"`
+ * and `"proj-secret"` address one file, so they must get one verdict. Checking
+ * the raw key gives two.
+ *
+ * That is the inverse of `AppletStore`'s reject-don't-repair rule, and the
+ * inversion is the point — that store *can* reject, because its ids are not
+ * repaired anywhere.
+ */
+export function keyInScope(key: string, scope: readonly string[]): boolean {
+  const target = sanitizeKey(key);
+  return scope.some((p) =>
+    p.endsWith('*') ? target.startsWith(p.slice(0, -1)) : target === sanitizeKey(p),
+  );
+}
+
 /**
  * Whether a record has been taken out of circulation, however that happened.
  *
@@ -134,6 +178,19 @@ function isRetired(parsed: ParsedMemoryFile): boolean {
   return parsed.supersededBy !== undefined || parsed.retiredAt !== undefined;
 }
 
+/**
+ * Collapses a front-matter value onto one line.
+ *
+ * Named `toSingleLine`, not `oneLine`: `reference-resolver.ts` already exports
+ * an `oneLine(value, max)` that also TRUNCATES, and two functions sharing a
+ * name while behaving differently is a trap for anyone grepping. Importing
+ * across that boundary would be the wrong edge, so the fix is the name.
+ *
+ * A raw key is arbitrary text — the model derives them from URLs and file
+ * paths — so a newline in one would close the fence early and turn the rest of
+ * the key into body. Applied on write AND to the incoming key during the
+ * collision check, so the two always compare like with like.
+ */
 function toSingleLine(value: string): string {
   // Normalized the way the READER normalizes, not merely flattened. Writing a
   // value the parser would hand back differently is what made a quoted key
@@ -216,8 +273,65 @@ export class MemoryStore {
    */
   private cache: Map<string, CacheEntry> = new Map();
 
+  /**
+   * Key patterns this instance may see, or `null` for the unscoped store
+   * (#511).
+   *
+   * A **view**, never a separate directory. The per-owner-directory shape
+   * `AppletStore(appId)` uses looks like the precedent and does not transfer:
+   * {@link scratch} is an in-memory Map on the INSTANCE, so a
+   * `new MemoryStore(scopeDir)` would hand every scoped dispatch an empty
+   * scratch — `<scratch_notes>` renders blank, `scratch.read` returns nothing,
+   * and nothing errors. Applet data has no shared session state; memory does.
+   */
+  private scope: readonly string[] | null = null;
+
   constructor() {
     fs.mkdirSync(MEMORY_DIR, { recursive: true });
+  }
+
+  /**
+   * A narrowed view of this store, sharing its session state (#511).
+   *
+   * Shares {@link scratch} and {@link cache} **by reference**, which is the
+   * whole reason this is a view rather than a second store: a scoped dispatch
+   * must see the session's scratch notes (filtered), not an empty map, and must
+   * not re-`stat` every file the parent already read.
+   *
+   * **Narrowing is monotone and widening is unrepresentable.** The intersection
+   * happens here, so there is no argument to any public method that can widen a
+   * view — `a.scoped(x).scoped(y)` admits only what BOTH allow. That is
+   * `AppletStore`'s reject-don't-repair spirit applied to the operation rather
+   * than to the identifier.
+   *
+   * `scoped(null)` returns `this`, so the unscoped path allocates nothing.
+   */
+  scoped(patterns: readonly string[] | null | undefined): MemoryStore {
+    if (!patterns) return this;
+    const base = this.scope;
+    const next = base === null ? [...patterns] : patterns.filter((p) => keyInScope(p, base));
+    const view = new MemoryStore();
+    view.scratch = this.scratch;
+    view.cache = this.cache;
+    view.scope = next;
+    return view;
+  }
+
+  /** The scope this instance carries, for reporting. `null` when unscoped. */
+  scopeOf(): readonly string[] | null {
+    return this.scope;
+  }
+
+  /** Whether this instance may see `key`. Always true for the unscoped store. */
+  private allows(key: string): boolean {
+    return this.scope === null || keyInScope(key, this.scope);
+  }
+
+  /** Refuses a write outside the fence. No-op when unscoped. */
+  private assertWritable(key: string): void {
+    if (this.scope !== null && !keyInScope(key, this.scope)) {
+      throw new MemoryScopeError(key, this.scope);
+    }
   }
 
   // --- Persistent Memory (disk-backed) ---
@@ -233,6 +347,11 @@ export class MemoryStore {
    * permissions problem is not an empty memory.
    */
   private load(key: string): { parsed: ParsedMemoryFile; mtimeMs: number } | null {
+    // One of the two places the fence is applied (#511). `readMemory`,
+    // `readRecord`, `liveEntries` and both `getAll*` funnel through this and
+    // {@link listAllMemory}, so a scoped view cannot see an out-of-scope record
+    // by any route.
+    if (!this.allows(key)) return null;
     const filePath = this.filePath(key);
     try {
       const stat = fs.statSync(filePath);
@@ -277,7 +396,8 @@ export class MemoryStore {
   /** Every key on disk, including superseded ones. */
   listAllMemory(): string[] {
     const files = fs.readdirSync(MEMORY_DIR);
-    return files.filter((f) => f.endsWith('.md')).map((f) => f.replace(/\.md$/, ''));
+    const keys = files.filter((f) => f.endsWith('.md')).map((f) => f.replace(/\.md$/, ''));
+    return this.scope === null ? keys : keys.filter((k) => this.allows(k));
   }
 
   /**
@@ -346,6 +466,11 @@ export class MemoryStore {
    *   first write, never retroactively.
    */
   writeMemory(key: string, content: string): void {
+    // Scope constrains writes as well as reads (#511), though the issue asks
+    // only about reads. A write you cannot read back is incoherent, and an
+    // unscoped write from a fenced worker turns the fence into a PUBLISHING
+    // channel: the worker writes, and `main` renders it next turn.
+    this.assertWritable(key);
     const existing = this.load(key)?.parsed;
     const incoming = toSingleLine(key);
     if (existing?.key && existing.key !== incoming) {
@@ -382,6 +507,10 @@ export class MemoryStore {
    * would produce a memory that is retired in favour of nothing readable.
    */
   supersede(key: string, replacement: string): boolean {
+    // Both ends: retiring an in-scope record in favour of one this dispatch
+    // cannot see would leave a pointer into the dark.
+    this.assertWritable(key);
+    this.assertWritable(replacement);
     const record = this.readRecord(key);
     if (!record) return false;
     // The cycle walk below already rejects this — `seen` is seeded with `key`
@@ -442,6 +571,7 @@ export class MemoryStore {
    * second call should not quietly restate it as today.
    */
   retire(key: string): boolean {
+    this.assertWritable(key);
     const record = this.readRecord(key);
     if (!record) return false;
     const filePath = this.filePath(key);
@@ -455,6 +585,7 @@ export class MemoryStore {
 
   /** Deletes a persistent memory entry. Returns `true` if the entry existed and was removed. */
   deleteMemory(key: string): boolean {
+    this.assertWritable(key);
     const filePath = this.filePath(key);
     if (!fs.existsSync(filePath)) return false;
     fs.unlinkSync(filePath);
@@ -477,29 +608,41 @@ export class MemoryStore {
 
   // --- Scratch Notes (in-memory, session only) ---
 
-  /** Returns the keys of all scratch notes in the current session. */
+  /**
+   * Returns the keys of all scratch notes in the current session.
+   *
+   * Filtered by the same scope as persistent memory (#511) — but over the
+   * SHARED map, so a scoped dispatch sees the session's notes it is allowed to
+   * see rather than an empty set. That distinction is the whole reason a scope
+   * is a view over the live instance and not a second store.
+   */
   listScratch(): string[] {
-    return Array.from(this.scratch.keys());
+    const keys = Array.from(this.scratch.keys());
+    return this.scope === null ? keys : keys.filter((k) => this.allows(k));
   }
 
   /** Reads a scratch note by key, returning `null` if it does not exist. */
   readScratch(key: string): string | null {
+    if (!this.allows(key)) return null;
     return this.scratch.get(key) ?? null;
   }
 
   /** Creates or overwrites a scratch note for the current session. */
   writeScratch(key: string, content: string): void {
+    this.assertWritable(key);
     this.scratch.set(key, content);
   }
 
   /** Deletes a scratch note. Returns `true` if the note existed and was removed. */
   deleteScratch(key: string): boolean {
+    this.assertWritable(key);
     return this.scratch.delete(key);
   }
 
   /** Returns a shallow copy of all scratch notes as a key-content map. */
   getAllScratchContents(): Map<string, string> {
-    return new Map(this.scratch);
+    if (this.scope === null) return new Map(this.scratch);
+    return new Map(Array.from(this.scratch).filter(([k]) => this.allows(k)));
   }
 
   /** Removes all scratch notes from the current session. */

@@ -1049,3 +1049,75 @@ describe('relabelStepLimit', () => {
     expect(relabelStepLimit(modelAuthored, hit)).toBe(modelAuthored);
   });
 });
+
+/**
+ * The one place a `runDefinition`-only fence fails OPEN (#511).
+ *
+ * `dispatchToolWrapper` assembles `childTools` and the four ctx-bound dispatch
+ * tools **before** the runner ever sees the input, and
+ * `toolWrapperDefinition.tools()` returns `input.childTools` verbatim — so the
+ * profile `runDefinition` resolves never reaches this registry. Without the
+ * early `scopeContext` here a scoped wrapper would be fenced in its context
+ * block and hand the UNSCOPED root context to every child tool.
+ *
+ * Asserted against what `createTools` is HANDED, because that is the argument
+ * the whole registry is built from: everything downstream inherits it.
+ */
+describe('a scoped wrapper record fences its pre-assembled child tools', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetPool();
+    vi.mocked(withSlot).mockImplementation((fn) => fn({ id: 1 }));
+    vi.mocked(resolveProviderAndModel).mockReturnValue({
+      ok: true,
+      provider: 'anthropic',
+      model: 'claude-test',
+    });
+    vi.mocked(generateText).mockResolvedValue({
+      text: '{"status":"ok","result":"done"}',
+      steps: [],
+      response: { messages: [] },
+      finishReason: 'stop',
+    } as never);
+  });
+
+  async function dispatchWith(specialist: Record<string, unknown>) {
+    const scopedSentinel = { scoped: true } as never;
+    const rootMemory = {
+      ...createMockMemoryStore(),
+      scoped: vi.fn(() => scopedSentinel),
+    } as never;
+    const specialistStore = createMockSpecialistStore();
+    specialistStore.get.mockReturnValue(specialist);
+    const toolDef = createToolWrapperRunTool(
+      makeCtx(
+        createMockConfig(),
+        createMockOptions(),
+        rootMemory,
+        specialistStore,
+        createMockCorrectionStore(),
+      ),
+    );
+    await toolDef.execute({ specialistId: 'shell-wrapper', input: 'go' }, DEFAULT_EXEC_OPTIONS);
+    const { createTools } = await import('./index.js');
+    return {
+      rootMemory: rootMemory as unknown as { scoped: ReturnType<typeof vi.fn> },
+      scopedSentinel,
+      handed: vi.mocked(createTools).mock.calls.at(-1)?.[1],
+    };
+  }
+
+  it('hands createTools the SCOPED store, never the root one', async () => {
+    const { rootMemory, scopedSentinel, handed } = await dispatchWith(
+      makeToolWrapperSpecialist({ memoryScope: ['proj-*'] }),
+    );
+    expect(rootMemory.scoped).toHaveBeenCalledWith(['proj-*']);
+    expect(handed).toBe(scopedSentinel);
+  });
+
+  it('leaves an unscoped record on the root store, so nothing changes for it', async () => {
+    const { rootMemory, handed } = await dispatchWith(makeToolWrapperSpecialist());
+    expect(rootMemory.scoped).not.toHaveBeenCalled();
+    expect(handed).toBe(rootMemory);
+  });
+});

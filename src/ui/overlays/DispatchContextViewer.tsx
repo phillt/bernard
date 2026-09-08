@@ -169,6 +169,20 @@ function detailBody(r: DispatchContextRecord): string {
       .sort((a, b) => b[1] - a[1])
       .map(([tag, size]) => `  ${tag}: ${size}`),
   ];
+  // Above the memory listing on purpose: the fence is what explains the
+  // listing, and a reader who meets the short list first has already formed
+  // the wrong conclusion (#511).
+  if (r.memoryScope || r.knowledgeScope) {
+    parts.push('', 'Scoped to:');
+    if (r.memoryScope) {
+      parts.push(`  memory: ${r.memoryScope.length > 0 ? r.memoryScope.join(', ') : '(none)'}`);
+    }
+    if (r.knowledgeScope) {
+      parts.push(
+        `  knowledge: ${r.knowledgeScope.length > 0 ? r.knowledgeScope.join(', ') : '(none)'}`,
+      );
+    }
+  }
   if (r.retrievalQuery) {
     parts.push('', 'Retrieved for:', `  ${r.retrievalQuery}`);
   }

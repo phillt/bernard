@@ -12,6 +12,12 @@ const mockCreateTools = vi.hoisted(() =>
 
 vi.mock('../tools/index.js', () => ({ createTools: mockCreateTools }));
 
+const mockRunHeadless = vi.hoisted(() => vi.fn());
+vi.mock('../headless.js', () => ({
+  runHeadless: mockRunHeadless,
+  resolvePosture: vi.fn(() => ({})),
+}));
+
 import { buildActionTools } from './dispatch.js';
 import { resolveFromManifest } from './invocation.js';
 import { AppActionSchema } from './manifest.js';
@@ -108,5 +114,66 @@ describe('the injection property, asserted on the registry', () => {
     const tools = await buildActionTools(ctx, a, ['web_search', 'web_read', 'shell']);
     expect(tools).not.toHaveProperty('shell');
     expect(Object.keys(tools)).toEqual(['web_search']);
+  });
+});
+
+/**
+ * The second place a `runDefinition`-only fence fails OPEN (#511).
+ *
+ * `dispatchAction` assembles the action's registry inside `buildInput`, and
+ * `toolWrapperDefinition.tools()` returns `input.childTools` verbatim — so the
+ * profile the runner resolves never reaches it. Sibling of the assertion in
+ * `tools/tool-wrapper-run.test.ts`, and asserted the same way: against what
+ * `createTools` is HANDED, because everything downstream inherits it.
+ */
+describe('dispatchAction fences the registry it pre-assembles', () => {
+  async function dispatchWith(specialist: Record<string, unknown> | null) {
+    const scopedSentinel = { scoped: true };
+    const rootMemory = { scoped: vi.fn(() => scopedSentinel) };
+    const envCtx = {
+      toolOptions: {},
+      stores: { memory: rootMemory },
+      mcp: { tools: {}, resolveAlias: () => null },
+      provenance: {},
+    };
+    mockRunHeadless.mockImplementation(async (opts: any) => {
+      await opts.buildInput({ ctx: envCtx, mcp: {}, runId: 'r' });
+      return { ok: true };
+    });
+    const { dispatchAction } = await import('./dispatch.js');
+    await dispatchAction({
+      invocation: {
+        appId: 'demo',
+        actionName: 'go',
+        frozenArgs: {},
+        action: action({ toolAllowlist: ['web_search'] }),
+      } as never,
+      specialist: specialist as never,
+      timeoutMs: null,
+      log: () => {},
+      runId: 'r',
+    });
+    return { rootMemory, scopedSentinel, handed: mockCreateTools.mock.calls.at(-1)?.[1] };
+  }
+
+  it('hands createTools the SCOPED store when the specialist declares a fence', async () => {
+    const { rootMemory, scopedSentinel, handed } = await dispatchWith({
+      targetTools: ['web_search'],
+      memoryScope: ['proj-*'],
+    });
+    expect(rootMemory.scoped).toHaveBeenCalledWith(['proj-*']);
+    expect(handed).toBe(scopedSentinel);
+  });
+
+  it('leaves an unscoped action on the root store', async () => {
+    const { rootMemory, handed } = await dispatchWith({ targetTools: ['web_search'] });
+    expect(rootMemory.scoped).not.toHaveBeenCalled();
+    expect(handed).toBe(rootMemory);
+  });
+
+  // A missing record is a different failure and must not become a fence.
+  it('treats a missing specialist as unscoped rather than deny-all', async () => {
+    const { rootMemory } = await dispatchWith(null);
+    expect(rootMemory.scoped).not.toHaveBeenCalled();
   });
 });

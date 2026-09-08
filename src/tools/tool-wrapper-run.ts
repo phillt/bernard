@@ -12,7 +12,8 @@ import { printSpecialistStart, printSpecialistEnd } from '../output.js';
 import { debugLog } from '../logger.js';
 import { withSlot, getMaxConcurrentAgents, slotStatusLine } from './agent-pool.js';
 import { runDispatchOrFail } from './dispatch-failure.js';
-import { declaredToolSurface } from '../framework/agents/dispatch-profile.js';
+import { declaredScope, declaredToolSurface } from '../framework/agents/dispatch-profile.js';
+import { scopeContext } from '../framework/context.js';
 import { attachmentsArg, resolveAttachments } from './attachment-args.js';
 import type { DispatchAttachment } from '../framework/agents/user-message.js';
 import type { AgentContext } from '../framework/context.js';
@@ -246,7 +247,7 @@ export interface DispatchToolWrapperArgs {
  */
 export async function dispatchToolWrapper(
   args: DispatchToolWrapperArgs,
-  ctx: AgentContext,
+  rootCtx: AgentContext,
 ): Promise<WrapperResult> {
   registerBuiltinDefinitions();
   const {
@@ -260,8 +261,7 @@ export async function dispatchToolWrapper(
     runLabel,
     skipCorrectionEnqueue,
   } = args;
-  const { config, toolOptions: options, stores } = ctx;
-  const { specialists: specialistStore, correction: correctionStore } = stores;
+  const { specialists: specialistStore, correction: correctionStore } = rootCtx.stores;
 
   const specialist = specialistStore.get(specialistId);
   if (!specialist) {
@@ -283,6 +283,18 @@ export async function dispatchToolWrapper(
       error: 'wrong_kind',
     };
   }
+
+  // The scope fence, applied HERE and not left to `runDefinition` (#511). This
+  // function assembles `childTools` and the four ctx-bound dispatch tools
+  // before the runner ever sees the input, and
+  // `toolWrapperDefinition.tools()` returns `input.childTools` verbatim — so
+  // the profile the runner resolves never reaches this registry. Without this
+  // line a scoped wrapper would be fenced in its context block and hand the
+  // UNSCOPED root context to every child tool. `runDefinition` re-derives the
+  // same scope from the same record through the same `declaredScope`, and
+  // narrowing is idempotent, so the second application is a no-op.
+  const ctx = scopeContext(rootCtx, declaredScope(specialist));
+  const { config, toolOptions: options, stores } = ctx;
 
   const resolution = resolveProviderAndModel({
     provider,

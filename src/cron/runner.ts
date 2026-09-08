@@ -13,6 +13,7 @@ import { renderAgentStatusPlain, type AgentStatusInputs } from '../agent-status.
 import { verdictOf, type Check, type Verdict } from '../rubric.js';
 import type { AgentContext } from '../framework/context.js';
 import { runHeadless, resolvePosture, type HeadlessPosture } from '../headless.js';
+import { declaredScope } from '../framework/agents/dispatch-profile.js';
 
 export {
   /** Re-exported so existing imports against the runner module keep working. */
@@ -160,6 +161,15 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
     posture,
     // RAG search using the job prompt as query (same scoping as before).
     ragQuery: job.prompt,
+    // The job's own knowledge fences (#511), validated through the same
+    // `declaredScope` a specialist record goes through. Unset means unscoped,
+    // matching `toolMode`'s house rule that an unset field preserves legacy
+    // behaviour and the job author opts in. Deny-by-default is the stronger
+    // position in the abstract and is rejected here on purpose: silently
+    // blanking every existing job's memory surfaces as "the job answered
+    // worse", which is the quietest failure mode in this tree — and cron,
+    // with no operator watching, is where it would be quietest.
+    scope: declaredScope(job),
     timeoutMs,
     log,
     debugLabel: 'cron',

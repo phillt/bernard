@@ -44,7 +44,13 @@ vi.mock('./framework/agents/run.js', () => ({ runDefinition: mockRunDefinition }
 vi.mock('./framework/agents/index.js', () => ({
   registerBuiltinDefinitions: mockRegisterBuiltins,
 }));
-vi.mock('./framework/context.js', () => ({ assembleContext: mockAssembleContext }));
+// Partial, so `scopeContext` (#511) is the real one: this file asserts on what
+// `runHeadless` hands `buildInput`, and a stubbed fence would make every one of
+// those assertions blind to it.
+vi.mock('./framework/context.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./framework/context.js')>()),
+  assembleContext: mockAssembleContext,
+}));
 vi.mock('./permissions/shell-ast.js', () => ({ initShellParser: vi.fn() }));
 vi.mock('./logger.js', () => ({ debugLog: vi.fn(), isDebugEnabled: () => false }));
 
@@ -213,6 +219,42 @@ describe('runHeadless', () => {
     expect(env.mcp.serverNames).toEqual(['alpha', 'beta']);
     expect(env.ragResults).toEqual([{ id: 'f1', text: 'fact' }]);
     expect(env.runId).toEqual(expect.any(String));
+  });
+
+  /**
+   * The knowledge fence reaches the PRE-CONNECT search (#511).
+   *
+   * That search is started before `assembleContext` on purpose, to overlap the
+   * ~1.1-1.6 s MCP connect — so it is the one retrieval a ctx-level fence
+   * cannot reach, and a fence applied only at assembly would leave it reading
+   * the whole index.
+   */
+  it('scopes the pre-connect RAG search to the granted domains', async () => {
+    const scopedSearch = vi.fn().mockResolvedValue([{ id: 'f1', text: 'scoped' }]);
+    const scoped = vi.fn(() => ({ search: scopedSearch, flush: mockRagFlush }));
+    mockRagStoreCtor.mockImplementation(
+      () => ({ search: mockRagSearch, flush: mockRagFlush, scoped }) as any,
+    );
+    const buildInput = vi.fn().mockReturnValue({});
+    await runHeadless(
+      opts({ buildInput, ragQuery: 'why', scope: { knowledgeScope: ['general'] } }),
+    );
+    expect(scoped).toHaveBeenCalledWith(['general']);
+    expect(mockRagSearch).not.toHaveBeenCalled();
+    expect(buildInput.mock.calls[0][0].ragResults).toEqual([{ id: 'f1', text: 'scoped' }]);
+  });
+
+  // The default, pinned as a decision rather than left as an absence. Unset
+  // means unscoped, matching `toolMode`'s house rule that an unset field
+  // preserves legacy behaviour and the author opts in.
+  it('leaves the search unscoped when no scope is declared', async () => {
+    const scoped = vi.fn();
+    mockRagStoreCtor.mockImplementation(
+      () => ({ search: mockRagSearch, flush: mockRagFlush, scoped }) as any,
+    );
+    await runHeadless(opts({ ragQuery: 'why' }));
+    expect(scoped).not.toHaveBeenCalled();
+    expect(mockRagSearch).toHaveBeenCalled();
   });
 
   // Not merely "does not search": the RAGStore constructor reads and parses the
