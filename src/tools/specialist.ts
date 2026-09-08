@@ -89,6 +89,53 @@ function targetToolsScopeError(
 }
 
 /**
+ * Refuses a binding whose specialist cannot cover the action it is bound to
+ * (#519).
+ *
+ * `grantedToolNames` hands a dispatch the INTERSECTION of the action's
+ * `toolAllowlist` and the specialist's `targetTools`, so a tool the action
+ * allows and the specialist does not target is simply **absent** — the agent
+ * runs with fewer tools than the manifest promises, possibly none, and fails as
+ * a bad ANSWER rather than an error. `agent-builder`'s prompt calls it "the
+ * single easiest thing to get wrong", and until now nothing checked it: the
+ * rule lived in prose and in a bad example.
+ *
+ * **Bind time is the creation boundary for this rule**, and it is the only
+ * place both halves exist. A specialist is created before its applet action is
+ * known — `agent-builder` deliberately creates unbound, validates by execution,
+ * and binds last — so there is no `toolAllowlist` in scope at create. At bind
+ * there is, exactly.
+ *
+ * Reuses `uncoveredTools` / `uncoveredToolsMessage` as a fourth consumer rather
+ * than computing the same set again; the VERDICT is deliberately not shared,
+ * per that module's own note, and this one refuses for the reason
+ * `applet.ts:checkDispatch` refuses: a model mid-authoring will not come back
+ * to it, so the binding must not be written believing it works.
+ *
+ * Fails **open** on anything it cannot read. A missing app, an unparseable
+ * manifest or an unreadable registry means the check could not run, not that
+ * the binding is wrong — and refusing a legitimate bind because a manifest was
+ * mid-write would be worse than the defect.
+ */
+async function bindCoverageError(
+  boundTo: { appId: string; action: string },
+  targetTools: string[] | undefined,
+): Promise<string | null> {
+  try {
+    const { AppRegistry } = await import('../apps/registry.js');
+    const { uncoveredTools, uncoveredToolsMessage } = await import('../apps/invocation.js');
+    const resolved = new AppRegistry({ seed: false }).resolve(boundTo.appId, boundTo.action);
+    if (!resolved.ok) return null;
+    const allowed = resolved.action.toolAllowlist ?? [];
+    const missing = uncoveredTools(allowed, targetTools);
+    if (missing.length === 0) return null;
+    return `Error: ${uncoveredToolsMessage('this specialist', allowed, missing)} Add them to targetTools before binding.`;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Rejects a `stepRatio` the resolver would silently discard (#508).
  *
  * `resolveDispatchProfile` already falls back on an out-of-range value, because
@@ -134,10 +181,13 @@ export function createSpecialistTool(
         'Manage reusable expert profiles (specialists). Specialists are persistent personas with custom instructions and behavioral guidelines that shape how a sub-agent approaches work. Unlike routines (step-by-step procedures), specialists define expertise and behavioral rules for recurring task patterns. Bundled specialists (those that ship with Bernard, e.g. shell-wrapper, specialist-creator) are protected: update and delete are refused on them.',
       parameters: z.object({
         action: z
-          .enum(['create', 'update', 'list', 'read', 'delete', 'roles'])
+          .enum(['create', 'update', 'list', 'read', 'delete', 'roles', 'inspect'])
           .describe(
             'The action to perform. "roles" lists the model roles a specialist may declare, ' +
-              'with what each is for — read it before choosing one.',
+              'with what each is for — read it before choosing one. "inspect" shows what one ' +
+              'specialist DECLARES against what that resolves to right now — the model its ' +
+              'role picks, the steps its ratio buys, and any tools its binding promises that ' +
+              'it does not target.',
           ),
         id: z
           .string()
@@ -359,6 +409,67 @@ export function createSpecialistTool(
             );
           }
 
+          case 'inspect': {
+            // Declared vs. resolved (#519). `read` returns the record; this
+            // answers the question a record cannot: what does it actually get?
+            // Every line here is a value the record only names indirectly —
+            // `role` picks a model through the active profile, `stepRatio` is a
+            // fraction of a setting, and a binding's coverage gap is an
+            // intersection with a manifest the record has never seen.
+            if (!id) return 'Error: id is required for inspect action.';
+            const record = store.get(id);
+            if (!record) return `No specialist found with id "${id}".`;
+            const lines: string[] = [`${record.name} (${record.id}) — ${record.kind ?? 'persona'}`];
+
+            if (record.role) {
+              let resolvedLine = `role: ${record.role}`;
+              if (config) {
+                try {
+                  const site = resolveSiteModel(config, 'specialist', { specialist: record });
+                  resolvedLine += ` → ${site.provider}/${site.modelName} (${site.source})`;
+                } catch {
+                  // Resolution needs a usable profile; naming the role alone is
+                  // still the useful half.
+                }
+              }
+              lines.push(resolvedLine);
+            } else if (record.provider || record.model) {
+              lines.push(
+                `pinned: ${record.provider ?? 'default'}/${record.model ?? 'default'} — a pin, not an intent. ` +
+                  'It is dropped as stale when it is off the active lineup.',
+              );
+            } else {
+              lines.push('role: none declared — this specialist follows the dispatching site.');
+            }
+
+            const ratio = record.stepRatio;
+            lines.push(
+              ratio === undefined
+                ? `steps: the site default (${Math.ceil((config?.maxSteps ?? 0) * 0.5) || 'unknown'})`
+                : `stepRatio: ${ratio} → ${Math.ceil((config?.maxSteps ?? 0) * ratio)} steps`,
+            );
+            if (record.strategy) lines.push(`strategy: ${record.strategy}`);
+            if (record.toolSurface) lines.push(`toolSurface: ${record.toolSurface}`);
+            lines.push(
+              record.targetTools?.length
+                ? `targetTools: ${record.targetTools.join(', ')}`
+                : 'targetTools: none declared',
+            );
+
+            if (record.boundTo) {
+              lines.push(`bound to: ${record.boundTo.appId}/${record.boundTo.action}`);
+              const coverage = await bindCoverageError(record.boundTo, record.targetTools);
+              // A gap here is a REPORT, not a refusal: the binding already
+              // exists, and refusing to describe it is how the one command that
+              // could diagnose it becomes useless.
+              lines.push(
+                coverage ? `  ⚠ ${coverage.replace(/^Error: /, '')}` : '  ✓ covers the action',
+              );
+            }
+            if (record.disabled) lines.push('disabled: yes — dispatch refuses it.');
+            return lines.join('\n');
+          }
+
           case 'create': {
             if (!id) return 'Error: id is required for create action.';
             if (!name) return 'Error: name is required for create action.';
@@ -381,6 +492,13 @@ export function createSpecialistTool(
             }
             const ratioError = stepRatioError(stepRatio);
             if (ratioError) return ratioError;
+            // A create MAY bind directly, so the coverage rule has to hold on
+            // both doors. `agent-builder` deliberately creates unbound and
+            // binds last, but nothing forces that order.
+            if (boundTo) {
+              const coverage = await bindCoverageError(boundTo, targetTools);
+              if (coverage) return coverage;
+            }
             if (normProvider !== undefined) {
               if (!isValidProvider(normProvider))
                 return `Error: Unknown provider "${normProvider}". Valid providers: ${Object.keys(PROVIDER_MODELS).join(', ')}`;
@@ -480,7 +598,14 @@ export function createSpecialistTool(
             if (guidelines !== undefined) updates.guidelines = guidelines;
             if (provider !== undefined) updates.provider = provider;
             if (model !== undefined) updates.model = model;
-            if (boundTo !== undefined) updates.boundTo = boundTo;
+            if (boundTo !== undefined) {
+              const coverage = await bindCoverageError(
+                boundTo,
+                targetTools ?? existingRecord?.targetTools,
+              );
+              if (coverage) return coverage;
+              updates.boundTo = boundTo;
+            }
             if (role !== undefined) {
               updates.role = role;
               // Setting a role clears any pin, or the both-state `create`

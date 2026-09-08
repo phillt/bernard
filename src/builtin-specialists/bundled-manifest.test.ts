@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { POST_V1_BUNDLED } from '../specialists.js';
 import { APPLET_COLOR_TOKENS, APPLET_STYLED_SELECTORS } from '../host/tokens.js';
 import { UI_RUNTIME_PATH, UI_RUNTIME_RULE } from '../host/ui-runtime.js';
+import { ROLE_NOT_PIN_RULE } from '../model-roles.js';
 
 /**
  * What the original `.seeded-v1` pass shipped.
@@ -75,6 +76,44 @@ describe('bundled specialist manifest', () => {
       if (raw.id !== file.replace(/\.json$/, '')) mismatched.push(file);
     }
     expect(mismatched).toEqual([]);
+  });
+});
+
+/**
+ * One rule about `role` and pins, stated once and obeyed by both creators
+ * (#519).
+ *
+ * `specialist-creator` and `agent-builder` both create specialists and
+ * disagreed about the single most important model-selection field:
+ * `agent-builder` requires a role and forbids a pin, `specialist-creator`
+ * mentioned neither. That silence is not neutral — `createSpecialistTool`
+ * auto-assigns a policy-resolved `provider`/`model` when a create declares
+ * neither, so the older and more-used creator has been minting persisted pins
+ * nobody chose, which is exactly what the off-lineup guard exists to drop.
+ *
+ * The rule cannot be interpolated into a bundled JSON record, so this is what
+ * keeps the two copies from diverging again — the same shape that pins the
+ * interview playbook to `PLAIN_LANGUAGE_RULE`.
+ */
+describe('the two creators agree about role and pins', () => {
+  const load = (name: string) =>
+    JSON.parse(fs.readFileSync(path.join(DIR, `${name}.json`), 'utf-8')) as {
+      systemPrompt: string;
+      guidelines?: string[];
+    };
+
+  for (const name of ['specialist-creator', 'agent-builder']) {
+    it(`${name} states the shared rule verbatim`, () => {
+      const record = load(name);
+      const text = [record.systemPrompt, ...(record.guidelines ?? [])].join('\n');
+      expect(text).toContain(ROLE_NOT_PIN_RULE);
+    });
+  }
+
+  it('specialist-creator tells the model to read the role catalogue first', () => {
+    // Naming the field is not enough: the roles are a closed set with distinct
+    // meanings, and a creator that guesses one is only a different kind of pin.
+    expect(load('specialist-creator').systemPrompt).toContain('action: "roles"');
   });
 });
 

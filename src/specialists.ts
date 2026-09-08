@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 import { SPECIALISTS_DIR } from './paths.js';
 import { RESERVED_NAMES } from './reserved-names.js';
@@ -15,6 +16,7 @@ import {
 } from './specialist-authority.js';
 import type { ModelParams } from './providers/model-params.js';
 import type { RoleId } from './model-roles.js';
+import { debugLog } from './logger.js';
 
 // Re-exported so existing importers (e.g. the `/specialists` UI grouping) keep
 // resolving it from this module; the authoritative definition lives in
@@ -266,6 +268,67 @@ export const POST_V1_BUNDLED = [
 ];
 
 /**
+ * The fields a bundled record's SHIPPED copy owns, and the ones it does not.
+ *
+ * Everything not listed here is the user's install: `goodExamples` and
+ * `badExamples` are written by the correction flow — the one channel
+ * `permissionsFor` deliberately leaves open on a bundled record — and
+ * `createdAt` / `disabled` are facts about this machine.
+ */
+const LEARNED_FIELDS = ['goodExamples', 'badExamples', 'createdAt', 'disabled'] as const;
+
+/**
+ * Merges a shipped bundled record over an installed one, keeping what was
+ * learned (#519).
+ *
+ * **Bundled specialists could not be updated at all**, and that is the blocker
+ * #519 does not name. `copyBundledJsonIfAbsent` returns early when the file
+ * exists — "never overwrite a user-edited copy" — `seedOnce` returns early once
+ * its marker is written, and `permissionsFor` gives builtins
+ * `canEditDefinition: false`, so there is no runtime path either. Editing
+ * `specialist-creator.json` in place therefore reaches **only fresh installs**.
+ * A `-v2` filename plus a `POST_V1_BUNDLED` entry reaches an existing one, but
+ * leaves the old record on disk beside it: two creators with one job, which is
+ * worse than the divergence being fixed.
+ *
+ * Overwriting is safe here precisely BECAUSE of the authority model rather than
+ * in spite of it: `canEditDefinition: false` means a user cannot legitimately
+ * have edited the definition, and `appendExamples` is the one carve-out — which
+ * is exactly what this preserves.
+ *
+ * Pure and exported so the merge rule can be tested without a filesystem.
+ */
+export function mergeBundledDefinition(
+  shipped: Record<string, unknown>,
+  installed: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...shipped };
+  for (const field of LEARNED_FIELDS) {
+    if (installed[field] !== undefined) merged[field] = installed[field];
+    else delete merged[field];
+  }
+  merged.updatedAt = new Date().toISOString();
+  return merged;
+}
+
+/** True when the shipped DEFINITION differs from what is installed. */
+function definitionDiffers(
+  shipped: Record<string, unknown>,
+  installed: Record<string, unknown>,
+): boolean {
+  const strip = (r: Record<string, unknown>): string => {
+    const copy = { ...r };
+    for (const field of LEARNED_FIELDS) delete copy[field];
+    delete copy.updatedAt;
+    // Key order is not a difference. `JSON.stringify` over sorted keys is
+    // enough here — these records are one level of plain values plus arrays,
+    // and the arrays that matter are all in LEARNED_FIELDS.
+    return JSON.stringify(copy, Object.keys(copy).sort());
+  };
+  return strip(shipped) !== strip(installed);
+}
+
+/**
  * Disk-backed store for named specialists (reusable expert profiles).
  *
  * Each specialist is stored as a separate JSON file under `SPECIALISTS_DIR`.
@@ -307,8 +370,53 @@ export class SpecialistStore {
           copyBundledJsonIfAbsent(bundledDir, SPECIALISTS_DIR, file),
         );
       }
+      this.refreshBundledDefinitions(bundledDir);
     } catch {
       // seed is best-effort; never block startup
+    }
+  }
+
+  /**
+   * Re-seeds the DEFINITION half of an installed bundled record when the
+   * shipped copy has changed (#519).
+   *
+   * This is what makes a fix to a bundled prompt reach an existing install
+   * instead of accumulating `-v2` files. Keyed on a hash of the shipped bytes,
+   * so it runs once per shipped change and never on an unchanged one — and the
+   * marker is per id, so one record's edit does not re-write another's.
+   *
+   * Only records that already EXIST are touched. A bundled specialist the user
+   * deleted stays deleted: `POST_V1_BUNDLED`'s own markers already carry that
+   * promise, and quietly resurrecting one here would break it.
+   */
+  private refreshBundledDefinitions(bundledDir: string): void {
+    let files: string[];
+    try {
+      files = fs.readdirSync(bundledDir).filter((f) => f.endsWith('.json'));
+    } catch {
+      return;
+    }
+    for (const file of files) {
+      try {
+        const raw = fs.readFileSync(path.join(bundledDir, file), 'utf-8');
+        const hash = createHash('sha256').update(raw).digest('hex').slice(0, 12);
+        const id = file.replace(/\.json$/, '');
+        const marker = path.join(SPECIALISTS_DIR, `.definition-${id}-${hash}`);
+        seedOnce(marker, () => {
+          const dest = path.join(SPECIALISTS_DIR, file);
+          if (!fs.existsSync(dest)) return;
+          const shipped = JSON.parse(raw) as Record<string, unknown>;
+          const installed = JSON.parse(fs.readFileSync(dest, 'utf-8')) as Record<string, unknown>;
+          if (!definitionDiffers(shipped, installed)) return;
+          atomicWriteFileSync(
+            dest,
+            JSON.stringify(mergeBundledDefinition(shipped, installed), null, 2),
+          );
+          debugLog('specialists:definition-refreshed', { id, hash });
+        });
+      } catch {
+        // Per-file, so one corrupt record cannot stop the rest.
+      }
     }
   }
 
