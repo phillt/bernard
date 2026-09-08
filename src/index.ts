@@ -92,7 +92,7 @@ import { GRANTABLE_DIRECTIVES } from './host/csp-grant.js';
 import type { CspGrantSpec } from './apps/manage.js';
 import { AppletCandidateStore } from './applet-candidates.js';
 import { MemoryCandidateStore } from './memory-candidates.js';
-import { memoryProposalBlock } from './memory-consolidation.js';
+import { memoryProposalBlock } from './memory-proposal.js';
 import { HELP_CONFIG } from './cli-help.js';
 import { appletSuggestionBlock } from './applet-detector.js';
 import { runCorrectionAgent } from './correction.js';
@@ -581,7 +581,7 @@ async function runInkRepl(args: {
       // nothing worth extracting.
       const wantsConsolidation = config.memoryConsolidation;
       if (wantsFacts || wantsConsolidation) {
-        const serialized = wantsFacts ? serializeMessages(history) : '';
+        const serialized = wantsFacts ? serializeMessages(history).trim() || undefined : undefined;
         {
           fs.mkdirSync(RAG_DIR, { recursive: true });
           const tempFile = path.join(
@@ -593,7 +593,7 @@ async function runInkRepl(args: {
             JSON.stringify({
               // Omitted rather than sent empty, so the worker's per-arm gate
               // reads as the same question the spawn asked.
-              ...(serialized.trim() ? { serialized } : {}),
+              ...(serialized ? { serialized } : {}),
               provider: config.provider,
               model: config.model,
               ...(wantsConsolidation ? { consolidateMemory: true } : {}),

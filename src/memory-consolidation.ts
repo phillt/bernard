@@ -3,10 +3,12 @@ import { generateText } from 'ai';
 import { resolveSiteModel } from './model-policy.js';
 import { usageRecordFromSite, type UsageRecorder } from './framework/hooks/token-stats.js';
 import { parseStructuredOutput } from './structured-output.js';
+import { ProposalSchema, type MemoryProposal } from './memory-proposal.js';
 import { debugLog, traceLlm } from './logger.js';
 import type { BernardConfig } from './config.js';
 import type { MemoryRecord, MemoryStore } from './memory.js';
 import { REWRITER_HINTS_KEY } from './memory.js';
+import { MAX_PERSISTENT_MEMORY_CHARS } from './context-message.js';
 
 /**
  * Noticing that persistent memory has accumulated things it no longer needs.
@@ -41,11 +43,22 @@ import { REWRITER_HINTS_KEY } from './memory.js';
  * ## This pass PROPOSES. It never writes a memory.
  *
  * The exit worker's existing invariant, kept: both detectors there `create()` a
- * candidate and touch no user data. The deciding argument is not caution — the
- * worker is spawned `detached` with `stdio: 'ignore'` and so **cannot print**,
- * which means "announce what was retired" can only fire at the next startup
- * either way. At that point "we retired three" and "shall we retire these
- * three?" cost the user the same keystroke, and only one of them can be wrong.
+ * candidate and touch no user data.
+ *
+ * **A wrongly-retired standing instruction fails silently**, and that is the
+ * argument. Reversibility — "one front-matter line" — is worth nothing if
+ * nobody notices: the model simply stops seeing *"always check unread only"*
+ * and behaves differently, with no error and no signal. A wrong PROPOSAL costs
+ * a glance.
+ *
+ * An earlier draft argued instead that the two cost "the same keystroke", since
+ * the worker is `detached` with `stdio: 'ignore'` and so cannot print, leaving
+ * the next startup as the only announcement point either way. The first half is
+ * true and the second half is wrong in this design's own favour: "we retired
+ * three" costs zero and is ignorable, while "shall we retire these three?"
+ * costs a conversation AND a context block on every dispatch until it is
+ * answered. On keystrokes alone, apply-and-announce wins. It is the asymmetry
+ * of the failures, not the cost of the reply, that decides it.
  *
  * ## Why a model and not a similarity score
  *
@@ -62,34 +75,6 @@ export interface ConsolidationInput {
   content: string;
   writtenAt?: string;
 }
-
-/** A group whose keeper already says everything the others do. */
-export interface DuplicateProposal {
-  kind: 'duplicate';
-  /** Every key in the group, keeper included. */
-  keys: string[];
-  /** The one to keep, verbatim. Must be a member of {@link keys}. */
-  keeper: string;
-  reason: string;
-}
-
-/** A genuine merge: neither contains the other, but one record would serve better. */
-export interface MergeProposal {
-  kind: 'merge';
-  keys: string[];
-  proposedKey: string;
-  proposedText: string;
-  reason: string;
-}
-
-/** A one-off record that has served its purpose and is worth retiring outright. */
-export interface StaleProposal {
-  kind: 'stale';
-  keys: string[];
-  reason: string;
-}
-
-export type MemoryProposal = DuplicateProposal | MergeProposal | StaleProposal;
 
 /**
  * Per run, across all kinds.
@@ -109,27 +94,6 @@ const MEMORY_CONSOLIDATION_MAX_TOKENS = 1024;
  * worth a model call, and a store this small is nowhere near any budget.
  */
 const MIN_MEMORIES_TO_CONSIDER = 3;
-
-const ProposalSchema = z.discriminatedUnion('kind', [
-  z.object({
-    kind: z.literal('duplicate'),
-    keys: z.array(z.string()).min(2),
-    keeper: z.string(),
-    reason: z.string(),
-  }),
-  z.object({
-    kind: z.literal('merge'),
-    keys: z.array(z.string()).min(2),
-    proposedKey: z.string(),
-    proposedText: z.string(),
-    reason: z.string(),
-  }),
-  z.object({
-    kind: z.literal('stale'),
-    keys: z.array(z.string()).min(1),
-    reason: z.string(),
-  }),
-]);
 
 const ResponseSchema = z.object({ proposals: z.array(ProposalSchema) });
 
@@ -158,56 +122,27 @@ NEVER propose:
 
 Two notes on the same subject are usually COMPLEMENTARY, not redundant. A list of two email accounts and a note adding a third are both needed.`;
 
-/** One proposal, as one line a user can read without opening anything. */
-export function describeProposal(p: MemoryProposal): string {
-  const keys = p.keys.map((k) => `\`${k}\``).join(', ');
-  switch (p.kind) {
-    case 'duplicate':
-      return `${keys} — keep \`${p.keeper}\`, retire the rest: ${p.reason}`;
-    case 'merge':
-      return `${keys} — merge into \`${p.proposedKey}\`: ${p.reason}`;
-    case 'stale':
-      return `${keys} — no longer needed: ${p.reason}`;
-  }
-}
-
-/**
- * The `<alert_context>` block the agent sees at startup.
- *
- * Modelled on `appletSuggestionBlock`, including the half that one had to learn:
- * the decline instruction. Without it the block tells the agent what to do when
- * the user says yes and nothing at all when they say no, so the proposal stays
- * pending, the startup notice keeps counting it, and this very block re-injects
- * it next session.
- *
- * The proposal's own `reason` is model-written prose being used to argue for
- * retiring the user's notes, so it is presented as a suggestion to raise, never
- * as a finding to act on.
- */
-export function memoryProposalBlock(
-  pending: Array<{ id: string; proposal: MemoryProposal }>,
-): string {
-  const rows = pending.map((c) => `- (${c.id}) ${describeProposal(c.proposal)}`);
-  return [
-    '## Memory Housekeeping',
-    '',
-    "Bernard noticed saved notes that may have outlived their use. These are suggestions, not findings — the notes are the user's own words.",
-    '',
-    ...rows,
-    '',
-    'Raise these only when relevant, and never all at once. Apply one only with the `memory` tool and only when the user agrees: `supersede` for a duplicate, `retire` for one that is simply done, `write` then `retire` for a merge.',
-    '',
-    "If the user turns one down, record it with the `memory` tool's `proposals` action so it stops being raised. Do not argue with a no, and do not silently drop it — an unrecorded decline comes back next session.",
-  ].join('\n');
-}
-
 /** Renders the corpus for the model. Keys are what a proposal refers to. */
-function buildUserContent(entries: ConsolidationInput[]): string {
-  const rows = entries.map((e) => {
+function buildUserContent(entries: ConsolidationInput[]): {
+  content: string;
+  included: number;
+} {
+  const rows: string[] = [];
+  let used = 0;
+  for (const e of entries) {
     const when = e.writtenAt ? ` (written ${e.writtenAt.slice(0, 10)})` : '';
-    return `### ${e.key}${when}\n${e.content.trim()}`;
-  });
-  return `Here are ${entries.length} saved notes.\n\n${rows.join('\n\n')}`;
+    const row = `### ${e.key}${when}\n${e.content.trim()}`;
+    // Whole records only, and oldest-first by construction: a note cut in half
+    // cannot be judged, and judging half of one is how a standing instruction
+    // gets proposed for retirement on the strength of its first sentence.
+    if (used + row.length > MAX_PERSISTENT_MEMORY_CHARS) break;
+    used += row.length;
+    rows.push(row);
+  }
+  return {
+    content: `Here are ${rows.length} saved notes.\n\n${rows.join('\n\n')}`,
+    included: rows.length,
+  };
 }
 
 /**
@@ -218,8 +153,20 @@ function buildUserContent(entries: ConsolidationInput[]): string {
  * to be a duplicate — each would surface to the user as a change Bernard cannot
  * make, and the first one that fails teaches them to ignore the rest.
  *
- * Semantics are NOT verified here, because they cannot be. That is the whole
- * reason nothing is applied automatically.
+ * Semantics are not verified here, and the reason is measured rather than
+ * asserted — which matters, because the system prompt defines `duplicate`
+ * operationally ("the keeper already states everything the others state"), so a
+ * textual containment gate looks available and would move the
+ * automatic/proposal boundary if it worked.
+ *
+ * It does not. Against the real store's one true duplicate — `3772` under
+ * `issue-3538`, which IS the entire measured 0.9% — normalized substring says
+ * no, token-subset containment says no (`any`, `like`, `that`, `be`,
+ * `researched` are absent from the keeper), and Jaccard is 0.26. The two state
+ * one rule in different words. So a deterministic gate scores that category at
+ * **zero** on the store it exists for: it would reject the only real duplicate
+ * while the harder cases still needed a model. Containment-as-meaning is not
+ * containment-as-text.
  */
 export function validProposals(
   proposals: MemoryProposal[],
@@ -275,6 +222,20 @@ export function consolidationInputs(store: MemoryStore): ConsolidationInput[] {
  * user's own notes, so unparseable output must propose nothing rather than
  * something approximate.
  *
+ * The corpus is capped at `MAX_PERSISTENT_MEMORY_CHARS` — the repo's own answer
+ * to "how much memory fits in one prompt", which `recall-filter` already
+ * imports for the same purpose. Uncapped, the store this pass exists to serve
+ * is by definition the one whose prompt overruns, so the cut would land
+ * provider-side and `parseStructuredOutput` would fail closed: the largest
+ * stores, silently proposing nothing.
+ *
+ * The corpus is capped at `MAX_PERSISTENT_MEMORY_CHARS` — the repo's own answer
+ * to "how much memory fits in one prompt", which `recall-filter` already
+ * imports for the same purpose. Uncapped, the store this pass exists to serve
+ * is by definition the one whose prompt overruns, so the cut would land
+ * provider-side and `parseStructuredOutput` would fail closed: the largest
+ * stores, silently proposing nothing.
+ *
  * **Not routed through the LLM sub-call cache**, and that is a decision.
  * `claim-verifier` records the reasoning for exactly this shape: the key embeds
  * `userContent` verbatim, so a corpus that changes between runs has a
@@ -290,7 +251,7 @@ export async function proposeConsolidation(
   if (entries.length < MIN_MEMORIES_TO_CONSIDER) return [];
 
   const site = resolveSiteModel(config, 'memory-consolidator');
-  const userContent = buildUserContent(entries);
+  const { content: userContent, included } = buildUserContent(entries);
 
   try {
     const t0 = Date.now();
@@ -318,10 +279,13 @@ export async function proposeConsolidation(
       debugLog('memory-consolidation:parse-failed', { raw: result.text.slice(0, 200) });
       return [];
     }
-    const known = new Set(entries.map((e) => e.key));
-    const kept = validProposals(parsed.proposals as MemoryProposal[], known);
+    // Only what was actually sent — a proposal naming a record the cap cut is
+    // one the model could not have seen, so it is invented by definition.
+    const known = new Set(entries.slice(0, included).map((e) => e.key));
+    const kept = validProposals(parsed.proposals, known);
     debugLog('memory-consolidation:proposed', {
-      considered: entries.length,
+      considered: included,
+      offered: entries.length,
       returned: parsed.proposals.length,
       kept: kept.length,
     });

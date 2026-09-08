@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { MemoryStore } from '../memory.js';
 import { MemoryKeyCollisionError } from '../memory.js';
 import { MemoryCandidateStore } from '../memory-candidates.js';
-import { describeProposal } from '../memory-consolidation.js';
+import { describeProposal } from '../memory-proposal.js';
 import { MEMORY_DIR } from '../paths.js';
 import type { BernardTool } from '../framework/tools/types.js';
 import { ok, err } from '../framework/tools/types.js';
@@ -54,7 +54,29 @@ type ScratchArgs = z.infer<typeof SCRATCH_PARAMETERS>;
 /**
  * Creates the persistent memory tool backed by on-disk markdown files.
  *
- * Supports list, read, write, and delete actions for cross-session recall.
+ * ## The `description` is the entire write-side policy, not one prompt among many
+ *
+ * Worth stating because a prompt tweak reads as hopeful otherwise. `writeMemory`
+ * has exactly one non-machinery caller — the `write` case below — and nothing in
+ * `agent-prompt.ts`, `agent.ts` or `framework/agents/` tells the model what is
+ * worth saving. So this string is 100% of the instruction surface, and
+ * tightening it from "anything worth recalling later" (which admits "that's an
+ * image I uploaded, that can be ignored") to a stays-true/merely-happened
+ * distinction changes the whole of it.
+ *
+ * The structural alternatives were weighed and are worse. A tool that REFUSES an
+ * episodic write needs the same semantic judgement `memory-consolidation.ts`
+ * measures as undecidable from text, and its failure mode is far worse: a false
+ * refusal silently loses a standing fact at the moment the user asked to keep
+ * it. A `kind: 'standing' | 'episodic'` argument would make the episodic
+ * category deterministically retirable, which is the real prize — but it is a
+ * self-report from the same model that wrote the detritus under an instruction
+ * not to. The non-self-report version is USE, not intent: an episodic record is
+ * never recalled again. Memory has no per-key access signal because it is
+ * injected wholesale, so that is net-new work and the honest direction rather
+ * than something this change could have done.
+ *
+ * Supports list, read, write, delete, supersede, retire and proposals actions for cross-session recall.
  * Returns a {@link BernardTool}; `serializeForModel` reproduces the historical
  * plain-string output (including the `"Error: "` prefix on validation errors).
  *
@@ -184,13 +206,15 @@ export function createMemoryTool(
               type: 'invalid_args',
               message: 'decision is required when proposalId is given.',
             });
-          // `decline`, not `updateStatus(id, 'rejected')`. Same status, but it
-          // stamps `decidedAt`, which is what starts the cooldown — a
-          // hand-flipped status is a decline that suppresses nothing.
-          const done =
-            decision === 'declined'
-              ? store.decline(proposalId)
-              : store.updateStatus(proposalId, 'accepted');
+          // One call. `MemoryCandidateStore.updateStatus` stamps `decidedAt`
+          // itself on a rejection — deliberately, and pinned by a test — so
+          // routing a decline through `decline()` buys nothing here. An earlier
+          // comment claimed otherwise, describing a hazard the applet store has
+          // and this one was written not to.
+          const done = store.updateStatus(
+            proposalId,
+            decision === 'declined' ? 'rejected' : 'accepted',
+          );
           if (!done) return ok(`No memory suggestion found with id "${proposalId}".`);
           return ok(`Memory suggestion "${proposalId}" marked ${decision}.`);
         }

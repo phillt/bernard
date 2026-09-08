@@ -109,6 +109,54 @@ describe('proposeConsolidation', () => {
     expect(onUsage.mock.calls[0][0]).toMatchObject({ site: 'memory-consolidator' });
   });
 
+  it('caps the corpus at the budget the repo already owns', async () => {
+    // Unbounded, the store this pass exists to serve is by definition the one
+    // whose prompt overruns — the cut lands provider-side, the reply is
+    // truncated, and `parseStructuredOutput` fails closed. So the LARGEST
+    // stores would silently propose nothing, which is the opposite of the
+    // point.
+    const { MAX_PERSISTENT_MEMORY_CHARS } = await import('./context-message.js');
+    generateTextMock.mockResolvedValue(reply('{"proposals":[]}'));
+    const huge = Array.from({ length: 60 }, (_, i) => ({
+      key: `k${i}`,
+      content: 'x'.repeat(1000),
+    }));
+
+    await proposeConsolidation(huge, config);
+
+    const content = generateTextMock.mock.calls[0][0].messages[0].content as string;
+    expect(content.length).toBeLessThanOrEqual(MAX_PERSISTENT_MEMORY_CHARS + 200);
+  });
+
+  it('never cuts a record in half', async () => {
+    // Judging half a note is how a standing instruction gets proposed for
+    // retirement on the strength of its first sentence.
+    generateTextMock.mockResolvedValue(reply('{"proposals":[]}'));
+    const huge = Array.from({ length: 60 }, (_, i) => ({
+      key: `k${i}`,
+      content: `START-${i} ${'x'.repeat(1000)} END-${i}`,
+    }));
+
+    await proposeConsolidation(huge, config);
+
+    const content = generateTextMock.mock.calls[0][0].messages[0].content as string;
+    const starts = [...content.matchAll(/START-(\d+)/g)].map((m) => m[1]);
+    for (const i of starts) expect(content).toContain(`END-${i}`);
+    expect(starts.length).toBeGreaterThan(0);
+  });
+
+  it('will not honour a proposal about a record the cap cut', async () => {
+    // The model cannot have seen it, so naming it is invented by definition.
+    const huge = Array.from({ length: 60 }, (_, i) => ({
+      key: `k${i}`,
+      content: 'x'.repeat(1000),
+    }));
+    generateTextMock.mockResolvedValue(
+      reply(JSON.stringify({ proposals: [{ kind: 'stale', keys: ['k59'], reason: 'r' }] })),
+    );
+    expect(await proposeConsolidation(huge, config)).toEqual([]);
+  });
+
   it('puts every key and its text in front of the model', async () => {
     generateTextMock.mockResolvedValue(reply('{"proposals":[]}'));
     await proposeConsolidation(entries, config);

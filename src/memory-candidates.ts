@@ -3,22 +3,32 @@ import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 import { MEMORY_CANDIDATES_DIR } from './paths.js';
 import { atomicWriteFileSync } from './fs-utils.js';
-import type { MemoryProposal } from './memory-consolidation.js';
+import type { MemoryProposal } from './memory-proposal.js';
 
 /**
  * The queue of memory changes Bernard has PROPOSED but not made (#529).
  *
- * A sibling of `AppletCandidateStore` rather than a generalization, on the rule
- * that store's own docstring states and `CorrectionCandidateStore` already
- * proves: the shape recurs — one JSON per record, a pending cap, an age sweep,
- * an atomic write — and the payload does not. There is no `draftId` to
- * validate, no `confidence` (see below), no `actions`, no `overlapScore`.
+ * A sibling of `AppletCandidateStore`, and the honest version of that claim is
+ * narrower than the one this file first made. It cited `applet-candidates.ts`'s
+ * argument against generalizing `CandidateStore` — but that argument turns on
+ * the specialist store's five non-overlapping METHODS (`reconcileSaved`,
+ * `acknowledge`) and this file did not copy that store. It copied the applet
+ * one, whose methods are a near-clone of these.
  *
- * It copies the APPLET store rather than the specialist one on one specific
- * point, and that point is the reason: `decidedAt` + {@link isSuppressed} + a
- * cooldown. A declined proposal has to expire, for the reason recorded on
- * `AppletCandidate.decidedAt` — without it the record leaves `listPending()`
- * and the very next pass proposes the identical thing again, forever.
+ * Extraction is still not worth it, for a different reason: of the four stores
+ * with this shape, only these two are close. `CorrectionCandidateStore` has a
+ * different status enum, an in-memory counter and no cooldown;
+ * `CandidateStore` has `enhancement`/`reconcileSaved`/`acknowledged` and no
+ * cooldown. Two near-clones do not carry a base class either — and if a fifth
+ * arrives, the piece to lift is `isSuppressed` + `MAX_AGE_MS` + `pruneOld` as
+ * free functions over a `{detectedAt, status, decidedAt}` structural type, not
+ * a class.
+ *
+ * What it does copy deliberately is `decidedAt` + {@link isSuppressed} + a
+ * cooldown, which the specialist store lacks. A declined proposal has to
+ * expire, for the reason recorded on `AppletCandidate.decidedAt` — without it
+ * the record leaves `listPending()` and the very next pass proposes the
+ * identical thing again, forever.
  *
  * **No confidence score, deliberately.** `structured-output.ts` states the
  * house rule — *"models are poor at calibrating those"* — and the two detectors
@@ -32,7 +42,7 @@ export interface MemoryCandidate {
   /** What is proposed. The keys inside were checked against the live store at creation. */
   proposal: MemoryProposal;
   detectedAt: string;
-  source: 'exit' | 'clear-save';
+  source: 'exit';
   status: 'pending' | 'accepted' | 'rejected' | 'dismissed';
   /**
    * When the user decided, for a status they chose themselves.
@@ -71,16 +81,6 @@ export function isSuppressed(c: MemoryCandidate, now: number = Date.now()): bool
     c.decidedAt !== undefined &&
     now - new Date(c.decidedAt).getTime() < DECLINE_COOLDOWN_MS
   );
-}
-
-/**
- * The memory keys a proposal would touch — what a later pass must not re-propose.
- *
- * A free function for the same reason {@link isSuppressed} is: the worker
- * flattens these across suppressed rows in one pass.
- */
-export function proposalKeys(c: MemoryCandidate): string[] {
-  return c.proposal.keys;
 }
 
 export class MemoryCandidateStore {
@@ -140,10 +140,6 @@ export class MemoryCandidateStore {
     return this.updateStatus(id, 'rejected');
   }
 
-  listSuppressed(now: number = Date.now()): MemoryCandidate[] {
-    return this.list().filter((c) => isSuppressed(c, now));
-  }
-
   updateStatus(id: string, status: MemoryCandidate['status']): boolean {
     const candidate = this.get(id);
     if (!candidate) return false;
@@ -157,13 +153,6 @@ export class MemoryCandidateStore {
     // the user asked for: silence is not a no, so neither starts a cooldown.
     if (status === 'rejected') candidate.decidedAt = new Date().toISOString();
     this.write(candidate);
-    return true;
-  }
-
-  delete(id: string): boolean {
-    const file = path.join(MEMORY_CANDIDATES_DIR, `${id}.json`);
-    if (!fs.existsSync(file)) return false;
-    fs.unlinkSync(file);
     return true;
   }
 

@@ -7,6 +7,7 @@ import * as os from 'node:os';
 const mockExtractDomainFacts = vi.fn();
 const mockLoadConfig = vi.fn();
 const mockAddFacts = vi.fn();
+const mockCleanupStaleTemp = vi.fn();
 const mockDetectSpecialistCandidate = vi.fn();
 const mockCandidateListPending = vi.fn(() => []);
 const mockCandidateCreate = vi.fn();
@@ -20,11 +21,18 @@ vi.mock('./context.js', () => ({
   extractDomainFacts: (...args: any[]) => mockExtractDomainFacts(...args),
 }));
 
-vi.mock('./rag.js', () => ({
-  RAGStore: vi.fn().mockImplementation(() => ({
-    addFacts: mockAddFacts,
-  })),
-}));
+vi.mock('./rag.js', () => {
+  const RAGStore = vi.fn().mockImplementation(() => ({ addFacts: mockAddFacts }));
+  // Static, and the worker calls it without constructing a store — that is the
+  // whole point of the call (a RAG-off session never builds one).
+  // Wrapped rather than assigned directly: `vi.mock` factories are hoisted and
+  // their BODY runs before the outer consts initialize, so referencing the spy
+  // here eagerly throws. The sibling mocks get away with a bare reference only
+  // because theirs sit inside a deferred arrow.
+  (RAGStore as unknown as { cleanupStaleTemp: unknown }).cleanupStaleTemp = (...a: unknown[]) =>
+    mockCleanupStaleTemp(...a);
+  return { RAGStore };
+});
 
 vi.mock('./logger.js', () => ({
   debugLog: vi.fn(),
@@ -183,6 +191,53 @@ describe('rag-worker (runWorkerForFile)', () => {
 
       expect(mockProposeConsolidation).not.toHaveBeenCalled();
       fs.rmSync(MEMORY_CONSOLIDATED_MARKER, { force: true });
+    });
+
+    it('examines a record on the run AFTER the one that withheld it as too fresh', async () => {
+      // The defect this shape exists to prevent, and nothing else catches it
+      // because no other test runs the pass twice.
+      //
+      // With the marker storing the RUN TIME, the trigger set and the input set
+      // were exact complements: a record written this session made `changed`
+      // true and was then withheld as too fresh, the marker advanced past it,
+      // and the next quiet session found `changed` false and returned before
+      // looking. A user's most recent memory was never examined at all.
+      const { MEMORY_CONSOLIDATED_MARKER } = await import('./paths.js');
+      fs.mkdirSync(path.dirname(MEMORY_CONSOLIDATED_MARKER), { recursive: true });
+      fs.rmSync(MEMORY_CONSOLIDATED_MARKER, { force: true });
+
+      const HOUR = 60 * 60 * 1000;
+      const justWritten = new Date(Date.now() - HOUR).toISOString();
+      mockConsolidationInputs.mockReturnValue([{ key: 'recent', writtenAt: justWritten }]);
+      write({ provider: 'anthropic', model: 'm', consolidateMemory: true });
+
+      // Run 1: too fresh to judge, so nothing is proposed about it — correct.
+      await runWorkerForFile(tempFile);
+      expect(mockProposeConsolidation.mock.calls[0][0]).toEqual([]);
+
+      // Run 2, days later, no new writes. The record is now old enough, and the
+      // gate must still fire — under the old shape it did not.
+      const later = Date.now() + 3 * 24 * HOUR;
+      vi.spyOn(Date, 'now').mockReturnValue(later);
+      try {
+        write({ provider: 'anthropic', model: 'm', consolidateMemory: true });
+        await runWorkerForFile(tempFile);
+        expect(mockProposeConsolidation).toHaveBeenCalledTimes(2);
+        const seen = mockProposeConsolidation.mock.calls[1][0] as Array<{ key: string }>;
+        expect(seen.map((e) => e.key)).toEqual(['recent']);
+      } finally {
+        vi.mocked(Date.now).mockRestore();
+        fs.rmSync(MEMORY_CONSOLIDATED_MARKER, { force: true });
+      }
+    });
+
+    it('reaps orphaned payloads even when RAG never ran', async () => {
+      // `RAGStore.cleanupStaleTemp` was only reachable through that store's
+      // CONSTRUCTOR, which a RAG-off session never runs — and this change is
+      // what made those sessions write payloads into RAG_DIR in the first place.
+      write({ provider: 'anthropic', model: 'm', consolidateMemory: true });
+      await runWorkerForFile(tempFile);
+      expect(mockCleanupStaleTemp).toHaveBeenCalled();
     });
 
     it('does not cost fact extraction its result when it throws', async () => {

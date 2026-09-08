@@ -72,8 +72,8 @@ type ParsedMemoryFile = Partial<MemoryRecord> & { content: string };
 /**
  * The fields a memory file records. Anything else in the fence is ignored.
  *
- * `writtenAt` and `supersededBy` are the DISCRIMINATORS: a fence is treated as
- * metadata only when it carries at least one of them. `key` alone is not
+ * `writtenAt`, `supersededBy` and `retiredAt` are the DISCRIMINATORS: a fence
+ * is treated as metadata only when it carries at least one of them. `key` alone is not
  * enough, because `key:` is a perfectly ordinary line in prose about YAML — and
  * these files are model-written, so a memory documenting a config format would
  * otherwise be silently decapitated. Both discriminators are written by
@@ -121,6 +121,19 @@ function parseMemoryFile(source: string): ParsedMemoryFile {
  * the key into body. Applied on write AND to the incoming key during the
  * collision check, so the two always compare like with like.
  */
+/**
+ * Whether a record has been taken out of circulation, however that happened.
+ *
+ * One predicate rather than two `&&` terms at the filter, because a third
+ * retirement state added later would fail **open**: forgetting the new term
+ * means the record silently renders, which is the failure mode this repo tracks
+ * everywhere else. `supersededBy` and `retiredAt` differ only in whether they
+ * point anywhere; for "should this be shown" they are the same answer.
+ */
+function isRetired(parsed: ParsedMemoryFile): boolean {
+  return parsed.supersededBy !== undefined || parsed.retiredAt !== undefined;
+}
+
 function toSingleLine(value: string): string {
   // Normalized the way the READER normalizes, not merely flattened. Writing a
   // value the parser would hand back differently is what made a quoted key
@@ -256,10 +269,7 @@ export class MemoryStore {
     const out: Array<{ key: string; parsed: ParsedMemoryFile; mtimeMs: number }> = [];
     for (const key of this.listAllMemory()) {
       const loaded = this.load(key);
-      // `retiredAt` and `supersededBy` are filtered on the same terms: both mean
-      // "do not render me", and they differ only in whether they point anywhere.
-      if (loaded && !loaded.parsed.supersededBy && !loaded.parsed.retiredAt)
-        out.push({ key, ...loaded });
+      if (loaded && !isRetired(loaded.parsed)) out.push({ key, ...loaded });
     }
     return out;
   }

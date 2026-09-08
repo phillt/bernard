@@ -1,11 +1,21 @@
 #!/usr/bin/env node
 
 /**
- * Background worker for exit-time RAG fact extraction.
+ * Background worker for exit-time work nobody should wait for.
  * Invoked as: node dist/rag-worker.js <tempfile>
  *
- * Reads a JSON temp file containing { serialized, provider, model },
- * extracts facts via LLM (domain-specific), stores them in RAGStore, then cleans up.
+ * Reads a JSON temp file and runs whichever passes it asks for: RAG fact
+ * extraction, specialist and applet candidate detection, and memory
+ * consolidation (#529). Then cleans up.
+ *
+ * **The name is now narrower than the job**, and this is where that became
+ * true: three of the four passes have nothing to do with RAG, and #529's gate
+ * had to be widened off `ragEnabled` precisely because a memory pass is not a
+ * RAG pass. The payload also still lands in `RAG_DIR`, whose orphan reaper is
+ * `RAGStore.cleanupStaleTemp` — called from that store's constructor, which a
+ * RAG-off session never runs. Called unconditionally below as the cheap half of
+ * that fix; renaming the module and moving the payload to `STATE_DIR` is the
+ * other half and is filed rather than smuggled in here.
  * Runs detached from the parent process — silent failure is fine.
  *
  * The core logic is exported as `runWorkerForFile` so tests can drive it
@@ -77,8 +87,9 @@ export interface TempPayload {
 }
 
 /**
- * Core worker logic: read a temp-file payload, extract RAG facts, run
- * specialist-candidate detection, then delete the temp file.
+ * Core worker logic: read a temp-file payload, run the passes it asks for, then
+ * delete the temp file. Which passes those are is per-arm — see below; the
+ * detectors need a transcript and consolidation needs only that memory changed.
  *
  * Exported so tests can call it directly with mocked dependencies rather
  * than re-implementing (and drifting from) the real logic.
@@ -87,8 +98,21 @@ export interface TempPayload {
 const WORKER_CONSOLIDATE_TIMEOUT_MS = 60_000;
 
 /**
- * When the consolidation pass last ran. `null` when it never has, or when the
- * marker is unreadable — either way the pass should run.
+ * How recently written is "too fresh to judge".
+ *
+ * An AGE rule, not a since-last-run rule, and that distinction is load-bearing
+ * — see {@link runMemoryConsolidation}. A note written this session has not had
+ * time to become redundant, and proposing to retire it is the fastest way to
+ * make someone turn the pass off.
+ */
+const FRESH_GRACE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The inclusion cutoff the last successful pass examined up to. `null` when it
+ * never ran, or when the marker is unreadable — either way the pass should run.
+ *
+ * Note this is a CUTOFF, not a run time. Storing "when we last ran" was a real
+ * defect; the docstring on {@link runMemoryConsolidation} has the trace.
  */
 function lastConsolidatedAt(): number | null {
   try {
@@ -118,17 +142,34 @@ function lastConsolidatedAt(): number | null {
  */
 async function runMemoryConsolidation(config: BernardConfig): Promise<void> {
   const store = new MemoryStore();
-  const lastRun = lastConsolidatedAt();
+  const lastCutoff = lastConsolidatedAt();
+  const cutoff = Date.now() - FRESH_GRACE_MS;
+  const writtenAt = (e: { writtenAt?: string }) => (e.writtenAt ? Date.parse(e.writtenAt) : 0);
 
   const all = consolidationInputs(store);
-  const changed =
-    lastRun === null || all.some((e) => e.writtenAt && Date.parse(e.writtenAt) > lastRun);
+  // Is there anything we have not examined yet?
+  const changed = lastCutoff === null || all.some((e) => writtenAt(e) > lastCutoff);
   if (!changed) return;
 
-  // Records newer than the last pass are withheld rather than the run being
-  // skipped: the rest of the store is still worth looking at.
-  const entries =
-    lastRun === null ? all : all.filter((e) => !e.writtenAt || Date.parse(e.writtenAt) <= lastRun);
+  // Everything old enough to judge. The two predicates read against DIFFERENT
+  // clocks on purpose, and an earlier cut had them read against one — which
+  // skipped a record permanently.
+  //
+  // That version stored the RUN TIME and filtered on it, so the trigger set and
+  // the input set were exact complements: a record written this session made
+  // `changed` true and was then withheld as too fresh, the marker advanced past
+  // it, and the next quiet session found `changed` false and returned before
+  // looking. The record was examined only if some LATER write re-triggered the
+  // gate — so a user's most recent memory was never examined at all, and the
+  // steady state carried a permanent one-write lag.
+  //
+  // Storing the CUTOFF instead breaks the symmetry: a withheld record stays
+  // above the stored value and keeps re-triggering, and the next run's cutoff
+  // has moved past it, so it is included and the marker then advances past it.
+  // It also gives the first run a freshness rail, which the old shape's
+  // `lastRun === null ? all : ...` did not — the run where proposing about a
+  // note written minutes ago is most likely.
+  const entries = all.filter((e) => writtenAt(e) <= cutoff);
 
   const candidates = new MemoryCandidateStore();
   const existing = candidates.list();
@@ -144,18 +185,24 @@ async function runMemoryConsolidation(config: BernardConfig): Promise<void> {
       for (const k of c.proposal.keys) spoken.add(k);
     }
   }
-  const fresh = entries.filter((e) => !spoken.has(e.key));
+  const unspoken = entries.filter((e) => !spoken.has(e.key));
 
-  const proposals = await proposeConsolidation(fresh, config, {
+  const proposals = await proposeConsolidation(unspoken, config, {
     abortSignal: AbortSignal.timeout(WORKER_CONSOLIDATE_TIMEOUT_MS),
   });
+  // Counted locally rather than re-reading. `listPending()` is a full readdir
+  // and parse, and `create()` runs its own cap check internally, so the call
+  // here made it two directory sweeps per proposal — the exact defect the
+  // sibling arm's comment below boasts of having fixed.
+  let room = MAX_PENDING_MEMORY_CANDIDATES - pending.length;
   for (const proposal of proposals) {
-    if (candidates.listPending().length >= MAX_PENDING_MEMORY_CANDIDATES) break;
+    if (room-- <= 0) break;
     candidates.create(proposal, 'exit');
   }
 
   try {
-    atomicWriteFileSync(MEMORY_CONSOLIDATED_MARKER, new Date().toISOString() + '\n');
+    // The CUTOFF, not `now` — see the partition above.
+    atomicWriteFileSync(MEMORY_CONSOLIDATED_MARKER, new Date(cutoff).toISOString() + '\n');
   } catch {
     // Best-effort, like every other marker in the repo. Losing it costs one
     // redundant pass, not correctness.
@@ -186,6 +233,15 @@ export async function runWorkerForFile(filePath: string): Promise<void> {
     tryUnlink(filePath);
     return;
   }
+
+  // Reap orphaned payloads unconditionally.
+  //
+  // `RAGStore.cleanupStaleTemp` is static but was only ever reached through the
+  // store's CONSTRUCTOR, which a RAG-off session never runs — and since #529
+  // widened the spawn gate off `ragEnabled`, exactly those sessions now write
+  // `.pending-*.json` into `RAG_DIR`. So the users this change serves were the
+  // ones whose orphans nothing collected. One static call, no store built.
+  RAGStore.cleanupStaleTemp();
 
   // Load config (reads .env + stored keys), override provider/model from temp file
   const config = loadConfig({ provider: payload.provider, model: payload.model });
