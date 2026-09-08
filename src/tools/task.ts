@@ -148,6 +148,14 @@ export function createTaskTool(ctx: AgentContext): BernardTool<TaskArgs, TaskPay
         if (routine) {
           resolvedTask = routine.content;
           if (task && task !== taskId) {
+            // Glued into the task string rather than carried as a
+            // `DispatchBrief` section (#509), deliberately. The section form
+            // renders byte-identically — `Task: <routine>` then
+            // `Additional context: <task>` either way — but `task` is also what
+            // `retrievalQueryFor` embeds, so moving this out of the string
+            // silently changes what every saved-routine dispatch retrieves for.
+            // A behavioural change with no eval behind it, for no gain in the
+            // message itself.
             resolvedTask += `\n\nAdditional context: ${task}`;
           }
         } else {

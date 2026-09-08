@@ -151,10 +151,13 @@ export async function dispatchAction(opts: DispatchActionOpts): Promise<Dispatch
       );
       return {
         specialistId: agent.specialistId,
-        // The instruction channel: author-written, never caller bytes.
+        // The instruction channel: author-written, never caller bytes. Typed
+        // `string`, which since #509 is what makes that a property rather than
+        // a promise — `renderArgsBlock` returns `UntrustedData`, so this
+        // assignment does not compile if the two are ever swapped.
         input: agent.instructions,
-        // The data channel.
-        context: renderArgsBlock(frozenArgs),
+        // The data channel, and the only field that accepts caller bytes.
+        data: renderArgsBlock(frozenArgs),
         slotId: 0,
         childTools,
         // Shared with `tool_wrapper_run`; see `wantsStructuredOutput`. It used

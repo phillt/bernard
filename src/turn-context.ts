@@ -29,8 +29,15 @@ export interface TurnContextRecord {
   /** Memory facts injected into `<recalled_context>` this turn (post-filter, post-stickiness). */
   recalledFacts: RAGSearchResult[];
   /**
-   * Keys rendered into `<persistent_memory>` this turn (#307). Optional: records
-   * predating the field have none, which reads differently from "none injected".
+   * Keys rendered into `<persistent_memory>` this turn (#307), in render order.
+   *
+   * This is the packer's own `kept` set since #528. It used to be every key on
+   * disk merely re-sorted, so the one surface a user consults to answer "why
+   * didn't Bernard use that memory" reported a dropped memory as injected on
+   * precisely the turn it was dropped — the only turn anyone looks.
+   *
+   * Optional: records predating the field have none, which reads differently
+   * from "none injected".
    */
   injectedMemoryKeys?: string[];
 }

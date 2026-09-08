@@ -131,6 +131,16 @@ export function buildArchitectBrief(target: PlanTarget): string {
 /**
  * The brief handed to the UX and data planners.
  *
+ * **Not migrated to `DispatchBrief` (#509), and the reason is a distinction
+ * worth keeping.** That type models the parent→child ENVELOPE — the labelled
+ * task, the supporting sections, the data channel — and these two functions
+ * produce the envelope's `task`, which is where their output already goes. They
+ * are a prompt body, not a second envelope format, and forcing their paragraphs
+ * into `BriefSection`s would either move their bytes or add a per-paragraph
+ * separator knob to a type that currently has one meaningful distinction. What
+ * #509 wants from them — the scope passing verbatim — is already true and
+ * already tested.
+ *
  * Both get the architect's scope VERBATIM rather than a paraphrase. The scope is
  * the only thing making these two agree, so re-wording it per planner is the one
  * edit that would quietly reintroduce the divergence the sequencing prevents.

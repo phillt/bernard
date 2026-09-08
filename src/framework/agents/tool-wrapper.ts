@@ -1,6 +1,6 @@
 import type { CoreMessage, Tool } from 'ai';
-import { buildTaskUserMessage } from './user-message.js';
-import type { WithAttachments } from './user-message.js';
+import { buildDispatchUserMessage } from './user-message.js';
+import type { DispatchInput } from './user-message.js';
 import { classifyError } from '../../error-taxonomy.js';
 import { CITATIONS_PROMPT, allowsInlineMarkers } from '../../agent-prompt.js';
 import { getModelProfile } from '../../providers/index.js';
@@ -38,10 +38,18 @@ export const TOOL_WRAPPER_STEP_RATIO = 0.5;
  * through {@link wrapWrapperResult}; otherwise the raw text is wrapped as
  * `{ status: 'ok', result: text }`.
  */
-export interface ToolWrapperInput extends WithAttachments {
+export interface ToolWrapperInput extends Omit<DispatchInput, 'task'> {
   specialistId: string;
+  /**
+   * The instruction channel: what the child is asked to do. `DispatchInput`'s
+   * `task` under another name, which is why that member is `Omit`ted above.
+   *
+   * `string`, and that is now load-bearing rather than incidental — it cannot
+   * accept {@link UntrustedData}, so an applet's caller-supplied arguments have
+   * no path here (#509). Before that the split was held by a comment in
+   * `apps/dispatch.ts`, with both channels typed `string`.
+   */
   input: string;
-  context?: string;
   slotId: number;
   /** Pre-assembled child registry (already filtered by `specialist.targetTools`). */
   childTools: Record<string, Tool>;
@@ -176,12 +184,18 @@ export const toolWrapperDefinition: AgentDefinition<ToolWrapperInput, WrapperRes
   },
 
   buildUserMessage(input): CoreMessage {
-    return buildTaskUserMessage({
-      task: input.input,
-      context: input.context,
-      attachments: input.attachments,
-      // Not `Task:` — some tool-wrapper prompts and tests read this verbatim.
+    return buildDispatchUserMessage({
+      ...input,
+      // Not `Task:`. An earlier comment here claimed some tool-wrapper prompts
+      // and tests read it verbatim; measured, `grep "Request:"` over `src/` and
+      // `docs/` returns nothing at all. The real reason to keep it is byte
+      // stability — every wrapper dispatch in the product has read this word —
+      // which is a better reason than the one that was written down.
       label: 'Request',
+      // The one field that is not shared: this input calls its instruction
+      // channel `input`, not `task`, and renaming it would touch every caller
+      // of `tool_wrapper_run` for no gain.
+      task: input.input,
     });
   },
 

@@ -56,6 +56,7 @@ import { DefaultPolicyEngine, isReactEffective } from './policy/index.js';
 import type { PolicyDecision, PolicyEngine, PolicyResult } from './policy/index.js';
 import { extractCitationMarkers, type SourceItem, type TurnProvenance } from './provenance.js';
 import { type TurnContextRecord } from './turn-context.js';
+import { packMemory } from './context-message.js';
 import { SemanticResponseCache } from './semantic-cache.js';
 import { isPureQuestion } from './policy/tool-mode.js';
 import type { Step } from './plan-store.js';
@@ -107,21 +108,17 @@ export interface CompactResult {
  * the main-only concerns of persistent history, compression, emergency
  * truncation, auto-continue, and IO wiring.
  */
-/**
- * Orders memory keys the way `renderPersistentMemory` packs them, so the
- * per-turn context record leads with the entries most likely to have survived
- * a budget trim. Mirrors `orderForPacking`; kept separate because that operates
- * on entries and this on bare keys, and the record is a display artefact.
- */
-function orderMemoryKeysForDisplay(keys: string[], priority?: string[]): string[] {
-  if (!priority || priority.length === 0) return keys;
-  const rank = new Map(priority.map((k, i) => [k, i]));
-  const last = priority.length;
-  return [...keys].sort((a, b) => (rank.get(a) ?? last) - (rank.get(b) ?? last));
-}
-
 export class Agent {
   private history: CoreMessage[] = [];
+  /**
+   * Curated memories the last completed turn could not fit (#528).
+   *
+   * Kept here rather than recomputed at the REPL because {@link processInput}
+   * already runs the packer for `injectedMemoryKeys` — a second call would be a
+   * third pass over the whole store to answer a question this one already
+   * answered, and could drift from it if a write landed in between.
+   */
+  private lastMemoryDropped: string[] = [];
   private config: BernardConfig;
   private memoryStore: MemoryStore;
   private alertContext?: string;
@@ -285,6 +282,11 @@ export class Agent {
    */
   getTurnContext(): TurnContextRecord[] {
     return [...this.turnContext];
+  }
+
+  /** Curated memories the last completed turn could not fit (#528). */
+  getLastMemoryDropped(): string[] {
+    return this.lastMemoryDropped;
   }
 
   /** Restores per-turn context snapshots when a session is resumed. */
@@ -1089,6 +1091,11 @@ export class Agent {
       // prompt-assembly trail (original vs. rewritten input, resolved refs,
       // recalled facts). Recorded for every completed turn. Intentionally does
       // NOT capture the system prompt — that's internal infra, not for disk/UI.
+      const memoryPack = packMemory(
+        this.memoryStore.getAllMemoryContents(),
+        options?.memoryPriority,
+      );
+      this.lastMemoryDropped = memoryPack.dropped;
       this.turnContext.push({
         turnIndex: userTurnIndex,
         timestamp: Date.now(),
@@ -1096,20 +1103,17 @@ export class Agent {
         rewrittenInput: userInput,
         resolvedReferences: this.lastResolvedReferences.map((e) => ({ ...e })),
         recalledFacts: this.lastRAGResults.map((f) => ({ ...f })),
-        // Read at snapshot rather than threaded out of `buildContextMessage`:
-        // under budget injection is unconditional, so the store's key list IS
-        // what went in. Over budget it is NOT — `renderPersistentMemory` drops
-        // the tail, and this would then report a memory as injected on exactly
-        // the turn it was dropped, which is the only turn anyone looks. So
-        // apply the same ordering the renderer used and record the ranked keys
-        // first; the viewer's list then leads with what actually survived.
-        // (A write during the turn can still drift by one entry — acceptable
-        // for a display record. Making this exact needs the renderer to report
-        // what it kept; see #371 follow-ups.)
-        injectedMemoryKeys: orderMemoryKeysForDisplay(
-          this.memoryStore.listMemory(),
-          options?.memoryPriority,
-        ),
+        // What was RENDERED, not what is on disk (#528). This used to be
+        // `listMemory()` merely re-sorted, i.e. every key the store holds — so
+        // on exactly the turns where the cap fired, the one surface a user
+        // consults to answer "why didn't Bernard use that memory" listed the
+        // dropped memory as injected. Running the packer here rather than
+        // threading a report out of `buildContextMessage` keeps the plumbing at
+        // zero and cannot disagree: it is the same pure function over the same
+        // two inputs the renderer was given. (A memory written mid-turn can
+        // still shift this by one entry, which is acceptable for a record whose
+        // only consumer is a viewer.)
+        injectedMemoryKeys: memoryPack.kept,
       });
 
       // Per-turn qualifier outcome (#167). One structured line that pairs the

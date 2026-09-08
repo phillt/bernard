@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { resolveAttachments } from './attachment-args.js';
-import { buildTaskUserMessage } from '../framework/agents/user-message.js';
+import { buildDispatchUserMessage } from '../framework/agents/user-message.js';
 
 // A 1x1 PNG. `loadImage` sniffs the extension, so the bytes only have to exist.
 const PNG = Buffer.from(
@@ -77,7 +77,7 @@ describe('resolveAttachments', () => {
   it('reaches the dispatched agent as an image part', () => {
     const res = resolveAttachments([img]);
     if (!res.ok) throw new Error('setup');
-    const msg = buildTaskUserMessage({ task: 'describe it', attachments: res.read() });
+    const msg = buildDispatchUserMessage({ task: 'describe it', attachments: res.read() });
     expect(Array.isArray(msg.content)).toBe(true);
     const parts = msg.content as { type: string }[];
     expect(parts[0].type).toBe('text');
@@ -87,7 +87,7 @@ describe('resolveAttachments', () => {
   // The zero-attachment path must stay a plain string — that is what keeps
   // every existing `toEqual({role:'user', content:'Task: …'})` true.
   it('leaves an attachment-free message a plain string', () => {
-    expect(buildTaskUserMessage({ task: 'plain' })).toEqual({
+    expect(buildDispatchUserMessage({ task: 'plain' })).toEqual({
       role: 'user',
       content: 'Task: plain',
     });

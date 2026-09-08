@@ -261,6 +261,57 @@ describe('recallFilter — memory reconciliation (#371)', () => {
     expect(system).toContain('standing rule');
   });
 
+  it('asks for a ranking inside the old deadband, where entries are dropped and nothing was asked', async () => {
+    // The band #512/#528 name. This store sums to EXACTLY the cap by the old
+    // measure — `Σ(key.length + content.length)` — so the old `> cap` test said
+    // "everything fits" and no ranking was requested; the renderer packs the
+    // rendered block, which is 5 chars per entry larger, and dropped entries
+    // anyway. Drop-by-filename at precisely the boundary the ranking exists to
+    // fix. Ten entries makes the gap 50 chars, so the fixture is inside the band
+    // rather than clearing it by a mile.
+    generateTextMock.mockResolvedValue({ text: JSON.stringify({ keep: [1] }) });
+    const { store } = makeRagStore([candidate('a', 'x')]);
+    const n = 10;
+    const per = Math.floor(MAX_PERSISTENT_MEMORY_CHARS / n);
+    const band = Object.fromEntries(
+      Array.from({ length: n }, (_, i) => {
+        const key = `k${i}`;
+        return [key, 'y'.repeat(per - key.length)];
+      }),
+    );
+
+    await recallFilter('q', makeConfig(), store, HISTORY, { memoryStore: makeMemoryStore(band) });
+
+    expect(generateTextMock.mock.calls[0][0].system).toContain('memoryPriority');
+  });
+
+  it('measures what the AGENT is given, including `rewriter-hints`', async () => {
+    // The exclusion is about what the curator is SHOWN, not about how much
+    // memory there is. `renderPersistentMemory` renders the hints file like any
+    // other entry, so a store that fits without it and not with it is one the
+    // renderer is already cutting — and measuring the curated subset would
+    // answer "everything fits" and skip the ranking. (Latent today:
+    // `saveRewriterHint` has no production caller, so no such file exists. The
+    // rule is still the right one, and this is what pins it if the writer
+    // returns.)
+    generateTextMock.mockResolvedValue({ text: JSON.stringify({ keep: [1] }) });
+    const { store } = makeRagStore([candidate('a', 'x')]);
+    const half = Math.floor(MAX_PERSISTENT_MEMORY_CHARS * 0.6);
+    const withHints = {
+      a: 'y'.repeat(half),
+      'rewriter-hints': 'h'.repeat(half),
+    };
+
+    await recallFilter('q', makeConfig(), store, HISTORY, {
+      memoryStore: makeMemoryStore(withHints),
+    });
+
+    const call = generateTextMock.mock.calls[0][0];
+    expect(call.system).toContain('memoryPriority');
+    // Still not shown it, though — both halves hold at once.
+    expect(call.messages[0].content).not.toContain('rewriter-hints');
+  });
+
   it('never shows the curator `rewriter-hints` — internal infra, not user-curated', async () => {
     generateTextMock.mockResolvedValue({ text: JSON.stringify({ keep: [1] }) });
     const { store } = makeRagStore([candidate('a', 'x')]);
