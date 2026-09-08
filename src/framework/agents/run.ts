@@ -1,5 +1,9 @@
 import type { CoreMessage } from 'ai';
-import { buildContextMessage, type ContextMessageInputs } from '../../context-message.js';
+import {
+  buildContextMessage,
+  type ContextMessageInputs,
+  type ContextReport,
+} from '../../context-message.js';
 import { resolveSiteModel } from '../../model-policy.js';
 import {
   applyAnthropicPromptCache,
@@ -20,10 +24,11 @@ import {
   type HookModelInfo,
 } from '../hooks/token-stats.js';
 import type { StepFinishPayload } from '../hooks/types.js';
-import { runAgent, type AgentResult, type AgentSpec } from '../runner.js';
+import { runAgent, newDispatchId, type AgentResult, type AgentSpec } from '../runner.js';
 import type { IterateFn, IterateOpts, StrategyContext } from '../strategies/types.js';
 import { resolveToolSurface } from './tool-surface.js';
 import { resolveDispatchProfile } from './dispatch-profile.js';
+import { recordDispatchContext } from '../../dispatch-context-history.js';
 import { resolveRetrieval } from './retrieval.js';
 import { visionRefusal } from './vision-gate.js';
 import { seedBudgetRefusal } from './seed-budget.js';
@@ -386,7 +391,9 @@ export async function runDefinition<TInput, TFormatted>(
   //
   // Resolved fresh on every iterate so memory updates / new RAG hits are
   // reflected, and NOT persisted into the caller's history.
-  const getContextMessages = async (): Promise<CoreMessage[]> => {
+  const getContextMessages = async (
+    onReport?: (report: ContextReport) => void,
+  ): Promise<CoreMessage[]> => {
     let extras: Partial<Omit<ContextMessageInputs, 'memoryStore'>> | null = {};
     if (def.contextInputs) {
       try {
@@ -401,11 +408,14 @@ export async function runDefinition<TInput, TFormatted>(
     if (extras === null) return [];
     const msg = buildContextMessage({
       ...extras,
+      // Recorded per assembly, so a sub-agent's own context decision is
+      // inspectable rather than invisible (#512).
+      onReport,
       // A definition that supplied its own results wins: `main` applies
       // stickiness and provenance the runner cannot see, and `cron` pre-fetches
       // before its MCP connect. `?? retrieved` rather than the other order for
       // exactly that reason.
-      ragResults: extras.ragResults ?? retrieved,
+      ragResults: extras.ragResults ?? retrieved.results,
       memoryStore: ctx.stores.memory,
       includeScratch: extras.includeScratch ?? true,
     });
@@ -473,7 +483,16 @@ export async function runDefinition<TInput, TFormatted>(
     // history by the caller's wrapIterate / strategy extras — see the
     // `partialObserver` doc on RunDefinitionOpts.
     partialObserver?.onIterateStart?.();
-    const contextMsgs = await getContextMessages();
+    // Minted here rather than handed back by `runAgent`, so the report the
+    // assembly produces and the id it is filed under are both in scope at the
+    // same point (#512). The callback form needed a mutable slot spanning two
+    // closures plus a manual clear, purely to stop iterate N's report attaching
+    // to iterate N+1's id — a hazard that disappears with the scope.
+    const dispatchId = newDispatchId();
+    let report: ContextReport | undefined;
+    const contextMsgs = await getContextMessages((r) => {
+      report = r;
+    });
     const seedWithContext = insertContextBeforeLastUser(contextMsgs, getSeed());
     const messages = composeMessages(def.historyMode, seedWithContext, iterOpts.extra);
     const sysWithSuffix = iterOpts.systemSuffix ? `${system}\n\n${iterOpts.systemSuffix}` : system;
@@ -492,11 +511,33 @@ export async function runDefinition<TInput, TFormatted>(
     const cached = promptCacheActive
       ? applyAnthropicPromptCache({ system: sysWithSuffix, messages })
       : { system: sysWithSuffix, messages };
+    // One record per LLM call rather than per dispatch, and that is the right
+    // grain: a multi-step dispatch reassembles its context every iterate, and
+    // `agent:dispatch:start` is logged per call too, so the ids line up with
+    // the session trace this is meant to be read beside.
+    if (report) {
+      recordDispatchContext({
+        dispatchId,
+        definitionId: def.id,
+        telemetrySite: modelInfo.site,
+        timestamp: Date.now(),
+        sections: report.sections,
+        ...(report.memory
+          ? { memoryKept: report.memory.kept, memoryDropped: report.memory.dropped }
+          : {}),
+        // From `resolveRetrieval`, which owns the decision — so the record
+        // states what was actually retrieved FOR rather than re-running the
+        // definition's thunk and claiming a query for a dispatch that searched
+        // nothing.
+        ...(retrieved.query ? { retrievalQuery: retrieved.query } : {}),
+      });
+    }
     const r = await runAgent({
       ...baseSpec,
       system: cached.system,
       messages: cached.messages,
       maxSteps: callMaxSteps,
+      dispatchId,
     });
     stepLimitHit = r.finishReason === 'tool-calls' && (r.steps?.length ?? 0) >= callMaxSteps;
     return r;

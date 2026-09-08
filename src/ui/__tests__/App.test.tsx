@@ -121,6 +121,7 @@ import type { Agent } from '../../agent.js';
 import type { HistoryStore } from '../../history.js';
 import type { ProvenanceHistoryStore } from '../../provenance-history.js';
 import type { TurnContextStore } from '../../turn-context.js';
+import type { DispatchContextStore } from '../../dispatch-context-history.js';
 import type { MemoryStore } from '../../memory.js';
 import type { RoutineStore } from '../../routines.js';
 import type { SpecialistStore } from '../../specialists.js';
@@ -287,6 +288,11 @@ function renderApp(opts: HarnessOptions = {}) {
     save: vi.fn(),
     load: () => [],
   } as unknown as TurnContextStore;
+  const dispatchContextStore = {
+    clear: vi.fn(),
+    save: vi.fn(),
+    load: () => [],
+  } as unknown as DispatchContextStore;
   const sessionToolAllowlist = new Set<string>();
   const stores = makeStores(opts.stores);
   const config = makeConfig(opts.config);
@@ -296,6 +302,7 @@ function renderApp(opts: HarnessOptions = {}) {
     historyStore,
     provenanceHistoryStore,
     turnContextStore,
+    dispatchContextStore,
     stores,
     sessionToolAllowlist,
     onExit,
@@ -467,12 +474,21 @@ describe('<App> Shift-Tab viewer tabs (#211)', () => {
     expect(frame).toContain('> Prompt & Context');
     expect(frame).not.toContain('> Sources');
 
+    // Shift-Tab again → Dispatch Context tab active (#512). Unlike its three
+    // siblings this one reads a module-level recorder rather than the agent,
+    // because `turnContext.push` only ever fires for the main agent.
+    stdin.write(SHIFT_TAB);
+    await tick();
+    frame = lastFrame() ?? '';
+    expect(frame).toContain('> Dispatch Context');
+    expect(frame).not.toContain('> Prompt & Context');
+
     // Shift-Tab again → Usage & Cost tab active.
     stdin.write(SHIFT_TAB);
     await tick();
     frame = lastFrame() ?? '';
     expect(frame).toContain('> Usage & Cost');
-    expect(frame).not.toContain('> Prompt & Context');
+    expect(frame).not.toContain('> Dispatch Context');
 
     // Shift-Tab once more → wraps back to Status (does not close).
     stdin.write(SHIFT_TAB);

@@ -10,5 +10,6 @@ export const VIEWER_TABS: readonly OverlayTab[] = [
   { id: 'status', label: 'Agent Status' },
   { id: 'sources', label: 'Sources' },
   { id: 'context', label: 'Prompt & Context' },
+  { id: 'dispatch', label: 'Dispatch Context' },
   { id: 'usage', label: 'Usage & Cost' },
 ];

@@ -153,6 +153,21 @@ export interface AgentSpec {
    * `callId`. Useful for live-updating the result block under the call row.
    */
   onToolResult?: (event: { callId: string; toolName: string; result: unknown }) => void;
+  /**
+   * The id this run is logged under, when the caller already knows it (#512).
+   *
+   * A caller cannot get it from the ALS — `runDefinition` assembles its context
+   * message *before* calling `runAgent` and would read whichever ancestor's
+   * scope it happens to be nested in, attributing a sub-agent's context
+   * decision to its parent's dispatch. So the id flows IN rather than back out
+   * through a callback: with a callback, the caller has to hold its report in a
+   * mutable slot spanning two closures and clear it by hand so iterate N's
+   * report cannot attach to iterate N+1's id. Passing the id removes the slot
+   * and the hazard with it.
+   *
+   * Omitted by every other caller, which mints one here as before.
+   */
+  dispatchId?: string;
 }
 
 /** Result type re-exported so callers needn't depend on `ai` directly. */
@@ -193,8 +208,16 @@ function composeOnStepFinish(
  * `onStepFinish` and `experimental_repairToolCall` are sourced from spec
  * hooks/factories.
  */
+/**
+ * A fresh dispatch id. Exported so a caller that needs to know the id BEFORE
+ * the call can mint one and pass it in — see {@link AgentSpec.dispatchId}.
+ */
+export function newDispatchId(): string {
+  return crypto.randomBytes(4).toString('hex');
+}
+
 export async function runAgent(spec: AgentSpec): Promise<AgentResult> {
-  const dispatchId = crypto.randomBytes(4).toString('hex');
+  const dispatchId = spec.dispatchId ?? newDispatchId();
   // Always establish the dispatch-id ALS context (not just under debug). It is
   // near-free and it's what lets the token hooks stamp `callId`/`parentCallId`
   // onto every telemetry record so the session trace forms a real tree. The

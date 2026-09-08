@@ -103,7 +103,25 @@ export function retrievalQueryFor(input: { task?: string; context?: string }): s
 }
 
 /**
- * Runs the dispatch's retrieval, or returns `undefined` when there is none.
+ * What one dispatch retrieved, and what it retrieved FOR.
+ *
+ * Both, from the one function that owns the decision (#512). The recorder used
+ * to call `def.retrievalQuery(input)` a second time to capture the string —
+ * running a definition-supplied thunk twice per dispatch, outside this
+ * function's guards, so the record claimed a `retrievalQuery` for dispatches
+ * that retrieved nothing (no `ctx.rag`, or a search that threw). A re-derived
+ * measure drifting from the real one is exactly the class `recall-filter` was
+ * just fixed for, and it does not belong in the module whose whole job is to be
+ * a trustworthy record of what happened.
+ */
+export interface Retrieval {
+  /** The query, present only when a search actually ran. */
+  query?: string;
+  results?: RAGSearchResult[];
+}
+
+/**
+ * Runs the dispatch's retrieval, or returns an empty result when there is none.
  *
  * Fails soft, exactly as the four copies did: a RAG failure must not abort a
  * turn, and `undefined` renders no `<recalled_context>` rather than an empty
@@ -113,10 +131,10 @@ export async function resolveRetrieval<TInput>(
   ctx: AgentContext,
   def: Pick<AgentDefinition<TInput, unknown>, 'id' | 'retrievalQuery'>,
   input: TInput,
-): Promise<RAGSearchResult[] | undefined> {
-  if (!ctx.rag || !def.retrievalQuery) return undefined;
+): Promise<Retrieval> {
+  if (!ctx.rag || !def.retrievalQuery) return {};
   const query = def.retrievalQuery(input);
-  if (!query) return undefined;
+  if (!query) return {};
   try {
     const results = await ctx.rag.search(query);
     if (results.length > 0) {
@@ -126,12 +144,12 @@ export async function resolveRetrieval<TInput>(
         results: results.length,
       });
     }
-    return results;
+    return { query, results };
   } catch (err) {
     debugLog('dispatch:rag:error', {
       definition: def.id,
       message: err instanceof Error ? err.message : String(err),
     });
-    return undefined;
+    return {};
   }
 }

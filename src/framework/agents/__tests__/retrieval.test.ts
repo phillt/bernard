@@ -172,33 +172,39 @@ describe('resolveRetrieval', () => {
     });
     expect(search).toHaveBeenCalledTimes(1);
     expect(search.mock.calls[0][0]).toContain('here is why');
-    expect(out).toHaveLength(1);
+    expect(out.results).toHaveLength(1);
+    // The query comes back too, so the recorder does not have to run the
+    // definition's thunk a second time to know what was searched for (#512).
+    expect(out.query).toContain('do it');
   });
 
-  it('returns undefined when the definition declares no query', async () => {
+  it('reports no query when the definition declares none', async () => {
     const search = vi.fn(async () => []);
     const out = await resolveRetrieval(ctxWithRag(search), { id: 'main' }, { task: 'x' });
     expect(search).not.toHaveBeenCalled();
-    expect(out).toBeUndefined();
+    expect(out).toEqual({});
   });
 
-  it('returns undefined when there is no RAG store at all', async () => {
-    expect(await resolveRetrieval({} as AgentContext, def, { task: 'x' })).toBeUndefined();
+  it('reports no query when there is no RAG store at all', async () => {
+    // The case that made the recorder lie: it re-ran the thunk unconditionally,
+    // so a dispatch with no store recorded a `retrievalQuery` for a search that
+    // never happened.
+    expect(await resolveRetrieval({} as AgentContext, def, { task: 'x' })).toEqual({});
   });
 
-  it('degrades to undefined when the search throws', async () => {
+  it('degrades to nothing when the search throws', async () => {
     // Fail-soft, exactly as the four copies were: a RAG failure must not abort
-    // a dispatch, and `undefined` renders no `<recalled_context>` rather than
-    // an empty one.
+    // a dispatch, and no results renders no `<recalled_context>` rather than an
+    // empty one. No query either — nothing was retrieved for.
     const search = vi.fn(async () => {
       throw new Error('embedding provider unavailable');
     });
-    expect(await resolveRetrieval(ctxWithRag(search), def, { task: 'x' })).toBeUndefined();
+    expect(await resolveRetrieval(ctxWithRag(search), def, { task: 'x' })).toEqual({});
   });
 
   it('does not search when the query resolves to null', async () => {
     const search = vi.fn(async () => []);
-    expect(await resolveRetrieval(ctxWithRag(search), def, {})).toBeUndefined();
+    expect(await resolveRetrieval(ctxWithRag(search), def, {})).toEqual({});
     expect(search).not.toHaveBeenCalled();
   });
 });

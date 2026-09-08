@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { buildContextMessage, packMemory, MAX_PERSISTENT_MEMORY_CHARS } from './context-message.js';
+import {
+  buildContextMessage,
+  packMemory,
+  MAX_PERSISTENT_MEMORY_CHARS,
+  type MemoryPack,
+} from './context-message.js';
 import { ProvenanceStore } from './provenance.js';
 
 describe('buildContextMessage — <current_datetime> (issue #269)', () => {
@@ -153,6 +158,46 @@ describe('buildContextMessage — section order', () => {
     const positions = order.map((tag) => content.indexOf(tag));
     expect(positions.every((p) => p >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((a, b) => a - b));
+  });
+});
+
+describe('buildContextMessage reports what it decided (#512)', () => {
+  it('reports the same section sizes it logs, and the pack it rendered', () => {
+    // The observer and `context:section-sizes` read the same numbers by
+    // construction — one is the always-available trail for a session someone is
+    // already debugging, the other is the durable per-dispatch record.
+    const reports: unknown[] = [];
+    const big = 'x'.repeat(MAX_PERSISTENT_MEMORY_CHARS);
+    buildContextMessage({
+      memoryStore: memoryStoreWith([
+        ['keeper', 'small'],
+        ['huge', big],
+      ]),
+      onReport: (r) => reports.push(r),
+    });
+    expect(reports).toHaveLength(1);
+    const report = reports[0] as { sections: Record<string, number>; memory?: MemoryPack };
+    expect(report.sections.persistent_memory).toBeGreaterThan(0);
+    expect(report.memory?.kept).toEqual(['keeper']);
+    expect(report.memory?.dropped).toEqual(['huge']);
+  });
+
+  it('is silent when nobody is listening, and byte-identical either way', () => {
+    // The observer must not change what is assembled — every caller but
+    // `runDefinition` omits it.
+    const entries: [string, string][] = [['a', 'x'.repeat(50)]];
+    const without = buildContextMessage({ memoryStore: memoryStoreWith(entries) });
+    const with_ = buildContextMessage({
+      memoryStore: memoryStoreWith(entries),
+      onReport: () => {},
+    });
+    expect(with_).toEqual(without);
+  });
+
+  it('omits the memory report when there is no store to pack', () => {
+    const reports: { memory?: MemoryPack }[] = [];
+    buildContextMessage({ currentDateTime: 'now', onReport: (r) => reports.push(r) });
+    expect(reports[0].memory).toBeUndefined();
   });
 });
 

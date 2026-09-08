@@ -41,6 +41,11 @@ import type { AgentContext } from '../../context.js';
 import type { BernardConfig } from '../../../config.js';
 import { buildContextMessage } from '../../../context-message.js';
 import { attachMeta } from '../../tools/adapter.js';
+import {
+  clearDispatchContexts,
+  enableDispatchContextRecording,
+  getDispatchContexts,
+} from '../../../dispatch-context-history.js';
 
 function makeConfig(): BernardConfig {
   return {
@@ -105,6 +110,141 @@ beforeEach(() => {
   // that don't care about the context message see an empty messages prefix.
   // Individual tests override this for context-message assertions.
   (buildContextMessage as unknown as ReturnType<typeof vi.fn>).mockReturnValue(null);
+});
+
+describe('runDefinition records what each dispatch was given (#512)', () => {
+  // `ContextViewer` reads `agent.getTurnContext()`, and `turnContext.push`
+  // happens at exactly one site inside `Agent.processInput` — so no sub-agent,
+  // task, specialist, delegate or cron dispatch's context assembly was recorded
+  // anywhere. These pin that the runner now records one, and that it records
+  // the DECISION rather than only its size.
+
+  it('records one row per LLM call, carrying the id that call is logged under', async () => {
+    // Per call rather than per dispatch is the right grain: a multi-step
+    // dispatch reassembles its context every iterate, and `agent:dispatch:start`
+    // is logged per call too — so the ids line up with the session trace this is
+    // meant to be read beside.
+    clearDispatchContexts();
+    enableDispatchContextRecording();
+    (buildContextMessage as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (inputs: any) => {
+        inputs.onReport?.({ sections: { persistent_memory: 42 } });
+        return { role: 'user', content: 'CTX' };
+      },
+    );
+    const def = fakeDefinition({
+      strategy: () => ({
+        async run(sctx: any) {
+          await sctx.iterate({ extra: [] });
+          return sctx.iterate({ extra: [] });
+        },
+      }),
+    });
+    await runDefinition(makeCtx(), def, { text: 'hi' });
+
+    const rows = getDispatchContexts();
+    expect(rows).toHaveLength(2);
+    expect(rows[0].definitionId).toBe('fake');
+    expect(rows[0].sections).toEqual({ persistent_memory: 42 });
+    // A real 4-byte hex id from the runner, and distinct per call.
+    expect(rows[0].dispatchId).toMatch(/^[0-9a-f]{8}$/);
+    expect(rows[0].dispatchId).not.toBe(rows[1].dispatchId);
+  });
+
+  it('records which memory keys were dropped, not just how many', () => {
+    // "2 entries were dropped" cannot be acted on; naming them can.
+    clearDispatchContexts();
+    enableDispatchContextRecording();
+    (buildContextMessage as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (inputs: any) => {
+        inputs.onReport?.({
+          sections: { persistent_memory: 10 },
+          memory: { kept: ['a'], dropped: ['big-log'], usedChars: 10 },
+        });
+        return { role: 'user', content: 'CTX' };
+      },
+    );
+    return runDefinition(makeCtx(), fakeDefinition(), { text: 'hi' }).then(() => {
+      const [rec] = getDispatchContexts();
+      expect(rec.memoryKept).toEqual(['a']);
+      expect(rec.memoryDropped).toEqual(['big-log']);
+    });
+  });
+
+  it('records the retrieval query, which is otherwise only a debug log', async () => {
+    clearDispatchContexts();
+    enableDispatchContextRecording();
+    (buildContextMessage as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (inputs: any) => {
+        inputs.onReport?.({ sections: {} });
+        return { role: 'user', content: 'CTX' };
+      },
+    );
+    const ctx = makeCtx();
+    (ctx as any).rag = { search: async () => [] };
+    const def = fakeDefinition({ retrievalQuery: (i: FakeInput) => i.text });
+    await runDefinition(ctx, def, { text: 'why is the sky blue' });
+    expect(getDispatchContexts()[0].retrievalQuery).toBe('why is the sky blue');
+  });
+
+  it('records NO query when nothing was retrieved for', async () => {
+    // The defect the second derivation caused: the recorder re-ran the
+    // definition's thunk outside `resolveRetrieval`'s guards, so a dispatch
+    // with no RAG store — or one whose search threw — recorded a
+    // `retrievalQuery` for a search that never happened. The field's own
+    // docstring says "when it retrieved".
+    clearDispatchContexts();
+    enableDispatchContextRecording();
+    (buildContextMessage as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (inputs: any) => {
+        inputs.onReport?.({ sections: {} });
+        return { role: 'user', content: 'CTX' };
+      },
+    );
+    const def = fakeDefinition({ retrievalQuery: (i: FakeInput) => i.text });
+    await runDefinition(makeCtx(), def, { text: 'why is the sky blue' });
+    expect(getDispatchContexts()[0].retrievalQuery).toBeUndefined();
+  });
+
+  it("never attributes one call's context to the next call's id", async () => {
+    // The report is held between assembling the message and learning the id the
+    // call is logged under, so it MUST be consumed. Left in place, an iterate
+    // whose own assembly produced nothing records the previous iterate's
+    // sections under its own dispatch id — a row that is wrong rather than
+    // missing, in the one surface that exists to answer what a dispatch was
+    // given.
+    clearDispatchContexts();
+    enableDispatchContextRecording();
+    let assemblies = 0;
+    (buildContextMessage as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (inputs: any) => {
+        assemblies++;
+        if (assemblies > 1) return null; // second iterate: nothing to inject
+        inputs.onReport?.({ sections: { persistent_memory: 42 } });
+        return { role: 'user', content: 'CTX' };
+      },
+    );
+    const def = fakeDefinition({
+      strategy: () => ({
+        async run(sctx: any) {
+          await sctx.iterate({ extra: [] });
+          return sctx.iterate({ extra: [] });
+        },
+      }),
+    });
+    await runDefinition(makeCtx(), def, { text: 'hi' });
+    expect(getDispatchContexts()).toHaveLength(1);
+  });
+
+  it('records nothing when the assembly produced no message', async () => {
+    // The default mock returns null, i.e. no sections at all. A row for an
+    // assembly that emitted nothing is noise in the one surface that exists to
+    // answer "what was this dispatch given".
+    clearDispatchContexts();
+    enableDispatchContextRecording();
+    await runDefinition(makeCtx(), fakeDefinition(), { text: 'hi' });
+    expect(getDispatchContexts()).toHaveLength(0);
+  });
 });
 
 describe('runDefinition resolves the record profile once and hands it down (#508)', () => {

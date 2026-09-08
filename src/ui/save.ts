@@ -37,4 +37,9 @@ export function persistAgentState(args: {
   } catch (err) {
     console.error('Failed to save turn context history:', err);
   }
+  // Dispatch-context records are deliberately NOT saved here. This runs in
+  // every turn's `finally`, on the Ink render path, and `PerTurnStore.save`
+  // pretty-prints and rewrites the whole array — 0.65 ms and 354 KB at the
+  // record bound, per turn, for a diagnostics record nothing reads until the
+  // session ends. `index.ts`'s cleanup flushes it once (#512).
 }

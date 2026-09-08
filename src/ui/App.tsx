@@ -87,6 +87,7 @@ import { applyProfileToConfig } from '../config.js';
 import { setToolDetailsVisible, formatFriendlyTimestamp } from '../output.js';
 import { noPromptCacheHint } from '../cost-guardrail.js';
 import { memoryCapNotice } from '../memory-notice.js';
+import { clearDispatchContextStore } from '../dispatch-context-history.js';
 import { makeUsageRecorder, makeOutOfTurnUsageRecorder } from '../framework/hooks/token-stats.js';
 import { truncate } from '../text.js';
 import { WIZARD_CATEGORIES_DATA, type WizardFieldData } from '../profiles-wizard-data.js';
@@ -171,6 +172,7 @@ import { ModelGridOverlay } from './overlays/ModelGridOverlay.js';
 import { ConfirmDialog } from './overlays/ConfirmDialog.js';
 import { StatusViewer } from './overlays/StatusViewer.js';
 import { SourcesViewer } from './overlays/SourcesViewer.js';
+import { DispatchContextViewer } from './overlays/DispatchContextViewer.js';
 import { ContextViewer } from './overlays/ContextViewer.js';
 import { UsageViewer } from './overlays/UsageViewer.js';
 import { HelpOverlay } from './overlays/HelpOverlay.js';
@@ -271,6 +273,7 @@ type Overlay =
   | 'status'
   | 'sources'
   | 'context'
+  | 'dispatch'
   | 'usage'
   | 'menu'
   | 'multi-menu'
@@ -870,6 +873,7 @@ export function App({
     activeOverlay === 'status' ||
     activeOverlay === 'sources' ||
     activeOverlay === 'context' ||
+    activeOverlay === 'dispatch' ||
     activeOverlay === 'usage' ||
     activeOverlay === 'settings';
 
@@ -1320,6 +1324,7 @@ export function App({
       historyStore.clear();
       provenanceHistoryStore.clear();
       turnContextStore.clear();
+      clearDispatchContextStore();
       agent.clearHistory();
       setInterrupted(false);
       // Reset the append-only log and remount <Thread> (via the epoch bump).
@@ -4782,6 +4787,12 @@ export function App({
       {activeOverlay === 'context' && (
         <ContextViewer
           agent={agent}
+          onClose={() => setActiveOverlay(null)}
+          onCycleTab={() => setActiveOverlay('dispatch')}
+        />
+      )}
+      {activeOverlay === 'dispatch' && (
+        <DispatchContextViewer
           onClose={() => setActiveOverlay(null)}
           onCycleTab={() => setActiveOverlay('usage')}
         />
