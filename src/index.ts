@@ -665,6 +665,10 @@ async function runInkRepl(args: {
       ['provenance', () => provenanceHistoryStore.save(agent.getTurnProvenance())],
       ['turn-context', () => turnContextStore.save(agent.getTurnContext())],
       ['dispatch-context', () => saveDispatchContexts()],
+      // Access bookkeeping deferred by the debounce (#533). The timer is
+      // `unref`ed so it can never hold the process open, which means it is a
+      // backstop and THIS is the flush that actually runs on a clean exit.
+      ['rag', () => ragStore?.flush()],
     ] as const) {
       try {
         save();

@@ -14,7 +14,10 @@ const mockMcpManager = vi.hoisted(() => ({
 }));
 
 const mockRagSearch = vi.hoisted(() => vi.fn().mockResolvedValue([]));
-const mockRagStoreCtor = vi.hoisted(() => vi.fn(() => ({ search: mockRagSearch })));
+const mockRagFlush = vi.hoisted(() => vi.fn());
+const mockRagStoreCtor = vi.hoisted(() =>
+  vi.fn(() => ({ search: mockRagSearch, flush: mockRagFlush })),
+);
 
 const mockRunDefinition = vi.hoisted(() =>
   vi.fn().mockResolvedValue({ formatted: 'done', stepLimitHit: false }),
@@ -91,8 +94,11 @@ beforeEach(() => {
     resolveAlias: () => null,
   });
   mockRagSearch.mockResolvedValue([]);
+  mockRagFlush.mockClear();
   mockRunDefinition.mockResolvedValue({ formatted: 'done', stepLimitHit: false });
-  mockRagStoreCtor.mockImplementation(() => ({ search: mockRagSearch }) as any);
+  mockRagStoreCtor.mockImplementation(
+    () => ({ search: mockRagSearch, flush: mockRagFlush }) as any,
+  );
 });
 
 describe('resolvePosture', () => {
@@ -229,6 +235,21 @@ describe('runHeadless', () => {
     mockRagSearch.mockRejectedValue(new Error('embedding backend down'));
     const res = await runHeadless(opts({ ragQuery: 'why' }));
     expect(res.ok).toBe(true);
+  });
+
+  it('flushes deferred RAG bookkeeping before the run ends (#533)', async () => {
+    // The store lives and dies with the run, so this `finally` is its only exit
+    // hook — a cron daemon runs many of these and never exits between them. The
+    // debounce timer is `unref`ed and cannot be relied on.
+    await runHeadless(opts({ ragQuery: 'why' }));
+    expect(mockRagFlush).toHaveBeenCalled();
+  });
+
+  it('flushes even when the run failed', async () => {
+    mockRunDefinition.mockRejectedValueOnce(new Error('boom'));
+    const res = await runHeadless(opts({ ragQuery: 'why' }));
+    expect(res.ok).toBe(false);
+    expect(mockRagFlush).toHaveBeenCalled();
   });
 
   it('continues without MCP tools when connect fails', async () => {
