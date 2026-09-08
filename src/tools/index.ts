@@ -134,7 +134,10 @@ export async function createTools(
         memory: toolToAISDK(
           createMemoryTool(memoryStore, provenance, {
             ...(config ? { config } : {}),
-            ...(options.askUser ? { askUser: options.askUser } : {}),
+            // `options?`, not `options.`: the parameter is typed required but
+            // `meta-coverage.test.ts` constructs a registry with none, and this
+            // is the first line in the group body to dereference it.
+            ...(options?.askUser ? { askUser: options.askUser } : {}),
             ...(opts?.onUsage ? { onUsage: opts.onUsage } : {}),
           }),
         ),
