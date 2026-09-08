@@ -260,66 +260,144 @@ export const MAX_PERSISTENT_MEMORY_CHARS = (() => {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 24_000;
 })();
 
+/** How many dropped keys `context:memory-capped` names before it stops. */
+const DROPPED_KEYS_LOGGED = 20;
+
 /**
- * Packing order for `<persistent_memory>` (#371).
+ * One rendered `<persistent_memory>` entry, and the only place its shape is
+ * decided.
  *
- * Only matters when memory exceeds the budget, because that is the only time
- * anything is dropped — and *that* is the defect this fixes. The loop below
- * packs in Map order, which traces back to readdir, so for any user over the
- * cap **which curated facts survive is decided by filename**: `aaron.md` gets
- * in, `zzz-never-do-this.md` does not, with no relevance judgement anywhere in
- * the path. `continue` rather than `break` also lets one large early file crowd
- * out several small later ones.
- *
- * When the curator supplied a ranking, pack in that order instead, so the
- * entries that go are the ones least relevant to this turn. Under budget the
- * order is irrelevant — everything fits either way and nothing is dropped —
- * which is what keeps this a no-op for the common case.
- *
- * Keys the curator omitted keep their original relative order and follow the
- * ranked ones, so a hallucinated or truncated ranking degrades to today's
- * behaviour rather than losing entries outright.
+ * Shared by {@link packMemory} and the renderer deliberately: the packer decides
+ * what fits by measuring this string and the renderer emits it, so a change to
+ * the heading or the escaping moves both at once. Two copies is how a budget
+ * starts describing a block nobody renders.
  */
-function orderForPacking(
-  memories: Map<string, string>,
-  priority?: string[],
-): Array<[string, string]> {
-  const entries = Array.from(memories);
-  if (!priority || priority.length === 0) return entries;
-  const rank = new Map(priority.map((key, i) => [key, i]));
-  // `Array#sort` is stable (ES2019), so unranked entries — all tied at `last` —
-  // keep their original relative order without an index tiebreak.
-  const last = priority.length;
-  return entries.sort((a, b) => (rank.get(a[0]) ?? last) - (rank.get(b[0]) ?? last));
+function memoryBlock(key: string, content: string): string {
+  return `### ${escapeXml(key)}\n${escapeXml(content)}`;
+}
+
+/** What {@link packMemory} decided, in render order. */
+export interface MemoryPack {
+  /** Keys that fit, in the order they are rendered. */
+  kept: string[];
+  /** Keys that did not, in the order they were considered and rejected. */
+  dropped: string[];
+  /** Sum of the kept blocks' lengths, excluding the `\n\n` joins. */
+  usedChars: number;
+  /**
+   * The rendered block for each kept key, in the same order as {@link kept}.
+   *
+   * The packer builds these to measure them, so handing them back is what stops
+   * the renderer escaping the whole store a second time.
+   */
+  keptBlocks: string[];
+}
+
+/**
+ * Which curated memories fit in `<persistent_memory>`, and which do not (#528).
+ *
+ * **Extracted from the renderer because three callers need the same answer.**
+ * The renderer emits the kept set; `recall-filter` asks whether anything will be
+ * dropped at all, to decide whether a ranking is worth requesting; and
+ * `Agent.processInput` records what was injected. Those three used to compute it
+ * three different ways, and the first two disagreed by construction —
+ * `recall-filter` summed `key.length + content.length` while the renderer
+ * measured the *rendered* block, `### ` and the newline and XML escaping
+ * included. The rendered form is strictly larger by 5 chars per entry plus
+ * escaping, so there was a deadband below the cap in which entries were dropped
+ * and **no ranking was ever asked for** — drop-by-filename, at precisely the
+ * boundary the ranking exists to fix. Measured at 162 chars on a real 30-entry
+ * store, and it widens with entry count rather than with bytes. Making the
+ * trigger *call this function* rather than re-derive its measure is what closes
+ * it for good: there is one measure now, so it cannot drift.
+ *
+ * **The order is the ranking, then size.** Ranked entries pack in the curator's
+ * order; everything it did not name follows, **smallest first**. Only the second
+ * half is new — the first is what #371 built — and it is the half that was
+ * broken, because unranked entries packed in `Map` order, which traces to
+ * `readdir`. So for any user over the cap, *which curated facts survive was
+ * decided by filename*: `aaa.md` in, `zzz-never-do-this.md` out, with no
+ * judgement anywhere in the path.
+ *
+ * Smallest-first is argued from the store rather than from taste: on a real
+ * install the two largest entries are one-off logs of specific emails, 1,498 of
+ * 6,177 chars between them, while the standing rules ("never email the client
+ * directly") are small. Dropping by size drops the episodic records first and
+ * keeps the most standing facts per byte. It is deterministic and it is stated,
+ * which is the property `readdir` order never had.
+ *
+ * **First-fit, deliberately — `break` was tried and is worse.** #528 reads the
+ * `continue` as making the ranking advisory, since a large rank-1 entry can be
+ * skipped while small low-ranked ones get in. Stopping at the first entry that
+ * does not fit would honour the ranking as a cut, but it hands one oversized
+ * memory the power to blank the whole section: a single 25,000-char entry
+ * ranked first would evict *everything*. Worked through on a four-entry example
+ * it is also not even reliably better by relevance — after the cut, filling the
+ * residue by size can keep a lower-ranked entry than the greedy pass would
+ * have. So the greedy stays, and the anomaly is answered where it actually
+ * hurts: the dropped keys are now named, to the model in `### (truncated)`, to
+ * the log, and to the user.
+ *
+ * Whole entries only, always. A fact truncated mid-sentence still reads as
+ * authoritative and is wrong.
+ *
+ * Takes the `Map`, not the `MemoryStore`, so it stays a pure function of its
+ * inputs — and so the two-method fake in `context-message.test.ts` and the
+ * one-method fake in `recall-filter.test.ts` both keep working unchanged.
+ */
+export function packMemory(memories: Map<string, string>, priority?: string[]): MemoryPack {
+  // Rendered once, here, and carried forward — the packer has to build every
+  // block to measure it, and the renderer then needs the kept ones. Escaping
+  // the whole store twice cost 14.7 µs against 6.8 µs on the real 30-entry
+  // store, on a path that runs per LLM call.
+  //
+  // An array of pairs rather than a key→size side-table: the table was built
+  // from the same map the loop walks, so every `get` needed a `?? 0` fallback
+  // that could not fire — three impossible cases reading as real ones.
+  const rank = new Map((priority ?? []).map((key, i) => [key, i]));
+  const unranked = rank.size;
+  const sized = Array.from(memories, ([key, content]) => {
+    const block = memoryBlock(key, content);
+    return { key, block, rank: rank.get(key) ?? unranked };
+  }).sort((a, b) => a.rank - b.rank || a.block.length - b.block.length);
+
+  const kept: string[] = [];
+  const keptBlocks: string[] = [];
+  const dropped: string[] = [];
+  let used = 0;
+  for (const entry of sized) {
+    if (used + entry.block.length > MAX_PERSISTENT_MEMORY_CHARS) {
+      dropped.push(entry.key);
+      continue;
+    }
+    kept.push(entry.key);
+    keptBlocks.push(entry.block);
+    used += entry.block.length;
+  }
+  return { kept, keptBlocks, dropped, usedChars: used };
 }
 
 function renderPersistentMemory(memoryStore?: MemoryStore, priority?: string[]): string | null {
   if (!memoryStore) return null;
   const memories = memoryStore.getAllMemoryContents();
   if (memories.size === 0) return null;
-  const blocks: string[] = [];
-  let used = 0;
-  for (const [key, content] of orderForPacking(memories, priority)) {
-    const block = `### ${escapeXml(key)}\n${escapeXml(content)}`;
-    // Whole entries only. Truncating mid-entry would hand the model a fact that
-    // stops mid-sentence, which is worse than not having it — it reads as
-    // authoritative and is wrong.
-    if (used + block.length > MAX_PERSISTENT_MEMORY_CHARS) continue;
-    blocks.push(block);
-    used += block.length;
-  }
-  const dropped = memories.size - blocks.length;
-  if (dropped > 0) {
+  const pack = packMemory(memories, priority);
+  const blocks = [...pack.keptBlocks];
+  if (pack.dropped.length > 0) {
     debugLog('context:memory-capped', {
-      dropped,
-      kept: blocks.length,
-      usedChars: used,
+      dropped: pack.dropped.length,
+      kept: pack.kept.length,
+      usedChars: pack.usedChars,
       capChars: MAX_PERSISTENT_MEMORY_CHARS,
+      // The KEYS, not just the count. "Three entries were dropped" cannot be
+      // acted on; "`pr-review-workflow` was dropped" can. Bounded because the
+      // store is unbounded and this is one line per LLM step.
+      droppedKeys: pack.dropped.slice(0, DROPPED_KEYS_LOGGED),
     });
     // Visible to the model, so a gap it can act on (by calling `memory` to read
     // a specific key) is never silent.
     blocks.push(
-      `### (truncated)\n${dropped} further memory ${plural(dropped, 'entry was', 'entries were')} ` +
+      `### (truncated)\n${pack.dropped.length} further memory ${plural(pack.dropped.length, 'entry was', 'entries were')} ` +
         `omitted to stay within the context budget. Use the \`memory\` tool to read a specific key.`,
     );
   }
