@@ -164,6 +164,9 @@ const mockRagSearch = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 const mockRagStoreInstance = vi.hoisted(() => ({
   search: mockRagSearch,
   flush: vi.fn(),
+  // On the real store's surface (#520): `runHeadless` reads it and writes the
+  // reason to the job log, since `RAGStore` deliberately does not print.
+  retrievalDisabledReason: () => null,
 }));
 
 vi.mock('../rag.js', () => ({

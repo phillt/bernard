@@ -1,6 +1,11 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { getEmbeddingProvider, cosineSimilarity } from './embeddings.js';
+import {
+  getEmbeddingProvider,
+  cosineSimilarity,
+  EMBEDDING_MODEL_ID,
+  type EmbeddingProvider,
+} from './embeddings.js';
 import { debugLog } from './logger.js';
 import { DEFAULT_DOMAIN } from './domains.js';
 import { RAG_DIR, MEMORIES_FILE, LAST_SESSION_FILE } from './paths.js';
@@ -21,6 +26,33 @@ const PRUNE_HALF_LIFE_DAYS = 90;
 const STALE_TEMP_MAX_AGE_MS = 60 * 60 * 1000; // 1 hour
 /** Default time-to-live in days for newly created memories. */
 const DEFAULT_RAG_TTL_DAYS = 90;
+
+/**
+ * Bumped only when the on-disk SHAPE changes, never when the model does — a
+ * model change is `model`/`dimensions`, and it is a refusal rather than a
+ * discard. Version 1 is the first stamped store; a bare array is version 0 by
+ * absence.
+ */
+const STORE_SCHEMA_VERSION = 1;
+
+/**
+ * Dimensionality written into the stamp.
+ *
+ * Read off the provider where one is available and from this constant on the
+ * write path, where `persist` is synchronous and `getEmbeddingProvider` is not.
+ * They cannot disagree: both describe the one hardcoded model, and the moment
+ * that stops being true is the moment the swap decision (#520's other half)
+ * gets made.
+ */
+const EMBEDDING_DIMENSIONS = 384;
+
+/** The stamped on-disk shape (#520). A bare `RAGMemory[]` is the legacy form. */
+interface StoredMemories {
+  version: number;
+  model: string;
+  dimensions: number;
+  memories: RAGMemory[];
+}
 
 /**
  * How long pending access bookkeeping may sit unwritten (#533).
@@ -129,6 +161,15 @@ export class RAGStore {
    * {@link turnSearchCache} (cleared together).
    */
   private turnEmbeddingCache = new Map<string, number[]>();
+  /**
+   * What the on-disk store says wrote it, when it says anything (#520).
+   * Absent for a legacy bare-array store, which is adopted rather than refused.
+   */
+  private stamp: { model?: string; dimensions?: number } | null = null;
+  /** A legacy store was read; write the stamp back on the next persist. */
+  private needsStamp = false;
+  /** See {@link retrievalDisabledReason}. Non-null IS the once-per-process latch. */
+  private disabledReason: string | null = null;
   /**
    * Access bookkeeping written but not yet flushed (#533).
    *
@@ -363,6 +404,14 @@ export class RAGStore {
     const provider = await getEmbeddingProvider();
     if (!provider) return null;
 
+    // The one choke point both `search` and `searchWithIds` pass through, so
+    // the refusal covers every read path without being written twice (#520).
+    const mismatch = this.modelMismatch(provider);
+    if (mismatch) {
+      this.warnMismatchOnce(mismatch);
+      return null;
+    }
+
     try {
       const vector = Array.from((await provider.embed([query]))[0]);
       if (cacheOn) this.turnEmbeddingCache.set(query, vector);
@@ -572,8 +621,18 @@ export class RAGStore {
       if (!fs.existsSync(MEMORIES_FILE)) return;
       const data = fs.readFileSync(MEMORIES_FILE, 'utf-8');
       const parsed = JSON.parse(data);
+      // Two shapes, and the legacy one is not deprecated — it is what every
+      // existing install has on disk (#520). A bare array is a store written
+      // before the stamp existed: read it, adopt it, and let `needsStamp`
+      // write the stamp back on the same constructor pass. No migration script.
+      const records: unknown = Array.isArray(parsed) ? parsed : parsed?.memories;
       if (Array.isArray(parsed)) {
-        this.memories = parsed.map((m: any) => ({
+        this.needsStamp = true;
+      } else if (parsed && typeof parsed === 'object') {
+        this.stamp = { model: parsed.model, dimensions: parsed.dimensions };
+      }
+      if (Array.isArray(records)) {
+        this.memories = records.map((m: any) => ({
           ...m,
           domain: m.domain ?? DEFAULT_DOMAIN,
           embedding: Array.isArray(m.embedding) ? m.embedding : Object.values(m.embedding),
@@ -619,9 +678,80 @@ export class RAGStore {
       dirty = true;
     }
 
-    if (dirty) {
+    if (dirty || this.needsStamp) {
       this.persist();
     }
+  }
+
+  /**
+   * Refuses to search when the store was written by a different embedding
+   * model (#520).
+   *
+   * The failure this replaces was **silent**: `cosineSimilarity` returns `0`
+   * for vectors of different lengths, `0` is below every threshold, so
+   * `search()` returned `[]` — no error, no log, a store of thousands of facts
+   * reading as empty. `dimensions()`, the interface method that would have
+   * caught it, existed with **zero production callers**. This is its first.
+   *
+   * **Refuse, do not discard.** `CACHE_SCHEMA_VERSION` is the template for the
+   * stamp, but its mismatch path returns `null` and refetches — right for a
+   * disposable model catalogue, wrong here: these are thousands of records
+   * derived from the user's own conversations. A mismatch stops retrieval and
+   * says why, leaving re-embedding or an explicit `bernard facts clear` as the
+   * user's call.
+   *
+   * An unstamped legacy store is NOT a mismatch — it is every install that
+   * predates this — so it is adopted, stamped and trusted. That is a real
+   * assumption worth naming: a model swapped before the stamp existed cannot
+   * be detected.
+   */
+  private modelMismatch(provider: EmbeddingProvider): string | null {
+    if (!this.stamp?.model) return null;
+    if (this.stamp.model === provider.modelId() && this.stamp.dimensions === provider.dimensions())
+      return null;
+    return (
+      `This memory store was written by ${this.stamp.model} at ${this.stamp.dimensions} dimensions, ` +
+      `but the active embedder is ${provider.modelId()} at ${provider.dimensions()}. ` +
+      `Vectors from different models score zero against each other, so every search would return ` +
+      `nothing. The ${this.memories.length} stored facts are intact — re-embed them, or run ` +
+      '`bernard facts clear` to start over.'
+    );
+  }
+
+  /**
+   * Records the mismatch and logs it; **does not print**.
+   *
+   * `debugLog` alone would reproduce the original defect one level up — the
+   * whole point is that this failure was invisible without `BERNARD_DEBUG` —
+   * but a `console.error` from here is the wrong channel and would be invisible
+   * for a different reason. RAG search runs mid-turn (`recall-filter`, the main
+   * agent's own retrieval), and in the default full-screen REPL Ink owns the
+   * alternate screen buffer: a raw stderr write at the cursor corrupts the
+   * current frame and is then overwritten on Ink's next ~32 ms render. The
+   * warning deliberately made "loud enough to be seen" would be the one most
+   * likely not to be seen.
+   *
+   * So this module exposes STATE and lets each front end surface it in its own
+   * channel — `catalog-notice.ts`'s `provider-wiped` precedent exactly, and for
+   * the same stated reason: "your retrieval is returning nothing" has to
+   * outlive a keystroke, so the REPL pushes a transcript notice rather than a
+   * toast, and `runHeadless` writes it to the job log where an operator will
+   * read it later.
+   */
+  private warnMismatchOnce(message: string): void {
+    debugLog('rag:model-mismatch', { message });
+    this.disabledReason = message;
+  }
+
+  /**
+   * Why retrieval is returning nothing, or `null` when it is healthy.
+   *
+   * Latched on first detection and never cleared: the condition is a property
+   * of the store on disk versus the active embedder, and neither changes
+   * within a process.
+   */
+  retrievalDisabledReason(): string | null {
+    return this.disabledReason;
   }
 
   /**
@@ -695,6 +825,7 @@ export class RAGStore {
   /** Persist memories to disk atomically (write to tmp, then rename). */
   private persist(): void {
     this.dirty = false;
+    this.needsStamp = false;
     try {
       // A UNIQUE temp name, not a fixed `.tmp` suffix (#533). Four processes
       // write this file — the REPL, the detached exit worker, the cron daemon
@@ -703,7 +834,16 @@ export class RAGStore {
       // documents avoiding `fs-utils`' fixed-suffix helper for exactly this.
       // Debouncing widens the window that makes it matter.
       const tmpFile = `${MEMORIES_FILE}.${process.pid}.${Date.now().toString(36)}.tmp`;
-      fs.writeFileSync(tmpFile, JSON.stringify(this.memories), 'utf-8');
+      // Stamped, so a later reader can tell which model wrote these vectors
+      // (#520). `CACHE_SCHEMA_VERSION` is the template for the shape; the
+      // difference is what a mismatch DOES — see `modelMismatch`.
+      const payload: StoredMemories = {
+        version: STORE_SCHEMA_VERSION,
+        model: this.stamp?.model ?? EMBEDDING_MODEL_ID,
+        dimensions: this.stamp?.dimensions ?? EMBEDDING_DIMENSIONS,
+        memories: this.memories,
+      };
+      fs.writeFileSync(tmpFile, JSON.stringify(payload), 'utf-8');
       fs.renameSync(tmpFile, MEMORIES_FILE);
     } catch (err) {
       debugLog(

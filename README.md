@@ -862,7 +862,7 @@ Bernard has a Retrieval-Augmented Generation (RAG) system that provides long-ter
 - **Per-domain retrieval** — search returns up to 5 results per domain (15 total max), preventing any single domain from crowding out others
 - **Domain-grouped context** — recalled facts are organized by domain with headings in the system prompt, giving the LLM clear signal about what kind of knowledge each fact represents
 - **Semantic search** — on each new user message, relevant facts are retrieved and injected into the system prompt as "Recalled Context"
-- **Local embeddings** — uses FastEmbed (`AllMiniLML6V2`, 384 dimensions) for fully local embedding computation
+- **Local embeddings** — uses `@xenova/transformers` (`Xenova/all-MiniLM-L6-v2`, 384 dimensions) for fully local embedding computation
 - **Deduplication** — facts too similar to existing ones (>92% cosine similarity) are skipped
 - **Pruning** — older, less-accessed facts decay over time (90-day half-life); the store caps at 5000 facts
 - **Backward compatible** — existing memories without a domain are automatically assigned to "general" on load
@@ -913,7 +913,7 @@ Bernard follows the [XDG Base Directory Specification](https://specifications.fr
     └── alerts/                  # Cron alert files
 
 ~/.cache/bernard/                # Cache (XDG_CACHE_HOME)
-├── models/                      # Embedding model cache (fastembed)
+├── models/                      # Embedding model cache (@xenova/transformers)
 └── update-check.json            # Update check state
 
 ~/.local/state/bernard/          # State (XDG_STATE_HOME)
@@ -986,7 +986,7 @@ src/
 ├── context.ts            # Context compression + domain fact extraction
 ├── domains.ts            # Memory domain registry + extraction prompts
 ├── rag.ts                # RAG store (domain-tagged embeddings + per-domain search)
-├── embeddings.ts         # FastEmbed wrapper
+├── embeddings.ts         # Embedding provider (@xenova/transformers)
 ├── routines.ts           # RoutineStore (named multi-step workflows)
 ├── specialists.ts        # SpecialistStore (reusable expert profiles)
 ├── specialist-candidates.ts  # CandidateStore (auto-detected suggestions)
@@ -1056,7 +1056,7 @@ Found a bug? Please [open an issue](https://github.com/phillt/bernard/issues/new
 
 ## Third-Party Licenses
 
-Bernard uses the [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) sentence-transformer model (via [fastembed](https://github.com/Anush008/fastembed-js)) for local RAG embeddings. This model is licensed under the Apache License 2.0. See [`THIRD-PARTY-NOTICES`](./THIRD-PARTY-NOTICES) for full license text and attribution.
+Bernard uses the [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) sentence-transformer model (via [@xenova/transformers](https://github.com/xenova/transformers.js)) for local RAG embeddings. This model is licensed under the Apache License 2.0. See [`THIRD-PARTY-NOTICES`](./THIRD-PARTY-NOTICES) for full license text and attribution.
 
 ## License
 

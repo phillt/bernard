@@ -1108,6 +1108,7 @@ export function App({
   // at all (#306). A wiped provider goes into the transcript rather than a
   // toast: toasts are cleared by the next submit, and "your cost and context
   // numbers are now wrong" must outlive a keystroke.
+  const retrievalDisabledNotifiedRef = useRef(false);
   const catalogRefreshRanRef = useRef(false);
   useEffect(() => {
     if (catalogRefreshRanRef.current) return;
@@ -4103,6 +4104,19 @@ export function App({
           memoryCapWarnedRef.current = true;
           pushAssistantNotice(memoryNotice);
         }
+      }
+      // A model swap silently destroys retrieval (#520). `RAGStore` records the
+      // mismatch and deliberately does NOT print it: search runs mid-turn, and
+      // a raw stderr write into Ink's alternate screen buffer corrupts the
+      // frame and is overwritten on the next render — so the warning made loud
+      // enough to be seen would be the one least likely to be. A transcript
+      // notice rather than a toast, the `provider-wiped` rule: "every search is
+      // returning nothing" has to outlive a keystroke. `RAGStore` latches it, so
+      // this fires once per session.
+      const retrievalOff = stores.rag?.retrievalDisabledReason();
+      if (retrievalOff && !retrievalDisabledNotifiedRef.current) {
+        retrievalDisabledNotifiedRef.current = true;
+        pushAssistantNotice(`⚠ Memory retrieval is disabled.\n\n${retrievalOff}`);
       }
       // Durable record of an interrupted turn (#403). The `⏹ you interrupted`
       // chrome in <Thread>/<TranscriptViewport> renders off the `interrupted`
