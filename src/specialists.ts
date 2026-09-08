@@ -92,6 +92,46 @@ export interface Specialist {
    * from before anything read the field at all.
    */
   targetTools?: string[];
+  /**
+   * Steps this specialist gets, as a fraction of `config.maxSteps` (#508).
+   *
+   * A ratio rather than a count, so it scales with `BERNARD_MAX_STEPS` instead
+   * of fighting it — the same reason `role` is preferred over a `provider`
+   * pin. Absent means the dispatching definition's own default (0.5 for both
+   * `specialist` and `tool-wrapper`), which is what every record has always
+   * had: a constant nobody chose, applied to a one-shot lookup and a
+   * twenty-step research run alike.
+   *
+   * Validated at resolution, never trusted — see `dispatch-profile.ts`.
+   */
+  stepRatio?: number;
+  /**
+   * The execution strategy this specialist wants (#508).
+   *
+   * `'react'` opts a specialist into the think → act → evaluate loop with plan
+   * enforcement; `'normal'` pins it to a single pass. Absent keeps what the
+   * dispatching definition does today, which for `specialist` is
+   * `coordinatorMode`-dependent and for `tool-wrapper` is always Normal — so a
+   * wrapper that genuinely needs to plan had no way to say so.
+   *
+   * Rides `BuildStrategyOpts.strategyId`, the seam #167 already built for
+   * per-turn variation, rather than a second mechanism.
+   */
+  strategy?: 'normal' | 'react';
+  /**
+   * Which built-in tool registry this specialist is scoped to (#508).
+   *
+   * `'worker'` drops the tools a dispatched worker has no business using
+   * (`routine`, `lineup_edit`, `specialist`, the `cron` family, MCP config);
+   * `'full'` keeps them. Absent derives from `historyMode`, i.e. `'worker'` for
+   * every dispatched specialist — and the only exception in the tree today is
+   * `tool-wrapper`'s hardcoded `'full'`, chosen for three bundled wrappers and
+   * therefore applied to every wrapper anyone has since written.
+   *
+   * Narrowing here is free; widening is a real grant, and it is bounded by
+   * {@link targetTools}, which is a fence for every kind since #507.
+   */
+  toolSurface?: 'full' | 'worker';
   /** Correct usage patterns used for few-shot priming. */
   goodExamples?: SpecialistExample[];
   /** Failed usage patterns with their corrected form. */
@@ -153,6 +193,12 @@ export interface CreateSpecialistInput {
   params?: ModelParams;
   kind?: SpecialistKind;
   targetTools?: string[];
+  /** See {@link Specialist.stepRatio}. */
+  stepRatio?: number;
+  /** See {@link Specialist.strategy}. */
+  strategy?: 'normal' | 'react';
+  /** See {@link Specialist.toolSurface}. */
+  toolSurface?: 'full' | 'worker';
   goodExamples?: SpecialistExample[];
   badExamples?: SpecialistBadExample[];
   structuredOutput?: boolean;
@@ -184,6 +230,16 @@ export type SpecialistUpdates = Partial<
    * typed `string` so they get it for free, while `RoleId` has to say so.
    */
   role?: RoleId | '';
+  /**
+   * The three execution fields (#508) carry the same sentinel, for the same
+   * reason: `undefined` means "don't change", so removing a declaration needs
+   * a value that says so. `0` is out of {@link Specialist.stepRatio}'s valid
+   * range and `''` is not a member of either union, so neither sentinel can
+   * collide with a real declaration.
+   */
+  stepRatio?: number;
+  strategy?: 'normal' | 'react' | '';
+  toolSurface?: 'full' | 'worker' | '';
 };
 
 const MAX_SPECIALISTS = 50;
@@ -344,6 +400,9 @@ export class SpecialistStore {
       ...(input.params !== undefined ? { params: input.params } : {}),
       ...(input.kind !== undefined ? { kind: input.kind } : {}),
       ...(input.targetTools !== undefined ? { targetTools: input.targetTools } : {}),
+      ...(input.stepRatio !== undefined ? { stepRatio: input.stepRatio } : {}),
+      ...(input.strategy !== undefined ? { strategy: input.strategy } : {}),
+      ...(input.toolSurface !== undefined ? { toolSurface: input.toolSurface } : {}),
       ...(input.goodExamples !== undefined ? { goodExamples: input.goodExamples } : {}),
       ...(input.badExamples !== undefined ? { badExamples: input.badExamples } : {}),
       ...(input.structuredOutput !== undefined ? { structuredOutput: input.structuredOutput } : {}),
@@ -356,6 +415,27 @@ export class SpecialistStore {
       JSON.stringify(specialist, null, 2),
     );
     return specialist;
+  }
+
+  /**
+   * Applies one optional update, where a sentinel value means "remove this
+   * declaration" (#508).
+   *
+   * `undefined` means "don't change", so every clearable field needs a value
+   * that says "clear" — and there were five hand-rolled copies of the same
+   * three-line branch, differing only in the sentinel token, which is the shape
+   * in which a `0` gets pasted next to a `''`. #508's own roadmap promises more
+   * declarable fields, so this is the third edit each one would otherwise need.
+   */
+  private setOrClear<K extends keyof Specialist>(
+    record: Specialist,
+    field: K,
+    value: Specialist[K] | '' | undefined,
+    isClear: (v: NonNullable<typeof value>) => boolean,
+  ): void {
+    if (value === undefined) return;
+    if (isClear(value as NonNullable<typeof value>)) delete record[field];
+    else record[field] = value as Specialist[K];
   }
 
   /** Stamps `updatedAt` and atomically persists a specialist record. */
@@ -386,20 +466,8 @@ export class SpecialistStore {
     if (updates.systemPrompt !== undefined) specialist.systemPrompt = updates.systemPrompt;
     if (updates.guidelines !== undefined) specialist.guidelines = updates.guidelines;
     // Empty string clears the override; undefined means "don't change"
-    if (updates.provider !== undefined) {
-      if (updates.provider === '') {
-        delete specialist.provider;
-      } else {
-        specialist.provider = updates.provider;
-      }
-    }
-    if (updates.model !== undefined) {
-      if (updates.model === '') {
-        delete specialist.model;
-      } else {
-        specialist.model = updates.model;
-      }
-    }
+    this.setOrClear(specialist, 'provider', updates.provider, (v) => v === '');
+    this.setOrClear(specialist, 'model', updates.model, (v) => v === '');
     // One-way: bind an unbound record, never re-bind or unbind. Enforced in
     // the store rather than only at the tool, since this is the property the
     // field exists for.
@@ -413,13 +481,7 @@ export class SpecialistStore {
     }
     // `''` clears the role, matching how provider/model clear — `undefined`
     // means "don't change", so there has to be a way to say "remove it".
-    if (updates.role !== undefined) {
-      if (updates.role === '') {
-        delete specialist.role;
-      } else {
-        specialist.role = updates.role;
-      }
-    }
+    this.setOrClear(specialist, 'role', updates.role, (v) => v === '');
     // An empty object clears params; undefined means "don't change".
     if (updates.params !== undefined) {
       if (Object.keys(updates.params).length === 0) {
@@ -430,6 +492,10 @@ export class SpecialistStore {
     }
     if (updates.kind !== undefined) specialist.kind = updates.kind;
     if (updates.targetTools !== undefined) specialist.targetTools = updates.targetTools;
+    const blank = (v: unknown): boolean => v === '';
+    this.setOrClear(specialist, 'stepRatio', updates.stepRatio, (v) => v === 0);
+    this.setOrClear(specialist, 'strategy', updates.strategy, blank);
+    this.setOrClear(specialist, 'toolSurface', updates.toolSurface, blank);
     if (updates.goodExamples !== undefined) specialist.goodExamples = updates.goodExamples;
     if (updates.badExamples !== undefined) specialist.badExamples = updates.badExamples;
     if (updates.structuredOutput !== undefined)

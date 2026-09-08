@@ -8,7 +8,7 @@ import type { AgentContext } from '../context.js';
 import type { Specialist } from '../../specialists.js';
 import { debugLog } from '../../logger.js';
 import type { ToolNameAliasResolver } from '../../mcp-names.js';
-import { resolveSiteModel } from '../../model-policy.js';
+import { resolveSiteModel, type ModelSite } from '../../model-policy.js';
 import { osPromptBlock } from '../../os-info.js';
 import {
   isWrapperParseFailure,
@@ -17,6 +17,7 @@ import {
   type WrapperResult,
 } from '../../structured-output.js';
 import { outputHook } from '../hooks/output.js';
+import { buildStrategy } from '../strategies/build-strategy.js';
 import { NormalStrategy } from '../strategies/normal.js';
 import type { AgentDefinition, FormatMeta, ResolvedModel } from './types.js';
 import { makeLastStepTextOnly } from './task.js';
@@ -60,7 +61,7 @@ export interface ToolWrapperInput extends WithAttachments {
  * will read the prompt.
  */
 function suppressesInlineMarkers(ctx: AgentContext, specialist: Specialist): boolean {
-  const site = resolveSiteModel(ctx.config, 'tool-wrapper', { specialist });
+  const site = resolveSiteModel(ctx.config, SITE, { specialist });
   const sdk = ctx.config.customProviders?.[site.provider]?.sdk;
   return !allowsInlineMarkers(getModelProfile(site.provider, site.modelName, sdk).family);
 }
@@ -74,6 +75,14 @@ function suppressesInlineMarkers(ctx: AgentContext, specialist: Specialist): boo
  * Model resolution honours `specialist.provider` / `specialist.model` (looked
  * up live so runtime edits are picked up).
  */
+/**
+ * Written once, read twice: the definition declares it for ledger attribution
+ * and `resolveModel` passes it to `resolveSiteModel` for tiering. Two literals
+ * that must agree, and if they drift the model resolves against a different
+ * site than the spend is billed to — silently.
+ */
+const SITE: ModelSite = 'tool-wrapper';
+
 export const toolWrapperDefinition: AgentDefinition<ToolWrapperInput, WrapperResult> = {
   id: 'tool-wrapper',
   historyMode: 'ephemeral',
@@ -85,8 +94,15 @@ export const toolWrapperDefinition: AgentDefinition<ToolWrapperInput, WrapperRes
   // the full registry for that reason; this declares the same fact where a
   // reader of the definition can see it.
   toolSurface: 'full',
+  // The fallback under `dispatchToolWrapper`'s per-id `tool-wrapper:<id>`
+  // (#299). Declared for the same reason `specialist` now declares one: without
+  // it, `resolveModel` returns no `site` key and `run.ts` defaults to `'main'`,
+  // so any caller that forgets the override attributes wrapper spend to the
+  // main layer.
+  site: SITE,
   repairLabel: 'tool-wrapper',
   prefix: (input) => `wrap:${input.slotId}`,
+  recordId: (input) => input.specialistId,
 
   systemPrompt(ctx, input) {
     const specialist = ctx.stores.specialists.get(input.specialistId);
@@ -139,12 +155,24 @@ export const toolWrapperDefinition: AgentDefinition<ToolWrapperInput, WrapperRes
     return input.childTools;
   },
 
-  strategy() {
-    return new NormalStrategy();
+  strategy(ctx, _input, profile) {
+    // Normal unless the record asks otherwise (#508). A wrapper that genuinely
+    // needs to plan had no way to say so: this returned `new NormalStrategy()`
+    // unconditionally, so the ReAct path was unreachable from a record even
+    // though `buildStrategy` has taken a per-run `strategyId` since #167.
+    // Routed through the builder only when a record declares one, so a wrapper
+    // that declares nothing gets the same object it always did rather than
+    // whatever `coordinatorMode` happens to say.
+    return profile.strategy
+      ? buildStrategy(ctx.config, { strategyId: profile.strategy })
+      : new NormalStrategy();
   },
 
-  stepBudget(config) {
-    return Math.max(2, Math.ceil(config.maxSteps * TOOL_WRAPPER_STEP_RATIO));
+  stepBudget(config, _input, profile) {
+    // The floor of 2 stays the definition's: a wrapper below it cannot call a
+    // tool and then report, so it is a property of the shape rather than of any
+    // record's preference.
+    return Math.max(2, Math.ceil(config.maxSteps * (profile.stepRatio ?? TOOL_WRAPPER_STEP_RATIO)));
   },
 
   buildUserMessage(input): CoreMessage {

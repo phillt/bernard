@@ -118,6 +118,13 @@ export function createSpecialistRunTool(ctx: AgentContext): Tool {
                   abortSignal: execOptions.abortSignal,
                   overrides: { provider, model },
                   planStore,
+                  // Attribute this dispatch's spend to its own per-specialist
+                  // site (#299, #508), the way `tool_wrapper_run` has since
+                  // #299 and `delegate_<server>` does with `mcp:<server>`.
+                  // Without it every specialist folded into the `main` layer of
+                  // `bernard usage`, so the one number that could tell you a
+                  // persona was expensive said "the main agent is expensive".
+                  telemetrySite: `specialist:${specialistId}`,
                 });
                 return formatted;
               } finally {

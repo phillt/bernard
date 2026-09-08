@@ -18,6 +18,11 @@ import { resolveSiteModel } from '../model-policy.js';
 import { ALL_ROLE_IDS, MODEL_ROLES, type RoleId } from '../model-roles.js';
 import { validateModelParams, PARAM_IDS, type ModelParams } from '../providers/model-params.js';
 import { attachMeta } from '../framework/tools/adapter.js';
+import {
+  DISPATCH_STRATEGIES,
+  DISPATCH_TOOL_SURFACES,
+  MAX_STEP_RATIO,
+} from '../framework/agents/dispatch-profile.js';
 
 const goodExampleSchema = z.object({
   input: z.string(),
@@ -81,6 +86,32 @@ function targetToolsScopeError(
     `Error: a "${effective}" specialist must declare targetTools. It fronts specific tools, ` +
     `and one that names none is handed no tools at all. Pass e.g. targetTools: ["shell"].`
   );
+}
+
+/**
+ * Rejects a `stepRatio` the resolver would silently discard (#508).
+ *
+ * `resolveDispatchProfile` already falls back on an out-of-range value, because
+ * it runs on every dispatch and must not throw for a bad record. That is the
+ * safety net, not the message: a record written with `stepRatio: 50` would be
+ * stored, ignored forever, and the only trace would be a debug line nobody
+ * reads. The creation boundary is where a model can still be told, so it is
+ * told here — the same division `targetToolsScopeError` makes against
+ * `buildChildTools`' silent drop.
+ *
+ * Returns an error string, or `null` when the value is fine. `0` is the clear
+ * sentinel and is handled by the caller before this is reached.
+ */
+function stepRatioError(value: number | undefined): string | null {
+  if (value === undefined || value === 0) return null;
+  if (!Number.isFinite(value) || value < 0 || value > MAX_STEP_RATIO) {
+    return (
+      `Error: stepRatio is a FRACTION of the session step budget, not a step count — ` +
+      `it must be greater than 0 and at most ${MAX_STEP_RATIO}. Got ${value}. ` +
+      `For "about a fifth of the usual work" pass 0.2; pass 0 to clear.`
+    );
+  }
+  return null;
 }
 
 /**
@@ -183,6 +214,38 @@ export function createSpecialistTool(
           .describe(
             'The tool names exposed to the child agent (e.g. ["shell"] or ["specialist", "tool_wrapper_run"]). Enforced for every kind: the specialist holds exactly these plus its reasoning tools, and nothing else. Required on tool-wrapper and meta; optional on persona, where omitting it means every tool the dispatch surface allows.',
           ),
+        stepRatio: z
+          .number()
+          .optional()
+          .describe(
+            'How much work this specialist gets, as a FRACTION of the session step budget — ' +
+              '0.2 for a lookup that should be one or two calls, 1 for a research run that ' +
+              'needs the full budget. A fraction rather than a count so it scales with the ' +
+              "user's own setting. Omit unless the work is clearly smaller or larger than " +
+              'usual; the default is 0.5. Pass 0 to clear. Used with create/update.',
+          ),
+        strategy: z
+          // `''` is in the union for the reason `role`'s is: the description
+          // offers it as the way to clear, and a bare `z.enum` would reject it
+          // before `execute` ran.
+          .union([z.enum(DISPATCH_STRATEGIES), z.literal('')])
+          .optional()
+          .describe(
+            'How this specialist runs. "react" is a think → act → evaluate loop with plan ' +
+              'enforcement — for multi-step work where the right next call depends on the last ' +
+              'result. "normal" is a single pass. Omit to follow the session default. ' +
+              'Pass "" to clear. Used with create/update.',
+          ),
+        toolSurface: z
+          .union([z.enum(DISPATCH_TOOL_SURFACES), z.literal('')])
+          .optional()
+          .describe(
+            'Which built-in registry this specialist is scoped to. "worker" drops the tools a ' +
+              'dispatched agent has no business using (routines, lineups, cron, MCP config); ' +
+              '"full" keeps them, and is only right for a specialist that manages Bernard itself. ' +
+              'Omit unless you need "full" — the default is already the narrow one. ' +
+              'Pass "" to clear. Used with create/update.',
+          ),
         goodExamples: z
           .array(goodExampleSchema)
           .optional()
@@ -216,6 +279,9 @@ export function createSpecialistTool(
         params,
         kind,
         targetTools,
+        stepRatio,
+        strategy,
+        toolSurface,
         goodExamples,
         badExamples,
         structuredOutput,
@@ -313,6 +379,8 @@ export function createSpecialistTool(
             if (normRole && (normProvider !== undefined || normModel !== undefined)) {
               return 'Error: declare either `role` or `provider`/`model`, not both. A role lets the active profile choose the model; a pin overrides it.';
             }
+            const ratioError = stepRatioError(stepRatio);
+            if (ratioError) return ratioError;
             if (normProvider !== undefined) {
               if (!isValidProvider(normProvider))
                 return `Error: Unknown provider "${normProvider}". Valid providers: ${Object.keys(PROVIDER_MODELS).join(', ')}`;
@@ -368,6 +436,9 @@ export function createSpecialistTool(
                 params: resolvedParams,
                 kind,
                 targetTools,
+                ...(stepRatio !== undefined && stepRatio !== 0 ? { stepRatio } : {}),
+                ...(strategy ? { strategy } : {}),
+                ...(toolSurface ? { toolSurface } : {}),
                 goodExamples: goodExamples as SpecialistExample[] | undefined,
                 badExamples: badExamples as SpecialistBadExample[] | undefined,
                 structuredOutput,
@@ -448,6 +519,11 @@ export function createSpecialistTool(
               );
               if (updateScopeError) return updateScopeError;
             }
+            const updateRatioError = stepRatioError(stepRatio);
+            if (updateRatioError) return updateRatioError;
+            if (stepRatio !== undefined) updates.stepRatio = stepRatio;
+            if (strategy !== undefined) updates.strategy = strategy;
+            if (toolSurface !== undefined) updates.toolSurface = toolSurface;
             if (goodExamples !== undefined)
               updates.goodExamples = goodExamples as SpecialistExample[];
             if (badExamples !== undefined)
@@ -456,7 +532,7 @@ export function createSpecialistTool(
             // Auto-clear model when provider is cleared and model not explicitly provided
             if (provider === '' && model === undefined) updates.model = '';
             if (Object.keys(updates).length === 0)
-              return 'Error: provide at least one field to update (name, description, systemPrompt, guidelines, provider, model, role, kind, targetTools, goodExamples, badExamples, or structuredOutput).';
+              return 'Error: provide at least one field to update (name, description, systemPrompt, guidelines, provider, model, role, kind, targetTools, stepRatio, strategy, toolSurface, goodExamples, badExamples, or structuredOutput).';
             try {
               const updated = store.update(id, updates);
               if (!updated) return `No specialist found with id "${id}".`;
