@@ -1,6 +1,6 @@
 import type { CoreMessage, Tool } from 'ai';
 import { buildDispatchUserMessage } from './user-message.js';
-import type { DispatchInput, UntrustedData } from './user-message.js';
+import type { DispatchInput } from './user-message.js';
 import { classifyError } from '../../error-taxonomy.js';
 import { CITATIONS_PROMPT, allowsInlineMarkers } from '../../agent-prompt.js';
 import { getModelProfile } from '../../providers/index.js';
