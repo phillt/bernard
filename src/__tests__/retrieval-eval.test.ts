@@ -3,12 +3,14 @@ import * as fs from 'node:fs';
 import {
   RETRIEVAL_CORPUS,
   RETRIEVAL_SHAPES,
+  type CorpusShape,
   type RetrievalShape,
 } from './fixtures/retrieval/corpus.js';
 import { RETRIEVAL_QUERIES } from './fixtures/retrieval/queries.js';
 import { getEmbeddingProvider, EMBEDDING_MODEL_ID } from '../embeddings.js';
 import { MEMORIES_FILE, RAG_DIR } from '../paths.js';
-import { RAGStore, DEFAULT_TOP_K_PER_DOMAIN } from '../rag.js';
+import { RAGStore, DEFAULT_TOP_K_PER_DOMAIN, type StoredMemories } from '../rag.js';
+import { getDomainIds } from '../domains.js';
 
 /**
  * The retrieval eval, and the baseline it guards (#524).
@@ -78,7 +80,7 @@ const K = 10;
  * channel weight separated the two; the rarity gate did. That row is the one
  * that would catch the regression coming back.
  */
-const BASELINE: Record<Exclude<RetrievalShape, 'filler'>, { recall: number; mrr: number }> = {
+const BASELINE: Record<RetrievalShape, { recall: number; mrr: number }> = {
   identifier: { recall: 1.0, mrr: 1.0 },
   paraphrase: { recall: 1.0, mrr: 0.75 },
   'near-duplicate': { recall: 1.0, mrr: 1.0 },
@@ -90,7 +92,7 @@ const TOLERANCE = 0.15;
 
 interface QueryOutcome {
   queryId: string;
-  shape: Exclude<RetrievalShape, 'filler'>;
+  shape: RetrievalShape;
   /** Did every expected id appear in the top K? */
   recalled: boolean;
   /** 1/rank of the first expected id, or 0 when none appeared. */
@@ -106,7 +108,9 @@ async function seedStore(): Promise<void> {
   if (!provider) throw new Error('retrieval eval: no embedding provider available');
   const vectors = await provider.embed(RETRIEVAL_CORPUS.map((r) => r.fact));
   const now = new Date().toISOString();
-  const payload = {
+  // Typed against the shape the store actually writes, so a schema change is a
+  // compile error here rather than a runtime "the fixture corpus did not load".
+  const payload: StoredMemories = {
     version: 1,
     model: EMBEDDING_MODEL_ID,
     dimensions: provider.dimensions(),
@@ -127,9 +131,14 @@ async function seedStore(): Promise<void> {
   fs.writeFileSync(MEMORIES_FILE, JSON.stringify(payload), 'utf-8');
 }
 
-function rate(outs: QueryOutcome[], pick: (o: QueryOutcome) => number): number {
-  if (outs.length === 0) return 0;
-  return outs.reduce((a, o) => a + pick(o), 0) / outs.length;
+/** The two rates, computed once and read by both the table and the assertions. */
+function metrics(outs: QueryOutcome[]): { recall: number; mrr: number } {
+  if (outs.length === 0) return { recall: 0, mrr: 0 };
+  const sum = (pick: (o: QueryOutcome) => number) => outs.reduce((a, o) => a + pick(o), 0);
+  return {
+    recall: sum((o) => (o.recalled ? 1 : 0)) / outs.length,
+    mrr: sum((o) => o.reciprocalRank) / outs.length,
+  };
 }
 
 beforeAll(async () => {
@@ -188,6 +197,16 @@ describe('retrieval eval (#524)', () => {
         expect(s, `[query: ${q.id}] shape disagrees with the record it expects`).toBe(q.shape);
       }
     }
+
+    // The corpus docstring claims its domains come from the real registry so
+    // that `scoreAndRank`'s per-domain grouping behaves as it does in
+    // production, and nothing checked it. A typo'd domain silently creates a
+    // one-record domain and changes what the per-domain cap does — which is the
+    // mechanism this eval was rebuilt around.
+    const domains = new Set(getDomainIds());
+    for (const r of RETRIEVAL_CORPUS) {
+      expect(domains.has(r.domain), `[record: ${r.id}] unknown domain "${r.domain}"`).toBe(true);
+    }
   });
 
   it('respects the result cap, so a ranking change cannot buy recall with tokens', () => {
@@ -211,7 +230,8 @@ describe('retrieval eval (#524)', () => {
   });
 
   it('the corpus contains every declared shape, so no row is vacuous', () => {
-    for (const shape of RETRIEVAL_SHAPES) {
+    const all: CorpusShape[] = [...RETRIEVAL_SHAPES, 'filler'];
+    for (const shape of all) {
       expect(
         RETRIEVAL_CORPUS.some((r) => r.shape === shape),
         `[shape: ${shape}] has no records`,
@@ -220,31 +240,43 @@ describe('retrieval eval (#524)', () => {
   });
 
   it('reports the baseline table', () => {
-    const rows = (Object.keys(BASELINE) as Array<keyof typeof BASELINE>).map((shape) => {
+    const rows: Array<{ shape: string; n: number; 'recall@10': string; mrr: string }> = [];
+    for (const shape of Object.keys(BASELINE) as Array<keyof typeof BASELINE>) {
       const outs = outcomes.filter((o) => o.shape === shape);
-      return {
+      const m = metrics(outs);
+      rows.push({
         shape,
         n: outs.length,
-        'recall@10': rate(outs, (o) => (o.recalled ? 1 : 0)).toFixed(2),
-        mrr: rate(outs, (o) => o.reciprocalRank).toFixed(2),
-      };
-    });
+        'recall@10': m.recall.toFixed(2),
+        mrr: m.mrr.toFixed(2),
+      });
+    }
+    const all = metrics(outcomes);
     rows.push({
-      shape: 'ALL' as never,
+      shape: 'ALL',
       n: outcomes.length,
-      'recall@10': rate(outcomes, (o) => (o.recalled ? 1 : 0)).toFixed(2),
-      mrr: rate(outcomes, (o) => o.reciprocalRank).toFixed(2),
+      'recall@10': all.recall.toFixed(2),
+      mrr: all.mrr.toFixed(2),
     });
     console.table(rows);
-    expect(outcomes.length).toBe(RETRIEVAL_QUERIES.length);
+
+    // Asserts something that can fail. `outcomes.length === QUERIES.length` was
+    // true by construction — the seed loop pushes exactly once per query with
+    // no branch — so this `it()` was a `console.table` wearing a test. Every
+    // shape having at least one query is the property the per-shape rows below
+    // silently depend on: an empty shape reports 0.00 and passes its floor.
+    for (const row of rows) {
+      expect(row.n, `[shape: ${row.shape}] has no queries, so its row is vacuous`).toBeGreaterThan(
+        0,
+      );
+    }
   });
 
   it.each(Object.keys(BASELINE) as Array<keyof typeof BASELINE>)(
     '%s holds its baseline',
     (shape) => {
       const outs = outcomes.filter((o) => o.shape === shape);
-      const recall = rate(outs, (o) => (o.recalled ? 1 : 0));
-      const mrr = rate(outs, (o) => o.reciprocalRank);
+      const { recall, mrr } = metrics(outs);
       const t = `[shape: ${shape}] [n: ${outs.length}]`;
       expect(
         recall,

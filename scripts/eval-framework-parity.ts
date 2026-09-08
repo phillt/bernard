@@ -81,7 +81,10 @@ async function main(): Promise<void> {
   interface Scenario {
     id: string;
     description: string;
-    build: () => { spec: AnyAgentSpec; hookFires: Array<{ hookId: string; payloadKeys: string[] }> };
+    build: () => {
+      spec: AnyAgentSpec;
+      hookFires: Array<{ hookId: string; payloadKeys: string[] }>;
+    };
   }
 
   function makeRecordingHook(id: string, log: Array<{ hookId: string; payloadKeys: string[] }>) {
@@ -196,7 +199,8 @@ async function main(): Promise<void> {
     },
     {
       id: 'specialist-initial',
-      description: 'src/tools/specialist-run.ts — initial call, outputHook("spec:1") + repair + prepareStep.',
+      description:
+        'src/tools/specialist-run.ts — initial call, outputHook("spec:1") + repair + prepareStep.',
       build: () => {
         const fires: Array<{ hookId: string; payloadKeys: string[] }> = [];
         return {

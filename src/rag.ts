@@ -60,7 +60,7 @@ const STORE_SCHEMA_VERSION = 1;
 const EMBEDDING_DIMENSIONS = 384;
 
 /** The stamped on-disk shape (#520). A bare `RAGMemory[]` is the legacy form. */
-interface StoredMemories {
+export interface StoredMemories {
   version: number;
   model: string;
   dimensions: number;

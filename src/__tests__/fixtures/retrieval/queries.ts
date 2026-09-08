@@ -18,7 +18,7 @@ export interface LabelledQuery {
   query: string;
   /** Corpus ids that answer this query. Order is irrelevant; membership is not. */
   relevant: string[];
-  shape: Exclude<RetrievalShape, 'filler'>;
+  shape: RetrievalShape;
 }
 
 export const RETRIEVAL_QUERIES: LabelledQuery[] = [
