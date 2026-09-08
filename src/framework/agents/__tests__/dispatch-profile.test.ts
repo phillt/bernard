@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { definitions, registerBuiltinDefinitions } from '../index.js';
 import { mcpDelegateDefinition } from '../mcp-delegate.js';
-import { resolveDispatchProfile, MAX_STEP_RATIO } from '../dispatch-profile.js';
+import {
+  resolveDispatchProfile,
+  declaredToolSurface,
+  MAX_STEP_RATIO,
+} from '../dispatch-profile.js';
 import { resolveToolSurface } from '../tool-surface.js';
 import { specialistDefinition } from '../specialist.js';
 import { toolWrapperDefinition } from '../tool-wrapper.js';
@@ -177,6 +181,26 @@ describe('the definitions consume the profile', () => {
     const react = toolWrapperDefinition.strategy(ctx, {} as never, { strategy: 'react' });
     expect(plain.constructor.name).toBe('NormalStrategy');
     expect(react.constructor.name).toBe('ReActStrategy');
+  });
+
+  it('a wrapper record actually reaches the registry, not just the resolver', () => {
+    // The precedence is justified by `tool-wrapper`'s hardcoded `'full'`, so it
+    // has to be live for exactly that kind — and it nearly was not.
+    // `dispatchToolWrapper` assembles `childTools` BEFORE `runDefinition` runs
+    // and `toolWrapperDefinition.tools()` returns them verbatim, so the resolved
+    // profile never reaches the registry. Both readers go through
+    // `declaredToolSurface`, and this pins that they agree.
+    expect(declaredToolSurface({ toolSurface: 'worker' })).toBe('worker');
+    expect(declaredToolSurface({ toolSurface: 'everythin' })).toBeUndefined();
+    expect(declaredToolSurface({})).toBeUndefined();
+    const ctx = ctxWith({ toolSurface: 'worker' });
+    expect(
+      resolveToolSurface(
+        ctx,
+        toolWrapperDefinition,
+        resolveDispatchProfile(ctx, toolWrapperDefinition, { specialistId: 'spec' } as never),
+      ).surface,
+    ).toBe(declaredToolSurface({ toolSurface: 'worker' }));
   });
 
   it('a record narrows or widens the tool surface, beating the definition', () => {

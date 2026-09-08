@@ -12,6 +12,7 @@ import { printSpecialistStart, printSpecialistEnd } from '../output.js';
 import { debugLog } from '../logger.js';
 import { withSlot, getMaxConcurrentAgents, slotStatusLine } from './agent-pool.js';
 import { runDispatchOrFail } from './dispatch-failure.js';
+import { declaredToolSurface } from '../framework/agents/dispatch-profile.js';
 import { attachmentsArg, resolveAttachments } from './attachment-args.js';
 import type { DispatchAttachment } from '../framework/agents/user-message.js';
 import type { AgentContext } from '../framework/context.js';
@@ -334,7 +335,18 @@ export async function dispatchToolWrapper(
               stores.candidates,
               config,
               ctx.provenance,
-              { surface: toolWrapperDefinition.toolSurface },
+              // The record may narrow this, and that is the point of #508's
+              // `toolSurface`: `'full'` was chosen for three bundled wrappers
+              // and has applied to every wrapper written since, so a record
+              // must be able to say "not me". Read HERE as well as in
+              // `resolveDispatchProfile` because this assembly happens before
+              // `runDefinition` — `toolWrapperDefinition.tools()` returns
+              // `input.childTools` verbatim, so the resolved profile never
+              // reaches the registry and the field would be inert for exactly
+              // the kind whose hardcoded `'full'` justifies the precedence.
+              // Both readers go through `declaredToolSurface`, so they cannot
+              // disagree about what a valid value is.
+              { surface: declaredToolSurface(specialist) ?? toolWrapperDefinition.toolSurface },
             );
             // `applet` is deliberately ABSENT here, and that absence is a
             // guard rather than an oversight. `main.ts` builds this same

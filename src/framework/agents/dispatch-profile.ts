@@ -85,6 +85,23 @@ function known<T extends string>(values: readonly T[], value: unknown): value is
 }
 
 /**
+ * A record's declared tool surface, validated — or `undefined` when it declared
+ * none or declared nonsense.
+ *
+ * Exported because `dispatchToolWrapper` assembles its `childTools` **before**
+ * `runDefinition` runs, so it cannot take the resolved profile. It reads the
+ * record itself, and it must reach the same verdict this module does: two
+ * readers of one field, one definition of what a valid value is. Without it a
+ * wrapper record declaring `toolSurface: 'everythin'` would be honoured at the
+ * assembly and rejected by the runner, which is the worst of both.
+ */
+export function declaredToolSurface(record: {
+  toolSurface?: unknown;
+}): DispatchToolSurface | undefined {
+  return known(DISPATCH_TOOL_SURFACES, record.toolSurface) ? record.toolSurface : undefined;
+}
+
+/**
  * Reads the record a dispatch names, if it names one, and returns the execution
  * fields it validly declares.
  *
@@ -131,7 +148,8 @@ export function resolveDispatchProfile<TInput>(
     else rejected.strategy = strategy;
   }
   if (toolSurface !== undefined) {
-    if (known(DISPATCH_TOOL_SURFACES, toolSurface)) profile.toolSurface = toolSurface;
+    const valid = declaredToolSurface(record);
+    if (valid) profile.toolSurface = valid;
     else rejected.toolSurface = toolSurface;
   }
 
