@@ -114,6 +114,57 @@ describe('createSpecialistTool', () => {
       expect(result).toContain('created');
     });
 
+    it('refuses a stepRatio that is really a step count (#508)', async () => {
+      // The resolver already falls back on an out-of-range value, because it
+      // runs before every dispatch and must not throw for a bad record. That is
+      // the safety net, not the message: without a refusal here, `stepRatio: 50`
+      // is stored, ignored forever, and the only trace is a debug line nobody
+      // reads. The creation boundary is where a model can still be told.
+      const result = await tool.execute(
+        {
+          action: 'create',
+          id: 'over-budget',
+          name: 'Over Budget',
+          description: 'x',
+          systemPrompt: 'x',
+          stepRatio: 50,
+        },
+        {} as any,
+      );
+      expect(result).toContain('Error:');
+      expect(result).toContain('FRACTION');
+      // And it says what to write instead, since a refusal with no remedy is
+      // retried against the same value.
+      expect(result).toContain('0.2');
+    });
+
+    it('accepts a real ratio, and 0 as the clear sentinel', async () => {
+      const ok = await tool.execute(
+        {
+          action: 'create',
+          id: 'quick-lookup',
+          name: 'Quick Lookup',
+          description: 'x',
+          systemPrompt: 'x',
+          stepRatio: 0.2,
+        },
+        {} as any,
+      );
+      expect(ok).toContain('created');
+      const cleared = await tool.execute(
+        {
+          action: 'create',
+          id: 'default-budget',
+          name: 'Default Budget',
+          description: 'x',
+          systemPrompt: 'x',
+          stepRatio: 0,
+        },
+        {} as any,
+      );
+      expect(cleared).toContain('created');
+    });
+
     it('returns error for validation failure', async () => {
       const result = await tool.execute(
         {

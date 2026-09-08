@@ -198,6 +198,7 @@ function makeAgent(
     getLastRAGResults: () => [],
     getTurnProvenance: () => [],
     getTurnContext: () => [],
+    getLastMemoryDropped: () => [],
     getContext: () => ({ provenance: { clear: () => {}, list: () => [] } }),
     getCorrectionStore: () => ({ listPending: () => [] }),
     getPlanSnapshot: () => [],

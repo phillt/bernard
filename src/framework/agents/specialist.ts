@@ -1,6 +1,6 @@
 import type { CoreMessage, Tool } from 'ai';
 import { buildDispatchUserMessage, type DispatchInput } from './user-message.js';
-import { resolveSiteModel } from '../../model-policy.js';
+import { resolveSiteModel, type ModelSite } from '../../model-policy.js';
 import { debugLog } from '../../logger.js';
 import { PlanStore } from '../../plan-store.js';
 import { capSubagentResult } from '../../tools/result-cap.js';
@@ -55,13 +55,29 @@ export interface SpecialistInput extends DispatchInput {
  * text-only on the final step. Strategy is `buildStrategy` with the historical
  * 0.25 enforcement ratio.
  */
+/**
+ * Written once, read twice: the definition declares it for ledger attribution
+ * and `resolveModel` passes it to `resolveSiteModel` for tiering. Two literals
+ * that must agree, and if they drift the model resolves against a different
+ * site than the spend is billed to — silently.
+ */
+const SITE: ModelSite = 'specialist';
+
 export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
   id: 'specialist',
   historyMode: 'ephemeral',
+  // Declared at last (#508). Without it `resolveModel` returns no `site` key,
+  // so `run.ts`'s `def.site ?? 'main'` default stood and **every specialist's
+  // spend folded into the `main` layer** of `bernard usage` — the gap #299
+  // closed for `tool-wrapper:<id>` and `mcp:<server>` and left open here. The
+  // per-id `telemetrySite` that makes it readable comes from `specialist-run`,
+  // the same way the wrapper's does; this is the fallback under it.
+  site: SITE,
   repairLabel: 'specialist',
   prefix: (input) => `spec:${input.slotId}`,
 
   retrievalQuery: retrievalQueryFor,
+  recordId: (input) => input.specialistId,
 
   systemPrompt(ctx, input) {
     const specialist = ctx.stores.specialists.get(input.specialistId);
@@ -102,14 +118,23 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
     return specialistTools;
   },
 
-  strategy(ctx) {
+  strategy(ctx, _input, profile) {
     return buildStrategy(ctx.config, {
       enforcementStepRatio: SPECIALIST_ENFORCEMENT_STEP_RATIO,
+      // A record's declared strategy rides the seam #167 already built for
+      // per-turn variation rather than a second mechanism: `strategyId` is
+      // exactly "what this run should be", and `isReactEffective` already
+      // prefers it over `config.coordinatorMode`. Absent, the fall-through to
+      // the global flag is unchanged.
+      ...(profile.strategy ? { strategyId: profile.strategy } : {}),
     });
   },
 
-  stepBudget(config) {
-    return Math.ceil(config.maxSteps * SPECIALIST_STEP_RATIO);
+  stepBudget(config, _input, profile) {
+    // The record declares a FRACTION, and the definition still owns what it is
+    // a fraction of. That split is the point: the record says "half the usual
+    // work", the site says what usual is here.
+    return Math.ceil(config.maxSteps * (profile.stepRatio ?? SPECIALIST_STEP_RATIO));
   },
 
   buildUserMessage(input): CoreMessage {
@@ -126,7 +151,7 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
 
   resolveModel(ctx, input, overrides): ResolvedModel {
     const specialist = ctx.stores.specialists.get(input.specialistId);
-    const site = resolveSiteModel(ctx.config, 'specialist', { overrides, specialist });
+    const site = resolveSiteModel(ctx.config, SITE, { overrides, specialist });
     return {
       model: site.model,
       providerOptions: site.providerOptions,

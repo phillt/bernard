@@ -13,7 +13,7 @@ import {
   RESPONSE_STYLE_IDS,
   type ResponseStyle,
 } from './agent-prompt.js';
-import { buildContextMessage } from './context-message.js';
+import { buildContextMessage, MAX_PERSISTENT_MEMORY_CHARS } from './context-message.js';
 import type { BernardConfig } from './config.js';
 import { MemoryStore } from './memory.js';
 import { printWarning, printInfo, type SpinnerStats } from './output.js';
@@ -898,6 +898,31 @@ describe('Agent', () => {
     await agent.processInput('hello');
     const call = mockGenerateText.mock.calls[0][0];
     expect(call.system).toContain('CUSTOM_MODEL_SUFFIX_TOKEN');
+  });
+
+  it('records the memory that was RENDERED, not every key on disk (#528)', async () => {
+    // The defect: `injectedMemoryKeys` was `listMemory()` merely re-sorted, so
+    // on the one turn a memory was dropped — the only turn anyone inspects —
+    // the Prompt & Context viewer listed it as injected. Both halves are
+    // asserted, because a record that omits the dropped key while nothing
+    // reports it is only half of an answer.
+    const huge = 'x'.repeat(MAX_PERSISTENT_MEMORY_CHARS);
+    vi.mocked(fs.readdirSync).mockReturnValue(['small.md', 'huge.md'] as any);
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockImplementation((p: any) =>
+      String(p).includes('huge') ? huge : ('kept note' as any),
+    );
+    vi.mocked(fs.statSync).mockReturnValue({ mtimeMs: 1, size: 1 } as any);
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'ok' }] },
+      usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+    });
+    const agent = makeAgent(makeConfig(), toolOptions, new MemoryStore());
+    await agent.processInput('hello');
+
+    const record = agent.getTurnContext()[0];
+    expect(record.injectedMemoryKeys).toEqual(['small']);
+    expect(agent.getLastMemoryDropped()).toEqual(['huge']);
   });
 
   it('appends response messages to history', async () => {

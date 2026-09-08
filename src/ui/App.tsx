@@ -86,6 +86,7 @@ import type { BreadthOption } from '../permissions/breadth.js';
 import { applyProfileToConfig } from '../config.js';
 import { setToolDetailsVisible, formatFriendlyTimestamp } from '../output.js';
 import { noPromptCacheHint } from '../cost-guardrail.js';
+import { memoryCapNotice } from '../memory-notice.js';
 import { makeUsageRecorder, makeOutOfTurnUsageRecorder } from '../framework/hooks/token-stats.js';
 import { truncate } from '../text.js';
 import { WIZARD_CATEGORIES_DATA, type WizardFieldData } from '../profiles-wizard-data.js';
@@ -820,6 +821,10 @@ export function App({
   // Cost guardrail (#298): latches true the first time we warn about a large
   // prefix re-billed on a non-caching provider, so the hint fires once/session.
   const noCacheWarnedRef = useRef(false);
+  // Memory byte cap (#528): latches true the first time a curated memory does
+  // not fit, so the notice fires once/session rather than on every turn while
+  // the store stays over budget.
+  const memoryCapWarnedRef = useRef(false);
   // Speech normalization (#432) is on by default, so the first time it actually
   // changes what a listener hears, say so — once per session. Latched on a real
   // `'normalized'` outcome rather than on the setting, so nobody who wouldn't
@@ -4080,6 +4085,18 @@ export function App({
         if (hint) {
           noCacheWarnedRef.current = true;
           flashToast(hint, 'warning');
+        }
+        // Memory that did not fit (#528). A notice, not a toast: a toast is
+        // cleared by the next submit, and "Bernard cannot see three of the
+        // things you wrote down" has to outlive a keystroke — the same
+        // reasoning `catalog-notice.ts` records for `provider-wiped`.
+        const memoryNotice = memoryCapNotice({
+          dropped: agent.getLastMemoryDropped(),
+          alreadyWarned: memoryCapWarnedRef.current,
+        });
+        if (memoryNotice) {
+          memoryCapWarnedRef.current = true;
+          pushAssistantNotice(memoryNotice);
         }
       }
       // Durable record of an interrupted turn (#403). The `⏹ you interrupted`
