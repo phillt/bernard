@@ -83,6 +83,31 @@ function createFakeProvider(): EmbeddingProvider {
   };
 }
 
+/** Writes to the store file, ignoring the session-date sidecar. */
+function storeWrites(): number {
+  return vi
+    .mocked(fs.writeFileSync)
+    .mock.calls.filter((c) => String(c[0]).includes('memories.json')).length;
+}
+
+/**
+ * A fresh store over reset `node:fs` mocks. Three top-level suites need one and
+ * each had grown its own copy, which is how they drifted apart on
+ * `similarityThreshold` without any of them saying so.
+ */
+async function createStore(config?: import('./rag.js').RAGStoreConfig) {
+  const { RAGStore } = await import('./rag.js');
+  return new RAGStore({ maxMemories: 100, ...config });
+}
+
+/** Puts the `node:fs` mocks back to "no store on disk". */
+function resetFsMocks(): void {
+  vi.clearAllMocks();
+  vi.mocked(fs.existsSync).mockReturnValue(false);
+  vi.mocked(fs.readFileSync).mockReturnValue('[]');
+  mockProvider = createFakeProvider();
+}
+
 describe('default limits', () => {
   it('exports expected default limits', async () => {
     const { DEFAULT_TOP_K_PER_DOMAIN, DEFAULT_MAX_RESULTS } = await import('./rag.js');
@@ -92,17 +117,7 @@ describe('default limits', () => {
 });
 
 describe('RAGStore', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(fs.existsSync).mockReturnValue(false);
-    vi.mocked(fs.readFileSync).mockReturnValue('[]');
-    mockProvider = createFakeProvider();
-  });
-
-  async function createStore(config?: import('./rag.js').RAGStoreConfig) {
-    const { RAGStore } = await import('./rag.js');
-    return new RAGStore({ maxMemories: 100, ...config });
-  }
+  beforeEach(resetFsMocks);
 
   /**
    * A read must not rewrite the store (#533).
@@ -114,13 +129,6 @@ describe('RAGStore', () => {
    * bookkeeping still survives.
    */
   describe('debounced access bookkeeping', () => {
-    /** Writes to the store file, ignoring the session-date sidecar. */
-    function storeWrites(): number {
-      return vi
-        .mocked(fs.writeFileSync)
-        .mock.calls.filter((c) => String(c[0]).includes('memories.json')).length;
-    }
-
     it('a search that hits does not write', async () => {
       const store = await createStore();
       await store.addFacts(['User prefers dark mode with testing keywords'], 'test');
@@ -1284,16 +1292,8 @@ describe('RAGStore domain scope (#511)', () => {
     mockProvider = createFakeProvider();
   });
 
-  /** Writes to the store file, ignoring the session-date sidecar. */
-  function writeCount(): number {
-    return vi
-      .mocked(fs.writeFileSync)
-      .mock.calls.filter((c) => String(c[0]).includes('memories.json')).length;
-  }
-
   async function seeded() {
-    const { RAGStore } = await import('./rag.js');
-    const store = new RAGStore({ maxMemories: 100, similarityThreshold: -1 });
+    const store = await createStore({ similarityThreshold: -1 });
     await store.addFacts(['shared vocabulary alpha'], 'test', 'general');
     await store.addFacts(['shared vocabulary beta'], 'test', 'user-preferences');
     return store;
@@ -1340,11 +1340,11 @@ describe('RAGStore domain scope (#511)', () => {
   it("a view's pending bookkeeping is flushed by the root store", async () => {
     const store = await seeded();
     store.flush();
-    const before = writeCount();
+    const before = storeWrites();
     await store.scoped(['general']).search('shared vocabulary');
-    expect(writeCount()).toBe(before);
+    expect(storeWrites()).toBe(before);
     store.flush();
-    expect(writeCount()).toBeGreaterThan(before);
+    expect(storeWrites()).toBeGreaterThan(before);
   });
 
   it('scoped(null) is the identity', async () => {
@@ -1385,7 +1385,7 @@ describe('RAGStore domain scope (#511)', () => {
  */
 describe('lexical index scoping (#526)', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    resetFsMocks();
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(fs.readFileSync).mockReturnValue(
       JSON.stringify(
@@ -1405,7 +1405,6 @@ describe('lexical index scoping (#526)', () => {
         })),
       ),
     );
-    mockProvider = createFakeProvider();
   });
 
   it('a scoped view never returns a record outside its scope', async () => {
@@ -1423,5 +1422,212 @@ describe('lexical index scoping (#526)', () => {
     for (const hit of scoped) {
       expect(hit.domain, 'a scoped search returned an out-of-scope record').toBe('general');
     }
+  });
+});
+
+/**
+ * Dedup reinforces the survivor instead of discarding the observation (#525).
+ *
+ * On a collision `addFacts` used to `continue`: the newcomer was dropped and
+ * the record it collided with gained NOTHING — no counter, no TTL refresh, no
+ * source update. So re-learning a fact across ten sessions was indistinguishable
+ * from learning it once, and repetition — the strongest available evidence that
+ * a fact is durable — was invisible to the prune score.
+ *
+ * The measurement that bounds this: against the real provider at
+ * `DEDUP_THRESHOLD = 0.92`, no contradicting pair reaches the threshold (the
+ * highest measured is `deploy.sh` vs `release.sh` at 0.8759). So a collision
+ * really is a near-restatement and reinforcing it is safe. The literature's
+ * "treat a collision as supersession" advice answers a problem this embedder
+ * does not have — that is #373's territory, which shipped separately.
+ */
+describe('dedup reinforcement (#525)', () => {
+  /** Reads a field off the record as persisted — the store exposes no record accessor. */
+  function persisted(s: { flush: () => void }, i: number): Record<string, unknown> {
+    s.flush();
+    const call = vi
+      .mocked(fs.writeFileSync)
+      .mock.calls.filter((c) => String(c[0]).includes('memories.json'))
+      .at(-1)!;
+    return persistedRecords(String(call[1]))[i];
+  }
+  const sourceOf = (s: any, i: number) => persisted(s, i).source as string;
+  /** Days-to-expiry off the LIVE record, via `listFacts`' own rendering. */
+  const daysLeft = (s: { listFacts: () => string[] }, i: number): number =>
+    Number(/expires in (\d+)d/.exec(s.listFacts()[i])![1]);
+
+  beforeEach(resetFsMocks);
+
+  it('counts a re-observation instead of dropping it silently', async () => {
+    const s = await createStore();
+    expect(await s.addFacts(['the deploy script is deploy.sh'], 'compression')).toBe(1);
+    // Identical text embeds identically, so this is a guaranteed collision.
+    expect(await s.addFacts(['the deploy script is deploy.sh'], 'exit')).toBe(0);
+
+    expect(s.listFacts()[0], 'the survivor gained nothing on the collision').toContain(
+      'observed 1x',
+    );
+  });
+
+  it('keeps the newer source, because the later observation is better evidenced', async () => {
+    const s = await createStore();
+    await s.addFacts(['a durable fact'], 'compression');
+    await s.addFacts(['a durable fact'], 'exit');
+    expect(sourceOf(s, 0)).toBe('exit');
+  });
+
+  it('extends a near-expiry survivor, so repetition keeps a fact alive', async () => {
+    // Seeded close to expiry on purpose. A FRESH record already has the full
+    // TTL, and the extension is monotone — it never shortens — so reinforcing
+    // one changes nothing. The extension exists for the record that has been
+    // sitting for months and is about to be pruned, which is precisely the case
+    // where "it was learned again" should matter.
+    const soon = new Date(Date.now() + 2 * 86400000).toISOString();
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockReturnValue(
+      JSON.stringify([
+        {
+          id: 'old',
+          fact: 'a durable fact',
+          embedding: fakeEmbed(['a durable fact'])[0],
+          source: 'compression',
+          domain: 'general',
+          createdAt: new Date(Date.now() - 88 * 86400000).toISOString(),
+          accessCount: 0,
+          expiresAt: soon,
+        },
+      ]),
+    );
+    const s = await createStore();
+    expect(daysLeft(s, 0)).toBeLessThanOrEqual(2);
+    await s.addFacts(['a durable fact'], 'exit');
+    expect(daysLeft(s, 0), 'a near-expiry record was not extended').toBeGreaterThan(2);
+  });
+
+  it('never shortens an expiry it was going to outlive anyway', async () => {
+    // The monotone guard. Without it, reinforcing a fresh record would pull its
+    // 90-day expiry back to the ~52 days one observation earns — so being
+    // learned again would make a fact die SOONER.
+    const s = await createStore();
+    await s.addFacts(['a durable fact'], 'compression');
+    const before = daysLeft(s, 0);
+    expect(before).toBeGreaterThan(80);
+    await s.addFacts(['a durable fact'], 'exit');
+    expect(daysLeft(s, 0), 'reinforcement pulled the expiry backwards').toBe(before);
+  });
+
+  it('does not count a reinforcement as an addition', async () => {
+    // `addFacts` returns the number ADDED. Reporting a reinforcement as an add
+    // would make the exit worker and `compressHistory` claim work they did not
+    // do, and would trip the eager `prune`/`persist` path below.
+    const s = await createStore();
+    await s.addFacts(['a durable fact'], 'compression');
+    expect(await s.addFacts(['a durable fact'], 'exit')).toBe(0);
+    expect(s.count()).toBe(1);
+  });
+
+  it('takes the debounced write path, not the eager one', async () => {
+    // Reinforcement is decay metadata, not content: a crash must not lose a
+    // fact, but losing the note that one was observed again costs a single TTL
+    // extension. `addFacts` persists eagerly when it ADDS; this must not.
+    const s = await createStore();
+    await s.addFacts(['a durable fact'], 'compression');
+    const before = vi
+      .mocked(fs.writeFileSync)
+      .mock.calls.filter((c) => String(c[0]).includes('memories.json')).length;
+    await s.addFacts(['a durable fact'], 'exit');
+    expect(
+      vi.mocked(fs.writeFileSync).mock.calls.filter((c) => String(c[0]).includes('memories.json'))
+        .length,
+      'reinforcement wrote eagerly',
+    ).toBe(before);
+    s.flush();
+    expect(
+      vi.mocked(fs.writeFileSync).mock.calls.filter((c) => String(c[0]).includes('memories.json'))
+        .length,
+    ).toBeGreaterThan(before);
+  });
+
+  it('bumpAccess never shortens an expiry either', async () => {
+    // Not strictly #525 — `bumpAccess` carries the identical monotone guard and
+    // had no test at all, which is how a mutation aimed at `reinforce` landed
+    // there instead and reported a false survivor. Same invariant, same cost:
+    // a retrieval that pulls a fact's expiry BACKWARDS would make being useful
+    // a reason to die sooner.
+    const s = await createStore();
+    await s.addFacts(['a durable fact'], 'compression');
+    const before = daysLeft(s, 0);
+    await s.search('a durable fact');
+    expect(daysLeft(s, 0), 'a search pulled the expiry backwards').toBe(before);
+  });
+
+  it('gives repetition weight in the prune score, so the field is not write-only', async () => {
+    // The load-bearing half. `source` and `lastAccessed` are both written by
+    // this store and read by nothing; a third write-only field would record the
+    // observation and still fail to save the record from a prune.
+    // **Alpha is seeded OLDEST on purpose.** Created in the same millisecond as
+    // its rivals it has identical recency, a stable sort keeps insertion order,
+    // and the test passes whether or not `observedCount` carries any weight —
+    // which is how the first cut of this passed with the term mutated to zero.
+    // Aged, alpha loses on recency and can only survive on repetition.
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockReturnValue(
+      JSON.stringify(
+        [
+          ['alpha fact one', 80],
+          ['beta fact two', 1],
+        ].map(([fact, ageDays]) => ({
+          id: String(fact),
+          fact,
+          embedding: fakeEmbed([String(fact)])[0],
+          source: 'compression',
+          domain: 'general',
+          createdAt: new Date(Date.now() - (ageDays as number) * 86400000).toISOString(),
+          accessCount: 0,
+          expiresAt: new Date(Date.now() + 90 * 86400000).toISOString(),
+        })),
+      ),
+    );
+    const { RAGStore } = await import('./rag.js');
+    const s = new RAGStore({ maxMemories: 2 });
+    // Re-observe alpha twice, then push the store over its cap.
+    await s.addFacts(['alpha fact one'], 'exit');
+    await s.addFacts(['alpha fact one'], 'exit');
+    await s.addFacts(['gamma fact three'], 'compression');
+
+    const kept = s.listFacts();
+    expect(
+      kept.some((f) => f.includes('alpha fact one')),
+      'the repeatedly observed fact was pruned',
+    ).toBe(true);
+    expect(kept).toHaveLength(2);
+  });
+
+  it('reads a legacy record with no observedCount as zero', async () => {
+    // Every record written before this lacks the field; absent must not be NaN,
+    // which would poison the prune sort for the whole store.
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockReturnValue(
+      JSON.stringify([
+        {
+          id: 'legacy',
+          fact: 'a fact from before the field existed',
+          embedding: fakeEmbed(['a fact from before the field existed'])[0],
+          source: 'compression',
+          domain: 'general',
+          createdAt: new Date().toISOString(),
+          accessCount: 3,
+        },
+      ]),
+    );
+    const s = await createStore();
+    expect(s.count()).toBe(1);
+    expect(s.listFacts()[0], 'a legacy record should show no observation').not.toContain(
+      'observed',
+    );
+    // And it still reinforces cleanly from absent, rather than yielding NaN —
+    // which would poison the prune sort for the whole store.
+    await s.addFacts(['a fact from before the field existed'], 'exit');
+    expect(s.listFacts()[0]).toContain('observed 1x');
   });
 });
