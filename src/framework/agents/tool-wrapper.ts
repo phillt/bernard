@@ -17,6 +17,7 @@ import {
   type WrapperResult,
 } from '../../structured-output.js';
 import { outputHook } from '../hooks/output.js';
+import { buildStrategy } from '../strategies/build-strategy.js';
 import { NormalStrategy } from '../strategies/normal.js';
 import type { AgentDefinition, FormatMeta, ResolvedModel } from './types.js';
 import { makeLastStepTextOnly } from './task.js';
@@ -85,8 +86,15 @@ export const toolWrapperDefinition: AgentDefinition<ToolWrapperInput, WrapperRes
   // the full registry for that reason; this declares the same fact where a
   // reader of the definition can see it.
   toolSurface: 'full',
+  // The fallback under `dispatchToolWrapper`'s per-id `tool-wrapper:<id>`
+  // (#299). Declared for the same reason `specialist` now declares one: without
+  // it, `resolveModel` returns no `site` key and `run.ts` defaults to `'main'`,
+  // so any caller that forgets the override attributes wrapper spend to the
+  // main layer.
+  site: 'tool-wrapper',
   repairLabel: 'tool-wrapper',
   prefix: (input) => `wrap:${input.slotId}`,
+  recordId: (input) => input.specialistId,
 
   systemPrompt(ctx, input) {
     const specialist = ctx.stores.specialists.get(input.specialistId);
@@ -139,12 +147,24 @@ export const toolWrapperDefinition: AgentDefinition<ToolWrapperInput, WrapperRes
     return input.childTools;
   },
 
-  strategy() {
-    return new NormalStrategy();
+  strategy(ctx, _input, profile) {
+    // Normal unless the record asks otherwise (#508). A wrapper that genuinely
+    // needs to plan had no way to say so: this returned `new NormalStrategy()`
+    // unconditionally, so the ReAct path was unreachable from a record even
+    // though `buildStrategy` has taken a per-run `strategyId` since #167.
+    // Routed through the builder only when a record declares one, so a wrapper
+    // that declares nothing gets the same object it always did rather than
+    // whatever `coordinatorMode` happens to say.
+    return profile.strategy
+      ? buildStrategy(ctx.config, { strategyId: profile.strategy })
+      : new NormalStrategy();
   },
 
-  stepBudget(config) {
-    return Math.max(2, Math.ceil(config.maxSteps * TOOL_WRAPPER_STEP_RATIO));
+  stepBudget(config, _input, profile) {
+    // The floor of 2 stays the definition's: a wrapper below it cannot call a
+    // tool and then report, so it is a property of the shape rather than of any
+    // record's preference.
+    return Math.max(2, Math.ceil(config.maxSteps * (profile.stepRatio ?? TOOL_WRAPPER_STEP_RATIO)));
   },
 
   buildUserMessage(input): CoreMessage {

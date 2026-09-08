@@ -92,6 +92,46 @@ export interface Specialist {
    * from before anything read the field at all.
    */
   targetTools?: string[];
+  /**
+   * Steps this specialist gets, as a fraction of `config.maxSteps` (#508).
+   *
+   * A ratio rather than a count, so it scales with `BERNARD_MAX_STEPS` instead
+   * of fighting it — the same reason `role` is preferred over a `provider`
+   * pin. Absent means the dispatching definition's own default (0.5 for both
+   * `specialist` and `tool-wrapper`), which is what every record has always
+   * had: a constant nobody chose, applied to a one-shot lookup and a
+   * twenty-step research run alike.
+   *
+   * Validated at resolution, never trusted — see `dispatch-profile.ts`.
+   */
+  stepRatio?: number;
+  /**
+   * The execution strategy this specialist wants (#508).
+   *
+   * `'react'` opts a specialist into the think → act → evaluate loop with plan
+   * enforcement; `'normal'` pins it to a single pass. Absent keeps what the
+   * dispatching definition does today, which for `specialist` is
+   * `coordinatorMode`-dependent and for `tool-wrapper` is always Normal — so a
+   * wrapper that genuinely needs to plan had no way to say so.
+   *
+   * Rides `BuildStrategyOpts.strategyId`, the seam #167 already built for
+   * per-turn variation, rather than a second mechanism.
+   */
+  strategy?: 'normal' | 'react';
+  /**
+   * Which built-in tool registry this specialist is scoped to (#508).
+   *
+   * `'worker'` drops the tools a dispatched worker has no business using
+   * (`routine`, `lineup_edit`, `specialist`, the `cron` family, MCP config);
+   * `'full'` keeps them. Absent derives from `historyMode`, i.e. `'worker'` for
+   * every dispatched specialist — and the only exception in the tree today is
+   * `tool-wrapper`'s hardcoded `'full'`, chosen for three bundled wrappers and
+   * therefore applied to every wrapper anyone has since written.
+   *
+   * Narrowing here is free; widening is a real grant, and it is bounded by
+   * {@link targetTools}, which is a fence for every kind since #507.
+   */
+  toolSurface?: 'full' | 'worker';
   /** Correct usage patterns used for few-shot priming. */
   goodExamples?: SpecialistExample[];
   /** Failed usage patterns with their corrected form. */
@@ -153,6 +193,12 @@ export interface CreateSpecialistInput {
   params?: ModelParams;
   kind?: SpecialistKind;
   targetTools?: string[];
+  /** See {@link Specialist.stepRatio}. */
+  stepRatio?: number;
+  /** See {@link Specialist.strategy}. */
+  strategy?: 'normal' | 'react';
+  /** See {@link Specialist.toolSurface}. */
+  toolSurface?: 'full' | 'worker';
   goodExamples?: SpecialistExample[];
   badExamples?: SpecialistBadExample[];
   structuredOutput?: boolean;
@@ -184,6 +230,16 @@ export type SpecialistUpdates = Partial<
    * typed `string` so they get it for free, while `RoleId` has to say so.
    */
   role?: RoleId | '';
+  /**
+   * The three execution fields (#508) carry the same sentinel, for the same
+   * reason: `undefined` means "don't change", so removing a declaration needs
+   * a value that says so. `0` is out of {@link Specialist.stepRatio}'s valid
+   * range and `''` is not a member of either union, so neither sentinel can
+   * collide with a real declaration.
+   */
+  stepRatio?: number;
+  strategy?: 'normal' | 'react' | '';
+  toolSurface?: 'full' | 'worker' | '';
 };
 
 const MAX_SPECIALISTS = 50;
@@ -344,6 +400,9 @@ export class SpecialistStore {
       ...(input.params !== undefined ? { params: input.params } : {}),
       ...(input.kind !== undefined ? { kind: input.kind } : {}),
       ...(input.targetTools !== undefined ? { targetTools: input.targetTools } : {}),
+      ...(input.stepRatio !== undefined ? { stepRatio: input.stepRatio } : {}),
+      ...(input.strategy !== undefined ? { strategy: input.strategy } : {}),
+      ...(input.toolSurface !== undefined ? { toolSurface: input.toolSurface } : {}),
       ...(input.goodExamples !== undefined ? { goodExamples: input.goodExamples } : {}),
       ...(input.badExamples !== undefined ? { badExamples: input.badExamples } : {}),
       ...(input.structuredOutput !== undefined ? { structuredOutput: input.structuredOutput } : {}),
@@ -430,6 +489,18 @@ export class SpecialistStore {
     }
     if (updates.kind !== undefined) specialist.kind = updates.kind;
     if (updates.targetTools !== undefined) specialist.targetTools = updates.targetTools;
+    if (updates.stepRatio !== undefined) {
+      if (updates.stepRatio === 0) delete specialist.stepRatio;
+      else specialist.stepRatio = updates.stepRatio;
+    }
+    if (updates.strategy !== undefined) {
+      if (updates.strategy === '') delete specialist.strategy;
+      else specialist.strategy = updates.strategy;
+    }
+    if (updates.toolSurface !== undefined) {
+      if (updates.toolSurface === '') delete specialist.toolSurface;
+      else specialist.toolSurface = updates.toolSurface;
+    }
     if (updates.goodExamples !== undefined) specialist.goodExamples = updates.goodExamples;
     if (updates.badExamples !== undefined) specialist.badExamples = updates.badExamples;
     if (updates.structuredOutput !== undefined)

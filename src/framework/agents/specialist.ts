@@ -61,10 +61,18 @@ export interface SpecialistInput extends WithAttachments {
 export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
   id: 'specialist',
   historyMode: 'ephemeral',
+  // Declared at last (#508). Without it `resolveModel` returns no `site` key,
+  // so `run.ts`'s `def.site ?? 'main'` default stood and **every specialist's
+  // spend folded into the `main` layer** of `bernard usage` — the gap #299
+  // closed for `tool-wrapper:<id>` and `mcp:<server>` and left open here. The
+  // per-id `telemetrySite` that makes it readable comes from `specialist-run`,
+  // the same way the wrapper's does; this is the fallback under it.
+  site: 'specialist',
   repairLabel: 'specialist',
   prefix: (input) => `spec:${input.slotId}`,
 
   retrievalQuery: retrievalQueryFor,
+  recordId: (input) => input.specialistId,
 
   systemPrompt(ctx, input) {
     const specialist = ctx.stores.specialists.get(input.specialistId);
@@ -105,14 +113,23 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
     return specialistTools;
   },
 
-  strategy(ctx) {
+  strategy(ctx, _input, profile) {
     return buildStrategy(ctx.config, {
       enforcementStepRatio: SPECIALIST_ENFORCEMENT_STEP_RATIO,
+      // A record's declared strategy rides the seam #167 already built for
+      // per-turn variation rather than a second mechanism: `strategyId` is
+      // exactly "what this run should be", and `isReactEffective` already
+      // prefers it over `config.coordinatorMode`. Absent, the fall-through to
+      // the global flag is unchanged.
+      ...(profile.strategy ? { strategyId: profile.strategy } : {}),
     });
   },
 
-  stepBudget(config) {
-    return Math.ceil(config.maxSteps * SPECIALIST_STEP_RATIO);
+  stepBudget(config, _input, profile) {
+    // The record declares a FRACTION, and the definition still owns what it is
+    // a fraction of. That split is the point: the record says "half the usual
+    // work", the site says what usual is here.
+    return Math.ceil(config.maxSteps * (profile.stepRatio ?? SPECIALIST_STEP_RATIO));
   },
 
   buildUserMessage(input): CoreMessage {

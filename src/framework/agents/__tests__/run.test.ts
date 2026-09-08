@@ -106,6 +106,95 @@ beforeEach(() => {
   (buildContextMessage as unknown as ReturnType<typeof vi.fn>).mockReturnValue(null);
 });
 
+describe('runDefinition resolves the record profile once and hands it down (#508)', () => {
+  // The behavioural half. A definition can declare `recordId` and the runner
+  // can quietly stop resolving it, or resolve it and pass `{}` down, and every
+  // unit test of `resolveDispatchProfile` stays green — the same gap
+  // `tool-surface.test.ts` and `retrieval.test.ts` each close for their own
+  // resolution.
+  function ctxWithRecord(record: any): AgentContext {
+    const ctx = makeCtx();
+    (ctx.stores as any).specialists = { get: (id: string) => (id === 'r1' ? record : undefined) };
+    return ctx;
+  }
+
+  it('honours a declared stepRatio through to the dispatch step budget', async () => {
+    const seen: number[] = [];
+    const def = fakeDefinition({
+      recordId: () => 'r1',
+      stepBudget: (config, _input, profile) =>
+        Math.ceil(config.maxSteps * (profile.stepRatio ?? 0.5)),
+    });
+    const ctx = ctxWithRecord({ id: 'r1', stepRatio: 0.25 });
+    (generateText as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async (arg: any) => {
+        seen.push(arg.maxSteps);
+        return { text: 'ok', steps: [], response: { messages: [] }, finishReason: 'stop' };
+      },
+    );
+    await runDefinition(ctx, def, { text: 'hi' });
+    expect(seen).toEqual([5]); // 20 * 0.25, not 20 * 0.5
+  });
+
+  it('honours a declared toolSurface through to the registry the definition is handed', async () => {
+    let surface: string | undefined;
+    const def = fakeDefinition({
+      recordId: () => 'r1',
+      tools: (_ctx, _input, s) => {
+        surface = s.surface;
+        return {};
+      },
+    });
+    await runDefinition(ctxWithRecord({ id: 'r1', toolSurface: 'full' }), def, { text: 'hi' });
+    // `historyMode: 'ephemeral'` derives to 'worker'; the record beat it.
+    expect(surface).toBe('full');
+  });
+
+  it('resolves the record ONCE per dispatch, not once per iterate', async () => {
+    // `stepBudget`, `strategy` and `tools` each need the answer, and `iterate`
+    // can run several times per dispatch. Reading the store per consumer would
+    // be a `readFileSync` per LLM call for a value that cannot change mid-run.
+    let reads = 0;
+    const ctx = makeCtx();
+    (ctx.stores as any).specialists = {
+      get: () => {
+        reads++;
+        return { id: 'r1', stepRatio: 0.25 };
+      },
+    };
+    const def = fakeDefinition({
+      recordId: () => 'r1',
+      strategy: () => ({
+        async run(sctx: any) {
+          await sctx.iterate({ extra: [] });
+          await sctx.iterate({ extra: [] });
+          return { text: 'done', steps: [], finishReason: 'stop' } as any;
+        },
+      }),
+    });
+    await runDefinition(ctx, def, { text: 'hi' });
+    expect(reads).toBe(1);
+  });
+
+  it('a definition with no recordId is untouched, which is what keeps main safe', async () => {
+    const ctx = makeCtx();
+    (ctx.stores as any).specialists = {
+      get: () => {
+        throw new Error('must not be consulted');
+      },
+    };
+    const profiles: unknown[] = [];
+    const def = fakeDefinition({
+      stepBudget: (_c, _i, profile) => {
+        profiles.push(profile);
+        return 7;
+      },
+    });
+    await expect(runDefinition(ctx, def, { text: 'hi' })).resolves.toBeDefined();
+    expect(profiles).toEqual([{}]);
+  });
+});
+
 describe('runDefinition telemetry site attribution (#299)', () => {
   it('records off-main steps under the opts.telemetrySite label, not "main"', async () => {
     const def = fakeDefinition();

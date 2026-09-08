@@ -7,6 +7,12 @@ import type { AgentHook } from '../hooks/types.js';
 import type { AgentResult } from '../runner.js';
 import type { ExecutionStrategy } from '../strategies/types.js';
 import type { CreateToolsOptions } from '../../tools/index.js';
+// Type-only, so it is erased: `dispatch-profile.ts` imports `AgentDefinition`
+// back, and a value edge would be a real cycle. `ResolvedToolSurface` solves
+// the same problem the other way round — declared here, re-exported by
+// `tool-surface.ts` — which is not available here because the profile's unions
+// are derived from runtime constants that belong beside the validator.
+import type { DispatchProfile } from './dispatch-profile.js';
 
 /**
  * Dispatch-level facts handed to {@link AgentDefinition.formatResult} (#370).
@@ -212,10 +218,10 @@ export interface AgentDefinition<TInput = unknown, TFormatted = unknown> {
   ): Promise<string> | string;
 
   /** Strategy selector. Built per-call so e.g. ReAct can be opt-in by definition. */
-  strategy(ctx: AgentContext, input: TInput): ExecutionStrategy;
+  strategy(ctx: AgentContext, input: TInput, profile: DispatchProfile): ExecutionStrategy;
 
   /** Step budget for the initial iterate call (strategies may scale). */
-  stepBudget(config: BernardConfig, input: TInput): number;
+  stepBudget(config: BernardConfig, input: TInput, profile: DispatchProfile): number;
 
   /** Build the seed user message when no explicit `seedMessages` is provided. */
   buildUserMessage(input: TInput): CoreMessage;
@@ -269,6 +275,22 @@ export interface AgentDefinition<TInput = unknown, TFormatted = unknown> {
    * the definition supplied. See `retrieval.ts` for why neither should move.
    */
   retrievalQuery?(input: TInput): string | null;
+
+  /**
+   * The specialist record this dispatch runs, if it runs one (#508).
+   *
+   * The runner reads that record to resolve the execution fields it declares —
+   * step budget, strategy, tool surface — in `resolveDispatchProfile`. Shaped
+   * exactly like {@link retrievalQuery}, and for the same three reasons: it
+   * takes `input` because that is the only place a record id lives; it is a
+   * function rather than a flag so the input shape stays checked per
+   * definition; and it is **optional, so omission fails closed** — a definition
+   * that does not declare it gets no record-driven anything, which is what
+   * keeps `main`, `sub`, `task`, `cron` and the PAC phases byte-identical.
+   *
+   * `specialist` and `tool-wrapper` declare it. Nothing else has a record.
+   */
+  recordId?(input: TInput): string | undefined;
 
   /** Hooks composed onto onStepFinish (output, token-stats, cron-step-recorder, etc.). */
   hooks(ctx: AgentContext, input: TInput): AgentHook[];

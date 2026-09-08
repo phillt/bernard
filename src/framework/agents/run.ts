@@ -23,6 +23,7 @@ import type { StepFinishPayload } from '../hooks/types.js';
 import { runAgent, type AgentResult, type AgentSpec } from '../runner.js';
 import type { IterateFn, IterateOpts, StrategyContext } from '../strategies/types.js';
 import { resolveToolSurface } from './tool-surface.js';
+import { resolveDispatchProfile } from './dispatch-profile.js';
 import { resolveRetrieval } from './retrieval.js';
 import { visionRefusal } from './vision-gate.js';
 import { seedBudgetRefusal } from './seed-budget.js';
@@ -152,7 +153,16 @@ export async function runDefinition<TInput, TFormatted>(
   // `{ surface: 'worker' }` by hand; both defaulted to the expensive option, so
   // a missed call site failed silently and expensively. Deciding here makes the
   // definitions consumers of the answer rather than five copies of the rule.
-  const surface = resolveToolSurface(ctx, def);
+  // How this dispatch RUNS, as the record it names declares it (#508). Same
+  // slot and same argument as the two below: a cross-cutting fact about what a
+  // dispatch is entitled to, decided once here so the definitions consume an
+  // answer rather than each carrying a copy of the rule. It has to be here
+  // rather than inside a definition for a harder reason too — `stepBudget` gets
+  // no `ctx` and `resolveToolSurface` gets no `input`, so neither can reach the
+  // record it is running. Cheap and total: no `recordId` on the definition, or
+  // no record on disk, and it is a frozen empty object.
+  const profile = resolveDispatchProfile(ctx, def, input);
+  const surface = resolveToolSurface(ctx, def, profile);
   // Retrieval, resolved once per dispatch for the same reason and in the same
   // place (#510). It used to sit in four definitions' `contextInputs`, which
   // runs inside `innerIterate` — so a multi-step dispatch re-searched on every
@@ -264,7 +274,7 @@ export async function runDefinition<TInput, TFormatted>(
           : tokenTotalsHook(ctx.statsTarget, modelInfo),
       ]
     : hooks;
-  const baseMaxSteps = def.stepBudget(config, input);
+  const baseMaxSteps = def.stepBudget(config, input, profile);
   const prepareStep = def.prepareStep?.(ctx, input, baseMaxSteps);
   const statsTarget = ctx.statsTarget;
   const repair = def.repairLabel
@@ -493,7 +503,7 @@ export async function runDefinition<TInput, TFormatted>(
   };
   const iterate: IterateFn = opts.wrapIterate ? opts.wrapIterate(innerIterate) : innerIterate;
 
-  const strategy = def.strategy(ctx, input);
+  const strategy = def.strategy(ctx, input, profile);
   const strategyCtx: StrategyContext = {
     config,
     userInput: extractUserInput(getSeed()),
