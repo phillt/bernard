@@ -48,11 +48,6 @@ async function main(): Promise<void> {
   const { loadConfig } = await import('../src/config.js');
   const { assembleContext } = await import('../src/framework/context.js');
   const { MEMORY_DIR } = await import('../src/paths.js');
-  const { RoutineStore } = await import('../src/routines.js');
-  const { SpecialistStore } = await import('../src/specialists.js');
-  const { CandidateStore } = await import('../src/specialist-candidates.js');
-  const { CorrectionCandidateStore } = await import('../src/correction-candidates.js');
-  const { ToolProfileStore } = await import('../src/tool-profiles.js');
   const { resolveReferences } = await import('../src/reference-resolver.js');
 
   type Scenario = {
@@ -82,14 +77,16 @@ async function main(): Promise<void> {
         'Estimate the total test count for the project if each service has about 40 tests. Use my saved project-config memory for the service count.',
       expectedNumber: 120,
       expectedUnit: 'tests',
-      wrongTotalPatterns: [/\btotal[^.]{0,40}\b(40|80|160|200)\b/i, /\b(40|80|160|200)\s*tests?\s*total\b/i],
+      wrongTotalPatterns: [
+        /\btotal[^.]{0,40}\b(40|80|160|200)\b/i,
+        /\b(40|80|160|200)\s*tests?\s*total\b/i,
+      ],
     },
     {
       id: 'B-morning-triage',
       description: 'named memory + multiplication (steps × minutes)',
       memoryKey: 'morning-triage',
-      memoryContent:
-        'Morning triage routine — 5 steps: inbox, calendar, slack, prs, standup.',
+      memoryContent: 'Morning triage routine — 5 steps: inbox, calendar, slack, prs, standup.',
       prompt:
         'How long should my morning triage take if each step is about 8 minutes? Check my morning-triage memory for the step list.',
       expectedNumber: 40,
@@ -100,14 +97,16 @@ async function main(): Promise<void> {
       id: 'C-release-checklist',
       description: 'named memory + addition (items × minutes)',
       memoryKey: 'release-checklist',
-      memoryContent:
-        'Release checklist — 4 steps: tag, build, smoke-test, announce.',
+      memoryContent: 'Release checklist — 4 steps: tag, build, smoke-test, announce.',
       prompt:
         'If every release-checklist item takes ~15 minutes, how long is a full release? My release-checklist memory has the step list.',
       expectedNumber: 60,
       expectedUnit: 'min',
       correctAlternates: [/\b1\s*(hour|hr)s?\b/i, /\bone\s+hour\b/i],
-      wrongTotalPatterns: [/\babout\s+(30|45|75|90|105)\s*(min|minutes?)\b/i, /=\s*(30|45|75|90|105)\b/],
+      wrongTotalPatterns: [
+        /\babout\s+(30|45|75|90|105)\s*(min|minutes?)\b/i,
+        /=\s*(30|45|75|90|105)\b/,
+      ],
     },
   ];
 
@@ -214,18 +213,14 @@ async function main(): Promise<void> {
     };
     const ragStore = config.ragEnabled ? new RAGStore() : undefined;
 
+    // Only `memory` is meaningful here — `assembleContext` already defaults
+    // the other five, and hand-listing them is how a seventh store field turns
+    // into an edit at every call site. That is the same rot this PR repairs.
     const ctx = assembleContext({
       config,
       toolOptions,
-      ...(ragStore ? { rag: ragStore } : {}),
-      stores: {
-        memory: memoryStore,
-        routines: new RoutineStore(),
-        specialists: new SpecialistStore(),
-        candidates: new CandidateStore(),
-        correction: new CorrectionCandidateStore(),
-        toolProfiles: new ToolProfileStore(),
-      },
+      rag: ragStore,
+      stores: { memory: memoryStore },
     });
     const agent = new Agent(ctx);
 
@@ -303,18 +298,14 @@ async function main(): Promise<void> {
     };
     const ragStore = config.ragEnabled ? new RAGStore() : undefined;
 
+    // Only `memory` is meaningful here — `assembleContext` already defaults
+    // the other five, and hand-listing them is how a seventh store field turns
+    // into an edit at every call site. That is the same rot this PR repairs.
     const ctx = assembleContext({
       config,
       toolOptions,
-      ...(ragStore ? { rag: ragStore } : {}),
-      stores: {
-        memory: memoryStore,
-        routines: new RoutineStore(),
-        specialists: new SpecialistStore(),
-        candidates: new CandidateStore(),
-        correction: new CorrectionCandidateStore(),
-        toolProfiles: new ToolProfileStore(),
-      },
+      rag: ragStore,
+      stores: { memory: memoryStore },
     });
     const agent = new Agent(ctx);
 
@@ -415,11 +406,9 @@ async function main(): Promise<void> {
       refResults.push(r);
       const tag = r.error
         ? `ERROR (${r.error.slice(0, 60)})`
-        : [
-            r.resolverStatus,
-            `entries=${r.resolvedEntryCount}`,
-            r.passed ? 'PASS' : 'fail',
-          ].join(' / ');
+        : [r.resolverStatus, `entries=${r.resolvedEntryCount}`, r.passed ? 'PASS' : 'fail'].join(
+            ' / ',
+          );
       console.log(tag);
     }
   }
@@ -449,7 +438,10 @@ async function main(): Promise<void> {
   }
 
   const resultsPath = path.join(home, 'eval-context-gathering.json');
-  fs.writeFileSync(resultsPath, JSON.stringify({ main: allResults, reference: refResults }, null, 2));
+  fs.writeFileSync(
+    resultsPath,
+    JSON.stringify({ main: allResults, reference: refResults }, null, 2),
+  );
   console.log(`\nRaw results written to ${resultsPath}`);
 
   const silentGuesses = aggUsable.filter((r) => r.silentGuess).length;

@@ -33,9 +33,10 @@ jobs:
       - run: npm ci
       - run: npx tsc --noEmit
       # `scripts/` is outside the base tsconfig (it compiles, with `rootDir:
-      # src`), so without this it is in no gate at all — which is how two of the
-      # three eval scripts silently stopped compiling against the `src/` they
-      # import.
+      # src`), so it needs its own no-emit pass — which is how two of the three
+      # eval scripts silently stopped compiling against the `src/` they import.
+      # `npm run lint` and `format:check` cover it directly; this is the third
+      # of the three gates it was missing.
       - run: npm run typecheck:scripts
 
   build:

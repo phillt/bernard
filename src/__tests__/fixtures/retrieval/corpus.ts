@@ -39,17 +39,24 @@ export interface CorpusRecord {
   id: string;
   fact: string;
   domain: string;
-  shape: RetrievalShape;
+  shape: CorpusShape;
 }
 
+/**
+ * The shapes a QUERY can probe. `filler` is not among them, deliberately —
+ * distractors exist to be missed, so no query labels one, and folding it in
+ * here forced `Exclude<RetrievalShape, 'filler'>` at three separate sites.
+ */
 export const RETRIEVAL_SHAPES = [
   'identifier',
   'paraphrase',
   'near-duplicate',
   'long-tail',
-  'filler',
 ] as const;
 export type RetrievalShape = (typeof RETRIEVAL_SHAPES)[number];
+
+/** What a corpus record can be: an answerable shape, or a distractor. */
+export type CorpusShape = RetrievalShape | 'filler';
 
 /** Padding that pushes a record's tail past the embedder's 256-word-piece ceiling. */
 const PAST_THE_CEILING = Array.from(
