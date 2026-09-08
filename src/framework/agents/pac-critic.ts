@@ -8,6 +8,7 @@ import { createWebReadTool } from '../../tools/web.js';
 import { createWebSearchTool } from '../../tools/web-search.js';
 import { toolToAISDK } from '../tools/adapter.js';
 import { outputHook } from '../hooks/output.js';
+import { buildBriefUserMessage } from './user-message.js';
 import { createReadOnlyMemoryTool, createReadOnlyScratchTool } from '../pac/read-only-memory.js';
 import { NormalStrategy } from '../strategies/normal.js';
 import { makeLastStepTextOnly } from './task.js';
@@ -114,12 +115,23 @@ export const pacCriticDefinition: AgentDefinition<PacCriticInput, PacCriticVerdi
   },
 
   buildUserMessage(input): CoreMessage {
-    const parts: string[] = [`Original task: ${input.task}`];
-    if (input.context) parts.push(`Context: ${input.context}`);
-    parts.push(`Plan (from Planner):\n${input.plan}`);
-    parts.push(`Actor's report:\n${input.actorOutput}`);
-    parts.push('Verify the success criteria. Emit your final JSON verdict per the format rules.');
-    return { role: 'user', content: parts.join('\n\n') };
+    // Through the shared renderer like its two siblings, and byte-identical:
+    // `PacCriticInput` does not extend `WithAttachments`, so `attachments` is
+    // always undefined and {@link attachTo} returns the same plain string this
+    // hand-rolled. Its `Original task:` and its trailing unlabelled instruction
+    // are preserved as DATA rather than normalised — the divergence is now
+    // visible in one place instead of buried in a third builder, which is what
+    // #509 was for; making the labels agree moves the bytes and needs an eval.
+    return buildBriefUserMessage({
+      label: 'Original task',
+      task: input.task,
+      sections: [
+        { label: 'Context', body: input.context ?? '' },
+        { label: 'Plan (from Planner)', body: input.plan, block: true },
+        { label: "Actor's report", body: input.actorOutput, block: true },
+        { body: 'Verify the success criteria. Emit your final JSON verdict per the format rules.' },
+      ],
+    });
   },
 
   hooks(_ctx, input) {

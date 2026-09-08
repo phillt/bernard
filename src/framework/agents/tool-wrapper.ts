@@ -1,6 +1,6 @@
 import type { CoreMessage, Tool } from 'ai';
-import { buildTaskUserMessage } from './user-message.js';
-import type { WithAttachments } from './user-message.js';
+import { buildBriefUserMessage } from './user-message.js';
+import type { UntrustedData, WithAttachments } from './user-message.js';
 import { classifyError } from '../../error-taxonomy.js';
 import { CITATIONS_PROMPT, allowsInlineMarkers } from '../../agent-prompt.js';
 import { getModelProfile } from '../../providers/index.js';
@@ -39,8 +39,22 @@ export const TOOL_WRAPPER_STEP_RATIO = 0.5;
  */
 export interface ToolWrapperInput extends WithAttachments {
   specialistId: string;
+  /**
+   * The instruction channel: what the child is asked to do.
+   *
+   * `string`, and that is now load-bearing rather than incidental — it cannot
+   * accept {@link UntrustedData}, so an applet's caller-supplied arguments have
+   * no path here (#509). Before that the split was held by a comment in
+   * `apps/dispatch.ts`, with both channels typed `string`.
+   */
   input: string;
+  /** Caller-written supporting detail. Still the instruction channel. */
   context?: string;
+  /**
+   * The data channel: bytes an external caller supplied, minted only by
+   * `renderArgsBlock`. Rendered last, under its own banner.
+   */
+  data?: UntrustedData;
   slotId: number;
   /** Pre-assembled child registry (already filtered by `specialist.targetTools`). */
   childTools: Record<string, Tool>;
@@ -148,12 +162,17 @@ export const toolWrapperDefinition: AgentDefinition<ToolWrapperInput, WrapperRes
   },
 
   buildUserMessage(input): CoreMessage {
-    return buildTaskUserMessage({
-      task: input.input,
-      context: input.context,
-      attachments: input.attachments,
-      // Not `Task:` — some tool-wrapper prompts and tests read this verbatim.
+    return buildBriefUserMessage({
+      // Not `Task:`. An earlier comment here claimed some tool-wrapper prompts
+      // and tests read it verbatim; measured, `grep "Request:"` over `src/` and
+      // `docs/` returns nothing at all. The real reason to keep it is byte
+      // stability — every wrapper dispatch in the product has read this word —
+      // which is a better reason than the one that was written down.
       label: 'Request',
+      task: input.input,
+      sections: [{ label: 'Context', body: input.context ?? '' }],
+      ...(input.data ? { data: input.data } : {}),
+      attachments: input.attachments,
     });
   },
 

@@ -61,6 +61,163 @@ export interface TaskMessageInput {
 }
 
 /**
+ * A phantom brand. Never constructed, never inspected — it exists only so the
+ * compiler can tell {@link UntrustedData} from `string`.
+ */
+declare const UNTRUSTED_DATA: unique symbol;
+
+/**
+ * Caller-supplied bytes, in a form the instruction channel cannot accept
+ * (#509).
+ *
+ * The two-channel split is a security property, not formatting.
+ * `apps/dispatch.ts` keeps author-written instructions and caller-supplied args
+ * apart precisely so caller bytes never land in the instruction slot — and
+ * until now it was held **by a comment**. Both channels were `string`, so the
+ * only thing standing between an applet's arguments and the instruction slot
+ * was that nobody had yet written the assignment.
+ *
+ * A nominal type makes the mistake unrepresentable in the direction that
+ * matters: {@link DispatchBrief.task} and a section body are `string` and
+ * cannot accept this, and {@link DispatchBrief.data} cannot accept a plain
+ * string. `renderArgsBlock` is the only mint, so "is this caller data?" has one
+ * answer rather than one per call site.
+ *
+ * It does **not** make the framing sufficient — `renderArgsBlock`'s own
+ * docstring is the authority on that, and the load-bearing control is still
+ * tool authority. This closes the accident, not the attack.
+ */
+export interface UntrustedData {
+  readonly [UNTRUSTED_DATA]: true;
+  readonly text: string;
+}
+
+/**
+ * The brand, asserted where it is actually checked.
+ *
+ * `tsconfig.json` excludes every test file from the program, so a
+ * `@ts-expect-error` in one is compiled by nothing and asserts nothing — it
+ * looks like a guard and is decoration. These two lines are in production code, which `npm run build`
+ * type-checks: collapse {@link UntrustedData} back to a `string` alias and the
+ * conditional resolves to `never`, the assignment fails, and the build breaks.
+ * That is the whole security property of #509's two-channel split, held by the
+ * one mechanism that will still be running in a year.
+ */
+type BrandHolds = string extends UntrustedData
+  ? never
+  : UntrustedData extends string
+    ? never
+    : // And the brand itself, not merely the wrapper: without the symbol a bare
+      // `{ text }` object literal satisfies the type structurally, so any caller
+      // could hand-roll one and the single-mint property would be gone.
+      { text: string } extends UntrustedData
+      ? never
+      : true;
+const _untrustedDataIsNominal: BrandHolds = true;
+void _untrustedDataIsNominal;
+
+/** Mints an {@link UntrustedData}. Called by `renderArgsBlock` and nothing else. */
+export function untrustedData(text: string): UntrustedData {
+  return { text } as UntrustedData;
+}
+
+/** One labelled section of a brief. */
+export interface BriefSection {
+  /**
+   * The section heading. Omitted for a bare paragraph — `pac-critic` ends with
+   * an unlabelled instruction, and inventing a label for it would change the
+   * bytes every critic has ever read.
+   */
+  label?: string;
+  body: string;
+  /**
+   * Put the body on its own line rather than after the colon.
+   *
+   * A real distinction rather than a knob: a plan, a report or a rejected draft
+   * is a block of text and reads as one, while a one-line `Context:` reads as a
+   * clause. It is also exactly the split the three hand-rolled PAC builders
+   * already made, so encoding it here is what lets them express through the
+   * shared renderer without their bytes moving.
+   */
+  block?: boolean;
+}
+
+/**
+ * What a parent hands a child (#509).
+ *
+ * Every one of the five delegation doors — `agent`, `task`, `specialist_run`,
+ * `tool_wrapper_run`, `delegate_<server>` — passed a task string and an
+ * optional context string, and what compensated was **prose in a tool
+ * description**: `subagent.ts` instructs the model to include "(1) specific
+ * objective and expected output format, (2) exact file paths…, (4) what 'done'
+ * looks like". That *was* the contract — a string, unvalidated, uninspectable.
+ *
+ * Three places already reached past the renderer and hand-built a structured
+ * brief: the three PAC phases stacking labelled sections, the two applet
+ * planner briefs, and applet actions splitting instruction from data by
+ * comment. Three instances of the same missing thing, which is what makes this
+ * a real primitive rather than a speculative one.
+ *
+ * **The bytes do not move.** `renderTaskText`'s literal output is load-bearing
+ * in five test assertions, in `policy/scratch.ts`'s `TASK_PREFIX_RE`, and in
+ * `App.tsx`, which feeds the rendered string to the policy engine so the
+ * decision cannot diverge from the real dispatch. Changing the wire format is a
+ * behavioural change across every dispatch in the product, unmeasurable without
+ * evals. So this change is to the TYPE: every shape expressible before renders
+ * identically after, pinned by a byte-equality test.
+ *
+ * What it buys now is that the vocabulary is in one table instead of three
+ * files — `pac-critic`'s `Original task:` divergence is visible rather than
+ * buried — and that the data channel is a type. What it buys later is that
+ * adding a goal/constraints/expected-output section is one place.
+ */
+export interface DispatchBrief {
+  /** `Task` by default; `Request` for `tool-wrapper`, `Original task` for `pac-critic`. */
+  label?: string;
+  task: string;
+  sections?: BriefSection[];
+  /**
+   * The data channel. Rendered last, after every instruction section, and the
+   * only field that accepts {@link UntrustedData}.
+   */
+  data?: UntrustedData;
+  attachments?: DispatchAttachment[];
+}
+
+/**
+ * The label the data channel renders under.
+ *
+ * `Context`, and only for byte stability: `apps/dispatch.ts` has always put
+ * `renderArgsBlock`'s output in the context slot, so anything else moves the
+ * bytes every applet action's agent has read. The block carries its own
+ * "DATA supplied by an external caller" banner, so the heading adds nothing
+ * semantically and could be renamed once there is an eval to say what it costs.
+ */
+const DATA_SECTION_LABEL = 'Context';
+
+function renderSection(section: BriefSection): string {
+  if (!section.label) return section.body;
+  return section.block ? `${section.label}:\n${section.body}` : `${section.label}: ${section.body}`;
+}
+
+/** Renders a brief to the text a child agent reads. */
+export function renderBrief(brief: DispatchBrief): string {
+  const parts = [`${brief.label ?? 'Task'}: ${brief.task}`];
+  for (const section of brief.sections ?? []) {
+    if (section.body) parts.push(renderSection(section));
+  }
+  if (brief.data) {
+    parts.push(renderSection({ label: DATA_SECTION_LABEL, body: brief.data.text }));
+  }
+  return parts.join('\n\n');
+}
+
+/** {@link renderBrief} plus {@link attachTo}. */
+export function buildBriefUserMessage(brief: DispatchBrief): CoreMessage {
+  return attachTo(renderBrief(brief), brief.attachments);
+}
+
+/**
  * The text half, on its own.
  *
  * Separately exported because `src/ui/App.tsx` feeds exactly this string to
@@ -69,12 +226,16 @@ export interface TaskMessageInput {
  * .content` behind a `typeof === 'string'` guard that would silently fall back
  * to the bare description the moment content became an array. Calling this
  * instead means that failure mode cannot exist.
+ *
+ * Now a thin adapter over {@link renderBrief}: the `Task:` / `Context:` shape
+ * is the common brief, not a second renderer.
  */
 export function renderTaskText(input: TaskMessageInput): string {
-  const label = input.label ?? 'Task';
-  return input.context
-    ? `${label}: ${input.task}\n\nContext: ${input.context}`
-    : `${label}: ${input.task}`;
+  return renderBrief({
+    label: input.label,
+    task: input.task,
+    ...(input.context ? { sections: [{ label: 'Context', body: input.context }] } : {}),
+  });
 }
 
 /**
