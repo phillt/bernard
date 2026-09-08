@@ -33,7 +33,8 @@ export type ModelSite =
   | 'applet-detector'
   | 'claim-verifier'
   | 'speech-normalizer'
-  | 'memory-consolidator';
+  | 'memory-consolidator'
+  | 'memory-contradiction';
 
 /**
  * Three-value runtime mode (#170, redesigned). The legacy `'off'` value is
@@ -415,6 +416,9 @@ const TEMPERATURE_ZERO_SITES: ReadonlySet<ModelSite> = new Set([
   // a sample fell. Two runs over an unchanged store should agree, or the
   // startup notice becomes noise the user learns to dismiss.
   'memory-consolidator',
+  // A user's own note being retired must not depend on which way a sample
+  // fell — the same argument the line above makes, at write time (#373).
+  'memory-contradiction',
 ]);
 
 /**
