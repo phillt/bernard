@@ -6,6 +6,7 @@ import {
   EMBEDDING_MODEL_ID,
   type EmbeddingProvider,
 } from './embeddings.js';
+import { LexicalIndex, reciprocalRankFusion } from './lexical.js';
 import { debugLog } from './logger.js';
 import { DEFAULT_DOMAIN } from './domains.js';
 import { RAG_DIR, MEMORIES_FILE, LAST_SESSION_FILE } from './paths.js';
@@ -219,6 +220,20 @@ export class RAGStore {
   private needsStamp = false;
   /** See {@link retrievalDisabledReason}. Non-null IS the once-per-process latch. */
   private disabledReason: string | null = null;
+  /**
+   * The BM25 index, built lazily and keyed on the corpus it describes (#526).
+   *
+   * Cached on the corpus ARRAY identity rather than on a dirty flag: a scoped
+   * view (#511) filters `memories` into a different array on every call, and a
+   * flag on the store would hand a scoped search the unscoped index — silently,
+   * since BM25 would still return plausible-looking scores for the wrong
+   * population. Identity is the one key that cannot get that wrong.
+   *
+   * Rebuilt rather than maintained: measured well under the cosine scan the
+   * same query already pays, and an incrementally-maintained index is a second
+   * source of truth that can drift from the array it describes.
+   */
+  private lexicalCache: { corpus: readonly RAGMemory[]; index: LexicalIndex } | null = null;
 
   constructor(config?: RAGStoreConfig) {
     this.topKPerDomain = config?.topKPerDomain ?? DEFAULT_TOP_K_PER_DOMAIN;
@@ -357,7 +372,17 @@ export class RAGStore {
    * Score, group by domain (top-k per domain), and cap at maxResults.
    * Shared by search() and searchWithIds().
    */
+  /**
+   * The one place the corpus is consumed and a ranked list is produced — and
+   * since #526, the one place the two retrieval channels fuse.
+   *
+   * It takes the raw `query` as well as its embedding, which it did not need
+   * before: BM25 works on terms, not vectors. Threading the string down here
+   * rather than fusing in the two callers is what keeps `search` and
+   * `searchWithIds` from drifting into two different rankings.
+   */
   private scoreAndRank(
+    query: string,
     queryEmbedding: number[],
     overrides?: RAGSearchOverrides,
   ): { memory: RAGMemory; similarity: number }[] {
@@ -373,13 +398,57 @@ export class RAGStore {
         ? this.memories
         : this.memories.filter((m) => this.domainScope!.includes(m.domain));
 
-    const scored = corpus
-      .map((m) => ({
+    const dense = corpus
+      .map((m, i) => ({
         memory: m,
         similarity: cosineSimilarity(queryEmbedding, m.embedding),
+        corpusIndex: i,
       }))
       .filter((s) => s.similarity >= threshold)
       .sort((a, b) => b.similarity - a.similarity);
+
+    // **The lexical channel, fused by rank (#526).** BM25 runs over the same
+    // scoped corpus, and the two rankings are combined with RRF.
+    //
+    // Rank-based fusion, not score-based: cosine is bounded in [-1,1] while
+    // BM25 is unbounded and corpus-dependent, so blending the scores requires
+    // choosing a normalisation that is itself an untuned parameter. Ranks need
+    // none.
+    //
+    // **The lexical channel is not subject to `threshold`.** That number is
+    // calibrated on cosine and means nothing on a BM25 score; applying it would
+    // silently drop every lexical-only hit — which is the entire population
+    // this channel exists to recover, since a record whose term sits past the
+    // embedder's 256-word-piece ceiling has a *low* cosine by construction.
+    // **Gated on whether the query names anything rare.** Ungated, this fusion
+    // recovered both identifier misses and destroyed paraphrase ranking (MRR
+    // 0.75 → 0.22 on the eval corpus) — see `hasDiscriminatingTerm`, which
+    // carries the measurement and the reason no RRF constant or channel weight
+    // could separate the two.
+    const index = this.lexicalIndex(corpus);
+    const lexical = index.hasDiscriminatingTerm(query)
+      ? [...index.score(query).entries()].sort((a, b) => b[1] - a[1]).map(([i]) => i)
+      : [];
+
+    const denseRanking = dense.map((d) => d.corpusIndex);
+    const order = lexical.length > 0 ? reciprocalRankFusion([denseRanking, lexical]) : denseRanking;
+
+    // `similarity` stays COSINE, deliberately. It is the scale `threshold` is
+    // calibrated on, the scale `applyStickiness` adds its 0.05 boost to and
+    // clamps at 1.0, and the number `bernard facts` prints. Putting a fused
+    // score there would decalibrate all three silently. Fusion changes which
+    // records come back and in what order; it does not redefine the field.
+    // Each entry carries its own fused position, so the re-sort below is a
+    // number comparison rather than a map lookup that has to assert it hit.
+    const byIndex = new Map(dense.map((d) => [d.corpusIndex, d]));
+    const scored = order.map((i, at) => {
+      const hit = byIndex.get(i);
+      return {
+        memory: hit?.memory ?? corpus[i],
+        similarity: hit?.similarity ?? cosineSimilarity(queryEmbedding, corpus[i].embedding),
+        at,
+      };
+    });
 
     const byDomain = new Map<string, typeof scored>();
     for (const entry of scored) {
@@ -391,9 +460,13 @@ export class RAGStore {
       }
     }
 
+    // Re-sorted by FUSED position, not by similarity. Sorting by similarity
+    // here would discard the fusion entirely — the lexical channel would decide
+    // membership and then be thrown away, which is the quiet way this change
+    // could ship looking correct and do nothing.
     const merged = Array.from(byDomain.values()).flat();
-    merged.sort((a, b) => b.similarity - a.similarity);
-    return merged.slice(0, maxResults);
+    merged.sort((a, b) => a.at - b.at);
+    return merged.slice(0, maxResults).map(({ memory, similarity }) => ({ memory, similarity }));
   }
 
   /**
@@ -503,7 +576,7 @@ export class RAGStore {
     const queryEmbedding = await this.embedQuery(query, 'rag:search');
     if (!queryEmbedding) return [];
 
-    const capped = this.scoreAndRank(queryEmbedding);
+    const capped = this.scoreAndRank(query, queryEmbedding);
 
     debugLog('rag:search', { query: query.slice(0, 100), returned: capped.length });
 
@@ -589,7 +662,7 @@ export class RAGStore {
     const queryEmbedding = await this.embedQuery(query, 'rag:searchWithIds');
     if (!queryEmbedding) return [];
 
-    const capped = this.scoreAndRank(queryEmbedding, overrides);
+    const capped = this.scoreAndRank(query, queryEmbedding, overrides);
 
     return capped.map((s) => ({
       id: s.memory.id,
@@ -839,6 +912,14 @@ export class RAGStore {
       // Non-critical — just log
       debugLog('rag:saveSessionDate', 'Failed to save session date');
     }
+  }
+
+  /** The BM25 index for `corpus`, built on first use and reused while it lasts. */
+  private lexicalIndex(corpus: readonly RAGMemory[]): LexicalIndex {
+    if (this.lexicalCache?.corpus === corpus) return this.lexicalCache.index;
+    const index = new LexicalIndex(corpus.map((m) => m.fact));
+    this.lexicalCache = { corpus, index };
+    return index;
   }
 
   /**
