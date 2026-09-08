@@ -17,6 +17,8 @@
  * raise the budget. Bounded, because the store is not.
  */
 
+import { nameList, plural } from './text.js';
+
 const KEYS_NAMED = 5;
 
 export interface MemoryCapNoticeInput {
@@ -36,15 +38,21 @@ export interface MemoryCapNoticeInput {
  */
 export function memoryCapNotice(input: MemoryCapNoticeInput): string | null {
   if (input.alreadyWarned) return null;
-  if (input.dropped.length === 0) return null;
-  const named = input.dropped.slice(0, KEYS_NAMED);
-  const rest = input.dropped.length - named.length;
-  const list = named.map((k) => `\`${k}\``).join(', ') + (rest > 0 ? `, and ${rest} more` : '');
-  const count = input.dropped.length;
+  const n = input.dropped.length;
+  if (n === 0) return null;
+  // `nameList` and `plural` rather than three inline ternaries and a hand-rolled
+  // "and N more": `catalog-notice.ts` — the module this one is modelled on —
+  // already uses both for the identical job of naming a bounded set of things
+  // that went wrong, and `plural` exists precisely because this was written
+  // inline in fourteen renderers with three different spellings.
+  const list = nameList(
+    input.dropped.map((k) => `\`${k}\``),
+    KEYS_NAMED,
+  );
   return (
-    `⚠ ${count} curated ${count === 1 ? 'memory' : 'memories'} did not fit the context budget ` +
-    `and ${count === 1 ? 'was' : 'were'} not shown to the model this turn: ${list}. ` +
-    `${count === 1 ? 'It is' : 'They are'} still on disk. Shorten or retire an entry, or raise ` +
+    `⚠ ${n} curated ${plural(n, 'memory', 'memories')} did not fit the context budget ` +
+    `and ${plural(n, 'was', 'were')} not shown to the model this turn: ${list}. ` +
+    `${plural(n, 'It is', 'They are')} still on disk. Shorten or retire an entry, or raise ` +
     `\`BERNARD_MAX_PERSISTENT_MEMORY_CHARS\`.`
   );
 }

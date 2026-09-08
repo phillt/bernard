@@ -27,7 +27,7 @@ describe('memoryCapNotice', () => {
       dropped: Array.from({ length: 12 }, (_, i) => `k${i}`),
       alreadyWarned: false,
     })!;
-    expect(notice).toContain('and 7 more');
+    expect(notice).toContain('+7 more');
     expect(notice).not.toContain('`k11`');
     // The total is still stated — the bound is on the naming, not the count.
     expect(notice).toContain('12 curated memories');
