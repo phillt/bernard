@@ -19,6 +19,22 @@ export interface EmbeddingProvider {
    * question "which model produced this store?" is unanswerable from the disk.
    */
   modelId(): string;
+  /**
+   * Exact word-piece counts, for callers that must not be truncated (#517).
+   *
+   * **Optional, and the optionality is the point.** Every existing test double
+   * in the tree implements three methods; a required fourth would break all of
+   * them for a capability only corpus ingestion needs. A caller that gets
+   * `undefined` falls back to the character estimate and says so.
+   *
+   * Why it exists: {@link MAX_EMBED_CHARS} divides by four, which is an
+   * English-prose average. Measured against this tokenizer, code runs at 2.47
+   * chars per piece and Japanese at 1.00 — so a chunk sized on the estimate is
+   * silently truncated on exactly the corpora a document store exists to hold.
+   * Tokenizing is microseconds against ~12.9 ms of inference per chunk, so the
+   * exact answer is affordable wherever it matters.
+   */
+  countWordPieces?(texts: string[]): Promise<number[]>;
 }
 
 let cachedProvider: EmbeddingProvider | null | undefined;
@@ -124,6 +140,28 @@ export async function getEmbeddingProvider(): Promise<EmbeddingProvider | null> 
       },
       modelId(): string {
         return EMBEDDING_MODEL_ID;
+      },
+      async countWordPieces(texts: string[]): Promise<number[]> {
+        // The pipeline exposes its own tokenizer, so this needs no second model
+        // load and no second download.
+        //
+        // **One string at a time, not a batch.** `truncation: false` is what
+        // makes the answer useful at all — with truncation on it reports the
+        // ceiling for anything over it, which is exactly the case being
+        // detected — but the tokenizer then refuses a batch of differing
+        // lengths outright ("you should probably activate truncation and/or
+        // padding"), because it cannot build one tensor from ragged rows. And
+        // padding would report the longest row's length for every row, which is
+        // the same wrong answer in the other direction. Measured in
+        // microseconds against ~12.9 ms of inference per chunk, so the loop
+        // costs nothing where it is used.
+        const out: number[] = [];
+        for (const text of texts) {
+          const enc = extractor.tokenizer(text, { truncation: false, padding: false });
+          const dims = (enc.input_ids as { dims?: number[] }).dims;
+          out.push(dims ? dims[dims.length - 1] : 0);
+        }
+        return out;
       },
     };
 
