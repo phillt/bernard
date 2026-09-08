@@ -15,7 +15,6 @@ import type { SpecialistStore } from '../specialists.js';
 import type { CandidateStoreReader } from '../specialist-candidates.js';
 import type { BernardConfig } from '../config.js';
 import type { ProvenanceStore } from '../provenance.js';
-import type { UsageRecorder } from '../framework/hooks/token-stats.js';
 
 export type { ToolOptions } from './types.js';
 
