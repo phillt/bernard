@@ -1,6 +1,8 @@
 import type { AgentContext } from '../context.js';
 import { debugLog } from '../../logger.js';
 import type { AgentDefinition } from './types.js';
+import { isValidScopePattern } from '../../memory.js';
+import { getDomainIds } from '../../domains.js';
 
 /**
  * How a dispatch is executed, as the record that names it can declare (#508).
@@ -75,6 +77,10 @@ export interface DispatchProfile {
   stepRatio?: number;
   strategy?: DispatchStrategy;
   toolSurface?: DispatchToolSurface;
+  /** Memory keys this dispatch may read and write (#511). Absent means unscoped. */
+  memoryScope?: string[];
+  /** RAG domains this dispatch may retrieve from (#511). Absent means unscoped. */
+  knowledgeScope?: string[];
 }
 
 /** Empty profile, shared so the common path allocates nothing. */
@@ -99,6 +105,61 @@ export function declaredToolSurface(record: {
   toolSurface?: unknown;
 }): DispatchToolSurface | undefined {
   return known(DISPATCH_TOOL_SURFACES, record.toolSurface) ? record.toolSurface : undefined;
+}
+
+/**
+ * A record's declared knowledge fences, validated (#511) — the second
+ * two-reader field, and for the same reason as {@link declaredToolSurface}:
+ * `dispatchToolWrapper` assembles its `childTools` and its four ctx-bound
+ * dispatch tools **before** `runDefinition` runs, and
+ * `toolWrapperDefinition.tools()` returns `input.childTools` verbatim, so a
+ * `runDefinition`-only fence would leave a scoped wrapper fenced in its context
+ * block and wide open in its tools. Narrowing is idempotent, so scoping early
+ * and letting `runDefinition` re-derive is safe rather than merely tolerable.
+ *
+ * ## The fallback rule INVERTS here, and that is deliberate
+ *
+ * Everywhere else in this module an invalid value falls back to the site
+ * default, which is safe — a bad `stepRatio` costs a step count. For a fence
+ * the fallback IS full access, so a shape error must resolve to **deny-all**:
+ * a non-array yields `[]`. An array with *some* invalid entries keeps the rest,
+ * because dropping from an allowlist already narrows and rejecting a whole
+ * scope over one typo buys nothing.
+ *
+ * `memoryScope: []` is honoured as deny-all rather than treated as "declared
+ * nothing". That diverges from `targetToolsScopeError`, which rejects
+ * `targetTools: []` — correctly, because "no tools" is an incoherent agent
+ * while "verify against the task and nothing else" is a coherent posture.
+ */
+export function declaredScope(
+  record: { memoryScope?: unknown; knowledgeScope?: unknown },
+  rejected?: Record<string, unknown>,
+): Pick<DispatchProfile, 'memoryScope' | 'knowledgeScope'> {
+  const scopeOf = (
+    raw: unknown,
+    valid: (v: unknown) => boolean,
+    field: string,
+  ): string[] | undefined => {
+    if (raw === undefined) return undefined;
+    if (!Array.isArray(raw)) {
+      if (rejected) rejected[field] = raw;
+      return [];
+    }
+    const kept = raw.filter(valid) as string[];
+    if (kept.length !== raw.length && rejected) rejected[field] = raw.filter((v) => !valid(v));
+    return kept;
+  };
+  const knownDomains = new Set(getDomainIds());
+  const memoryScope = scopeOf(record.memoryScope, isValidScopePattern, 'memoryScope');
+  const knowledgeScope = scopeOf(
+    record.knowledgeScope,
+    (v) => typeof v === 'string' && knownDomains.has(v),
+    'knowledgeScope',
+  );
+  return {
+    ...(memoryScope !== undefined ? { memoryScope } : {}),
+    ...(knowledgeScope !== undefined ? { knowledgeScope } : {}),
+  };
 }
 
 /**
@@ -147,6 +208,8 @@ export function resolveDispatchProfile<TInput>(
     if (known(DISPATCH_STRATEGIES, strategy)) profile.strategy = strategy;
     else rejected.strategy = strategy;
   }
+  Object.assign(profile, declaredScope(record, rejected));
+
   if (toolSurface !== undefined) {
     const valid = declaredToolSurface(record);
     if (valid) profile.toolSurface = valid;

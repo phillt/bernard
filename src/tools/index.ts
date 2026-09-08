@@ -15,7 +15,6 @@ import type { SpecialistStore } from '../specialists.js';
 import type { CandidateStoreReader } from '../specialist-candidates.js';
 import type { BernardConfig } from '../config.js';
 import type { ProvenanceStore } from '../provenance.js';
-import type { UsageRecorder } from '../framework/hooks/token-stats.js';
 
 export type { ToolOptions } from './types.js';
 
@@ -72,19 +71,6 @@ interface ToolGroup {
 /** Which built-in surface a dispatch receives. */
 export interface CreateToolsOptions {
   /**
-   * Records LLM spend made from INSIDE a tool's `execute` (#373).
-   *
-   * `ToolExecOptions` carries `{toolCallId, abortSignal, messages}` and no
-   * usage handle, so a tool that calls a model has nowhere to report what it
-   * cost — the exact defect `claim-verifier` complains about, one layer down.
-   * Supplied by `resolveToolSurface`, which is the one place with both a `ctx`
-   * and a route to every definition, so no dispatch site has to remember.
-   *
-   * It does not vary the tool BYTES — only a closure — so the byte-stability
-   * rule below is untouched.
-   */
-  onUsage?: UsageRecorder;
-  /**
    * `'full'` (default) — every built-in, for the main agent.
    * `'worker'` — only groups declaring `audience: 'any'`.
    *
@@ -138,7 +124,7 @@ export async function createTools(
             // `meta-coverage.test.ts` constructs a registry with none, and this
             // is the first line in the group body to dereference it.
             ...(options?.askUser ? { askUser: options.askUser } : {}),
-            ...(opts?.onUsage ? { onUsage: opts.onUsage } : {}),
+            ...(options?.onUsage ? { onUsage: options.onUsage } : {}),
           }),
         ),
         scratch: toolToAISDK(createScratchTool(memoryStore, provenance)),

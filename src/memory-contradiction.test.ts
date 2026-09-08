@@ -126,3 +126,36 @@ describe('write-time contradiction detection (#373)', () => {
     expect(onUsage).toHaveBeenCalled();
   });
 });
+
+/**
+ * The corpus is bounded, and the INCOMING note is charged against the bound.
+ *
+ * The head carries caller-supplied content with no cap of its own, so a head
+ * that did not count could push the whole message past `MAX_PERSISTENT_MEMORY_
+ * CHARS` — which is the one thing the shared `renderMemoryCorpus` exists to
+ * prevent, and the reason the incoming note goes in as `head` rather than being
+ * concatenated afterwards.
+ */
+describe('the message is bounded', () => {
+  function userContent(): string {
+    return String(generateTextMock.mock.calls.at(-1)?.[0]?.messages?.[0]?.content ?? '');
+  }
+
+  it('charges the incoming note against the budget, so a huge one crowds out the corpus', async () => {
+    reply({ verdict: 'none' });
+    const { MAX_PERSISTENT_MEMORY_CHARS } = await import('./context-message.js');
+    const huge = 'x'.repeat(MAX_PERSISTENT_MEMORY_CHARS);
+    await checkContradiction({ key: 'k', content: huge }, existing, config);
+    const sent = userContent();
+    expect(sent).toContain(huge);
+    // Nothing from the corpus fits beside it — the budget was actually applied
+    // to the head, not only to the rows.
+    expect(sent).not.toContain('daily-blaze-format');
+  });
+
+  it('sends the corpus when the incoming note leaves room', async () => {
+    reply({ verdict: 'none' });
+    await checkContradiction({ key: 'k', content: 'short' }, existing, config);
+    expect(userContent()).toContain('daily-blaze-format');
+  });
+});

@@ -11,6 +11,8 @@ import { createAppletStoreTool } from './store-tools.js';
 import { runWorkspace } from '../paths.js';
 import type { AgentDispatch, AppAction } from './manifest.js';
 import { grantedToolNames, renderArgsBlock, type ResolvedInvocation } from './invocation.js';
+import { declaredScope } from '../framework/agents/dispatch-profile.js';
+import { scopeContext } from '../framework/context.js';
 
 /**
  * Builds the tool registry one action's agent runs against.
@@ -143,8 +145,14 @@ export async function dispatchAction(opts: DispatchActionOpts): Promise<Dispatch
     abortSignal,
     debugLabel: 'script',
     buildInput: async (env) => {
+      // Scoped here as well as in `runDefinition`, for the reason
+      // `dispatchToolWrapper` gives (#511): this registry is assembled before
+      // the runner sees the input and reaches the definition verbatim as
+      // `input.childTools`, so a `runDefinition`-only fence would leave the
+      // context block scoped and every child tool unscoped. Narrowing is
+      // idempotent, so the runner's own application is a no-op.
       const childTools = await buildActionTools(
-        env.ctx,
+        scopeContext(env.ctx, declaredScope(specialist ?? {})),
         action,
         specialist?.targetTools,
         invocation.appId,

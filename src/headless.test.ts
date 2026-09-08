@@ -15,16 +15,20 @@ const mockMcpManager = vi.hoisted(() => ({
 
 const mockRagSearch = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 const mockRagFlush = vi.hoisted(() => vi.fn());
+// The fake carries the real store's surface: `scoped` (#511) returns the
+// receiver for an absent scope, and `retrievalDisabledReason` (#520) is what
+// `runHeadless` reads to write the reason to the run log, since `RAGStore`
+// deliberately does not print.
 const mockRagStoreCtor = vi.hoisted(() =>
-  // `retrievalDisabledReason` is on the real store's surface (#520):
-  // `runHeadless` reads it and writes the reason to the run log, because
-  // `RAGStore` deliberately does not print — a raw stderr write is the wrong
-  // channel for the REPL, which owns the terminal.
-  vi.fn(() => ({
-    search: mockRagSearch,
-    flush: mockRagFlush,
-    retrievalDisabledReason: () => null,
-  })),
+  vi.fn(() => {
+    const store: any = {
+      search: mockRagSearch,
+      flush: mockRagFlush,
+      retrievalDisabledReason: () => null,
+    };
+    store.scoped = vi.fn(() => store);
+    return store;
+  }),
 );
 
 const mockRunDefinition = vi.hoisted(() =>
@@ -52,7 +56,13 @@ vi.mock('./framework/agents/run.js', () => ({ runDefinition: mockRunDefinition }
 vi.mock('./framework/agents/index.js', () => ({
   registerBuiltinDefinitions: mockRegisterBuiltins,
 }));
-vi.mock('./framework/context.js', () => ({ assembleContext: mockAssembleContext }));
+// Partial, so `scopeContext` (#511) is the real one: this file asserts on what
+// `runHeadless` hands `buildInput`, and a stubbed fence would make every one of
+// those assertions blind to it.
+vi.mock('./framework/context.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./framework/context.js')>()),
+  assembleContext: mockAssembleContext,
+}));
 vi.mock('./permissions/shell-ast.js', () => ({ initShellParser: vi.fn() }));
 vi.mock('./logger.js', () => ({ debugLog: vi.fn(), isDebugEnabled: () => false }));
 
@@ -104,14 +114,15 @@ beforeEach(() => {
   mockRagSearch.mockResolvedValue([]);
   mockRagFlush.mockClear();
   mockRunDefinition.mockResolvedValue({ formatted: 'done', stepLimitHit: false });
-  mockRagStoreCtor.mockImplementation(
-    () =>
-      ({
-        search: mockRagSearch,
-        flush: mockRagFlush,
-        retrievalDisabledReason: () => null,
-      }) as any,
-  );
+  mockRagStoreCtor.mockImplementation(() => {
+    const store: any = {
+      search: mockRagSearch,
+      flush: mockRagFlush,
+      retrievalDisabledReason: () => null,
+    };
+    store.scoped = vi.fn(() => store);
+    return store;
+  });
 });
 
 describe('resolvePosture', () => {
@@ -226,6 +237,50 @@ describe('runHeadless', () => {
     expect(env.mcp.serverNames).toEqual(['alpha', 'beta']);
     expect(env.ragResults).toEqual([{ id: 'f1', text: 'fact' }]);
     expect(env.runId).toEqual(expect.any(String));
+  });
+
+  /**
+   * The knowledge fence reaches the PRE-CONNECT search (#511).
+   *
+   * That search is started before `assembleContext` on purpose, to overlap the
+   * ~1.1-1.6 s MCP connect — so it is the one retrieval a ctx-level fence
+   * cannot reach, and a fence applied only at assembly would leave it reading
+   * the whole index.
+   */
+  it('scopes the pre-connect RAG search to the granted domains', async () => {
+    const scopedSearch = vi.fn().mockResolvedValue([{ id: 'f1', text: 'scoped' }]);
+    const scoped = vi.fn(() => ({ search: scopedSearch, flush: mockRagFlush }));
+    mockRagStoreCtor.mockImplementation(
+      () =>
+        ({
+          search: mockRagSearch,
+          flush: mockRagFlush,
+          scoped,
+          retrievalDisabledReason: () => null,
+        }) as any,
+    );
+    // (a bespoke fake here, because this case needs the two stores to differ)
+    const buildInput = vi.fn().mockReturnValue({});
+    await runHeadless(
+      opts({ buildInput, ragQuery: 'why', scope: { knowledgeScope: ['general'] } }),
+    );
+    expect(scoped).toHaveBeenCalledWith(['general']);
+    expect(mockRagSearch).not.toHaveBeenCalled();
+    expect(buildInput.mock.calls[0][0].ragResults).toEqual([{ id: 'f1', text: 'scoped' }]);
+  });
+
+  // The default, pinned as a decision rather than left as an absence. Unset
+  // means unscoped, matching `toolMode`'s house rule that an unset field
+  // preserves legacy behaviour and the author opts in.
+  // Asserted behaviourally rather than as "scoped was not called": the absent
+  // scope is resolved in ONE place — `scoped()` itself returns the receiver —
+  // so the fact worth pinning is that the unscoped search is the one that ran.
+  it('leaves the search unscoped when no scope is declared', async () => {
+    const buildInput = vi.fn().mockReturnValue({});
+    mockRagSearch.mockResolvedValue([{ id: 'f1', text: 'unscoped' }]);
+    await runHeadless(opts({ buildInput, ragQuery: 'why' }));
+    expect(mockRagSearch).toHaveBeenCalledWith('why');
+    expect(buildInput.mock.calls[0][0].ragResults).toEqual([{ id: 'f1', text: 'unscoped' }]);
   });
 
   // Not merely "does not search": the RAGStore constructor reads and parses the
@@ -464,14 +519,15 @@ describe('runHeadless', () => {
  */
 describe('runHeadless reports disabled retrieval', () => {
   it('writes the reason to the run log', async () => {
-    mockRagStoreCtor.mockImplementation(
-      () =>
-        ({
-          search: mockRagSearch,
-          flush: mockRagFlush,
-          retrievalDisabledReason: () => 'written by other/model at 768',
-        }) as any,
-    );
+    mockRagStoreCtor.mockImplementation(() => {
+      const store: any = {
+        search: mockRagSearch,
+        flush: mockRagFlush,
+        retrievalDisabledReason: () => 'written by other/model at 768',
+      };
+      store.scoped = vi.fn(() => store);
+      return store;
+    });
     const log = vi.fn();
     await runHeadless(opts({ ragQuery: 'why', log }));
     expect(log.mock.calls.flat().join(' ')).toContain('written by other/model at 768');

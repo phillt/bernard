@@ -123,12 +123,13 @@ NEVER propose:
 Two notes on the same subject are usually COMPLEMENTARY, not redundant. A list of two email accounts and a note adding a third are both needed.`;
 
 /** Renders the corpus for the model. Keys are what a proposal refers to. */
-function buildUserContent(entries: ConsolidationInput[]): {
-  content: string;
-  included: number;
-} {
+export function renderMemoryCorpus(
+  entries: ConsolidationInput[],
+  opts: { head?: string } = {},
+): { content: string; included: number } {
+  const head = opts.head ?? '';
   const rows: string[] = [];
-  let used = 0;
+  let used = head.length;
   for (const e of entries) {
     const when = e.writtenAt ? ` (written ${e.writtenAt.slice(0, 10)})` : '';
     const row = `### ${e.key}${when}\n${e.content.trim()}`;
@@ -139,10 +140,7 @@ function buildUserContent(entries: ConsolidationInput[]): {
     used += row.length;
     rows.push(row);
   }
-  return {
-    content: `Here are ${rows.length} saved notes.\n\n${rows.join('\n\n')}`,
-    included: rows.length,
-  };
+  return { content: head + rows.join('\n\n'), included: rows.length };
 }
 
 /**
@@ -251,7 +249,12 @@ export async function proposeConsolidation(
   if (entries.length < MIN_MEMORIES_TO_CONSIDER) return [];
 
   const site = resolveSiteModel(config, 'memory-consolidator');
-  const { content: userContent, included } = buildUserContent(entries);
+  const { content: corpus, included } = renderMemoryCorpus(entries);
+  // The count names what was actually SENT, not what was on disk — and it is
+  // composed here rather than passed as `head` for that reason: `head` is
+  // charged against the budget, and this line cannot be written until the
+  // budget has decided.
+  const userContent = `Here are ${included} saved notes.\n\n${corpus}`;
 
   try {
     const t0 = Date.now();

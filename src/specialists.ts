@@ -134,6 +134,31 @@ export interface Specialist {
    * {@link targetTools}, which is a fence for every kind since #507.
    */
   toolSurface?: 'full' | 'worker';
+  /**
+   * Memory keys this specialist may read and write (#511).
+   *
+   * Exact keys, or prefixes ending in `*`. Absent means unscoped, which is what
+   * every record has today and what keeps this change a capability rather than
+   * a migration. **An empty array is honoured as deny-all**, which diverges
+   * from `targetToolsScopeError`'s rejection of `targetTools: []` — correctly,
+   * because "no tools" is incoherent while "verify against the task and nothing
+   * else" is a coherent posture. Validated at resolution, never trusted.
+   *
+   * **Not on `CreateSpecialistInput`, deliberately.** The `specialist` tool's
+   * schema does not expose it — `SpecialistUpdates` clears a field with a
+   * sentinel and an array has none that is not already meaningful, since `[]`
+   * must mean deny-all and so cannot also mean clear. Day-one authoring is
+   * hand-edited JSON, which goes through this type; adding the field to the
+   * create input would leave a plumbed-looking route nobody can reach and
+   * would read as "already done" to whoever lands the authoring surface.
+   */
+  memoryScope?: string[];
+  /**
+   * RAG domains this specialist may retrieve from (#511).
+   *
+   * Validated against the domain registry. Absent means unscoped.
+   */
+  knowledgeScope?: string[];
   /** Correct usage patterns used for few-shot priming. */
   goodExamples?: SpecialistExample[];
   /** Failed usage patterns with their corrected form. */

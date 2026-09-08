@@ -1,7 +1,7 @@
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import { loadConfig } from './config.js';
-import { assembleContext } from './framework/context.js';
+import { assembleContext, scopeContext } from './framework/context.js';
 import type { AgentContext, AgentContextMCP, AgentContextStores } from './framework/context.js';
 import { RAGStore, type RAGSearchResult } from './rag.js';
 import { debugLog } from './logger.js';
@@ -9,6 +9,7 @@ import { MCPManager } from './mcp.js';
 import { registerBuiltinDefinitions } from './framework/agents/index.js';
 import { runDefinition } from './framework/agents/run.js';
 import type { AgentDefinition } from './framework/agents/types.js';
+import type { DispatchProfile } from './framework/agents/dispatch-profile.js';
 import { initShellParser } from './permissions/shell-ast.js';
 
 /**
@@ -73,6 +74,24 @@ export interface RunHeadlessOpts<TInput, TFormatted> {
   posture: HeadlessPosture;
   /** Retrieval query. Omit to skip the RAG search entirely. */
   ragQuery?: string;
+  /**
+   * Knowledge fences for this run, already validated by `declaredScope` (#511).
+   *
+   * Optional, and that DIVERGES from `HeadlessPostureInput.writeScope` /
+   * `toolPermissions`, which are required so no caller inherits "unrestricted"
+   * by omission. The difference is what the default means: an omitted write
+   * scope was an accident nobody decided, while unscoped is the deliberate,
+   * system-wide default for every dispatch including `main` — a new headless
+   * entry point that omits this inherits exactly what the REPL does, not a
+   * widening relative to it.
+   *
+   * Applied in two places, and the first is why this exists at all: the
+   * pre-connect RAG search runs before `assembleContext`, so a fence applied
+   * only at ctx assembly would leave that one search reading the whole index.
+   * `runDefinition` re-derives from the dispatched record and narrowing is
+   * idempotent, so a scope that arrives both ways is applied once in effect.
+   */
+  scope?: Pick<DispatchProfile, 'memoryScope' | 'knowledgeScope'>;
   /** Wall clock in ms. `null` disables it. */
   timeoutMs: number | null;
   /** The caller's own signal, composed with the wall clock. */
@@ -168,6 +187,7 @@ export async function runHeadless<TInput, TFormatted>(
   opts: RunHeadlessOpts<TInput, TFormatted>,
 ): Promise<RunHeadlessResult<TFormatted>> {
   const { buildInput, posture, ragQuery, timeoutMs, log, debugLabel } = opts;
+  const scope = opts.scope ?? {};
 
   registerBuiltinDefinitions();
   const config = loadConfig();
@@ -226,10 +246,18 @@ export async function runHeadless<TInput, TFormatted>(
     // ~1.1-1.6 s against four stdio servers while the first search pays a cold
     // MiniLM load. Awaited further down; `.catch` is attached here, at
     // creation, so an early rejection can never surface as unhandled.
-    ragSearch = ragStore?.search(ragQuery).catch((err: unknown) => {
-      debugLog(`${debugLabel}:rag:error`, err instanceof Error ? err.message : String(err));
-      return undefined;
-    });
+    // Scoped BEFORE the search, not after: this one runs ahead of
+    // `assembleContext` (deliberately, to overlap the MCP connect), so it is
+    // the one retrieval a ctx-level fence cannot reach.
+    // `scoped(undefined)` returns the receiver, so this needs no guard of its
+    // own — one place decides what an absent scope means.
+    ragSearch = ragStore
+      ?.scoped(scope.knowledgeScope)
+      .search(ragQuery)
+      .catch((err: unknown) => {
+        debugLog(`${debugLabel}:rag:error`, err instanceof Error ? err.message : String(err));
+        return undefined;
+      });
   }
 
   const mcpManager = new MCPManager();
@@ -264,13 +292,16 @@ export async function runHeadless<TInput, TFormatted>(
   // is the one deliberate behaviour change in the extraction.
   let ctx: AgentContext;
   try {
-    ctx = assembleContext({
-      config,
-      toolOptions: headlessToolOptions(posture, config.shellTimeout),
-      mcp: mcpSnapshot,
-      rag: ragStore,
-      stores: opts.stores,
-    });
+    ctx = scopeContext(
+      assembleContext({
+        config,
+        toolOptions: headlessToolOptions(posture, config.shellTimeout),
+        mcp: mcpSnapshot,
+        rag: ragStore,
+        stores: opts.stores,
+      }),
+      scope,
+    );
 
     // Wire the resolved posture into the policy decision so that
     // `runDefinition` → `augmentTools` sees the correct toolMode and
@@ -336,6 +367,10 @@ export async function runHeadless<TInput, TFormatted>(
     const input = await buildInput(env);
     const { formatted, stepLimitHit } = await runDefinition(ctx, opts.definition(), input, {
       abortSignal: abort.signal,
+      // Reporting only — `ctx` above is already narrowed. Without it a cron
+      // job's fence is invisible in the dispatch record, because a `CronJob` is
+      // not a specialist record and `resolveDispatchProfile` cannot see one.
+      declaredScope: scope,
     });
     return { ok: true, formatted, env, startedAt, timings: timings(), stepLimitHit };
   } catch (err: unknown) {

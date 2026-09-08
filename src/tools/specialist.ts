@@ -24,6 +24,7 @@ import {
   DISPATCH_TOOL_SURFACES,
   MAX_STEP_RATIO,
 } from '../framework/agents/dispatch-profile.js';
+import { scopeList } from '../text.js';
 
 const goodExampleSchema = z.object({
   input: z.string(),
@@ -508,6 +509,25 @@ export function createSpecialistTool(
                 ? `targetTools: ${record.targetTools.join(', ')}`
                 : 'targetTools: none declared',
             );
+            // The knowledge fences (#511), reported through the same resolved
+            // profile. `[]` is a real posture — deny-all — so it is rendered as
+            // "(nothing)" rather than folded into "none declared"; the two mean
+            // opposite things and the resolver already keeps them apart.
+            for (const [label, declared, resolved] of [
+              ['memoryScope', record.memoryScope, profile.memoryScope],
+              ['knowledgeScope', record.knowledgeScope, profile.knowledgeScope],
+            ] as const) {
+              if (resolved === undefined) continue;
+              lines.push(`${label}: ${scopeList(resolved)}`);
+              const dropped = Array.isArray(declared) ? declared.length - resolved.length : null;
+              if (dropped === null) {
+                lines.push(`  ⚠ declared ${label} is not a list, so this dispatch reads nothing`);
+              } else if (dropped > 0) {
+                lines.push(
+                  `  ⚠ ${dropped} declared entr${dropped === 1 ? 'y is' : 'ies are'} invalid and dropped`,
+                );
+              }
+            }
 
             if (record.boundTo) {
               lines.push(`bound to: ${record.boundTo.appId}/${record.boundTo.action}`);

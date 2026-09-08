@@ -105,6 +105,100 @@ describe('RAGStore', () => {
   }
 
   /**
+   * A read must not rewrite the store (#533).
+   *
+   * `search()` ended with `persist()`, and `persist()` is a `JSON.stringify` of
+   * the whole array plus a write — measured at 188 ms on a real 3,664-record /
+   * 31 MB store, synchronous, on the turn's critical path, to record an
+   * `accessCount++`. These pin that the write is deferred and that the
+   * bookkeeping still survives.
+   */
+  describe('debounced access bookkeeping', () => {
+    /** Writes to the store file, ignoring the session-date sidecar. */
+    function storeWrites(): number {
+      return vi
+        .mocked(fs.writeFileSync)
+        .mock.calls.filter((c) => String(c[0]).includes('memories.json')).length;
+    }
+
+    it('a search that hits does not write', async () => {
+      const store = await createStore();
+      await store.addFacts(['User prefers dark mode with testing keywords'], 'test');
+      const before = storeWrites();
+
+      const results = await store.search('User prefers dark mode with testing keywords');
+
+      expect(results.length).toBeGreaterThan(0);
+      expect(storeWrites()).toBe(before);
+    });
+
+    it('flushes once for many dirtying searches', async () => {
+      // The whole point: a fan-out of dispatches coalesces into one write
+      // rather than front-loading one 31 MB rewrite each.
+      const store = await createStore();
+      await store.addFacts(['fact one with testing keywords'], 'test');
+      const before = storeWrites();
+
+      for (let i = 0; i < 5; i++) {
+        store.clearTurnCache(); // otherwise the per-turn cache short-circuits
+        await store.search('fact one with testing keywords');
+      }
+      expect(storeWrites()).toBe(before);
+
+      store.flush();
+      expect(storeWrites()).toBe(before + 1);
+    });
+
+    it('a flush with nothing pending is a no-op', async () => {
+      const store = await createStore();
+      const before = storeWrites();
+      store.flush();
+      store.flush();
+      expect(storeWrites()).toBe(before);
+    });
+
+    it('keeps writing content eagerly — only bookkeeping is deferred', async () => {
+      // `addFacts` writes a FACT. A crash must not lose it, only the note that
+      // a fact was useful.
+      const store = await createStore();
+      const before = storeWrites();
+      await store.addFacts(['a brand new fact'], 'test');
+      expect(storeWrites()).toBeGreaterThan(before);
+    });
+
+    it('does not hold the process open for bookkeeping', async () => {
+      // `unref`ed, so the debounce can never be why Bernard will not exit —
+      // which is also why every exit path flushes explicitly rather than
+      // trusting the timer.
+      const unref = vi.fn();
+      const spy = vi.spyOn(globalThis, 'setTimeout').mockReturnValue({ unref } as never);
+      try {
+        const store = await createStore();
+        await store.addFacts(['fact one with testing keywords'], 'test');
+        await store.search('fact one with testing keywords');
+        expect(unref).toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('writes to a unique temp path, not a shared one', async () => {
+      // Four processes write this file. A fixed `.tmp` suffix means two
+      // concurrent persists share one temp path and rename it twice;
+      // debouncing widens the window that makes it matter.
+      const store = await createStore();
+      await store.addFacts(['another fact'], 'test');
+      const temps = vi
+        .mocked(fs.writeFileSync)
+        .mock.calls.map((c) => String(c[0]))
+        .filter((p) => p.endsWith('.tmp'));
+      expect(temps.length).toBeGreaterThan(0);
+      for (const t of temps) expect(t).not.toMatch(/memories\.json\.tmp$/);
+      expect(temps[0]).toContain(String(process.pid));
+    });
+  });
+
+  /**
    * A model swap must not silently destroy retrieval (#520).
    *
    * `cosineSimilarity` returns `0` for vectors of different lengths, `0` is
@@ -234,100 +328,6 @@ describe('RAGStore', () => {
       });
       const store = await createStore();
       expect((await store.search('a stored fact with testing keywords')).length).toBeGreaterThan(0);
-    });
-  });
-
-  /**
-   * A read must not rewrite the store (#533).
-   *
-   * `search()` ended with `persist()`, and `persist()` is a `JSON.stringify` of
-   * the whole array plus a write — measured at 188 ms on a real 3,664-record /
-   * 31 MB store, synchronous, on the turn's critical path, to record an
-   * `accessCount++`. These pin that the write is deferred and that the
-   * bookkeeping still survives.
-   */
-  describe('debounced access bookkeeping', () => {
-    /** Writes to the store file, ignoring the session-date sidecar. */
-    function storeWrites(): number {
-      return vi
-        .mocked(fs.writeFileSync)
-        .mock.calls.filter((c) => String(c[0]).includes('memories.json')).length;
-    }
-
-    it('a search that hits does not write', async () => {
-      const store = await createStore();
-      await store.addFacts(['User prefers dark mode with testing keywords'], 'test');
-      const before = storeWrites();
-
-      const results = await store.search('User prefers dark mode with testing keywords');
-
-      expect(results.length).toBeGreaterThan(0);
-      expect(storeWrites()).toBe(before);
-    });
-
-    it('flushes once for many dirtying searches', async () => {
-      // The whole point: a fan-out of dispatches coalesces into one write
-      // rather than front-loading one 31 MB rewrite each.
-      const store = await createStore();
-      await store.addFacts(['fact one with testing keywords'], 'test');
-      const before = storeWrites();
-
-      for (let i = 0; i < 5; i++) {
-        store.clearTurnCache(); // otherwise the per-turn cache short-circuits
-        await store.search('fact one with testing keywords');
-      }
-      expect(storeWrites()).toBe(before);
-
-      store.flush();
-      expect(storeWrites()).toBe(before + 1);
-    });
-
-    it('a flush with nothing pending is a no-op', async () => {
-      const store = await createStore();
-      const before = storeWrites();
-      store.flush();
-      store.flush();
-      expect(storeWrites()).toBe(before);
-    });
-
-    it('keeps writing content eagerly — only bookkeeping is deferred', async () => {
-      // `addFacts` writes a FACT. A crash must not lose it, only the note that
-      // a fact was useful.
-      const store = await createStore();
-      const before = storeWrites();
-      await store.addFacts(['a brand new fact'], 'test');
-      expect(storeWrites()).toBeGreaterThan(before);
-    });
-
-    it('does not hold the process open for bookkeeping', async () => {
-      // `unref`ed, so the debounce can never be why Bernard will not exit —
-      // which is also why every exit path flushes explicitly rather than
-      // trusting the timer.
-      const unref = vi.fn();
-      const spy = vi.spyOn(globalThis, 'setTimeout').mockReturnValue({ unref } as never);
-      try {
-        const store = await createStore();
-        await store.addFacts(['fact one with testing keywords'], 'test');
-        await store.search('fact one with testing keywords');
-        expect(unref).toHaveBeenCalled();
-      } finally {
-        spy.mockRestore();
-      }
-    });
-
-    it('writes to a unique temp path, not a shared one', async () => {
-      // Four processes write this file. A fixed `.tmp` suffix means two
-      // concurrent persists share one temp path and rename it twice;
-      // debouncing widens the window that makes it matter.
-      const store = await createStore();
-      await store.addFacts(['another fact'], 'test');
-      const temps = vi
-        .mocked(fs.writeFileSync)
-        .mock.calls.map((c) => String(c[0]))
-        .filter((p) => p.endsWith('.tmp'));
-      expect(temps.length).toBeGreaterThan(0);
-      for (const t of temps) expect(t).not.toMatch(/memories\.json\.tmp$/);
-      expect(temps[0]).toContain(String(process.pid));
     });
   });
 
@@ -1264,5 +1264,109 @@ describe('RAGStore', () => {
       // Should NOT persist when nothing was deleted
       expect(fs.writeFileSync).not.toHaveBeenCalled();
     });
+  });
+});
+
+/**
+ * The knowledge fence (#511).
+ *
+ * The `domain` axis has been populated and RANKED on since day one and never
+ * once filtered on — `scoreAndRank` already groups by it. So a scoped search is
+ * the same ranking over a smaller corpus, not a truncation of a wider result,
+ * and that distinction is what these pin: the filter has to go in FRONT of the
+ * grouping, or a scoped search returns whatever survived an unscoped top-k.
+ */
+describe('RAGStore domain scope (#511)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    vi.mocked(fs.readFileSync).mockReturnValue('[]');
+    mockProvider = createFakeProvider();
+  });
+
+  /** Writes to the store file, ignoring the session-date sidecar. */
+  function writeCount(): number {
+    return vi
+      .mocked(fs.writeFileSync)
+      .mock.calls.filter((c) => String(c[0]).includes('memories.json')).length;
+  }
+
+  async function seeded() {
+    const { RAGStore } = await import('./rag.js');
+    const store = new RAGStore({ maxMemories: 100, similarityThreshold: -1 });
+    await store.addFacts(['shared vocabulary alpha'], 'test', 'general');
+    await store.addFacts(['shared vocabulary beta'], 'test', 'user-preferences');
+    return store;
+  }
+
+  it('a scoped view retrieves only from the domains it was granted', async () => {
+    const store = await seeded();
+    const view = store.scoped(['general']);
+    const hits = await view.search('shared vocabulary');
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits.every((h) => h.domain === 'general')).toBe(true);
+  });
+
+  it('the unscoped store still sees everything', async () => {
+    const store = await seeded();
+    const domains = new Set((await store.search('shared vocabulary')).map((h) => h.domain));
+    expect(domains).toEqual(new Set(['general', 'user-preferences']));
+  });
+
+  it('an empty scope retrieves nothing', async () => {
+    const store = await seeded();
+    expect(await store.scoped([]).search('shared vocabulary')).toEqual([]);
+  });
+
+  it('narrowing is monotone — a second scope cannot widen the first', async () => {
+    const store = await seeded();
+    const view = store.scoped(['general']).scoped(['general', 'user-preferences']);
+    // Through what the view RETRIEVES rather than a scope accessor: the effect
+    // is the property, and the bookkeeping is not public.
+    const hits = await view.search('shared vocabulary');
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits.every((h) => h.domain === 'general')).toBe(true);
+  });
+
+  /**
+   * The two PRs in this wave interact here, and the interaction is silent.
+   *
+   * `scoped()` is a shallow clone, so a per-FIELD `dirty` flag would be copied
+   * into the view: the view's search marks the view dirty, the exit hooks call
+   * `flush()` on the ROOT, whose flag is still false, and #533's explicit-flush
+   * half stops applying to every scoped dispatch. Holding the state in one
+   * object shared by reference is what makes that unrepresentable.
+   */
+  it("a view's pending bookkeeping is flushed by the root store", async () => {
+    const store = await seeded();
+    store.flush();
+    const before = writeCount();
+    await store.scoped(['general']).search('shared vocabulary');
+    expect(writeCount()).toBe(before);
+    store.flush();
+    expect(writeCount()).toBeGreaterThan(before);
+  });
+
+  it('scoped(null) is the identity', async () => {
+    const store = await seeded();
+    expect(store.scoped(null)).toBe(store);
+  });
+
+  /**
+   * The fail-open hazard neither #511 nor the audit had named.
+   *
+   * `turnSearchCache` is keyed on the query STRING alone. `main` searches
+   * "deployment process" unscoped and caches fifteen results; a scoped child
+   * searching the same string would get the UNSCOPED results straight out of
+   * the cache, with no code path ever consulting a domain. So a view carries no
+   * search cache — the embedding cache, where the real cost is, stays shared.
+   */
+  it('does not inherit the parent turn-search cache', async () => {
+    const store = await seeded();
+    // Warm the parent's cache with the unscoped answer for this exact query.
+    const unscoped = await store.search('shared vocabulary');
+    expect(unscoped.length).toBe(2);
+    const scoped = await store.scoped(['general']).search('shared vocabulary');
+    expect(scoped.every((h) => h.domain === 'general')).toBe(true);
   });
 });

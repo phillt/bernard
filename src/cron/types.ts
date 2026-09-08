@@ -49,6 +49,25 @@ export interface CronJob {
    */
   skipPermissions?: boolean;
   /**
+   * Memory keys this job may read and write (#511).
+   *
+   * **Unset means unscoped**, matching `toolMode`'s stated house rule two
+   * fields up: an unset posture field preserves legacy behaviour and the job
+   * author opts in. Deny-by-default is the stronger security position in the
+   * abstract and is deliberately rejected here — silently blanking every
+   * existing job's memory overnight surfaces as "the job answered worse", which
+   * #510 already records as the quietest failure mode in this repo, and cron is
+   * where it would be quietest.
+   */
+  memoryScope?: string[];
+  /**
+   * RAG domains this job may retrieve from (#511). Unset means unscoped.
+   *
+   * Orthogonal to `prompt`, which bounds retrieval by SIMILARITY. That is not a
+   * fence and was never claimed to be; the two multiply.
+   */
+  knowledgeScope?: string[];
+  /**
    * Per-job wall clock in milliseconds (#326). Falls back to
    * `BERNARD_CRON_JOB_TIMEOUT_MS`, then to a 30-minute default; `0` disables
    * the clock for this job.

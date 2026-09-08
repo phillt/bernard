@@ -37,6 +37,18 @@ export interface DispatchContextRecord {
   memoryDropped?: string[];
   /** The query this dispatch retrieved for, when it retrieved (#510). */
   retrievalQuery?: string;
+  /**
+   * The memory-key fence this dispatch ran under, when it declared one (#511).
+   *
+   * Recorded because a fence and a bad retrieval look identical from the
+   * outside: both surface as a standing instruction simply not being there.
+   * `memoryKept` alone cannot tell them apart — an empty array reads the same
+   * whether the store had nothing to give or the dispatch was not allowed to
+   * ask. Absent means unscoped, which is every dispatch today.
+   */
+  memoryScope?: string[];
+  /** The RAG domains this dispatch could retrieve from, when fenced (#511). */
+  knowledgeScope?: string[];
 }
 
 function isStringArray(v: unknown): boolean {
@@ -58,7 +70,9 @@ function isDispatchContextRecord(entry: unknown): entry is DispatchContextRecord
     // rule `isTurnContextRecord` already applies to `injectedMemoryKeys`.
     (e.memoryKept === undefined || isStringArray(e.memoryKept)) &&
     (e.memoryDropped === undefined || isStringArray(e.memoryDropped)) &&
-    (e.retrievalQuery === undefined || typeof e.retrievalQuery === 'string')
+    (e.retrievalQuery === undefined || typeof e.retrievalQuery === 'string') &&
+    (e.memoryScope === undefined || isStringArray(e.memoryScope)) &&
+    (e.knowledgeScope === undefined || isStringArray(e.knowledgeScope))
   );
 }
 

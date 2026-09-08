@@ -1,5 +1,6 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import { randomBytes } from 'node:crypto';
 
 /**
  * Writes `data` to a `.tmp` file then renames it into place for crash-safe
@@ -23,6 +24,45 @@ export function atomicWriteFileSync(
     opts.mode === undefined ? 'utf-8' : { encoding: 'utf-8', mode: opts.mode },
   );
   fs.renameSync(tmp, filePath);
+}
+
+/**
+ * The same crash-safe write, through a temp path no other writer can collide
+ * with — and which is unlinked when the write fails.
+ *
+ * Separate from {@link atomicWriteFileSync} rather than an option on it,
+ * because the two answer different questions and the fixed-suffix form is
+ * correct where it is used: a store with one writer wants a predictable temp
+ * name, and the sweeps that exist for orphans (`RAGStore.cleanupStaleTemp`,
+ * `pruneFileGroupsByMtime`) are written against known names.
+ *
+ * Use this where SEVERAL processes write one file. `memories.json` has four —
+ * the REPL, the detached exit worker, the cron daemon and `bernard facts` — so
+ * a shared `.tmp` means two concurrent persists write one file and rename it
+ * twice. `tools/file.ts` reached the same conclusion independently and had
+ * hand-rolled it; this is that function, lifted rather than copied a third
+ * time.
+ *
+ * The unlink-on-failure half is what makes a unique name safe: without it every
+ * failed write leaves a distinct orphan forever, where a fixed suffix left one
+ * that the next write overwrote. Returns an error message, never throws, so a
+ * caller on a best-effort path (a debounced flush) can stay silent.
+ */
+export function atomicWriteFileSyncUnique(filePath: string, data: string): string | null {
+  const tmp = `${filePath}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
+  try {
+    fs.writeFileSync(tmp, data, 'utf-8');
+    fs.renameSync(tmp, filePath);
+    return null;
+  } catch (err: unknown) {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      // Best-effort cleanup: the write already failed, and a failed unlink on
+      // top of it is not something a caller can act on.
+    }
+    return `Write failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
 }
 
 export interface SeedOnceOptions {

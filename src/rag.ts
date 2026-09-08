@@ -9,6 +9,7 @@ import {
 import { debugLog } from './logger.js';
 import { DEFAULT_DOMAIN } from './domains.js';
 import { RAG_DIR, MEMORIES_FILE, LAST_SESSION_FILE } from './paths.js';
+import { atomicWriteFileSyncUnique } from './fs-utils.js';
 
 /** Maximum results returned per domain before merging. */
 export const DEFAULT_TOP_K_PER_DOMAIN = 5;
@@ -26,6 +27,17 @@ const PRUNE_HALF_LIFE_DAYS = 90;
 const STALE_TEMP_MAX_AGE_MS = 60 * 60 * 1000; // 1 hour
 /** Default time-to-live in days for newly created memories. */
 const DEFAULT_RAG_TTL_DAYS = 90;
+
+/**
+ * How long pending access bookkeeping may sit unwritten (#533).
+ *
+ * A backstop, not the mechanism: every exit path flushes explicitly, so this
+ * only covers a process that is killed rather than closed. Long enough that a
+ * burst of dispatches coalesces into one write, short enough that a SIGKILL
+ * loses at most a few seconds of decay metadata — which costs one TTL
+ * extension, not a fact.
+ */
+const FLUSH_DEBOUNCE_MS = 5_000;
 
 /**
  * Bumped only when the on-disk SHAPE changes, never when the model does — a
@@ -53,17 +65,6 @@ interface StoredMemories {
   dimensions: number;
   memories: RAGMemory[];
 }
-
-/**
- * How long pending access bookkeeping may sit unwritten (#533).
- *
- * A backstop, not the mechanism: every exit path flushes explicitly, so this
- * only covers a process that is killed rather than closed. Long enough that a
- * burst of dispatches coalesces into one write, short enough that a SIGKILL
- * loses at most a few seconds of decay metadata — which costs one TTL
- * extension, not a fact.
- */
-const FLUSH_DEBOUNCE_MS = 5_000;
 
 /** A single stored memory with its embedding vector and lifecycle metadata. */
 export interface RAGMemory {
@@ -162,15 +163,6 @@ export class RAGStore {
    */
   private turnEmbeddingCache = new Map<string, number[]>();
   /**
-   * What the on-disk store says wrote it, when it says anything (#520).
-   * Absent for a legacy bare-array store, which is adopted rather than refused.
-   */
-  private stamp: { model?: string; dimensions?: number } | null = null;
-  /** A legacy store was read; write the stamp back on the next persist. */
-  private needsStamp = false;
-  /** See {@link retrievalDisabledReason}. Non-null IS the once-per-process latch. */
-  private disabledReason: string | null = null;
-  /**
    * Access bookkeeping written but not yet flushed (#533).
    *
    * `search()` used to call {@link persist} on every hit, and `persist` is a
@@ -189,17 +181,44 @@ export class RAGStore {
    * Losing an unflushed bump costs at most one TTL extension. `addFacts`,
    * `clear` and `deleteByIds` write CONTENT and stay eager — a crash must not
    * lose a fact, only the note that a fact was useful.
-   */
-  private dirty = false;
-  /**
-   * Debounce timer for {@link flush}.
    *
-   * `unref`ed, following `inbox/watcher.ts`, so a pending flush can never be
-   * the reason a process will not exit — which also means the timer alone is
-   * not a guarantee, and every exit path must call {@link flush} explicitly.
-   * Both halves are required; neither is sufficient.
+   * **Held in one object shared by reference, the way `memories` is.** A
+   * scoped view (#511) is a shallow clone, so a per-field `dirty` flag would be
+   * COPIED into the view: the view's search would mark the view dirty, the exit
+   * hooks would call `flush()` on the root, whose flag is still false, and the
+   * explicit half of the "both halves are required" contract below would
+   * silently stop applying to every scoped dispatch. A copied `flushTimer` is
+   * worse — a view's `markDirty` would see the root's live handle, early-return,
+   * and never schedule its own.
+   *
+   * The timer is `unref`ed, following `inbox/watcher.ts`, so a pending flush can
+   * never be the reason a process will not exit — which also means the timer
+   * alone is not a guarantee, and every exit path must call {@link flush}
+   * explicitly. Both halves are required; neither is sufficient.
    */
-  private flushTimer: NodeJS.Timeout | null = null;
+  private persistState: { dirty: boolean; timer: NodeJS.Timeout | null } = {
+    dirty: false,
+    timer: null,
+  };
+  /**
+   * Domains this instance may retrieve from, or `null` for the unscoped store
+   * (#511).
+   *
+   * The `domain` axis has existed, been populated and been ranked on since day
+   * one — `scoreAndRank` already GROUPS by it — and has never once been
+   * filtered on. This is the first reader. On a real store: `general` 1,217,
+   * `conversations` 935, `tool-usage` 1,131, `user-preferences` 381.
+   */
+  private domainScope: readonly string[] | null = null;
+  /**
+   * What the on-disk store says wrote it, when it says anything (#520).
+   * Absent for a legacy bare-array store, which is adopted rather than refused.
+   */
+  private stamp: { model?: string; dimensions?: number } | null = null;
+  /** A legacy store was read; write the stamp back on the next persist. */
+  private needsStamp = false;
+  /** See {@link retrievalDisabledReason}. Non-null IS the once-per-process latch. */
+  private disabledReason: string | null = null;
 
   constructor(config?: RAGStoreConfig) {
     this.topKPerDomain = config?.topKPerDomain ?? DEFAULT_TOP_K_PER_DOMAIN;
@@ -213,6 +232,33 @@ export class RAGStore {
     this.saveSessionDate();
     this.pruneExpired();
     RAGStore.cleanupStaleTemp();
+  }
+
+  /**
+   * A narrowed view of this store, restricted to the given domains (#511).
+   *
+   * Shares `memories` and the query-EMBEDDING cache by reference — it must:
+   * `search` mutates access metadata and the embedding is where the real cost
+   * is. It deliberately does **not** share {@link turnSearchCache}.
+   *
+   * **That omission is a fail-open hazard closed, not an optimisation skipped.**
+   * `turnSearchCache` is keyed on the verbatim query string ALONE. So `main`
+   * searching "deployment process" unscoped and caching fifteen results, then a
+   * scoped child searching the same string, would hand the child the *unscoped*
+   * results straight out of the cache — with no code path ever consulting a
+   * domain. A composite key would work and is a correctness question nobody
+   * re-checks; a view has no cache at all, is per-dispatch, and is discarded,
+   * so there is nothing to invalidate.
+   */
+  scoped(domains: readonly string[] | null | undefined): RAGStore {
+    if (!domains) return this;
+    const base = this.domainScope;
+    const next = base === null ? [...domains] : domains.filter((d) => base.includes(d));
+    const view = Object.create(RAGStore.prototype) as RAGStore;
+    // `persistState` rides along in the spread, by reference — which is the
+    // point: a view's access bookkeeping must reach the root's `flush()`.
+    Object.assign(view, this, { domainScope: next, turnSearchCache: new Map() });
+    return view;
   }
 
   /** Delete .pending-*.json temp files older than 1 hour (handles crashed workers). */
@@ -319,7 +365,15 @@ export class RAGStore {
     const topKPerDomain = overrides?.topKPerDomain ?? this.topKPerDomain;
     const maxResults = overrides?.maxResults ?? this.maxResults;
 
-    const scored = this.memories
+    // The filter goes in FRONT of the per-domain grouping below, so a scoped
+    // search is the same ranking over a smaller corpus rather than a truncation
+    // of a wider result (#511).
+    const corpus =
+      this.domainScope === null
+        ? this.memories
+        : this.memories.filter((m) => this.domainScope!.includes(m.domain));
+
+    const scored = corpus
       .map((m) => ({
         memory: m,
         similarity: cosineSimilarity(queryEmbedding, m.embedding),
@@ -795,14 +849,15 @@ export class RAGStore {
    * matters is the explicit one at each exit hook.
    */
   private markDirty(): void {
-    this.dirty = true;
-    if (this.flushTimer) return;
-    this.flushTimer = setTimeout(() => {
-      this.flushTimer = null;
+    const st = this.persistState;
+    st.dirty = true;
+    if (st.timer) return;
+    st.timer = setTimeout(() => {
+      st.timer = null;
       this.flush();
     }, FLUSH_DEBOUNCE_MS);
     // Never keep the process alive for bookkeeping.
-    this.flushTimer.unref?.();
+    st.timer.unref?.();
   }
 
   /**
@@ -814,42 +869,45 @@ export class RAGStore {
    * Idempotent and cheap when nothing is dirty.
    */
   flush(): void {
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer);
-      this.flushTimer = null;
+    const st = this.persistState;
+    if (st.timer) {
+      clearTimeout(st.timer);
+      st.timer = null;
     }
-    if (!this.dirty) return;
+    if (!st.dirty) return;
     this.persist();
   }
 
-  /** Persist memories to disk atomically (write to tmp, then rename). */
+  /**
+   * Persist memories to disk atomically (write to tmp, then rename).
+   *
+   * Through `atomicWriteFileSyncUnique`, not a hand-rolled pair (#533). A
+   * UNIQUE temp name is required here rather than `fs-utils`' fixed `.tmp`
+   * suffix: four processes write this file — the REPL, the detached exit
+   * worker, the cron daemon and `bernard facts` — so a shared temp path means
+   * two concurrent persists write the same file and rename it twice, and
+   * debouncing widens the window that makes it matter.
+   *
+   * **The unlink-on-failure half is what makes a unique name safe**, and is why
+   * the shared helper is worth reaching for rather than copying it a fifth
+   * time. A fixed suffix left one orphan that the next write overwrote; a
+   * unique one leaves a distinct ~31 MB file per failure, and
+   * {@link cleanupStaleTemp} sweeps only `.pending-*.json`, so nothing would
+   * ever collect them.
+   */
   private persist(): void {
-    this.dirty = false;
+    this.persistState.dirty = false;
     this.needsStamp = false;
-    try {
-      // A UNIQUE temp name, not a fixed `.tmp` suffix (#533). Four processes
-      // write this file — the REPL, the detached exit worker, the cron daemon
-      // and `bernard facts` — and a shared temp path means two concurrent
-      // persists write the same file and rename it twice. `tools/file.ts`
-      // documents avoiding `fs-utils`' fixed-suffix helper for exactly this.
-      // Debouncing widens the window that makes it matter.
-      const tmpFile = `${MEMORIES_FILE}.${process.pid}.${Date.now().toString(36)}.tmp`;
-      // Stamped, so a later reader can tell which model wrote these vectors
-      // (#520). `CACHE_SCHEMA_VERSION` is the template for the shape; the
-      // difference is what a mismatch DOES — see `modelMismatch`.
-      const payload: StoredMemories = {
-        version: STORE_SCHEMA_VERSION,
-        model: this.stamp?.model ?? EMBEDDING_MODEL_ID,
-        dimensions: this.stamp?.dimensions ?? EMBEDDING_DIMENSIONS,
-        memories: this.memories,
-      };
-      fs.writeFileSync(tmpFile, JSON.stringify(payload), 'utf-8');
-      fs.renameSync(tmpFile, MEMORIES_FILE);
-    } catch (err) {
-      debugLog(
-        'rag:persist',
-        `Failed to persist memories: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
+    // Stamped, so a later reader can tell which model wrote these vectors
+    // (#520). `CACHE_SCHEMA_VERSION` is the template for the shape; the
+    // difference is what a mismatch DOES — see `modelMismatch`.
+    const payload: StoredMemories = {
+      version: STORE_SCHEMA_VERSION,
+      model: this.stamp?.model ?? EMBEDDING_MODEL_ID,
+      dimensions: this.stamp?.dimensions ?? EMBEDDING_DIMENSIONS,
+      memories: this.memories,
+    };
+    const failure = atomicWriteFileSyncUnique(MEMORIES_FILE, JSON.stringify(payload));
+    if (failure) debugLog('rag:persist', `Failed to persist memories: ${failure}`);
   }
 }

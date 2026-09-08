@@ -27,7 +27,8 @@ import type { StepFinishPayload } from '../hooks/types.js';
 import { runAgent, newDispatchId, type AgentResult, type AgentSpec } from '../runner.js';
 import type { IterateFn, IterateOpts, StrategyContext } from '../strategies/types.js';
 import { resolveToolSurface } from './tool-surface.js';
-import { resolveDispatchProfile } from './dispatch-profile.js';
+import { resolveDispatchProfile, type DispatchProfile } from './dispatch-profile.js';
+import { scopeContext, withUsageRecorder } from '../context.js';
 import { recordDispatchContext } from '../../dispatch-context-history.js';
 import { resolveRetrieval } from './retrieval.js';
 import { visionRefusal } from './vision-gate.js';
@@ -98,6 +99,26 @@ export interface RunDefinitionOpts {
    * the `main` layer in `bernard usage` / the UsageViewer.
    */
   telemetrySite?: string;
+  /**
+   * A knowledge fence the CALLER has already applied to `ctx` (#511).
+   *
+   * Reporting only — the ctx handed in is already narrowed, so this changes
+   * nothing about what the dispatch can reach. It exists because
+   * `DispatchContextRecord` must name the fence and `resolveDispatchProfile`
+   * cannot always see it: a `CronJob` is not a specialist record, so
+   * `cronDefinition` has no `recordId` and a job fenced through
+   * `RunHeadlessOpts.scope` would be recorded as unscoped — the worst possible
+   * gap for a field whose whole purpose is that a fence and a bad retrieval
+   * look identical from outside.
+   *
+   * Deliberately NOT a second application point. Reading the applied fence back
+   * off the scoped stores would be the more general answer and was tried: it
+   * requires every memory and RAG test double in the tree — around thirty of
+   * them — to grow a scope accessor to satisfy one diagnostic line, which is the
+   * design telling you the runner should not interrogate a store to find out
+   * what it was told.
+   */
+  declaredScope?: Pick<DispatchProfile, 'memoryScope' | 'knowledgeScope'>;
 }
 
 export interface RunDefinitionResult<TFormatted> {
@@ -142,13 +163,12 @@ export interface RunDefinitionResult<TFormatted> {
  * happen here, not at the call sites.
  */
 export async function runDefinition<TInput, TFormatted>(
-  ctx: AgentContext,
+  rootCtx: AgentContext,
   def: AgentDefinition<TInput, TFormatted>,
   input: TInput,
   opts: RunDefinitionOpts = {},
 ): Promise<RunDefinitionResult<TFormatted>> {
-  const { config } = ctx;
-  const resolved = resolveModel(def, ctx, input, opts.overrides);
+  const resolved = resolveModel(def, rootCtx, input, opts.overrides);
 
   // Central tool-surface resolution (#315, #322). The built-in registry scope
   // (#253) and the MCP bag (#296/#305) are cross-cutting decisions about what
@@ -166,7 +186,23 @@ export async function runDefinition<TInput, TFormatted>(
   // no `ctx` and `resolveToolSurface` gets no `input`, so neither can reach the
   // record it is running. Cheap and total: no `recordId` on the definition, or
   // no record on disk, and it is a frozen empty object.
-  const profile = resolveDispatchProfile(ctx, def, input);
+  const profile = resolveDispatchProfile(rootCtx, def, input);
+
+  // The scope fence (#511), and the SHADOWING is the mechanism. Every `ctx`
+  // below this line is the scoped one without a single reference being
+  // touched — including `def.tools(ctx, …)`, where six of the ten
+  // `createTools` call sites read `ctx.stores.memory`. Shadowing rather than a
+  // second name makes "reach the unscoped context below this line"
+  // unrepresentable rather than merely discouraged, and `scopeContext` returns
+  // `rootCtx` unchanged when nothing is declared, so `main` keeps object
+  // identity and the prompt-cache prefix is untouched.
+  const ctx = withUsageRecorder(scopeContext(rootCtx, profile));
+  // What this dispatch is fenced to, for the record only. The two terms cannot
+  // both be set today — a caller supplies one exactly when there is no record
+  // to declare it — and if they ever could, the applied fence is their
+  // intersection, since `scopeContext` narrows monotonically at each site.
+  const fence = { ...profile, ...(opts.declaredScope ?? {}) };
+  const { config } = ctx;
   const surface = resolveToolSurface(ctx, def, profile);
   // Retrieval, resolved once per dispatch for the same reason and in the same
   // place (#510). It used to sit in four definitions' `contextInputs`, which
@@ -398,10 +434,21 @@ export async function runDefinition<TInput, TFormatted>(
     if (def.contextInputs) {
       try {
         extras = await Promise.resolve(def.contextInputs(ctx, input));
-      } catch {
+      } catch (err) {
         // Fail-soft: a thrown contextInputs (e.g. RAG search error) must not
         // abort the turn. Drop the extras and fall back to the framework
         // default memory + scratch contract.
+        //
+        // Logged rather than swallowed (#511). It widens `null` to `{}`, so a
+        // definition that opts OUT of the context block entirely — `pac-critic`
+        // returns `contextInputs: () => null` — silently starts rendering one
+        // if its thunk ever throws, which is a change of contract reported
+        // nowhere. Note the fence itself is unaffected either way: scoping
+        // happens above, on the store this line falls back to.
+        debugLog('context:inputs:failed', {
+          definition: def.id,
+          message: err instanceof Error ? err.message : String(err),
+        });
         extras = {};
       }
     }
@@ -530,6 +577,14 @@ export async function runDefinition<TInput, TFormatted>(
         // definition's thunk and claiming a query for a dispatch that searched
         // nothing.
         ...(retrieved.query ? { retrievalQuery: retrieved.query } : {}),
+        // The RECORD's fence, which is the union of what the record declared
+        // and what the caller already applied — see `RunDefinitionOpts.
+        // declaredScope`. Without the second term a cron job's fence is
+        // invisible in the one record that exists to explain a short memory
+        // list, because a `CronJob` is not a specialist record and
+        // `resolveDispatchProfile` cannot see it.
+        ...(fence.memoryScope ? { memoryScope: fence.memoryScope } : {}),
+        ...(fence.knowledgeScope ? { knowledgeScope: fence.knowledgeScope } : {}),
       });
     }
     const r = await runAgent({

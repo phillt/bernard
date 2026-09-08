@@ -8,12 +8,13 @@ import { ToolProfileStore } from '../tool-profiles.js';
 import type { RAGStore } from '../rag.js';
 import type { PolicyDecision } from '../policy/types.js';
 import type { ToolOptions } from '../tools/types.js';
-import type { TokenStatsTarget } from './hooks/token-stats.js';
+import { makeUsageRecorder, type TokenStatsTarget } from './hooks/token-stats.js';
 import { ProvenanceStore } from '../provenance.js';
 import { VerificationStore } from '../agent-status.js';
 import { VerificationTracker } from '../verification-tracker.js';
 import type { Check } from '../rubric.js';
 import type { ToolNameAliasResolver } from '../mcp-names.js';
+import type { DispatchProfile } from './agents/dispatch-profile.js';
 
 export interface AgentContextStores {
   memory: MemoryStore;
@@ -168,5 +169,72 @@ export function assembleContext(input: AssembleContextInput): AgentContext {
     verification: input.verification ?? new VerificationStore(),
     verificationTracker: input.verificationTracker ?? new VerificationTracker(),
     postWriteChecks: input.postWriteChecks ?? [],
+  };
+}
+
+/**
+ * Narrows a context to the knowledge a dispatch was granted (#511).
+ *
+ * A scope is a narrowing **view over the live store instance**, derived once in
+ * `runDefinition` onto a shadowed `ctx` — which is what makes one change fence
+ * both halves. The context block reads `ctx.stores.memory` through
+ * `contextInputs`; the `memory` / `scratch` tools read the same field through
+ * `def.tools(ctx, …)`. Neither `context-message.ts` nor `createTools` ever
+ * learns the word "scope", because the object they are handed is already the
+ * fenced one.
+ *
+ * `pac-critic` is the case that proves the fence is in the right place: it
+ * returns `contextInputs: () => null` (no memory block at all) *and* builds
+ * `createReadOnlyMemoryTool(ctx.stores.memory)` inside its own `tools()`. A
+ * fence in `getContextMessages` would miss it; a fence in `createTools` would
+ * miss it too. Only a fence on the store catches both, and the two wrappers
+ * compose — one fences actions, the other fences rows.
+ *
+ * **Returns `ctx` unchanged when nothing is declared**, so the overwhelmingly
+ * common path allocates nothing and `main` keeps object identity — which is
+ * what keeps its tool block byte-identical for the prompt cache (#269).
+ */
+export function scopeContext(ctx: AgentContext, profile: DispatchProfile): AgentContext {
+  const { memoryScope, knowledgeScope } = profile;
+  if (memoryScope === undefined && knowledgeScope === undefined) return ctx;
+  // Narrowing is monotone and idempotent in both stores, so re-scoping an
+  // already-scoped context can only ever narrow further. That is what lets
+  // `tool-wrapper-run.ts` scope early for its pre-assembled child tools and
+  // still let `runDefinition` re-derive.
+  // **The two axes stay independent**, which is why the memory arm keeps a
+  // guard of its own rather than leaning on `scoped(undefined)` returning the
+  // receiver: a knowledge-only fence must not reach for the memory store at
+  // all. `rag` needs no such guard — it is already reached conditionally.
+  return {
+    ...ctx,
+    stores:
+      memoryScope === undefined
+        ? ctx.stores
+        : { ...ctx.stores, memory: ctx.stores.memory.scoped(memoryScope) },
+    rag: ctx.rag?.scoped(knowledgeScope),
+  };
+}
+
+/**
+ * Gives a dispatch's tools a handle for reporting LLM spend they make
+ * themselves (#373).
+ *
+ * `ToolExecOptions` carries no usage handle, so a tool that calls a model has
+ * nowhere to report what it cost. This puts one on `ToolOptions` — the bag that
+ * already exists for per-dispatch callbacks a tool may reach back through —
+ * rather than on `CreateToolsOptions`, which is a decision about which built-in
+ * SURFACE a dispatch receives and is guarded by a prompt-cache byte-stability
+ * rule that a per-dispatch closure has to argue its way past.
+ *
+ * Derived here, beside {@link scopeContext}, for the reason that one gives:
+ * `runDefinition` is the single place with both a `ctx` and a route to every
+ * definition, so no dispatch site has to remember. Returns `ctx` unchanged when
+ * there is nothing to record to, or when a caller already supplied one.
+ */
+export function withUsageRecorder(ctx: AgentContext): AgentContext {
+  if (!ctx.statsTarget || ctx.toolOptions.onUsage) return ctx;
+  return {
+    ...ctx,
+    toolOptions: { ...ctx.toolOptions, onUsage: makeUsageRecorder(ctx.statsTarget) },
   };
 }
