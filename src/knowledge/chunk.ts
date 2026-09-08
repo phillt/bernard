@@ -188,7 +188,14 @@ export function chunkText(source: string, opts: ChunkOptions = {}): Chunk[] {
     const overlap = previous ? tailSentences(previous, overlapBudget) : '';
     chunks.push({
       ordinal: chunks.length,
-      text: `${prefix}${overlap}${body}`,
+      // The ceiling is enforced here rather than merely asserted by the tests.
+      // Everything above bounds the BODY by the target and trusts
+      // `target + overlap + heading <= ceiling` to bound the rest — which is
+      // true today and is exactly the kind of arithmetic a later edit to the
+      // heading path or the overlap rule breaks without noticing. A chunk over
+      // the ceiling is a silently truncated embedding, so the last step cuts
+      // rather than trusts.
+      text: capText(`${prefix}${overlap}${body}`, ceiling),
       ...(heading ? { heading } : {}),
       charStart: pending[0].start,
       charEnd: pending[pending.length - 1].end,
@@ -235,6 +242,17 @@ function tailSentences(previous: Chunk, budget: number): string {
   const tail = body.slice(start).trim();
   if (!tail || tail.length > budget) return '';
   return `${tail}\n\n`;
+}
+
+/**
+ * Final bound on an emitted chunk, cut on a code-point boundary.
+ *
+ * A backstop, not a strategy: reaching it means the packing arithmetic above
+ * is wrong, and the right response is still to emit something embeddable
+ * rather than to store a chunk the tokenizer will truncate anyway.
+ */
+function capText(text: string, ceiling: number): string {
+  return text.length <= ceiling ? text : text.slice(0, safeCut(text, ceiling));
 }
 
 /** Offsets at which a sentence begins, excluding 0. */
