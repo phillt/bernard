@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildContextMessage, MAX_PERSISTENT_MEMORY_CHARS } from './context-message.js';
+import { buildContextMessage, packMemory, MAX_PERSISTENT_MEMORY_CHARS } from './context-message.js';
 import { ProvenanceStore } from './provenance.js';
 
 describe('buildContextMessage — <current_datetime> (issue #269)', () => {
@@ -123,14 +123,18 @@ describe('buildContextMessage — <persistent_memory> byte cap (#307)', () => {
   it('drops whole entries, never mid-entry', () => {
     // A fact that stops mid-sentence is worse than an absent one: it still
     // reads as authoritative.
+    // Sized so exactly one fits, and asserted on the SMALLER one, which is the
+    // one the pack keeps (#528). The property under test is that `big` is
+    // absent whole rather than present truncated — not which of the two wins.
     const entries: [string, string][] = [
-      ['first', 'y'.repeat(MAX_PERSISTENT_MEMORY_CHARS - 100)],
-      ['second', 'z'.repeat(1_000)],
+      ['big', 'y'.repeat(MAX_PERSISTENT_MEMORY_CHARS - 100)],
+      ['small', 'z'.repeat(1_000)],
     ];
     const msg = buildContextMessage({ memoryStore: memoryStoreWith(entries) });
     const content = msg!.content as string;
-    expect(content).toContain('### first');
-    expect(content).not.toContain('### second');
+    expect(content).toContain('### small');
+    expect(content).not.toContain('### big');
+    expect(content).not.toContain('yyy');
     expect(content).toContain('1 further memory entry was omitted');
   });
 });
@@ -184,38 +188,91 @@ describe('buildContextMessage — curator reconciliation + memory packing (#371)
     expect(withPriority).not.toContain('(truncated)');
   });
 
-  it('over budget: survival is decided by filename without a ranking, by relevance with one', () => {
-    // Two entries, each >half the budget, so exactly one can survive. Unranked
-    // they pack in Map order and `aaa` wins on its name alone — `zzz` is the
-    // rule that matters and it is the one that goes. That is the defect.
+  it('over budget: survival is decided by size without a ranking, by relevance with one', () => {
+    // Two entries, each >half the budget, so exactly one can survive. The
+    // *smaller* one wins, and the fixture is built so that size and filename
+    // disagree: `aaa` is the bigger one, so a pass that still packed in Map
+    // order would keep it and fail here. That is the point — before #528 the
+    // survivor was decided by `readdir`, i.e. by what the file happened to be
+    // called.
     const big = 'x'.repeat(Math.floor(MAX_PERSISTENT_MEMORY_CHARS * 0.6));
-    const entries = { aaa: `boilerplate ${big}`, zzz: `the rule that matters ${big}` };
+    const entries = {
+      aaa: `boilerplate ${big}${'y'.repeat(200)}`,
+      zzz: `the rule that matters ${big}`,
+    };
 
     const unranked = buildContextMessage({ memoryStore: memoryStoreWith(Object.entries(entries)) })!
       .content as string;
-    expect(unranked).toContain('boilerplate');
-    expect(unranked).not.toContain('the rule that matters');
+    expect(unranked).toContain('the rule that matters');
+    expect(unranked).not.toContain('boilerplate');
     expect(unranked).toContain('(truncated)');
 
+    // A ranking outranks size: the curator's first pick goes in even though it
+    // is the larger entry.
     const ranked = buildContextMessage({
       memoryStore: memoryStoreWith(Object.entries(entries)),
-      memoryPriority: ['zzz', 'aaa'],
+      memoryPriority: ['aaa', 'zzz'],
     })!.content as string;
-    expect(ranked).toContain('the rule that matters');
-    expect(ranked).not.toContain('boilerplate');
+    expect(ranked).toContain('boilerplate');
+    expect(ranked).not.toContain('the rule that matters');
   });
 
-  it('over budget: unranked entries keep their original relative order after ranked ones', () => {
-    // A truncated or partial ranking must degrade to today's behaviour, not
-    // reshuffle what it did not mention.
+  it('over budget: entries the ranking did not name pack smallest first', () => {
+    // A truncated or partial ranking must still leave a *decision* behind it,
+    // not a filename. `bbb` is smaller than `aaa`, so it survives despite
+    // sorting later by name and later in the map.
     const big = 'x'.repeat(Math.floor(MAX_PERSISTENT_MEMORY_CHARS * 0.55));
-    const entries = { aaa: `alpha ${big}`, bbb: `beta ${big}`, zzz: 'ranked first' };
+    const entries = {
+      aaa: `alpha ${big}${'y'.repeat(100)}`,
+      bbb: `beta ${big}`,
+      zzz: 'ranked first',
+    };
     const ranked = buildContextMessage({
       memoryStore: memoryStoreWith(Object.entries(entries)),
       memoryPriority: ['zzz'],
     })!.content as string;
     expect(ranked).toContain('ranked first');
-    expect(ranked).toContain('alpha'); // first of the unranked, by original order
-    expect(ranked).not.toContain('beta');
+    expect(ranked).toContain('beta');
+    expect(ranked).not.toContain('alpha');
+  });
+
+  it('names the dropped keys to the model, and reports them for the user', () => {
+    // The `### (truncated)` block is what the model can act on; `dropped` is
+    // what the REPL notice and the turn record are built from. Counting alone
+    // is not actionable — "3 entries were omitted" names nothing to shorten.
+    const big = 'x'.repeat(MAX_PERSISTENT_MEMORY_CHARS);
+    const memories = new Map([
+      ['keeper', 'small'],
+      ['huge-log', big],
+      ['other-huge-log', big],
+    ]);
+    const pack = packMemory(memories);
+    expect(pack.kept).toEqual(['keeper']);
+    expect(pack.dropped.sort()).toEqual(['huge-log', 'other-huge-log']);
+    // kept ∪ dropped is the whole input — nothing is silently lost by the pack
+    // itself, only by the budget.
+    expect([...pack.kept, ...pack.dropped].sort()).toEqual([...memories.keys()].sort());
+  });
+
+  it('under budget the pack is a no-op that keeps every entry', () => {
+    const memories = new Map([
+      ['a', 'x'.repeat(50)],
+      ['b', 'y'.repeat(50)],
+    ]);
+    expect(packMemory(memories).dropped).toEqual([]);
+    expect(packMemory(memories, ['b']).kept).toEqual(['b', 'a']);
+  });
+
+  it('measures the rendered block, not the raw key and content', () => {
+    // The trigger/cap deadband (#512, #528): `recall-filter` used to sum
+    // `key.length + content.length`, which under-reads by `### ` + newline per
+    // entry plus XML escaping. An entry sized to fit by THAT measure and not by
+    // the real one is the whole of the band, and it must be dropped here — a
+    // packer that agreed with the old sum would keep it and the two would
+    // disagree again.
+    const key = 'k';
+    const raw = MAX_PERSISTENT_MEMORY_CHARS - key.length; // fits the naive sum exactly
+    const pack = packMemory(new Map([[key, '<'.repeat(raw)]]));
+    expect(pack.dropped).toEqual([key]);
   });
 });

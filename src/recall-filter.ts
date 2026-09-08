@@ -9,7 +9,7 @@ import { buildRecentTurnsBlock, oneLine } from './reference-resolver.js';
 import { buildRAGQuery, extractRecentUserTexts, extractRecentToolContext } from './rag-query.js';
 import { getDomain } from './domains.js';
 import { REWRITER_HINTS_KEY, type MemoryStore } from './memory.js';
-import { MAX_PERSISTENT_MEMORY_CHARS } from './context-message.js';
+import { MAX_PERSISTENT_MEMORY_CHARS, packMemory } from './context-message.js';
 import { plural } from './text.js';
 
 /**
@@ -139,20 +139,40 @@ const MAX_MEMORY_BLOCK_CHARS = MAX_PERSISTENT_MEMORY_CHARS;
  * plus a `readFileSync` per entry with no cache, so callers must not re-derive
  * keys from a second call.
  *
+ * Returns memory **whole**, which is the change #528 needed. It used to drop
+ * `rewriter-hints` here, and the one caller then used the filtered map for two
+ * different jobs: what to SHOW the curator, and how much memory there IS. The
+ * second is a question about the agent's budget, and the agent is shown the
+ * hints — so the trigger measured a smaller store than the renderer packs and
+ * could answer "nothing will be dropped" while the renderer dropped something.
+ * The exclusion now lives at the prompt, where the reason for it actually
+ * applies; see {@link curatedForPrompt}.
+ */
+function readAllMemory(memoryStore?: MemoryStore): Map<string, string> {
+  if (!memoryStore) return new Map();
+  try {
+    return memoryStore.getAllMemoryContents();
+  } catch {
+    return new Map();
+  }
+}
+
+/**
+ * The subset the curator is shown and may rank.
+ *
  * Excludes `rewriter-hints`: it is internal infra written by the resolver, and
  * presenting it to the curator as "written down on purpose" would let it
  * compete for the memory budget as though the user had authored it.
  * `reference-resolver` drops it before its own prompt for the same reason.
+ *
+ * It is also what `knownMemoryKeys` is built from, so a ranking can never name
+ * the hints file — which leaves it unranked and therefore packed last, the
+ * outcome that was already emergent here and is now deliberate.
  */
-function readCuratedMemory(memoryStore?: MemoryStore): Map<string, string> {
-  if (!memoryStore) return new Map();
-  try {
-    const entries = memoryStore.getAllMemoryContents();
-    entries.delete(REWRITER_HINTS_KEY);
-    return entries;
-  } catch {
-    return new Map();
-  }
+function curatedForPrompt(all: Map<string, string>): Map<string, string> {
+  const entries = new Map(all);
+  entries.delete(REWRITER_HINTS_KEY);
+  return entries;
 }
 
 /** Renders the curated-memory block the model reconciles against. `''` when empty. */
@@ -172,13 +192,6 @@ function buildMemoryBlock(entries: Map<string, string>): string {
   }
   if (omitted > 0) lines.push(`- … ${omitted} more ${plural(omitted, 'entry', 'entries')} omitted`);
   return lines.join('\n');
-}
-
-/** Total chars of curated memory — decides whether a ranking is worth asking for. */
-function memoryChars(entries: Map<string, string>): number {
-  let n = 0;
-  for (const [key, content] of entries) n += key.length + content.length;
-  return n;
 }
 
 interface CuratorResponse {
@@ -304,10 +317,16 @@ export async function recallFilter(
   }
 
   const historyBlock = buildRecentTurnsBlock(history);
-  const memoryEntries = readCuratedMemory(memoryStore);
+  const allMemory = readAllMemory(memoryStore);
+  const memoryEntries = curatedForPrompt(allMemory);
   const memoryBlock = buildMemoryBlock(memoryEntries);
-  // Only worth a ranking when something will actually be dropped.
-  const needsRanking = memoryChars(memoryEntries) > MAX_PERSISTENT_MEMORY_CHARS;
+  // Only worth a ranking when something will actually be dropped — and the way
+  // to know that is to ASK THE PACKER, not to re-derive its measure. The
+  // re-derivation is what made this wrong: it summed raw key + content lengths
+  // while `renderPersistentMemory` drops on the rendered block, so it under-read
+  // the store by ~5 chars per entry and answered "everything fits" for a store
+  // the renderer was already cutting. One measure, no drift (#528).
+  const needsRanking = packMemory(allMemory).dropped.length > 0;
   const systemPrompt = needsRanking
     ? RECALL_FILTER_SYSTEM_PROMPT + MEMORY_RANKING_PROMPT
     : RECALL_FILTER_SYSTEM_PROMPT;
