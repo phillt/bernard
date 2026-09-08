@@ -116,3 +116,40 @@ describe('mergeWindows', () => {
     ).toHaveLength(2);
   });
 });
+
+describe('section boundaries', () => {
+  const withHeading = (ordinal: number, heading: string, body: string) => ({
+    ordinal,
+    heading,
+    text: `${heading}\n\n${body}`,
+    prefixLen: heading.length + 2,
+  });
+
+  it('re-emits a heading that changed between consecutive chunks', () => {
+    // `prefixLen` covers the heading AND the carried overlap, and dropping it
+    // wholesale is right only when the predecessor really did already say it —
+    // true of the overlap, false of a heading that changed. Without this a
+    // window spanning two sections reads as one undifferentiated passage, which
+    // is precisely the structure restoring document order exists to preserve.
+    const out = stitchWindow([
+      withHeading(0, 'Handbook > Rolling back', 'A rollback is a deploy of the previous tag.'),
+      withHeading(1, 'Handbook > Who to wake', 'The escalation contact is the on-call rota.'),
+    ]);
+    expect(out).toContain('Rolling back');
+    expect(out).toContain('Who to wake');
+    expect(out.indexOf('Rolling back')).toBeLessThan(out.indexOf('Who to wake'));
+  });
+
+  it('does not repeat an unchanged heading', () => {
+    const out = stitchWindow([
+      withHeading(0, 'Handbook > Rolling back', 'First part.'),
+      withHeading(1, 'Handbook > Rolling back', 'Second part.'),
+    ]);
+    expect(out.split('Rolling back').length - 1).toBe(1);
+  });
+
+  it('leaves headingless chunks alone', () => {
+    const out = stitchWindow([chunk(0, '', 'Alpha.'), chunk(1, 'Alpha. ', 'Beta.')]);
+    expect(out).toBe('Alpha.\n\nBeta.');
+  });
+});

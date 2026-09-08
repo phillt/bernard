@@ -16,6 +16,8 @@ export interface StitchableChunk {
   text: string;
   /** Leading characters of `text` the previous chunk already said. */
   prefixLen: number;
+  /** The heading path this chunk sits under, if any. */
+  heading?: string;
 }
 
 /** Marks a hole where an ordinal is missing, so a reader is not told a lie. */
@@ -45,11 +47,23 @@ export function stitchWindow(chunks: readonly StitchableChunk[]): string {
   let out = ordered[0].text;
   for (let i = 1; i < ordered.length; i++) {
     const chunk = ordered[i];
-    const consecutive = chunk.ordinal === ordered[i - 1].ordinal + 1;
-    // Only a real predecessor licenses dropping the prefix. Across a gap the
-    // borrowed sentences belong to a chunk nobody is being shown, so they are
-    // the only remaining trace of it and are kept.
-    out += consecutive ? `\n\n${chunk.text.slice(chunk.prefixLen)}` : `${GAP_MARKER}${chunk.text}`;
+    const previous = ordered[i - 1];
+    if (chunk.ordinal !== previous.ordinal + 1) {
+      // Across a gap the borrowed sentences belong to a chunk nobody is being
+      // shown, so they are the only remaining trace of it and are kept.
+      out += `${GAP_MARKER}${chunk.text}`;
+      continue;
+    }
+    // **A changed heading is re-emitted.** `prefixLen` covers the heading AND
+    // the carried overlap, and dropping it wholesale is right only when the
+    // predecessor really did already say it — true of the overlap, false of a
+    // heading that changed. Dropping a changed heading deletes the section
+    // boundary from the stitched text, which is exactly the structure restoring
+    // document order exists to preserve: a window spanning "Rolling back" into
+    // "Who to wake" read as one undifferentiated passage.
+    const body = chunk.text.slice(chunk.prefixLen);
+    const sectionChanged = chunk.heading !== undefined && chunk.heading !== previous.heading;
+    out += sectionChanged ? `\n\n${chunk.heading}\n\n${body}` : `\n\n${body}`;
   }
   return out;
 }
