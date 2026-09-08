@@ -226,4 +226,58 @@ describe('inspect shows declared against resolved', () => {
     expect(out).toContain('role: function-caller');
     expect(out).toContain('targetTools: web_search');
   });
+
+  it('uses the dispatching definition, not a re-hardcoded ratio', async () => {
+    // `tool-wrapper` and `specialist` share a 0.5 default but not the floor:
+    // a wrapper cannot go below two steps, because below that it cannot call a
+    // tool and then report. Re-deriving the arithmetic here would report a
+    // number the runtime is never going to use.
+    const { createSpecialistTool } = await load();
+    const tool = createSpecialistTool(undefined, undefined, { maxSteps: 20 } as never);
+    await tool.execute(
+      {
+        action: 'create',
+        id: 'tiny',
+        name: 'Tiny',
+        description: 'x',
+        systemPrompt: 'x',
+        kind: 'tool-wrapper',
+        targetTools: ['shell'],
+        stepRatio: 0.01,
+      } as never,
+      {} as never,
+    );
+    expect(await tool.execute({ action: 'inspect', id: 'tiny' } as never, {} as never)).toContain(
+      'stepRatio: 0.01 → 2 steps',
+    );
+  });
+
+  it('says when a declared value is being ignored', async () => {
+    // The single most useful thing this command can say, and the thing a second
+    // implementation of the resolution would get exactly backwards: it would
+    // report the declared value as though it will be honoured.
+    const { createSpecialistTool, paths } = await load();
+    const tool = createSpecialistTool(undefined, undefined, { maxSteps: 20 } as never);
+    await tool.execute(
+      {
+        action: 'create',
+        id: 'broken',
+        name: 'Broken',
+        description: 'x',
+        systemPrompt: 'x',
+      } as never,
+      {} as never,
+    );
+    // Written past the tool's own refusal, which is the state a hand-edited
+    // record arrives in.
+    const file = path.join(paths.SPECIALISTS_DIR, 'broken.json');
+    const record = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    record.stepRatio = 50;
+    record.strategy = 'coordinator';
+    fs.writeFileSync(file, JSON.stringify(record));
+
+    const out = await tool.execute({ action: 'inspect', id: 'broken' } as never, {} as never);
+    expect(out).toContain('declared stepRatio 50 is invalid and is ignored');
+    expect(out).toContain('strategy: coordinator — not a known strategy, so it is ignored');
+  });
 });

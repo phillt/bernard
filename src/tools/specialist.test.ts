@@ -114,6 +114,46 @@ describe('createSpecialistTool', () => {
       expect(result).toContain('created');
     });
 
+    it('persists no pin when a create declares neither role nor model (#519)', async () => {
+      // The block that used to mint one was the CAUSE this PR diagnoses:
+      // `specialist-creator` declared neither, so every specialist it made
+      // carried a policy-resolved pin nobody chose — dropped as stale on the
+      // next lineup switch, and bucketed `pinned` in `bernard usage` instead of
+      // by tier. Prose in a prompt binds a model that read it; removing the
+      // writer binds every path.
+      const writes: string[] = [];
+      vi.mocked(fs.writeFileSync).mockImplementation((_p: any, data: any) => {
+        writes.push(String(data));
+      });
+      // A config the policy branch would actually fire on — with no API key
+      // `resolveSiteModel` returns `source: 'fallback'` and the old block was a
+      // no-op, so a tool built without one asserts nothing.
+      const tool = createSpecialistTool(undefined, undefined, {
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-5-20250929',
+        modelMode: 'balanced',
+        customProviders: {},
+        maxSteps: 20,
+        anthropicApiKey: 'sk-test',
+      } as never);
+      await tool.execute(
+        {
+          action: 'create',
+          id: 'unpinned',
+          name: 'Unpinned',
+          description: 'x',
+          systemPrompt: 'x',
+        } as never,
+        {} as never,
+      );
+      const record = JSON.parse(writes.find((w) => w.includes('unpinned')) ?? '{}');
+      expect(record.provider).toBeUndefined();
+      expect(record.model).toBeUndefined();
+      // And no role invented on its behalf either — `resolveSiteModel` already
+      // treats "declares neither" as the site default.
+      expect(record.role).toBeUndefined();
+    });
+
     it('refuses a stepRatio that is really a step count (#508)', async () => {
       // The resolver already falls back on an out-of-range value, because it
       // runs before every dispatch and must not throw for a bad record. That is

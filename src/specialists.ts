@@ -251,6 +251,9 @@ const ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/;
 /** Marker file that prevents re-seeding bundled specialists on every start. */
 const SEED_MARKER = '.seeded-v1';
 
+/** Prefix of the single bundle-definition marker. See `refreshBundledDefinitions`. */
+const DEFINITION_MARKER_PREFIX = '.definitions-';
+
 /**
  * Bundled specialists added after the original `.seeded-v1` set. Seeded
  * additively (each via its own marker) so existing installs pick them up
@@ -296,7 +299,10 @@ const LEARNED_FIELDS = ['goodExamples', 'badExamples', 'createdAt', 'disabled'] 
  * have edited the definition, and `appendExamples` is the one carve-out — which
  * is exactly what this preserves.
  *
- * Pure and exported so the merge rule can be tested without a filesystem.
+ * Pure and exported so the merge rule can be tested without a filesystem —
+ * which it briefly was not: it stamped `updatedAt` itself, taking on
+ * `writeRecord`'s job and becoming non-deterministic in the process. The write
+ * side owns that.
  */
 export function mergeBundledDefinition(
   shipped: Record<string, unknown>,
@@ -307,7 +313,6 @@ export function mergeBundledDefinition(
     if (installed[field] !== undefined) merged[field] = installed[field];
     else delete merged[field];
   }
-  merged.updatedAt = new Date().toISOString();
   return merged;
 }
 
@@ -396,27 +401,72 @@ export class SpecialistStore {
     } catch {
       return;
     }
+
+    // ONE marker for the whole bundle, keyed on a stat digest of every shipped
+    // file. Two reasons, and neither is cosmetic.
+    //
+    // A per-(id, hash) marker leaves the previous hash's dotfile behind on every
+    // shipped edit, forever, in the directory `list()` and `getSummaries()`
+    // `readdir` — unbounded, unlike the `.seeded-<id>` markers it sits beside.
+    // And the hash had to come from the file's CONTENT, so the read could not be
+    // skipped: 77 KB re-read and SHA-256'd on every seeding construction, which
+    // is every REPL start, every `assembleContext`, and the `bernard script`
+    // path #452 got down to 17 ms. Measured at 0.202 ms warm.
+    //
+    // Stat metadata instead of bytes: contents cannot change without `mtimeMs`
+    // or `size` moving in any realistic install, which is the same assumption
+    // `MemoryStore`'s read cache already makes and documents. Steady state is
+    // now 13 `stat`s and one `existsSync`, with no file read at all.
+    const digest = createHash('sha256');
     for (const file of files) {
       try {
-        const raw = fs.readFileSync(path.join(bundledDir, file), 'utf-8');
-        const hash = createHash('sha256').update(raw).digest('hex').slice(0, 12);
-        const id = file.replace(/\.json$/, '');
-        const marker = path.join(SPECIALISTS_DIR, `.definition-${id}-${hash}`);
-        seedOnce(marker, () => {
-          const dest = path.join(SPECIALISTS_DIR, file);
-          if (!fs.existsSync(dest)) return;
-          const shipped = JSON.parse(raw) as Record<string, unknown>;
-          const installed = JSON.parse(fs.readFileSync(dest, 'utf-8')) as Record<string, unknown>;
-          if (!definitionDiffers(shipped, installed)) return;
-          atomicWriteFileSync(
-            dest,
-            JSON.stringify(mergeBundledDefinition(shipped, installed), null, 2),
-          );
-          debugLog('specialists:definition-refreshed', { id, hash });
-        });
+        const st = fs.statSync(path.join(bundledDir, file));
+        digest.update(`${file}:${st.mtimeMs}:${st.size}\n`);
       } catch {
-        // Per-file, so one corrupt record cannot stop the rest.
+        return; // Cannot characterise the bundle; leave every record alone.
       }
+    }
+    const hash = digest.digest('hex').slice(0, 12);
+    const marker = path.join(SPECIALISTS_DIR, `${DEFINITION_MARKER_PREFIX}${hash}`);
+
+    seedOnce(marker, () => {
+      // Only reached when the bundle moved, so the sweep and the reads below
+      // cost nothing in steady state.
+      this.pruneDefinitionMarkers(marker);
+      for (const file of files) {
+        try {
+          const dest = path.join(SPECIALISTS_DIR, file);
+          if (!fs.existsSync(dest)) continue;
+          const shipped = JSON.parse(
+            fs.readFileSync(path.join(bundledDir, file), 'utf-8'),
+          ) as Record<string, unknown>;
+          const installed = JSON.parse(fs.readFileSync(dest, 'utf-8')) as Record<string, unknown>;
+          if (!definitionDiffers(shipped, installed)) continue;
+          // Through `writeRecord`, the class's own on-disk convention: it
+          // stamps `updatedAt`, pretty-prints and writes atomically to
+          // `<id>.json`, which this used to re-implement inline. A second copy
+          // means the re-seed keeps writing the old shape the day that method
+          // gains anything. The filename equals the id by the store's own
+          // invariant, so the path is the same either way.
+          this.writeRecord(mergeBundledDefinition(shipped, installed) as unknown as Specialist);
+          debugLog('specialists:definition-refreshed', { id: file.replace(/\.json$/, ''), hash });
+        } catch {
+          // Per-file, so one corrupt record cannot stop the rest.
+        }
+      }
+    });
+  }
+
+  /** Drops markers from earlier bundle versions, so they cannot accumulate. */
+  private pruneDefinitionMarkers(keep: string): void {
+    try {
+      for (const entry of fs.readdirSync(SPECIALISTS_DIR)) {
+        if (!entry.startsWith(DEFINITION_MARKER_PREFIX)) continue;
+        const full = path.join(SPECIALISTS_DIR, entry);
+        if (full !== keep) fs.unlinkSync(full);
+      }
+    } catch {
+      // Best-effort tidying; never block seeding.
     }
   }
 

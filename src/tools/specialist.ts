@@ -18,6 +18,7 @@ import { resolveSiteModel } from '../model-policy.js';
 import { ALL_ROLE_IDS, MODEL_ROLES, type RoleId } from '../model-roles.js';
 import { validateModelParams, PARAM_IDS, type ModelParams } from '../providers/model-params.js';
 import { attachMeta } from '../framework/tools/adapter.js';
+import type { AgentDefinition } from '../framework/agents/types.js';
 import {
   DISPATCH_STRATEGIES,
   DISPATCH_TOOL_SURFACES,
@@ -442,14 +443,66 @@ export function createSpecialistTool(
               lines.push('role: none declared — this specialist follows the dispatching site.');
             }
 
-            const ratio = record.stepRatio;
-            lines.push(
-              ratio === undefined
-                ? `steps: the site default (${Math.ceil((config?.maxSteps ?? 0) * 0.5) || 'unknown'})`
-                : `stepRatio: ${ratio} → ${Math.ceil((config?.maxSteps ?? 0) * ratio)} steps`,
+            // Through the real resolver and the real definition, never a second
+            // implementation. Re-deriving these was the failure this action
+            // exists to catch, one level down: an out-of-range `stepRatio` would
+            // be reported as if it will be honoured when `resolveDispatchProfile`
+            // is going to discard it, a `tool-wrapper` record's own ratio and
+            // its `Math.max(2, …)` floor would both be invisible, and
+            // `SPECIALIST_STEP_RATIO` was re-hardcoded as a literal `0.5`.
+            // "What does this record actually get" is answered by the code that
+            // gives it.
+            // Deferred, like `bindCoverageError`'s: a static edge would put the
+            // whole agent runtime on `createTools`' eager graph, which is the
+            // cost #452 exists to have removed.
+            const [
+              { specialistDefinition },
+              { toolWrapperDefinition },
+              { resolveDispatchProfile },
+            ] = await Promise.all([
+              import('../framework/agents/specialist.js'),
+              import('../framework/agents/tool-wrapper.js'),
+              import('../framework/agents/dispatch-profile.js'),
+            ]);
+            const def = (
+              record.kind === 'tool-wrapper' ? toolWrapperDefinition : specialistDefinition
+            ) as AgentDefinition<{ specialistId: string }, unknown>;
+            // The resolver reads exactly one thing off the context, and this is
+            // the store it would have read.
+            const profile = resolveDispatchProfile(
+              { stores: { specialists: store } } as never,
+              def,
+              {
+                specialistId: record.id,
+              },
             );
-            if (record.strategy) lines.push(`strategy: ${record.strategy}`);
-            if (record.toolSurface) lines.push(`toolSurface: ${record.toolSurface}`);
+            if (config) {
+              const steps = def.stepBudget(config, { specialistId: record.id }, profile);
+              lines.push(
+                profile.stepRatio === undefined
+                  ? `steps: ${steps} (the site default for a ${def.id})`
+                  : `stepRatio: ${profile.stepRatio} → ${steps} steps`,
+              );
+              // A declared value the resolver threw away is the single most
+              // useful thing this command can say.
+              if (record.stepRatio !== undefined && profile.stepRatio === undefined) {
+                lines.push(`  ⚠ declared stepRatio ${record.stepRatio} is invalid and is ignored`);
+              }
+            }
+            if (record.strategy) {
+              lines.push(
+                profile.strategy
+                  ? `strategy: ${profile.strategy}`
+                  : `strategy: ${record.strategy} — not a known strategy, so it is ignored`,
+              );
+            }
+            if (record.toolSurface) {
+              lines.push(
+                profile.toolSurface
+                  ? `toolSurface: ${profile.toolSurface}`
+                  : `toolSurface: ${record.toolSurface} — not a known surface, so it is ignored`,
+              );
+            }
             lines.push(
               record.targetTools?.length
                 ? `targetTools: ${record.targetTools.join(', ')}`
@@ -506,27 +559,29 @@ export function createSpecialistTool(
               // lag day-0 model releases, and the underlying SDK already
               // rejects unknown ids. Trust the caller and pass through.
             }
-            // Auto-assign policy-resolved provider/model when multi-model
-            // mode is active and the user didn't specify either (#170).
-            let resolvedProvider = normProvider;
-            let resolvedModel = normModel;
-            // Declaring NEITHER is the legacy third state, and it keeps
-            // today's behaviour byte for byte — a binding minted from the
-            // policy and persisted — which is what leaves existing callers
-            // (`specialist-creator` among them) unaffected. Only a declared
-            // role suppresses it, and that pin is exactly what the off-lineup
-            // guard exists to drop: one nobody chose.
-            if (normProvider === undefined && normModel === undefined && !normRole && config) {
-              try {
-                const site = resolveSiteModel(config, 'specialist');
-                if (site.source === 'policy') {
-                  resolvedProvider = site.provider;
-                  resolvedModel = site.modelName;
-                }
-              } catch {
-                // Policy resolution is best-effort; fall through to no override.
-              }
-            }
+            // A create that declares NEITHER a role nor a pin now persists
+            // neither (#519).
+            //
+            // This block used to mint a policy-resolved `provider`/`model` and
+            // write it to disk, justified as keeping today's behaviour byte for
+            // byte for existing callers — `specialist-creator` named
+            // explicitly. That justification has expired: `specialist-creator`
+            // is the caller this change teaches to declare a role, and the pin
+            // it was minting is **exactly** what the off-lineup guard exists to
+            // drop. One nobody chose, dropped as stale the moment the user
+            // switches lineup, and bucketed as `pinned` in `bernard usage`
+            // instead of by tier.
+            //
+            // Removing it is also the only enforceable form of the rule. Prose
+            // in two bundled prompts binds a model that read them; the writer
+            // binds every path — a hand-written record, `/specialists`, a
+            // future creator, or `agent-builder` on a turn where it forgets.
+            // `resolveSiteModel` already treats "declares neither" as the site
+            // default, so the resolved model is the same — decided live rather
+            // than frozen, which is the whole difference between a binding and
+            // an intent.
+            const resolvedProvider = normProvider;
+            const resolvedModel = normModel;
             // Capability-gate params against the pinned model; needs a pin.
             // Reject rather than silently drop so the caller knows params
             // require a provider+model to bind to.

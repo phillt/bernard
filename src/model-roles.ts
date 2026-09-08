@@ -144,6 +144,8 @@ export const MODEL_ROLES: readonly ModelRole[] = [
 ];
 
 /** Every role id, in display order. Iterate this for lineup slots / editor. */
+export const ALL_ROLE_IDS: readonly RoleId[] = MODEL_ROLES.map((r) => r.id);
+
 /**
  * The one rule about `role` and pins, stated once (#519).
  *
@@ -158,14 +160,17 @@ export const MODEL_ROLES: readonly ModelRole[] = [
  *
  * A constant rather than two paragraphs, for the reason `PLAIN_LANGUAGE_RULE`
  * is one: copies of a rule do not fail, they diverge, and the second one
- * quietly stops meaning what the first does. It cannot be interpolated into a
- * bundled JSON record, so `bundled-manifest.test.ts` asserts both prompts
- * contain it verbatim — the same shape that pins the interview playbook.
+ * quietly stops meaning what the first does.
+ *
+ * **Unlike `PLAIN_LANGUAGE_RULE`, nothing interpolates this** — both copies are
+ * strings inside bundled JSON records, which cannot reference a TypeScript
+ * constant. So `bundled-manifest.test.ts` is what actually prevents the
+ * divergence, and this is the canonical text it checks both prompts against.
+ * Worth stating plainly: an exported symbol whose only importer is a test reads
+ * as dead, and deleting it would take the check with it.
  */
 export const ROLE_NOT_PIN_RULE =
   'Declare a `role`, never a `provider`/`model` pin. A role lets the active profile choose the model and keep choosing correctly when the profile changes; a pin you invented is the exact thing Bernard drops as stale, and it is the most confusing kind because nobody chose it. Declaring both is rejected outright.';
-
-export const ALL_ROLE_IDS: readonly RoleId[] = MODEL_ROLES.map((r) => r.id);
 
 /** Lookup a role definition by id. */
 export function getRole(id: RoleId): ModelRole {

@@ -737,12 +737,19 @@ describe('SpecialistStore', () => {
      */
     function arrange(opts: { installed?: object | null; refreshed?: boolean }): void {
       _resetBuiltinSpecialistCache();
-      vi.mocked(fs.statSync).mockReturnValue({ isDirectory: () => true } as any);
+      // `mtimeMs`/`size` because the bundle marker is keyed on stat metadata
+      // rather than on file contents — 13 stats and one `existsSync` in steady
+      // state instead of re-reading and hashing 77 KB on every construction.
+      vi.mocked(fs.statSync).mockReturnValue({
+        isDirectory: () => true,
+        mtimeMs: 1,
+        size: 1,
+      } as any);
       vi.mocked(fs.readdirSync).mockReturnValue(['shell-wrapper.json'] as any);
       vi.mocked(fs.existsSync).mockImplementation((p: any) => {
         const path = String(p);
         // The v1 and post-v1 seed markers exist, so only the refresh pass runs.
-        if (path.includes('.definition-')) return Boolean(opts.refreshed);
+        if (path.includes('.definitions-')) return Boolean(opts.refreshed);
         if (path.includes('.seeded')) return true;
         if (path.endsWith('shell-wrapper.json')) return opts.installed !== null;
         return true;
@@ -813,6 +820,25 @@ describe('SpecialistStore', () => {
       arrange({ installed: null });
       new SpecialistStore();
       expect(written()).toBeUndefined();
+    });
+
+    it('leaves exactly one marker behind, however many times the bundle moves', () => {
+      // The per-(id, hash) scheme left the previous hash's dotfile behind on
+      // every shipped edit, forever, in the directory `list()` and
+      // `getSummaries()` readdir — unbounded, unlike the `.seeded-<id>` markers
+      // it sits beside.
+      arrange({ installed: { ...shipped, systemPrompt: 'OLD PROMPT' } });
+      vi.mocked(fs.readdirSync).mockReturnValue([
+        'shell-wrapper.json',
+        '.definitions-oldhash1',
+        '.definitions-oldhash2',
+      ] as any);
+      new SpecialistStore();
+      const unlinked = vi.mocked(fs.unlinkSync).mock.calls.map((c) => String(c[0]));
+      expect(unlinked.some((u) => u.endsWith('.definitions-oldhash1'))).toBe(true);
+      expect(unlinked.some((u) => u.endsWith('.definitions-oldhash2'))).toBe(true);
+      // Never a real record.
+      expect(unlinked.some((u) => u.endsWith('shell-wrapper.json'))).toBe(false);
     });
 
     it('runs once per shipped change, not once per startup', () => {

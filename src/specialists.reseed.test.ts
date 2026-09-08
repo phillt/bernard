@@ -67,13 +67,13 @@ describe('mergeBundledDefinition', () => {
     expect(merged.goodExamples).toBeUndefined();
   });
 
-  it('stamps updatedAt, because the record on disk really did change', () => {
-    // Asserted as a real timestamp, not merely "different from the old one":
-    // dropping the stamp leaves `shipped.updatedAt`, which is `undefined` here
-    // and so passes an inequality check while recording nothing.
-    const before = Date.now();
-    const merged = mergeBundledDefinition(shipped, { id: 'x', updatedAt: 'old' });
-    expect(typeof merged.updatedAt).toBe('string');
-    expect(Date.parse(merged.updatedAt as string)).toBeGreaterThanOrEqual(before);
+  it('is pure — the write side owns the timestamp', () => {
+    // It briefly stamped `updatedAt` itself, taking on `writeRecord`'s job and
+    // becoming non-deterministic in the process, in a function whose docstring
+    // says it exists to be testable without a filesystem. `writeRecord` stamps
+    // it, and the constructor test below asserts the record on disk carries one.
+    const a = mergeBundledDefinition(shipped, { id: 'x', updatedAt: 'old' });
+    const b = mergeBundledDefinition(shipped, { id: 'x', updatedAt: 'old' });
+    expect(a).toEqual(b);
   });
 });
