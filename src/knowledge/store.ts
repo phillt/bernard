@@ -490,12 +490,24 @@ export class KnowledgeStore {
     return { vectors, malformed };
   }
 
-  /** Every chunk's text in id order, for building a lexical index. */
-  scanTexts(): { id: number; text: string }[] {
-    return this.db.prepare('SELECT id, text FROM chunks ORDER BY id').all() as unknown as {
-      id: number;
-      text: string;
-    }[];
+  /**
+   * Every chunk's text in id order, for building a lexical index.
+   *
+   * Carries `source_id` and `ordinal` too, because the row is being read anyway
+   * and the alternative is a second scan: a lexical-ONLY hit still needs its
+   * position to expand into a window, and asking `scanVectors` for it would
+   * decode every embedding to recover two integers.
+   */
+  scanTexts(): { id: number; sourceId: number; ordinal: number; text: string }[] {
+    const rows = this.db
+      .prepare('SELECT id, source_id, ordinal, text FROM chunks ORDER BY id')
+      .all() as unknown as { id: number; source_id: number; ordinal: number; text: string }[];
+    return rows.map((r) => ({
+      id: r.id,
+      sourceId: r.source_id,
+      ordinal: r.ordinal,
+      text: r.text,
+    }));
   }
 
   /** A contiguous run of ordinals from one source, in document order. */

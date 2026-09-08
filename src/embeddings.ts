@@ -177,7 +177,7 @@ export async function getEmbeddingProvider(): Promise<EmbeddingProvider | null> 
 }
 
 /** Cosine similarity between two vectors. Returns 0 for zero-length vectors. */
-export function cosineSimilarity(a: number[], b: number[]): number {
+export function cosineSimilarity(a: ArrayLike<number>, b: ArrayLike<number>): number {
   if (a.length !== b.length || a.length === 0) return 0;
 
   let dot = 0;
