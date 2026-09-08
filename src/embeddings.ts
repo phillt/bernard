@@ -39,8 +39,17 @@ export interface EmbeddingProvider {
 
 let cachedProvider: EmbeddingProvider | null | undefined;
 
-/** Embedding vector dimensionality for all-MiniLM-L6-v2. */
-const DIMENSIONS = 384;
+/**
+ * Embedding vector dimensionality for all-MiniLM-L6-v2.
+ *
+ * Exported since #516 so a store can stamp itself without awaiting the provider
+ * — `rag.ts` keeps a private copy for exactly that reason (its `persist` is
+ * synchronous and `getEmbeddingProvider` is not), and a third copy would be one
+ * too many. That copy could now import this; changing it is not this PR's
+ * business and is noted rather than smuggled in.
+ */
+export const EMBEDDING_DIMENSIONS = 384;
+const DIMENSIONS = EMBEDDING_DIMENSIONS;
 
 /**
  * The model id, exported so a persisted store can be stamped with it (#520).

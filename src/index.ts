@@ -1229,6 +1229,91 @@ program
  * were then both edited by hand again when `logs` arrived. Derived from one
  * array, they cannot.
  */
+const KNOWLEDGE_ACTIONS = ['list', 'create', 'add', 'search', 'read', 'remove', 'stats'] as const;
+
+program
+  .command('knowledge [action] [target] [arg]')
+  .description(`Manage knowledge libraries: ${KNOWLEDGE_ACTIONS.join(' | ')}`)
+  .option('--title <title>', 'Human-readable title for `create`')
+  .option('--library <id>', 'Restrict `search` to one library')
+  .option('--limit <n>', 'Maximum results for `search`', Number)
+  .option('--neighbours <n>', 'Chunks of context either side of a hit', Number)
+  .option('--from <n>', 'First chunk for `read`', Number)
+  .option('--to <n>', 'Last chunk for `read`', Number)
+  .option('--force', 'Re-ingest even when the content is unchanged')
+  .action(
+    async (
+      action: string | undefined,
+      target: string | undefined,
+      arg: string | undefined,
+      options: {
+        title?: string;
+        library?: string;
+        limit?: number;
+        neighbours?: number;
+        from?: number;
+        to?: number;
+        force?: boolean;
+      },
+      command: { args: string[] },
+    ) => {
+      try {
+        // Deferred so `bernard --help` and every other subcommand pay nothing
+        // for a module graph that reaches node:sqlite and the embedder.
+        const cli = await import('./knowledge/cli.js');
+        switch (action ?? 'list') {
+          case 'list':
+            cli.knowledgeList();
+            break;
+          case 'create':
+            if (!target) throw new Error('Usage: bernard knowledge create <id> [--title "…"]');
+            cli.knowledgeCreate(target, options.title);
+            break;
+          case 'add': {
+            if (!target) throw new Error('Usage: bernard knowledge add <id> <path…>');
+            // Everything after the library id is a target, so a multi-path add
+            // does not silently ingest only the first one.
+            const targets = command.args.slice(2).filter((a): a is string => Boolean(a));
+            await cli.knowledgeAdd(target, targets, options.force ? { force: true } : {});
+            break;
+          }
+          case 'search': {
+            if (!target)
+              throw new Error('Usage: bernard knowledge search <query> [--library <id>]');
+            await cli.knowledgeSearch([target, arg].filter(Boolean).join(' '), {
+              ...(options.library ? { library: options.library } : {}),
+              ...(options.limit !== undefined ? { limit: options.limit } : {}),
+              ...(options.neighbours !== undefined ? { neighbours: options.neighbours } : {}),
+            });
+            break;
+          }
+          case 'read':
+            if (!target || !arg) throw new Error('Usage: bernard knowledge read <id> <uri>');
+            cli.knowledgeRead(target, arg, {
+              ...(options.from !== undefined ? { from: options.from } : {}),
+              ...(options.to !== undefined ? { to: options.to } : {}),
+            });
+            break;
+          case 'remove':
+            if (!target) throw new Error('Usage: bernard knowledge remove <id> [uri]');
+            cli.knowledgeRemove(target, arg);
+            break;
+          case 'stats':
+            if (!target) throw new Error('Usage: bernard knowledge stats <id>');
+            cli.knowledgeStats(target);
+            break;
+          default:
+            throw new Error(
+              `Unknown action "${action}". Expected one of: ${KNOWLEDGE_ACTIONS.join(', ')}`,
+            );
+        }
+      } catch (err) {
+        printError(err instanceof Error ? err.message : String(err));
+        process.exit(1);
+      }
+    },
+  );
+
 const APP_ACTIONS = ['list', 'open', 'allow', 'csp', 'logs', 'delete', 'path'] as const;
 
 program
