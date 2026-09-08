@@ -83,6 +83,31 @@ function createFakeProvider(): EmbeddingProvider {
   };
 }
 
+/** Writes to the store file, ignoring the session-date sidecar. */
+function storeWrites(): number {
+  return vi
+    .mocked(fs.writeFileSync)
+    .mock.calls.filter((c) => String(c[0]).includes('memories.json')).length;
+}
+
+/**
+ * A fresh store over reset `node:fs` mocks. Three top-level suites need one and
+ * each had grown its own copy, which is how they drifted apart on
+ * `similarityThreshold` without any of them saying so.
+ */
+async function createStore(config?: import('./rag.js').RAGStoreConfig) {
+  const { RAGStore } = await import('./rag.js');
+  return new RAGStore({ maxMemories: 100, ...config });
+}
+
+/** Puts the `node:fs` mocks back to "no store on disk". */
+function resetFsMocks(): void {
+  vi.clearAllMocks();
+  vi.mocked(fs.existsSync).mockReturnValue(false);
+  vi.mocked(fs.readFileSync).mockReturnValue('[]');
+  mockProvider = createFakeProvider();
+}
+
 describe('default limits', () => {
   it('exports expected default limits', async () => {
     const { DEFAULT_TOP_K_PER_DOMAIN, DEFAULT_MAX_RESULTS } = await import('./rag.js');
@@ -92,17 +117,7 @@ describe('default limits', () => {
 });
 
 describe('RAGStore', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(fs.existsSync).mockReturnValue(false);
-    vi.mocked(fs.readFileSync).mockReturnValue('[]');
-    mockProvider = createFakeProvider();
-  });
-
-  async function createStore(config?: import('./rag.js').RAGStoreConfig) {
-    const { RAGStore } = await import('./rag.js');
-    return new RAGStore({ maxMemories: 100, ...config });
-  }
+  beforeEach(resetFsMocks);
 
   /**
    * A read must not rewrite the store (#533).
@@ -114,13 +129,6 @@ describe('RAGStore', () => {
    * bookkeeping still survives.
    */
   describe('debounced access bookkeeping', () => {
-    /** Writes to the store file, ignoring the session-date sidecar. */
-    function storeWrites(): number {
-      return vi
-        .mocked(fs.writeFileSync)
-        .mock.calls.filter((c) => String(c[0]).includes('memories.json')).length;
-    }
-
     it('a search that hits does not write', async () => {
       const store = await createStore();
       await store.addFacts(['User prefers dark mode with testing keywords'], 'test');
@@ -1284,16 +1292,8 @@ describe('RAGStore domain scope (#511)', () => {
     mockProvider = createFakeProvider();
   });
 
-  /** Writes to the store file, ignoring the session-date sidecar. */
-  function writeCount(): number {
-    return vi
-      .mocked(fs.writeFileSync)
-      .mock.calls.filter((c) => String(c[0]).includes('memories.json')).length;
-  }
-
   async function seeded() {
-    const { RAGStore } = await import('./rag.js');
-    const store = new RAGStore({ maxMemories: 100, similarityThreshold: -1 });
+    const store = await createStore({ similarityThreshold: -1 });
     await store.addFacts(['shared vocabulary alpha'], 'test', 'general');
     await store.addFacts(['shared vocabulary beta'], 'test', 'user-preferences');
     return store;
@@ -1340,11 +1340,11 @@ describe('RAGStore domain scope (#511)', () => {
   it("a view's pending bookkeeping is flushed by the root store", async () => {
     const store = await seeded();
     store.flush();
-    const before = writeCount();
+    const before = storeWrites();
     await store.scoped(['general']).search('shared vocabulary');
-    expect(writeCount()).toBe(before);
+    expect(storeWrites()).toBe(before);
     store.flush();
-    expect(writeCount()).toBeGreaterThan(before);
+    expect(storeWrites()).toBeGreaterThan(before);
   });
 
   it('scoped(null) is the identity', async () => {
@@ -1395,27 +1395,17 @@ describe('dedup reinforcement (#525)', () => {
       .mocked(fs.writeFileSync)
       .mock.calls.filter((c) => String(c[0]).includes('memories.json'))
       .at(-1)!;
-    return JSON.parse(String(call[1])).memories[i];
+    return persistedRecords(String(call[1]))[i];
   }
   const sourceOf = (s: any, i: number) => persisted(s, i).source as string;
   /** Days-to-expiry off the LIVE record, via `listFacts`' own rendering. */
   const daysLeft = (s: { listFacts: () => string[] }, i: number): number =>
     Number(/expires in (\d+)d/.exec(s.listFacts()[i])![1]);
 
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(fs.existsSync).mockReturnValue(false);
-    vi.mocked(fs.readFileSync).mockReturnValue('[]');
-    mockProvider = createFakeProvider();
-  });
-
-  async function store() {
-    const { RAGStore } = await import('./rag.js');
-    return new RAGStore({ maxMemories: 100 });
-  }
+  beforeEach(resetFsMocks);
 
   it('counts a re-observation instead of dropping it silently', async () => {
-    const s = await store();
+    const s = await createStore();
     expect(await s.addFacts(['the deploy script is deploy.sh'], 'compression')).toBe(1);
     // Identical text embeds identically, so this is a guaranteed collision.
     expect(await s.addFacts(['the deploy script is deploy.sh'], 'exit')).toBe(0);
@@ -1426,7 +1416,7 @@ describe('dedup reinforcement (#525)', () => {
   });
 
   it('keeps the newer source, because the later observation is better evidenced', async () => {
-    const s = await store();
+    const s = await createStore();
     await s.addFacts(['a durable fact'], 'compression');
     await s.addFacts(['a durable fact'], 'exit');
     expect(sourceOf(s, 0)).toBe('exit');
@@ -1454,7 +1444,7 @@ describe('dedup reinforcement (#525)', () => {
         },
       ]),
     );
-    const s = await store();
+    const s = await createStore();
     expect(daysLeft(s, 0)).toBeLessThanOrEqual(2);
     await s.addFacts(['a durable fact'], 'exit');
     expect(daysLeft(s, 0), 'a near-expiry record was not extended').toBeGreaterThan(2);
@@ -1464,7 +1454,7 @@ describe('dedup reinforcement (#525)', () => {
     // The monotone guard. Without it, reinforcing a fresh record would pull its
     // 90-day expiry back to the ~52 days one observation earns — so being
     // learned again would make a fact die SOONER.
-    const s = await store();
+    const s = await createStore();
     await s.addFacts(['a durable fact'], 'compression');
     const before = daysLeft(s, 0);
     expect(before).toBeGreaterThan(80);
@@ -1476,7 +1466,7 @@ describe('dedup reinforcement (#525)', () => {
     // `addFacts` returns the number ADDED. Reporting a reinforcement as an add
     // would make the exit worker and `compressHistory` claim work they did not
     // do, and would trip the eager `prune`/`persist` path below.
-    const s = await store();
+    const s = await createStore();
     await s.addFacts(['a durable fact'], 'compression');
     expect(await s.addFacts(['a durable fact'], 'exit')).toBe(0);
     expect(s.count()).toBe(1);
@@ -1486,7 +1476,7 @@ describe('dedup reinforcement (#525)', () => {
     // Reinforcement is decay metadata, not content: a crash must not lose a
     // fact, but losing the note that one was observed again costs a single TTL
     // extension. `addFacts` persists eagerly when it ADDS; this must not.
-    const s = await store();
+    const s = await createStore();
     await s.addFacts(['a durable fact'], 'compression');
     const before = vi
       .mocked(fs.writeFileSync)
@@ -1510,7 +1500,7 @@ describe('dedup reinforcement (#525)', () => {
     // there instead and reported a false survivor. Same invariant, same cost:
     // a retrieval that pulls a fact's expiry BACKWARDS would make being useful
     // a reason to die sooner.
-    const s = await store();
+    const s = await createStore();
     await s.addFacts(['a durable fact'], 'compression');
     const before = daysLeft(s, 0);
     await s.search('a durable fact');
@@ -1576,7 +1566,7 @@ describe('dedup reinforcement (#525)', () => {
         },
       ]),
     );
-    const s = await store();
+    const s = await createStore();
     expect(s.count()).toBe(1);
     expect(s.listFacts()[0], 'a legacy record should show no observation').not.toContain(
       'observed',

@@ -151,6 +151,27 @@ export interface RAGStoreConfig {
 }
 
 /**
+ * Push a memory's `expiresAt` out to `nowMs + days`, but only ever forward.
+ *
+ * **Monotone is the whole contract.** Both writers compute a different curve —
+ * {@link RAGStore.bumpAccess} off `accessCount`, {@link RAGStore.reinforce} off
+ * `observedCount` — and the two interleave in any order, so a record that was
+ * re-learned (a long extension) and then merely retrieved (a short one) must
+ * not have its expiry pulled back in. Written once here rather than at each
+ * writer because a guard that is right in one copy and dropped in the other
+ * fails silently: the record simply expires early, months later, with nothing
+ * to trace it to.
+ *
+ * Mutates in place; the caller persists.
+ */
+function extendExpiry(memory: RAGMemory, days: number, nowMs: number): void {
+  const next = nowMs + days * 86400000;
+  if (!memory.expiresAt || next > new Date(memory.expiresAt).getTime()) {
+    memory.expiresAt = new Date(next).toISOString();
+  }
+}
+
+/**
  * Disk-backed vector store for long-term conversational memory.
  * Stores facts as embeddings, supports similarity search with per-domain top-k ranking,
  * and manages memory lifecycle via TTL-based expiration and capacity pruning.
@@ -439,24 +460,25 @@ export class RAGStore {
   }
 
   /**
-   * Bump one memory's access metadata and extend its TTL. Single source of the
-   * "base 7d + log-scaled by access count, capped at half TTL" extension math,
-   * shared by {@link search} and {@link recordAccess}. Mutates `memory` in place;
-   * the caller is responsible for persisting.
+   * Bump one memory's access metadata and extend its TTL by "base 7d +
+   * log-scaled by access count, capped at half TTL". Shared by {@link search}
+   * and {@link recordAccess}. Mutates `memory` in place; the caller is
+   * responsible for persisting.
+   *
+   * The sibling is {@link reinforce}, which credits an OBSERVATION rather than
+   * a retrieval and computes a different, longer extension. Only the monotone
+   * guard is shared, in {@link extendExpiry} — the two curves are deliberately
+   * distinct, which is what makes a re-learned fact outlive a merely
+   * often-retrieved one.
    */
   private bumpAccess(memory: RAGMemory, now: string, nowMs: number): void {
     memory.accessCount++;
     memory.lastAccessed = now;
-
-    // Extend expiresAt: base of 7d + log scaling by access count, capped at half TTL
-    const extensionDays = Math.min(
-      this.ragTtlDays * 0.5,
-      7 + Math.log2(memory.accessCount + 1) * 3,
+    extendExpiry(
+      memory,
+      Math.min(this.ragTtlDays * 0.5, 7 + Math.log2(memory.accessCount + 1) * 3),
+      nowMs,
     );
-    const newExpiry = nowMs + extensionDays * 86400000;
-    if (!memory.expiresAt || newExpiry > new Date(memory.expiresAt).getTime()) {
-      memory.expiresAt = new Date(newExpiry).toISOString();
-    }
   }
 
   /**
@@ -936,14 +958,11 @@ export class RAGStore {
     memory.observedCount = (memory.observedCount ?? 0) + 1;
     memory.source = source;
     memory.lastAccessed = now;
-    const extensionDays = Math.min(
-      this.ragTtlDays,
-      this.ragTtlDays * 0.5 + Math.log2(memory.observedCount + 1) * 7,
+    extendExpiry(
+      memory,
+      Math.min(this.ragTtlDays, this.ragTtlDays * 0.5 + Math.log2(memory.observedCount + 1) * 7),
+      nowMs,
     );
-    const newExpiry = nowMs + extensionDays * 86400000;
-    if (!memory.expiresAt || newExpiry > new Date(memory.expiresAt).getTime()) {
-      memory.expiresAt = new Date(newExpiry).toISOString();
-    }
   }
 
   /**
