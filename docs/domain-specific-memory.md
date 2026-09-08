@@ -156,7 +156,7 @@ Facts are stored in `~/.bernard/rag/memories.json`. Each memory entry looks like
 
 ### Embeddings
 
-When a fact is stored, it's converted into a 384-dimensional vector using the `all-MiniLM-L6-v2` model from fastembed (runs locally, no API calls). This vector captures the _semantic meaning_ of the text, so "npm run build compiles the project" and "how do I build this?" would have high similarity even though they share few words.
+When a fact is stored, it's converted into a 384-dimensional vector using the `all-MiniLM-L6-v2` model via `@xenova/transformers` (runs locally, no API calls). This vector captures the _semantic meaning_ of the text, so "npm run build compiles the project" and "how do I build this?" would have high similarity even though they share few words.
 
 ### Deduplication
 
@@ -446,7 +446,7 @@ The third parameter `domain` defaults to `'general'` for backward compatibility.
 
 **Implementation path:**
 
-1. Gets the embedding provider (fastembed, lazily initialized)
+1. Gets the embedding provider (`@xenova/transformers`, lazily initialized)
 2. Batch-embeds all facts in one call to `provider.embed(facts)`
 3. For each fact + embedding pair:
    - Checks dedup: scans all existing memories, computes cosine similarity against the new embedding, skips if any exceed 0.92
@@ -637,7 +637,7 @@ interface EmbeddingProvider {
 }
 ```
 
-**Implementation:** Uses fastembed's `all-MiniLM-L6-v2` model (via the `fastembed` npm package). The model runs locally using ONNX Runtime — no API calls, no network dependency, no token costs. It's lazily initialized on first use and cached for the process lifetime.
+**Implementation:** Uses the `all-MiniLM-L6-v2` model via the `@xenova/transformers` npm package. The model runs locally using ONNX Runtime — no API calls, no network dependency, no token costs. It's lazily initialized on first use and cached for the process lifetime.
 
 **Batch embedding:** `provider.embed(texts)` accepts an array and returns an array of vectors. Both `addFacts` (embedding new facts) and `search` (embedding the query) use this interface. The `addFacts` path batches all facts in a single call; the `search` path embeds one query string.
 

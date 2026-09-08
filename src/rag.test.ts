@@ -15,6 +15,9 @@ const fs = await import('node:fs');
 let mockProvider: EmbeddingProvider | null = null;
 
 vi.mock('./embeddings.js', () => ({
+  // The stamp constants the store writes with (#520). A module mock must
+  // export every name the module under test imports, or the import throws.
+  EMBEDDING_MODEL_ID: 'Xenova/all-MiniLM-L6-v2',
   getEmbeddingProvider: vi.fn(async () => mockProvider),
   cosineSimilarity: vi.fn((a: number[], b: number[]) => {
     // Real cosine similarity for deterministic fake embeddings
@@ -54,6 +57,18 @@ function fakeEmbed(texts: string[]): number[][] {
   });
 }
 
+/**
+ * The records inside the persisted payload.
+ *
+ * The store is stamped since #520 — `{version, model, dimensions, memories}`
+ * rather than a bare array — so the three tests that inspect what was written
+ * unwrap it here rather than each learning the shape.
+ */
+function persistedRecords(raw: string): any[] {
+  const parsed = JSON.parse(raw);
+  return Array.isArray(parsed) ? parsed : parsed.memories;
+}
+
 function createFakeProvider(): EmbeddingProvider {
   return {
     async embed(texts: string[]): Promise<number[][]> {
@@ -61,6 +76,9 @@ function createFakeProvider(): EmbeddingProvider {
     },
     dimensions(): number {
       return 16;
+    },
+    modelId(): string {
+      return 'Xenova/all-MiniLM-L6-v2';
     },
   };
 }
@@ -85,6 +103,141 @@ describe('RAGStore', () => {
     const { RAGStore } = await import('./rag.js');
     return new RAGStore({ maxMemories: 100, ...config });
   }
+
+  /**
+   * A model swap must not silently destroy retrieval (#520).
+   *
+   * `cosineSimilarity` returns `0` for vectors of different lengths, `0` is
+   * below every threshold, so the old behaviour was `search()` returning `[]`
+   * with no error and no log — a store of thousands of facts reading as empty.
+   * `dimensions()` existed to catch exactly this and had zero production
+   * callers.
+   */
+  describe('embedding model stamp', () => {
+    function lastPayload(): any {
+      const call = vi
+        .mocked(fs.writeFileSync)
+        .mock.calls.filter((c) => String(c[0]).includes('memories.json'))
+        .at(-1);
+      return JSON.parse(String(call![1]));
+    }
+
+    function seed(raw: unknown): void {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(raw));
+    }
+
+    const record = {
+      id: '1',
+      fact: 'a stored fact with testing keywords',
+      embedding: fakeEmbed(['a stored fact with testing keywords'])[0],
+      source: 'test',
+      domain: 'general',
+      createdAt: new Date().toISOString(),
+      accessCount: 0,
+      expiresAt: new Date(Date.now() + 86400000).toISOString(),
+    };
+
+    it('stamps what wrote the store', async () => {
+      const store = await createStore();
+      await store.addFacts(['a brand new fact'], 'test');
+      const payload = lastPayload();
+      expect(payload.model).toBe('Xenova/all-MiniLM-L6-v2');
+      expect(payload.dimensions).toBe(384);
+      expect(Array.isArray(payload.memories)).toBe(true);
+    });
+
+    it('adopts a legacy bare array and stamps it in place', async () => {
+      // Every existing install has this shape. It must load, keep its facts,
+      // and gain a stamp — not be refused, and above all not be discarded.
+      seed([record]);
+      const store = await createStore();
+      expect(store.listMemories()).toHaveLength(1);
+      expect(lastPayload().model).toBe('Xenova/all-MiniLM-L6-v2');
+    });
+
+    it('refuses to search a store another model wrote, and says why', async () => {
+      seed({
+        version: 1,
+        model: 'some-other/embedder',
+        dimensions: 768,
+        memories: [record],
+      });
+      const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const store = await createStore();
+        // The facts are still THERE — the whole point of refusing rather than
+        // discarding. Only retrieval stops.
+        expect(store.listMemories()).toHaveLength(1);
+        expect(await store.search('a stored fact with testing keywords')).toEqual([]);
+        const said = err.mock.calls.flat().join(' ');
+        expect(said).toContain('some-other/embedder');
+        expect(said).toContain('Xenova/all-MiniLM-L6-v2');
+        expect(said).toContain('intact');
+      } finally {
+        err.mockRestore();
+      }
+    });
+
+    it('says it once, not once per query', async () => {
+      seed({ version: 1, model: 'other', dimensions: 768, memories: [record] });
+      const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const store = await createStore();
+        for (let i = 0; i < 3; i++) {
+          store.clearTurnCache();
+          await store.search('a stored fact with testing keywords');
+        }
+        expect(err).toHaveBeenCalledTimes(1);
+      } finally {
+        err.mockRestore();
+      }
+    });
+
+    it('refuses on the searchWithIds path too', async () => {
+      // Both read paths go through `embedQuery`, so the refusal is written
+      // once rather than at each entry point.
+      seed({ version: 1, model: 'other', dimensions: 768, memories: [record] });
+      const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const store = await createStore();
+        expect(await store.searchWithIds('a stored fact with testing keywords')).toEqual([]);
+      } finally {
+        err.mockRestore();
+      }
+    });
+
+    it('refuses on dimensionality alone, with the same model name', async () => {
+      // The realistic swap #520 names: a Matryoshka model truncated to fewer
+      // dimensions keeps its id and changes its vector length. Comparing the
+      // name alone would let that through, and the vectors would score zero.
+      seed({
+        version: 1,
+        model: 'Xenova/all-MiniLM-L6-v2',
+        dimensions: 768,
+        memories: [record],
+      });
+      const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const store = await createStore();
+        expect(await store.search('a stored fact with testing keywords')).toEqual([]);
+        expect(err.mock.calls.flat().join(' ')).toContain('768');
+      } finally {
+        err.mockRestore();
+      }
+    });
+
+    it('does not refuse when the stamp matches', async () => {
+      seed({
+        version: 1,
+        model: 'Xenova/all-MiniLM-L6-v2',
+        dimensions: 16,
+        memories: [record],
+      });
+      const store = await createStore();
+      expect((await store.search('a stored fact with testing keywords')).length).toBeGreaterThan(0);
+    });
+  });
 
   describe('addFacts', () => {
     it('stores facts with embeddings', async () => {
@@ -510,7 +663,7 @@ describe('RAGStore', () => {
       // Grab the JSON written to disk
       const writeCall = vi.mocked(fs.writeFileSync).mock.calls.at(-1);
       expect(writeCall).toBeDefined();
-      const persisted = JSON.parse(writeCall![1] as string);
+      const persisted = persistedRecords(writeCall![1] as string);
       expect(Array.isArray(persisted[0].embedding)).toBe(true);
       // Verify it serializes as a real array, not {"0":...,"1":...}
       const reserialized = JSON.parse(JSON.stringify(persisted[0].embedding));
@@ -724,7 +877,7 @@ describe('RAGStore', () => {
         .mocked(fs.writeFileSync)
         .mock.calls.find((c) => String(c[0]).includes('memories.json.tmp'));
       expect(writeCall).toBeDefined();
-      const persisted = JSON.parse(writeCall![1] as string);
+      const persisted = persistedRecords(writeCall![1] as string);
       expect(persisted[0].expiresAt).toBeDefined();
 
       const expiresAt = new Date(persisted[0].expiresAt).getTime();
@@ -851,7 +1004,7 @@ describe('RAGStore', () => {
         .mocked(fs.writeFileSync)
         .mock.calls.find((c) => String(c[0]).includes('memories.json.tmp'));
       expect(writeCall).toBeDefined();
-      const updatedData = JSON.parse(writeCall![1] as string);
+      const updatedData = persistedRecords(writeCall![1] as string);
 
       expect(updatedData[0].accessCount).toBe(1);
       const newExpiry = new Date(updatedData[0].expiresAt).getTime();
