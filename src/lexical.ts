@@ -142,12 +142,49 @@ function splitPieces(raw: string): string[] {
 }
 
 /**
- * Corpus size below which the lexical channel does not engage at all.
+ * Whether a query names something symbol-shaped — the gate that decides whether
+ * the lexical channel contributes at all (#526).
  *
- * IDF is a statement about a population; on a handful of documents there is no
- * population and every term looks rare. See {@link LexicalIndex.hasDiscriminatingTerm}.
+ * ## Why this is structural and not statistical
+ *
+ * The first version gated on RARITY: the query had to contain a term appearing
+ * in at most 1% of the corpus. It produced a clean result on the 51-record eval
+ * fixture and **does not survive contact with a real store.** Measured against
+ * 3,662 real records, the rarest term in each query was:
+ *
+ *   identifier queries: df 1, 3, 8
+ *   prose queries:      df 4, 2, 5, 2, 3, 1
+ *
+ * They overlap completely — a prose query's rarest word is as rare as the
+ * rarest identifier, because a small heterogeneous corpus of conversational
+ * facts has plenty of ordinary words appearing once. **No threshold separates
+ * them**, so the gate was a fixture artifact: on 51 records prose happened to
+ * sit at df 2 and identifiers at df 1. At production scale it opened on 6 of 6
+ * identifier-free prose queries, scoring up to 2,954 of 3,662 records — i.e.
+ * the protection against the measured paraphrase collapse was not engaged at
+ * all in the only place it matters.
+ *
+ * The separating property is not how OFTEN a term occurs but what it LOOKS
+ * like. `resolveSiteModel`, `TS2554`, `applet-hosts.json` and
+ * `BERNARD_STREAM_STALL_TIMEOUT_MS` are compounds — they carry a digit, a
+ * separator, or a camelCase boundary. `deployment`, `conventions` and
+ * `addressed` do not. That is exactly what "exact-identifier lookup" means, and
+ * it is **scale-invariant**: it reads the query, never the corpus, so it cannot
+ * be right on a fixture and wrong in production.
+ *
+ * Measured on the same real store: 0 of 8 prose queries open it, 6 of 6
+ * identifier queries do.
  */
-export const MIN_CORPUS_FOR_LEXICAL = 20;
+export function namesASymbol(query: string): boolean {
+  for (const raw of query.match(TERM_RE) ?? []) {
+    if (/[0-9]/.test(raw)) return true;
+    if (/[._\-/]/.test(raw)) return true;
+    // A camelCase boundary — the compound survives `lexicalTokens` whole, which
+    // is what gives it maximal IDF against a corpus of prose.
+    if (/[a-z0-9][A-Z]/.test(raw)) return true;
+  }
+  return false;
+}
 
 /** BM25 term-frequency saturation. The standard default. */
 const K1 = 1.2;
@@ -192,71 +229,14 @@ export class LexicalIndex {
   }
 
   /**
-   * The document frequency below which a term counts as **discriminating**.
-   *
-   * 1% of the corpus, floored at 1 — so on the 51-record eval fixture it is a
-   * term appearing in exactly one document, and on a real 3,662-record store it
-   * is a term appearing in at most 36. Relative rather than absolute because an
-   * ordinary English word sits at df≈2 in a tiny corpus and df≈2000 in a large
-   * one; an absolute threshold would gate correctly at one size and wrongly at
-   * the other.
-   */
-  private get rareBelow(): number {
-    return Math.max(1, Math.floor(this.size * 0.01));
-  }
-
-  /**
-   * Whether `query` names anything rare enough for this channel to be useful.
-   *
-   * **This gate is the difference between a strict improvement and a
-   * regression, and it was measured rather than assumed.** Ungated, fusing BM25
-   * with cosine recovered both identifier misses AND destroyed paraphrase
-   * ranking — MRR 0.75 → 0.22 on the eval corpus — because a paraphrase query
-   * shares only ordinary words with its answer, so BM25's long tail of weak
-   * matches occupied ranks that dense retrieval had right. Sweeping the RRF
-   * constant and a channel weight could not fix it: every setting that helped
-   * identifiers hurt paraphrase, and the two best paraphrase settings destroyed
-   * long-tail instead.
-   *
-   * Gating on rarity separates them cleanly, because it is the same property
-   * LIMIT is about: a term appearing in essentially one document is exactly the
-   * arbitrary top-k subset a 384-dim space cannot single out, and exactly where
-   * BM25's IDF is maximal. A query with no such term has nothing this channel
-   * can contribute, so it contributes nothing.
-   *
-   * Measured with the gate: identifier 0.75/0.75 → 1.00/1.00, long-tail
-   * 0.00/0.00 → 1.00/0.50, paraphrase and near-duplicate unchanged.
-   */
-  hasDiscriminatingTerm(query: string): boolean {
-    // **Below a floor, rarity is not a signal and the channel stays out.** On a
-    // one-document corpus every term appears in 100% of it, yet `df <= 1` calls
-    // all of them rare — so the gate opened on every query and BM25 returned
-    // the sole record for anything, including queries cosine had rejected as
-    // below threshold. Adding a second document then closed the gate and the
-    // result vanished, which is how this surfaced: an existing cache test
-    // asserting that adding a fact cannot REDUCE what a search returns.
-    //
-    // 20 is where "appears in one document" first means something: at that size
-    // df=1 is 5% of the corpus, and below it the whole store fits in a couple
-    // of result pages anyway, so dense retrieval alone is adequate.
-    if (this.size < MIN_CORPUS_FOR_LEXICAL) return false;
-    const limit = this.rareBelow;
-    for (const term of new Set(lexicalTokens(query))) {
-      const list = this.postings.get(term);
-      if (list && list.length <= limit) return true;
-    }
-    return false;
-  }
-
-  /**
    * Scores every document that shares at least one term with `query`.
    *
    * Returns only non-zero scores, so a query with no lexical overlap yields an
    * empty map rather than a corpus-sized map of zeros — which matters because
    * the caller fuses ranks, and a zero-score document must not occupy a rank.
    *
-   * Callers should consult {@link hasDiscriminatingTerm} first; this method
-   * answers what BM25 says, not whether BM25 is worth listening to.
+   * Callers should consult {@link namesASymbol} first; this method answers what
+   * BM25 says, not whether BM25 is worth listening to.
    */
   score(query: string): Map<number, number> {
     const scores = new Map<number, number>();

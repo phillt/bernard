@@ -2,9 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   lexicalTokens,
   LexicalIndex,
+  namesASymbol,
   reciprocalRankFusion,
   RRF_K,
-  MIN_CORPUS_FOR_LEXICAL,
 } from './lexical.js';
 
 /**
@@ -67,7 +67,6 @@ describe('LexicalIndex', () => {
     const idx = new LexicalIndex([]);
     expect(idx.size).toBe(0);
     expect(idx.score('anything').size).toBe(0);
-    expect(idx.hasDiscriminatingTerm('anything')).toBe(false);
   });
 
   it('never scores a matching document negative', () => {
@@ -86,54 +85,44 @@ describe('LexicalIndex', () => {
   });
 });
 
-describe('hasDiscriminatingTerm — the gate that makes fusion a strict improvement', () => {
-  // Measured: ungated fusion recovered both identifier misses AND collapsed
-  // paraphrase MRR from 0.75 to 0.22 on the eval corpus, because a paraphrase
-  // query shares only ordinary words with its answer. No RRF constant and no
-  // channel weight separated the two.
-  const corpus = [
-    'The function resolveSiteModel decides which model a call site uses.',
-    ...Array.from(
-      { length: 200 },
-      (_, i) => `Routine note ${i} about deployment and configuration.`,
-    ),
-  ];
-  const idx = new LexicalIndex(corpus);
-
-  it('fires for a query naming something rare', () => {
-    expect(idx.hasDiscriminatingTerm('what does resolveSiteModel do')).toBe(true);
+describe('namesASymbol — the gate that makes fusion a strict improvement', () => {
+  // Ungated, fusion recovered both identifier misses AND collapsed paraphrase
+  // MRR from 0.75 to 0.22 on the eval corpus, because a paraphrase query shares
+  // only ordinary words with its answer. No RRF constant and no channel weight
+  // separated the two.
+  //
+  // **The first gate was statistical and was a fixture artifact.** It required
+  // a query term appearing in ≤1% of the corpus. Measured against 3,662 real
+  // records the rarest term per query was df 1/3/8 for identifier queries and
+  // 4/2/5/2/3/1 for prose — completely overlapping, so no threshold separates
+  // them, and at production scale it opened on 6 of 6 prose queries. These
+  // cases are the ones that would have caught that, and they are written
+  // against query SHAPE, which cannot be right on a fixture and wrong at scale.
+  it.each([
+    'what did we decide about how the user prefers to be addressed',
+    'which days are acceptable for shipping to production',
+    'how should I word feedback when reviewing a pull request',
+    'tell me about the deployment process we agreed on',
+    'remind me what we said about handling errors gracefully',
+  ])('stays shut for prose: %s', (q) => {
+    expect(namesASymbol(q)).toBe(false);
   });
 
-  it('does not fire for a query of ordinary words', () => {
-    expect(idx.hasDiscriminatingTerm('tell me about deployment and configuration')).toBe(false);
+  it.each([
+    ['camelCase', 'what happens in resolveSiteModel when there is no role'],
+    ['a code with digits', 'I am seeing TS2554 after pulling'],
+    ['a dotted filename', 'where is applet-hosts.json written'],
+    ['SCREAMING_SNAKE', 'does BERNARD_STREAM_STALL_TIMEOUT_MS cover the header wait'],
+    ['a hyphenated code', 'what is QUOTA-4417'],
+  ])('opens for %s', (_kind, q) => {
+    expect(namesASymbol(q)).toBe(true);
   });
 
-  it('scales the threshold with the corpus rather than fixing it', () => {
-    // An ordinary English word sits at df≈2 in a tiny corpus and df≈2000 in a
-    // large one; an absolute threshold would gate correctly at one size and
-    // wrongly at the other. 1% floored at 1 — so on this 201-record corpus a
-    // term in one document is discriminating and one in all of them is not.
-    expect(idx.hasDiscriminatingTerm('resolveSiteModel')).toBe(true);
-    expect(idx.hasDiscriminatingTerm('routine note')).toBe(false);
-  });
-
-  it('does not engage at all below the corpus floor', () => {
-    // IDF is a statement about a population, and on a handful of documents
-    // there is no population — every term appears in ~100% of the corpus while
-    // `df <= 1` still calls it rare. Ungated, that made BM25 return the sole
-    // record of a one-document store for ANY query, including ones cosine had
-    // rejected as below threshold; adding a second document then closed the
-    // gate and the result vanished. An existing cache test caught it, asserting
-    // that adding a fact cannot reduce what a search returns.
-    const tiny = new LexicalIndex(['alpha beta', 'beta gamma']);
-    expect(tiny.size).toBeLessThan(MIN_CORPUS_FOR_LEXICAL);
-    expect(tiny.hasDiscriminatingTerm('alpha')).toBe(false);
-
-    const atFloor = new LexicalIndex([
-      'alpha is unique here',
-      ...Array.from({ length: MIN_CORPUS_FOR_LEXICAL - 1 }, (_, i) => `filler note ${i}`),
-    ]);
-    expect(atFloor.hasDiscriminatingTerm('alpha')).toBe(true);
+  it('reads the query only, so it cannot depend on corpus size', () => {
+    // The property the frequency gate lacked: it is a pure function of the
+    // query, so a result measured on a fixture holds in production.
+    expect(namesASymbol('resolveSiteModel')).toBe(true);
+    expect(namesASymbol('deployment')).toBe(false);
   });
 });
 

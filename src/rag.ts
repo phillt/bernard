@@ -6,7 +6,7 @@ import {
   EMBEDDING_MODEL_ID,
   type EmbeddingProvider,
 } from './embeddings.js';
-import { LexicalIndex, reciprocalRankFusion } from './lexical.js';
+import { LexicalIndex, namesASymbol, reciprocalRankFusion } from './lexical.js';
 import { debugLog } from './logger.js';
 import { DEFAULT_DOMAIN } from './domains.js';
 import { RAG_DIR, MEMORIES_FILE, LAST_SESSION_FILE } from './paths.js';
@@ -229,11 +229,19 @@ export class RAGStore {
    * since BM25 would still return plausible-looking scores for the wrong
    * population. Identity is the one key that cannot get that wrong.
    *
-   * Rebuilt rather than maintained: measured well under the cosine scan the
-   * same query already pays, and an incrementally-maintained index is a second
-   * source of truth that can drift from the array it describes.
+   * Rebuilt rather than maintained, and the honest cost is **~77 ms at 3,662
+   * records** — 45× the 1.7 ms cosine scan, not "a rounding error" as an
+   * earlier version of this comment claimed. It is affordable because it is
+   * paid ONCE per store (see the cache key) and only when a query actually
+   * names a symbol, so an ordinary prose turn never builds it at all. An
+   * incrementally-maintained index would avoid that first hit and become a
+   * second source of truth that can drift from the array it describes.
    */
-  private lexicalCache: { corpus: readonly RAGMemory[]; index: LexicalIndex } | null = null;
+  private lexicalCache: {
+    memories: readonly RAGMemory[];
+    scope: readonly string[] | null;
+    index: LexicalIndex;
+  } | null = null;
 
   constructor(config?: RAGStoreConfig) {
     this.topKPerDomain = config?.topKPerDomain ?? DEFAULT_TOP_K_PER_DOMAIN;
@@ -420,53 +428,53 @@ export class RAGStore {
     // silently drop every lexical-only hit — which is the entire population
     // this channel exists to recover, since a record whose term sits past the
     // embedder's 256-word-piece ceiling has a *low* cosine by construction.
-    // **Gated on whether the query names anything rare.** Ungated, this fusion
+    // **Gated on whether the query names a SYMBOL.** Ungated, this fusion
     // recovered both identifier misses and destroyed paraphrase ranking (MRR
-    // 0.75 → 0.22 on the eval corpus) — see `hasDiscriminatingTerm`, which
-    // carries the measurement and the reason no RRF constant or channel weight
-    // could separate the two.
-    const index = this.lexicalIndex(corpus);
-    const lexical = index.hasDiscriminatingTerm(query)
-      ? [...index.score(query).entries()].sort((a, b) => b[1] - a[1]).map(([i]) => i)
+    // 0.75 → 0.22 on the eval corpus). An earlier frequency-based gate looked
+    // like it fixed that and did not survive contact with a real store — see
+    // `namesASymbol`, which carries the measurement and why the separating
+    // property is the query's shape rather than the corpus's statistics.
+    //
+    // Checked BEFORE the index is built, so a prose query pays nothing: the
+    // build is ~77 ms at 3,662 records against a ~1.7 ms cosine scan.
+    const lexical = namesASymbol(query)
+      ? [...this.lexicalIndex(corpus).score(query).entries()]
+          .sort((a, b) => b[1] - a[1])
+          .map(([i]) => i)
       : [];
 
     const denseRanking = dense.map((d) => d.corpusIndex);
     const order = lexical.length > 0 ? reciprocalRankFusion([denseRanking, lexical]) : denseRanking;
 
-    // `similarity` stays COSINE, deliberately. It is the scale `threshold` is
-    // calibrated on, the scale `applyStickiness` adds its 0.05 boost to and
-    // clamps at 1.0, and the number `bernard facts` prints. Putting a fused
-    // score there would decalibrate all three silently. Fusion changes which
-    // records come back and in what order; it does not redefine the field.
-    // Each entry carries its own fused position, so the re-sort below is a
-    // number comparison rather than a map lookup that has to assert it hit.
+    // **Cosine is resolved for the SURVIVORS only.** Computing it for every
+    // fused candidate here meant ~2,400 redundant cosine computations per
+    // search on a real store — 3,114 fused entries reduced to 15 by the caps
+    // below. It is output-identical to defer it, because nothing between here
+    // and the return orders by `similarity`: the domain grouping and the final
+    // sort both key on fused position.
     const byIndex = new Map(dense.map((d) => [d.corpusIndex, d]));
-    const scored = order.map((i, at) => {
-      const hit = byIndex.get(i);
-      return {
-        memory: hit?.memory ?? corpus[i],
-        similarity: hit?.similarity ?? cosineSimilarity(queryEmbedding, corpus[i].embedding),
-        at,
-      };
-    });
+    const scored = order.map((i) => ({ memory: corpus[i], corpusIndex: i }));
 
-    const byDomain = new Map<string, typeof scored>();
-    for (const entry of scored) {
-      const d = entry.memory.domain;
-      if (!byDomain.has(d)) byDomain.set(d, []);
-      const group = byDomain.get(d)!;
-      if (group.length < topKPerDomain) {
-        group.push(entry);
-      }
+    // One pass, in fused order, so the ordering is structural rather than
+    // restored by a re-sort. `similarity` stays COSINE — it is the scale
+    // `threshold` is calibrated on, the scale `applyStickiness` boosts and
+    // clamps at 1.0, and the number `bernard facts` prints, so a fused score
+    // there would decalibrate all three silently.
+    const perDomain = new Map<string, number>();
+    const merged: { memory: RAGMemory; similarity: number }[] = [];
+    for (const e of scored) {
+      const n = perDomain.get(e.memory.domain) ?? 0;
+      if (n >= topKPerDomain) continue;
+      perDomain.set(e.memory.domain, n + 1);
+      merged.push({
+        memory: e.memory,
+        similarity:
+          byIndex.get(e.corpusIndex)?.similarity ??
+          cosineSimilarity(queryEmbedding, e.memory.embedding),
+      });
+      if (merged.length === maxResults) break;
     }
-
-    // Re-sorted by FUSED position, not by similarity. Sorting by similarity
-    // here would discard the fusion entirely — the lexical channel would decide
-    // membership and then be thrown away, which is the quiet way this change
-    // could ship looking correct and do nothing.
-    const merged = Array.from(byDomain.values()).flat();
-    merged.sort((a, b) => a.at - b.at);
-    return merged.slice(0, maxResults).map(({ memory, similarity }) => ({ memory, similarity }));
+    return merged;
   }
 
   /**
@@ -914,11 +922,26 @@ export class RAGStore {
     }
   }
 
-  /** The BM25 index for `corpus`, built on first use and reused while it lasts. */
+  /**
+   * The BM25 index for `corpus`, built on first use and reused while it lasts.
+   *
+   * **Keyed on `(memories, domainScope)`, not on the corpus array's identity.**
+   * Unscoped, `corpus === this.memories` and identity would work — but a scoped
+   * view (#511) builds `this.memories.filter(...)`, a NEW array on every call,
+   * so an identity key never hit and every scoped query rebuilt the whole
+   * index. Measured on the real store: 21–25 ms per query for the three large
+   * domains, against a 1.7 ms cosine scan, and since #532 retrieval runs once
+   * per dispatch — so a four-way fan-out paid it four times.
+   *
+   * Both key fields are stable for the life of a view: `scoped()` computes its
+   * scope once, and every path that changes membership reassigns `this.memories`
+   * wholesale, so identity still invalidates correctly.
+   */
   private lexicalIndex(corpus: readonly RAGMemory[]): LexicalIndex {
-    if (this.lexicalCache?.corpus === corpus) return this.lexicalCache.index;
+    const c = this.lexicalCache;
+    if (c && c.memories === this.memories && c.scope === this.domainScope) return c.index;
     const index = new LexicalIndex(corpus.map((m) => m.fact));
-    this.lexicalCache = { corpus, index };
+    this.lexicalCache = { memories: this.memories, scope: this.domainScope, index };
     return index;
   }
 

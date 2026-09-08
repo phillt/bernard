@@ -1370,3 +1370,58 @@ describe('RAGStore domain scope (#511)', () => {
     expect(scoped.every((h) => h.domain === 'general')).toBe(true);
   });
 });
+
+/**
+ * The lexical index is per-(store, scope), and that is a correctness property
+ * rather than a cache optimisation (#526 + #511).
+ *
+ * BM25 postings hold indices into the array the index was built from. A scoped
+ * view searches `this.memories.filter(...)` — a different, shorter array — so a
+ * cache shared with the unscoped store would map document 900 of the root
+ * corpus onto element 900 of a 40-element scope. The original identity key hid
+ * this by never hitting for a view (a fresh `filter` array each call), at the
+ * cost of rebuilding ~77 ms of index per query; keying on
+ * `(memories, domainScope)` makes it both correct and built once.
+ */
+describe('lexical index scoping (#526)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockReturnValue(
+      JSON.stringify(
+        [
+          ['general', 'the resolveSiteModel helper lives in the policy layer'],
+          ['tool-usage', 'a different note that also mentions resolveSiteModel'],
+          ['conversations', 'unrelated chatter about lunch'],
+        ].map(([domain, fact], i) => ({
+          id: `r${i}`,
+          fact,
+          embedding: fakeEmbed([String(fact)])[0],
+          source: 'test',
+          domain,
+          createdAt: new Date().toISOString(),
+          accessCount: 0,
+          expiresAt: new Date(Date.now() + 90 * 86400000).toISOString(),
+        })),
+      ),
+    );
+    mockProvider = createFakeProvider();
+  });
+
+  it('a scoped view never returns a record outside its scope', async () => {
+    const { RAGStore } = await import('./rag.js');
+    const store = new RAGStore({ maxMemories: 100 });
+    // Warm the UNSCOPED index first — this is what a real session does before
+    // any scoped dispatch runs, and it is what a scope-blind cache would reuse.
+    const all = await store.searchWithIds('resolveSiteModel', { threshold: 0 });
+    expect(all.length).toBeGreaterThan(1);
+
+    const scoped = await store.scoped(['general']).searchWithIds('resolveSiteModel', {
+      threshold: 0,
+    });
+    expect(scoped.length).toBeGreaterThan(0);
+    for (const hit of scoped) {
+      expect(hit.domain, 'a scoped search returned an out-of-scope record').toBe('general');
+    }
+  });
+});
