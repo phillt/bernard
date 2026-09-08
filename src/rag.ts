@@ -60,13 +60,36 @@ const ACCESS_CREDIT_HALF_LIFE_DAYS = 30;
 const NEWCOMER_WINDOW_DAYS = 7;
 
 /**
+ * The most access credit any record can hold: what {@link ACCESS_CREDIT_CAP}
+ * buys, undecayed. ~2.58 at a cap of 5.
+ */
+const ACCESS_CREDIT_CEILING = Math.log2(ACCESS_CREDIT_CAP + 1);
+
+/**
  * Score floor a fact inside its newcomer window is guaranteed.
  *
- * Set above the capped access ceiling (~2.58) on purpose: the window is
- * worthless if a maxed-out incumbent still wins. It is a FLOOR rather than a
- * bonus so it cannot stack with other terms into a runaway score.
+ * **Derived, not a literal.** It has to sit above the capped access ceiling —
+ * the window is worthless if a maxed-out incumbent still wins — and that is a
+ * relationship between two constants, so raising {@link ACCESS_CREDIT_CAP}
+ * must move it. Written as `3` the coupling lived only in prose, and a cap of
+ * 7 would have silently pushed the ceiling to exactly 3 and made the newcomer
+ * window a no-op against a maxed incumbent, with every test still green.
+ *
+ * It is a FLOOR rather than a bonus so it cannot stack with other terms into a
+ * runaway score.
  */
-const NEWCOMER_FLOOR = 3;
+const NEWCOMER_FLOOR = ACCESS_CREDIT_CEILING + 0.5;
+
+/**
+ * How much more an independent re-observation is worth than a retrieval (#525).
+ *
+ * `accessCount` says a fact is topically adjacent to what gets asked;
+ * `observedCount` says it was independently learned again, which is the
+ * stronger evidence that it is durable. Two, so a fact observed twice beats one
+ * retrieved twice — the ordering is what the number is for, and it is pinned by
+ * a test rather than left to arithmetic nobody re-does.
+ */
+const OBSERVATION_WEIGHT = 2;
 /** Maximum age of `.pending-*.json` temp files before cleanup (1 hour). */
 const STALE_TEMP_MAX_AGE_MS = 60 * 60 * 1000; // 1 hour
 /** Default time-to-live in days for newly created memories. */
@@ -195,6 +218,27 @@ export interface RAGStoreConfig {
 }
 
 /**
+ * Push a memory's `expiresAt` out to `nowMs + days`, but only ever forward.
+ *
+ * **Monotone is the whole contract.** Both writers compute a different curve —
+ * {@link RAGStore.creditRetrieval} off `accessCount`, {@link RAGStore.reinforce} off
+ * `observedCount` — and the two interleave in any order, so a record that was
+ * re-learned (a long extension) and then merely retrieved (a short one) must
+ * not have its expiry pulled back in. Written once here rather than at each
+ * writer because a guard that is right in one copy and dropped in the other
+ * fails silently: the record simply expires early, months later, with nothing
+ * to trace it to.
+ *
+ * Mutates in place; the caller persists.
+ */
+function extendExpiry(memory: RAGMemory, days: number, nowMs: number): void {
+  const next = nowMs + days * 86400000;
+  if (!memory.expiresAt || next > new Date(memory.expiresAt).getTime()) {
+    memory.expiresAt = new Date(next).toISOString();
+  }
+}
+
+/**
  * Disk-backed vector store for long-term conversational memory.
  * Stores facts as embeddings, supports similarity search with per-domain top-k ranking,
  * and manages memory lifecycle via TTL-based expiration and capacity pruning.
@@ -236,9 +280,9 @@ export class RAGStore {
    * conversation, none of it correctness.
    *
    * **What is deferred is bookkeeping, and only bookkeeping.** Every field
-   * {@link bumpAccess} touches is decay metadata: `accessCount`,
-   * `lastAccessed` (which has no reader anywhere in the repo) and `expiresAt`.
-   * Losing an unflushed bump costs at most one TTL extension. `addFacts`,
+   * {@link countRetrieval} and {@link creditRetrieval} touch is decay metadata:
+   * `accessCount`, `lastAccessed` (which has no reader anywhere in the repo)
+   * and `expiresAt`. Losing an unflushed bump costs at most one TTL extension. `addFacts`,
    * `clear` and `deleteByIds` write CONTENT and stay eager — a crash must not
    * lose a fact, only the note that a fact was useful.
    *
@@ -483,38 +527,47 @@ export class RAGStore {
   }
 
   /**
-   * Bump one memory's access metadata and extend its TTL. Single source of the
-   * "base 7d + log-scaled by access count, capped at half TTL" extension math,
-   * shared by {@link search} and {@link recordAccess}. Mutates `memory` in place;
-   * the caller is responsible for persisting.
-   */
-  /**
-   * Records that a fact was returned by a search.
+   * Records that a fact was returned by a search. Counts, and buys nothing.
    *
-   * **Counting and extending are separate since #372**, because conflating them
-   * is the entrenchment loop: `search()` called this on *every* returned hit
-   * with no judgment involved, so retrieval bumped the score, a higher score
-   * meant a higher chance of retrieval, and nothing ever consulted whether the
-   * retrieval had helped. Observed on a real store: 31 stale facts with
-   * `accessCount` up to 40, due to expire in Sept–Oct and renewing forever.
+   * **Counting and extending are separate since #372**, and are two methods
+   * rather than one flag because conflating them IS the entrenchment loop:
+   * `search()` extended on *every* returned hit with no judgment involved, so
+   * retrieval bought life, life bought retrieval, and nothing ever consulted
+   * whether the retrieval had helped. Observed on a real store: 31 stale facts
+   * with `accessCount` up to 40, due to expire in Sept–Oct and renewing
+   * forever. A boolean parameter leaves the two one edit apart and reads as a
+   * detail at the call site; the split makes "does this buy life?" the name of
+   * the thing being called.
    *
    * The count is still true — the fact *was* retrieved — so it is still
    * recorded. What it no longer buys is life.
    */
-  private bumpAccess(memory: RAGMemory, now: string, extendTtl: boolean, nowMs: number): void {
+  private countRetrieval(memory: RAGMemory, now: string): void {
     memory.accessCount++;
     memory.lastAccessed = now;
-    if (!extendTtl) return;
+  }
 
-    // Extend expiresAt: base of 7d + log scaling by access count, capped at half TTL
-    const extensionDays = Math.min(
-      this.ragTtlDays * 0.5,
-      7 + Math.log2(memory.accessCount + 1) * 3,
+  /**
+   * Counts a retrieval AND extends the record's TTL by "base 7d + log-scaled by
+   * access count, capped at half TTL".
+   *
+   * The endorsed path, and the only one: `recordAccess` is what `recall-filter`
+   * calls with the ids a curator explicitly KEPT after seeing all ~24 candidates
+   * in one prompt, so it is a judgment about usefulness rather than topical
+   * adjacency — which is what earns an extension.
+   *
+   * The sibling curve is {@link reinforce}, off `observedCount`. Only the
+   * monotone guard is shared, in {@link extendExpiry} — the two curves are
+   * deliberately distinct, which is what makes a re-learned fact outlive a
+   * merely often-retrieved one.
+   */
+  private creditRetrieval(memory: RAGMemory, now: string, nowMs: number): void {
+    this.countRetrieval(memory, now);
+    extendExpiry(
+      memory,
+      Math.min(this.ragTtlDays * 0.5, 7 + Math.log2(memory.accessCount + 1) * 3),
+      nowMs,
     );
-    const newExpiry = nowMs + extensionDays * 86400000;
-    if (!memory.expiresAt || newExpiry > new Date(memory.expiresAt).getTime()) {
-      memory.expiresAt = new Date(newExpiry).toISOString();
-    }
   }
 
   /**
@@ -533,11 +586,7 @@ export class RAGStore {
     let touched = 0;
     for (const memory of this.memories) {
       if (wanted.has(memory.id)) {
-        // `true`: this is the endorsed path. `recall-filter` calls it with the
-        // ids a curator explicitly KEPT after seeing all ~24 candidates in one
-        // prompt, so it is a judgment about usefulness rather than topical
-        // adjacency — which is what earns a TTL extension.
-        this.bumpAccess(memory, now, true, nowMs);
+        this.creditRetrieval(memory, now, nowMs);
         touched++;
       }
     }
@@ -618,9 +667,8 @@ export class RAGStore {
     // something. Endorsement drives TTL, and endorsement arrives through
     // `recordAccess` — the ids a curator kept after seeing every candidate.
     const now = new Date().toISOString();
-    const nowMs = Date.now();
     for (const { memory } of capped) {
-      this.bumpAccess(memory, now, false, nowMs);
+      this.countRetrieval(memory, now);
     }
     if (capped.length > 0) {
       this.markDirty();
@@ -788,7 +836,7 @@ export class RAGStore {
       // written by this store and read by NOTHING, and a third write-only field
       // would be the same defect: the observation would be recorded and still
       // could not save the record from a prune.
-      const observed = Math.log2((m.observedCount ?? 0) + 1) * 2;
+      const observed = Math.log2((m.observedCount ?? 0) + 1) * OBSERVATION_WEIGHT;
       const score = recency + access + observed;
       // A floor, not a bonus: inside the window a fact cannot be outcompeted by
       // an incumbent's accumulated credit, but it also cannot stack its way
@@ -997,7 +1045,7 @@ export class RAGStore {
   /**
    * Credits a record for having been observed again (#525).
    *
-   * **Not `bumpAccess`.** That one records a RETRIEVAL and drives the
+   * **Not `creditRetrieval`.** That one records a RETRIEVAL and drives the
    * entrenchment loop #372 is about — retrieved, bumped, more likely retrieved.
    * This records an independent OBSERVATION, which is the strongest evidence
    * available that a fact is durable, and it must not be swept up by the cap
@@ -1016,14 +1064,11 @@ export class RAGStore {
     memory.observedCount = (memory.observedCount ?? 0) + 1;
     memory.source = source;
     memory.lastAccessed = now;
-    const extensionDays = Math.min(
-      this.ragTtlDays,
-      this.ragTtlDays * 0.5 + Math.log2(memory.observedCount + 1) * 7,
+    extendExpiry(
+      memory,
+      Math.min(this.ragTtlDays, this.ragTtlDays * 0.5 + Math.log2(memory.observedCount + 1) * 7),
+      nowMs,
     );
-    const newExpiry = nowMs + extensionDays * 86400000;
-    if (!memory.expiresAt || newExpiry > new Date(memory.expiresAt).getTime()) {
-      memory.expiresAt = new Date(newExpiry).toISOString();
-    }
   }
 
   /**
