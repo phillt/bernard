@@ -47,7 +47,6 @@ vi.mock('../embeddings.js', async () => {
   };
 });
 import * as fs from 'node:fs';
-import * as fs from 'node:fs';
 import {
   RETRIEVAL_CORPUS,
   RETRIEVAL_SHAPES,
@@ -112,45 +111,34 @@ import { getDomainIds } from '../domains.js';
 const K = 10;
 
 /**
- * Committed baseline, measured on this corpus with **cosine-only** retrieval —
- * i.e. `bernard-1-0-0` as of #524, before #525/#526/#372 touch anything.
+ * Committed baseline, measured on this corpus with **cosine + BM25 fused by
+ * rarity-gated RRF** (#526). The cosine-only numbers it replaced are kept in
+ * the table below, because the delta is the evidence.
  *
  * **Recorded as a floor, not a target.** With the vectors committed these are
  * fully deterministic — there is no model to drift. The tolerance band is kept
  * for the case where the fixture corpus itself is extended, which shifts every
  * rate slightly; update the numbers deliberately, in the PR that moves them.
  *
- * The per-query ranks behind these numbers, for whoever changes them next:
+ * | shape | cosine only | + lexical | what moved |
+ * | --- | --- | --- | --- |
+ * | identifier | 0.75 / 0.75 | **1.00 / 1.00** | both misses recovered to rank 1 |
+ * | paraphrase | 1.00 / 0.75 | 1.00 / 0.75 | unchanged — the control held |
+ * | near-duplicate | 1.00 / 1.00 | 1.00 / 1.00 | unchanged |
+ * | long-tail | 0.00 / 0.00 | **1.00 / 0.50** | reachable at all for the first time |
  *
- * | shape | query | rank |
- * | --- | --- | --- |
- * | identifier | `q-resolve-site-model` | 1 |
- * | identifier | `q-ts-2554` | **miss** |
- * | identifier | `q-stream-stall-env` | 1 |
- * | identifier | `q-applet-hosts-json` | 1 (bare-identifier control) |
- * | paraphrase | `q-when-to-ship` | 1 |
- * | paraphrase | `q-feedback-tone` | 4 |
- * | paraphrase | `q-morning-meeting` | 1 |
- * | near-duplicate | `q-weekly-slack` | 1 |
- * | near-duplicate | `q-weekly-email` | 1 |
- * | long-tail | `q-quota-4417` | **miss** |
- *
- * **The two misses are what #526 has to move**, and they fail for different
- * reasons — which is why both shapes exist. `q-ts-2554` misses because the
- * identifier is diluted among ordinary words and the decoys about the same
- * subject outrank the record that contains it verbatim. `q-quota-4417` misses
- * because the term sits past the embedder's 256-word-piece ceiling and is not
- * in the vector at all; a lexical index has no sequence limit, so it is
- * reachable by term match and by nothing else available today.
- *
- * `long-tail` at 0.00 is a floor that cannot regress — its value is as the
- * number a lexical channel must raise, not as a guard.
+ * `paraphrase` holding is not a formality. Ungated fusion recovered the same
+ * identifier misses **and** collapsed paraphrase MRR to 0.22, because a
+ * paraphrase query shares only ordinary words with its answer and BM25's tail
+ * of weak matches took ranks dense retrieval had right. No RRF constant and no
+ * channel weight separated the two; the rarity gate did. That row is the one
+ * that would catch the regression coming back.
  */
 const BASELINE: Record<RetrievalShape, { recall: number; mrr: number }> = {
-  identifier: { recall: 0.75, mrr: 0.75 },
+  identifier: { recall: 1.0, mrr: 1.0 },
   paraphrase: { recall: 1.0, mrr: 0.75 },
   'near-duplicate': { recall: 1.0, mrr: 1.0 },
-  'long-tail': { recall: 0.0, mrr: 0.0 },
+  'long-tail': { recall: 1.0, mrr: 0.5 },
 };
 
 /** Absolute tolerance on a rate. Generous enough for a patch-level model change. */
