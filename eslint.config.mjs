@@ -90,6 +90,26 @@ export default tseslint.config(
     },
   },
 
+  // Relaxed rules for eval/build scripts.
+  //
+  // `scripts/` was outside every gate until #524, so nothing had ever linted
+  // it. It is now in `npm run lint`, and the 32 errors that surfaced were all
+  // `no-explicit-any` — which `src/` itself only WARNS on, and which test files
+  // turn off entirely. These scripts stub model shapes and walk agent history
+  // the same way a test does, so they get the test treatment: it is the same
+  // judgment the repo already made, applied to the same kind of code, rather
+  // than a new exemption invented to make a gate pass.
+  {
+    files: ["scripts/**/*.{ts,tsx,mjs}"],
+    rules: {
+      "@typescript-eslint/no-explicit-any": "off",
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
+      ],
+    },
+  },
+
   // Relaxed rules for test files (both .ts and .tsx)
   {
     files: ["src/**/*.test.ts", "src/**/*.test.tsx"],

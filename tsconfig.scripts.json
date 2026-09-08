@@ -1,0 +1,26 @@
+{
+  // Typechecks `scripts/` against the same rules as `src/`, with no emit.
+  //
+  // A separate config rather than widening the base `include`, because the base
+  // compiles: `rootDir` is `src` and `outDir` is `dist`, so adding `scripts/**`
+  // there would emit `dist/scripts/…` and change what ships.
+  //
+  // It exists because `scripts/` was outside EVERY gate — not in `tsconfig`'s
+  // include, not in `eslint src/`, not in `format:check`'s globs, and so not in
+  // CI — and two of the three eval scripts had silently stopped compiling
+  // against the `src/` they import. A one-off repair leaves the next one to rot
+  // the same way.
+  //
+  // Test files stay excluded, deliberately and as in the base: several
+  // decisions in `src/` turn on `tsc` not seeing them (see the compile-time
+  // brand assertion in `framework/agents/user-message.ts`, which is written in
+  // production code precisely because a `@ts-expect-error` in a test would be
+  // compiled by nothing).
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": ["scripts/**/*", "src/**/*"],
+  "exclude": ["node_modules", "dist", "src/**/*.test.ts", "src/**/*.test.tsx"]
+}
