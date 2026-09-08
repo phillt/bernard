@@ -15,11 +15,17 @@ const mockMcpManager = vi.hoisted(() => ({
 
 const mockRagSearch = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 const mockRagFlush = vi.hoisted(() => vi.fn());
+// The fake carries the real store's surface: `scoped` (#511) returns the
+// receiver for an absent scope, and `retrievalDisabledReason` (#520) is what
+// `runHeadless` reads to write the reason to the run log, since `RAGStore`
+// deliberately does not print.
 const mockRagStoreCtor = vi.hoisted(() =>
   vi.fn(() => {
-    // `scoped` is part of the real store's surface, so the fake carries it and
-    // returns itself for an absent scope — exactly what `RAGStore.scoped` does.
-    const store: any = { search: mockRagSearch, flush: mockRagFlush };
+    const store: any = {
+      search: mockRagSearch,
+      flush: mockRagFlush,
+      retrievalDisabledReason: () => null,
+    };
     store.scoped = vi.fn(() => store);
     return store;
   }),
@@ -109,7 +115,11 @@ beforeEach(() => {
   mockRagFlush.mockClear();
   mockRunDefinition.mockResolvedValue({ formatted: 'done', stepLimitHit: false });
   mockRagStoreCtor.mockImplementation(() => {
-    const store: any = { search: mockRagSearch, flush: mockRagFlush };
+    const store: any = {
+      search: mockRagSearch,
+      flush: mockRagFlush,
+      retrievalDisabledReason: () => null,
+    };
     store.scoped = vi.fn(() => store);
     return store;
   });
@@ -241,7 +251,13 @@ describe('runHeadless', () => {
     const scopedSearch = vi.fn().mockResolvedValue([{ id: 'f1', text: 'scoped' }]);
     const scoped = vi.fn(() => ({ search: scopedSearch, flush: mockRagFlush }));
     mockRagStoreCtor.mockImplementation(
-      () => ({ search: mockRagSearch, flush: mockRagFlush, scoped }) as any,
+      () =>
+        ({
+          search: mockRagSearch,
+          flush: mockRagFlush,
+          scoped,
+          retrievalDisabledReason: () => null,
+        }) as any,
     );
     // (a bespoke fake here, because this case needs the two stores to differ)
     const buildInput = vi.fn().mockReturnValue({});
@@ -488,5 +504,38 @@ describe('runHeadless', () => {
     const res = await runHeadless(opts());
     expect(res.env.ctx).toBeDefined();
     expect(res.env.runId).toEqual(expect.any(String));
+  });
+});
+
+/**
+ * A dead embedding store is reported where an operator will see it (#520).
+ *
+ * `RAGStore` records the mismatch and does not print: search runs mid-turn and
+ * a raw stderr write into Ink's alternate screen buffer is corrupted and then
+ * overwritten, so the warning made "loud enough to be seen" was the one least
+ * likely to be. Each front end surfaces it in its own channel — the REPL pushes
+ * a transcript notice, and this writes it to the run log, which for cron is the
+ * job log. Without it an unattended job answers worse, forever, silently.
+ */
+describe('runHeadless reports disabled retrieval', () => {
+  it('writes the reason to the run log', async () => {
+    mockRagStoreCtor.mockImplementation(() => {
+      const store: any = {
+        search: mockRagSearch,
+        flush: mockRagFlush,
+        retrievalDisabledReason: () => 'written by other/model at 768',
+      };
+      store.scoped = vi.fn(() => store);
+      return store;
+    });
+    const log = vi.fn();
+    await runHeadless(opts({ ragQuery: 'why', log }));
+    expect(log.mock.calls.flat().join(' ')).toContain('written by other/model at 768');
+  });
+
+  it('says nothing when retrieval is healthy', async () => {
+    const log = vi.fn();
+    await runHeadless(opts({ ragQuery: 'why', log }));
+    expect(log.mock.calls.flat().join(' ')).not.toContain('retrieval is disabled');
   });
 });

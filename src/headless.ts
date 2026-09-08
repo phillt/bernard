@@ -322,6 +322,14 @@ export async function runHeadless<TInput, TFormatted>(
   }
 
   const ragResults = await ragSearch;
+  // A model swap silently destroys retrieval (#520). `RAGStore` records the
+  // mismatch and does not print it — a raw stderr write is the wrong channel
+  // for the REPL, which owns the terminal — so each front end surfaces it in
+  // its own: the REPL pushes a transcript notice, and here it goes to the run
+  // log, which for cron is the job log an operator reads later. Without it an
+  // unattended job would answer worse, forever, and say nothing.
+  const retrievalOff = ragStore?.retrievalDisabledReason();
+  if (retrievalOff) log(`Memory retrieval is disabled. ${retrievalOff}`);
   if (ragResults && ragResults.length > 0) {
     debugLog(`${debugLabel}:rag`, {
       runId,

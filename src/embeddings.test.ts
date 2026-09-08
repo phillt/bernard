@@ -81,3 +81,52 @@ describe('getEmbeddingProvider', () => {
     expect(results[1][0]).toBe(2);
   });
 });
+
+describe('the model is identifiable, and the ceiling is visible (#520)', () => {
+  it('names the model that produced its vectors', async () => {
+    // Without this the question "which model wrote this store?" is
+    // unanswerable from disk, which is why a swap was silent.
+    const { getEmbeddingProvider, EMBEDDING_MODEL_ID } = await import('./embeddings.js');
+    const provider = await getEmbeddingProvider();
+    if (!provider) return; // no model cached in this environment
+    expect(provider.modelId()).toBe(EMBEDDING_MODEL_ID);
+  });
+
+  it('states the sequence limit in word pieces, not characters', async () => {
+    // 256, not the 512 #520 assumes — and #515/#517/#518 are being shaped
+    // around this number, so it is worth pinning rather than inferring.
+    const { EMBEDDING_MAX_WORD_PIECES, MAX_EMBED_CHARS } = await import('./embeddings.js');
+    expect(EMBEDDING_MAX_WORD_PIECES).toBe(256);
+    expect(MAX_EMBED_CHARS).toBe(1024);
+  });
+
+  it('warns once when input is past the ceiling', async () => {
+    const logger = await import('./logger.js');
+    const spy = vi.spyOn(logger, 'debugLog');
+    const { getEmbeddingProvider, MAX_EMBED_CHARS, _resetEmbeddingProvider } =
+      await import('./embeddings.js');
+    _resetEmbeddingProvider();
+    const provider = await getEmbeddingProvider();
+    if (!provider) return;
+    spy.mockClear();
+    await provider.embed(['x'.repeat(MAX_EMBED_CHARS + 1)]);
+    await provider.embed(['y'.repeat(MAX_EMBED_CHARS + 1)]);
+    const warns = spy.mock.calls.filter((c) => c[0] === 'embeddings:truncated');
+    // Once per process, because this runs in a loop over every fact.
+    expect(warns).toHaveLength(1);
+    spy.mockRestore();
+  });
+
+  it('stays quiet for input the model can actually read', async () => {
+    const logger = await import('./logger.js');
+    const spy = vi.spyOn(logger, 'debugLog');
+    const { getEmbeddingProvider, _resetEmbeddingProvider } = await import('./embeddings.js');
+    _resetEmbeddingProvider();
+    const provider = await getEmbeddingProvider();
+    if (!provider) return;
+    spy.mockClear();
+    await provider.embed(['a short fact']);
+    expect(spy.mock.calls.filter((c) => c[0] === 'embeddings:truncated')).toHaveLength(0);
+    spy.mockRestore();
+  });
+});
