@@ -163,6 +163,7 @@ vi.mock('../memory.js', () => ({
 const mockRagSearch = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 const mockRagStoreInstance = vi.hoisted(() => ({
   search: mockRagSearch,
+  flush: vi.fn(),
 }));
 
 vi.mock('../rag.js', () => ({

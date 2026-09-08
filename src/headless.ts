@@ -336,6 +336,10 @@ export async function runHeadless<TInput, TFormatted>(
   } finally {
     if (timer) clearTimeout(timer);
     opts.abortSignal?.removeEventListener('abort', onCallerAbort);
+    // The store lives and dies with this run, so its own `finally` is the
+    // right exit hook — a cron daemon runs many of these and never exits
+    // between them (#533).
+    ragStore?.flush();
     await mcpManager.close();
   }
 }
