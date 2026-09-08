@@ -1,5 +1,5 @@
 import type { CoreMessage, Tool } from 'ai';
-import { attachTo } from './user-message.js';
+import { buildBriefUserMessage } from './user-message.js';
 import type { WithAttachments } from './user-message.js';
 import { createDateTimeTool } from '../../tools/datetime.js';
 import { createFileTools } from '../../tools/file.js';
@@ -106,15 +106,15 @@ export const pacPlannerDefinition: AgentDefinition<PacPlannerInput, string> = {
   },
 
   buildUserMessage(input): CoreMessage {
-    const parts: string[] = [`Task: ${input.task}`];
-    if (input.context) parts.push(`Context: ${input.context}`);
-    if (input.priorPlan) {
-      parts.push(`Prior plan (rejected by Critic):\n${input.priorPlan}`);
-    }
-    if (input.criticFeedback) {
-      parts.push(`Critic feedback to address:\n${input.criticFeedback}`);
-    }
-    return attachTo(parts.join('\n\n'), input.attachments);
+    return buildBriefUserMessage({
+      task: input.task,
+      sections: [
+        { label: 'Context', body: input.context ?? '' },
+        { label: 'Prior plan (rejected by Critic)', body: input.priorPlan ?? '', block: true },
+        { label: 'Critic feedback to address', body: input.criticFeedback ?? '', block: true },
+      ],
+      attachments: input.attachments,
+    });
   },
 
   hooks(_ctx, input) {

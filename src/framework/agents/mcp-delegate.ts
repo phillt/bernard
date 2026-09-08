@@ -1,5 +1,5 @@
 import type { CoreMessage, Tool } from 'ai';
-import { buildTaskUserMessage } from './user-message.js';
+import { buildDispatchUserMessage, type DispatchInput } from './user-message.js';
 import { appendActivitySummary } from '../../tools/activity-summary.js';
 
 /**
@@ -33,13 +33,9 @@ export const MCP_DELEGATE_STEP_RATIO = 0.5;
  * `ask_user`) so the definition itself stays store-free — unlike
  * {@link toolWrapperDefinition}, which fetches its specialist from disk.
  */
-export interface McpDelegateInput {
+export interface McpDelegateInput extends DispatchInput {
   /** The MCP server this helper operates (used only for logging/labels). */
   server: string;
-  /** The natural-language task the main agent delegated. */
-  task: string;
-  /** Optional extra context threaded from the main agent. */
-  context?: string;
   /** Pool slot id, for output-prefix routing. */
   slotId: number;
   /** Scoped registry: this server's MCP tools + `ask_user`. */
@@ -93,7 +89,7 @@ export const mcpDelegateDefinition: AgentDefinition<McpDelegateInput, string> = 
   },
 
   buildUserMessage(input): CoreMessage {
-    return buildTaskUserMessage(input);
+    return buildDispatchUserMessage(input);
   },
 
   hooks(_ctx, input) {

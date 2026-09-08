@@ -1,5 +1,5 @@
 import type { CoreMessage, Tool } from 'ai';
-import { attachTo } from './user-message.js';
+import { buildBriefUserMessage } from './user-message.js';
 import type { WithAttachments } from './user-message.js';
 import { appendActivitySummary } from '../../tools/activity-summary.js';
 import { createTools } from '../../tools/index.js';
@@ -103,10 +103,14 @@ export const pacActorDefinition: AgentDefinition<PacActorInput, string> = {
   },
 
   buildUserMessage(input): CoreMessage {
-    const parts: string[] = [`Task: ${input.task}`];
-    if (input.context) parts.push(`Context: ${input.context}`);
-    parts.push(`Plan to execute:\n${input.plan}`);
-    return attachTo(parts.join('\n\n'), input.attachments);
+    return buildBriefUserMessage({
+      task: input.task,
+      sections: [
+        { label: 'Context', body: input.context ?? '' },
+        { label: 'Plan to execute', body: input.plan, block: true },
+      ],
+      attachments: input.attachments,
+    });
   },
 
   hooks(_ctx, input) {

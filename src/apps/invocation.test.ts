@@ -22,10 +22,27 @@ function registryReturning(result: unknown): AppRegistry {
 
 describe('renderArgsBlock', () => {
   it('labels the args as caller-supplied data and fences them', () => {
-    const block = renderArgsBlock({ question: 'why is the sky blue' });
+    const block = renderArgsBlock({ question: 'why is the sky blue' }).text;
     expect(block).toContain('DATA supplied by an external caller');
     expect(block).toContain('```json');
     expect(block).toContain(JSON.stringify({ question: 'why is the sky blue' }));
+  });
+
+  it('mints a value, not a bare string (#509)', () => {
+    // The two-channel split was held by a comment in `apps/dispatch.ts`, with
+    // both channels typed `string` — so the only thing between an applet's
+    // arguments and the instruction slot was that nobody had written the
+    // assignment.
+    //
+    // The assignability half is asserted in `user-message.ts` rather than here,
+    // and deliberately: `tsconfig.json` excludes `src/**/*.test.ts`, so a
+    // `@ts-expect-error` in this file is compiled by nothing and would assert
+    // nothing while looking like a guard. What this pins is the runtime shape —
+    // that the mint returns a carrier and not the string itself, which is what
+    // makes the nominal type reachable at all.
+    const data = renderArgsBlock({ q: 'x' });
+    expect(typeof data).toBe('object');
+    expect(typeof data.text).toBe('string');
   });
 });
 
