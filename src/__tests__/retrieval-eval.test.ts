@@ -1,4 +1,51 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
+
+/**
+ * **Committed vectors, so this eval is genuinely offline.**
+ *
+ * `setup-test-home` points `BERNARD_HOME` at a fresh directory per test file,
+ * and `MODELS_DIR` derives from it — so calling the real embedder here found an
+ * empty cache and re-downloaded 23 MB of MiniLM from the HuggingFace CDN on
+ * **every** `npm test` run, in CI as well as locally. Measured: 10.6 s inside
+ * the suite, the second slowest of 287 files, for 8 tests. No test on
+ * `bernard-1-0-0` had ever touched the embedder, so this file would have been
+ * the one that gave CI a network dependency.
+ *
+ * The corpus and query texts are fixed constants and embedding is
+ * deterministic, so the vectors are generated once and committed (71 × 384
+ * float32, 142 KB base64). That makes the file offline and ~0 ms, and it
+ * removes the reason the tolerance band existed: with the model pinned there is
+ * no "unrelated MiniLM patch release" to absorb.
+ *
+ * Keyed by TEXT rather than by index: editing a fixture string then misses
+ * loudly instead of silently shifting every vector by one. Regenerate with the
+ * snippet in `vectors.json`'s sibling comment when the corpus changes.
+ */
+vi.mock('../embeddings.js', async () => {
+  const actual = await vi.importActual<typeof import('../embeddings.js')>('../embeddings.js');
+  const fixture = (await import('./fixtures/retrieval/vectors.json', { with: { type: 'json' } }))
+    .default as { model: string; dimensions: number; keys: string[]; base64: string };
+  const flat = new Float32Array(Buffer.from(fixture.base64, 'base64').buffer);
+  const byText = new Map(
+    fixture.keys.map((k, i) => [
+      k,
+      Array.from(flat.subarray(i * fixture.dimensions, (i + 1) * fixture.dimensions)),
+    ]),
+  );
+  return {
+    ...actual,
+    getEmbeddingProvider: async () => ({
+      embed: async (texts: string[]) =>
+        texts.map((t) => {
+          const v = byText.get(t);
+          if (!v) throw new Error(`retrieval eval: no committed vector for ${JSON.stringify(t)}`);
+          return v;
+        }),
+      dimensions: () => fixture.dimensions,
+      modelId: () => fixture.model,
+    }),
+  };
+});
 import * as fs from 'node:fs';
 import {
   RETRIEVAL_CORPUS,
@@ -18,9 +65,17 @@ import { getDomainIds } from '../domains.js';
  * ## Why this is a test and not a `scripts/eval-*.ts`
  *
  * #524 assumes an eval means real API calls behind `BERNARD_EVAL=1`. For
- * *retrieval* it does not: the embedder is local and free. Measured —
- * **196 ms** to load MiniLM warm, **209 ms** to embed 200 chunks, **2 ms** per
- * query. The whole file costs well under a second and touches no network.
+ * *retrieval* it does not — no model is called at all. With the vectors
+ * committed (see the mock above) the whole file runs in **19 ms** with no
+ * network.
+ *
+ * An earlier version of this comment claimed "196 ms to load MiniLM warm … well
+ * under a second and touches no network", measured on a warm developer cache.
+ * All three were wrong as the file was wired: the per-file throwaway
+ * `BERNARD_HOME` meant an empty model cache, so it re-downloaded 23 MB every
+ * run and cost **10.6 s** inside the suite. The claim is kept here as a
+ * correction rather than deleted, because it is the shape of mistake a
+ * measurement is supposed to prevent and it took a review pass to catch.
  *
  * That changes what the baseline is worth. A number somebody runs by hand once
  * is an opinion by the following week; a number CI re-derives on every PR is a
@@ -60,11 +115,10 @@ const K = 10;
  * rarity-gated RRF** (#526). The cosine-only numbers it replaced are kept in
  * the table below, because the delta is the evidence.
  *
- * **Recorded as a floor, not a target.** Embedding is deterministic for a fixed
- * model, so these do not drift on their own; the tolerance band keeps the file
- * from failing on an unrelated MiniLM patch release while still catching a real
- * ranking regression. Update deliberately, in the PR that moves them, with the
- * new numbers in the message.
+ * **Recorded as a floor, not a target.** With the vectors committed these are
+ * fully deterministic — there is no model to drift. The tolerance band is kept
+ * for the case where the fixture corpus itself is extended, which shifts every
+ * rate slightly; update the numbers deliberately, in the PR that moves them.
  *
  * | shape | cosine only | + lexical | what moved |
  * | --- | --- | --- | --- |
