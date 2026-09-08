@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 import { SPECIALISTS_DIR } from './paths.js';
 import { RESERVED_NAMES } from './reserved-names.js';
@@ -15,6 +16,7 @@ import {
 } from './specialist-authority.js';
 import type { ModelParams } from './providers/model-params.js';
 import type { RoleId } from './model-roles.js';
+import { debugLog } from './logger.js';
 
 // Re-exported so existing importers (e.g. the `/specialists` UI grouping) keep
 // resolving it from this module; the authoritative definition lives in
@@ -249,6 +251,9 @@ const ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/;
 /** Marker file that prevents re-seeding bundled specialists on every start. */
 const SEED_MARKER = '.seeded-v1';
 
+/** Prefix of the single bundle-definition marker. See `refreshBundledDefinitions`. */
+const DEFINITION_MARKER_PREFIX = '.definitions-';
+
 /**
  * Bundled specialists added after the original `.seeded-v1` set. Seeded
  * additively (each via its own marker) so existing installs pick them up
@@ -264,6 +269,69 @@ export const POST_V1_BUNDLED = [
   'applet-ux-planner.json',
   'applet-data-planner.json',
 ];
+
+/**
+ * The fields a bundled record's SHIPPED copy owns, and the ones it does not.
+ *
+ * Everything not listed here is the user's install: `goodExamples` and
+ * `badExamples` are written by the correction flow — the one channel
+ * `permissionsFor` deliberately leaves open on a bundled record — and
+ * `createdAt` / `disabled` are facts about this machine.
+ */
+const LEARNED_FIELDS = ['goodExamples', 'badExamples', 'createdAt', 'disabled'] as const;
+
+/**
+ * Merges a shipped bundled record over an installed one, keeping what was
+ * learned (#519).
+ *
+ * **Bundled specialists could not be updated at all**, and that is the blocker
+ * #519 does not name. `copyBundledJsonIfAbsent` returns early when the file
+ * exists — "never overwrite a user-edited copy" — `seedOnce` returns early once
+ * its marker is written, and `permissionsFor` gives builtins
+ * `canEditDefinition: false`, so there is no runtime path either. Editing
+ * `specialist-creator.json` in place therefore reaches **only fresh installs**.
+ * A `-v2` filename plus a `POST_V1_BUNDLED` entry reaches an existing one, but
+ * leaves the old record on disk beside it: two creators with one job, which is
+ * worse than the divergence being fixed.
+ *
+ * Overwriting is safe here precisely BECAUSE of the authority model rather than
+ * in spite of it: `canEditDefinition: false` means a user cannot legitimately
+ * have edited the definition, and `appendExamples` is the one carve-out — which
+ * is exactly what this preserves.
+ *
+ * Pure and exported so the merge rule can be tested without a filesystem —
+ * which it briefly was not: it stamped `updatedAt` itself, taking on
+ * `writeRecord`'s job and becoming non-deterministic in the process. The write
+ * side owns that.
+ */
+export function mergeBundledDefinition(
+  shipped: Record<string, unknown>,
+  installed: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...shipped };
+  for (const field of LEARNED_FIELDS) {
+    if (installed[field] !== undefined) merged[field] = installed[field];
+    else delete merged[field];
+  }
+  return merged;
+}
+
+/** True when the shipped DEFINITION differs from what is installed. */
+function definitionDiffers(
+  shipped: Record<string, unknown>,
+  installed: Record<string, unknown>,
+): boolean {
+  const strip = (r: Record<string, unknown>): string => {
+    const copy = { ...r };
+    for (const field of LEARNED_FIELDS) delete copy[field];
+    delete copy.updatedAt;
+    // Key order is not a difference. `JSON.stringify` over sorted keys is
+    // enough here — these records are one level of plain values plus arrays,
+    // and the arrays that matter are all in LEARNED_FIELDS.
+    return JSON.stringify(copy, Object.keys(copy).sort());
+  };
+  return strip(shipped) !== strip(installed);
+}
 
 /**
  * Disk-backed store for named specialists (reusable expert profiles).
@@ -307,8 +375,98 @@ export class SpecialistStore {
           copyBundledJsonIfAbsent(bundledDir, SPECIALISTS_DIR, file),
         );
       }
+      this.refreshBundledDefinitions(bundledDir);
     } catch {
       // seed is best-effort; never block startup
+    }
+  }
+
+  /**
+   * Re-seeds the DEFINITION half of an installed bundled record when the
+   * shipped copy has changed (#519).
+   *
+   * This is what makes a fix to a bundled prompt reach an existing install
+   * instead of accumulating `-v2` files. Keyed on a hash of the shipped bytes,
+   * so it runs once per shipped change and never on an unchanged one — and the
+   * marker is per id, so one record's edit does not re-write another's.
+   *
+   * Only records that already EXIST are touched. A bundled specialist the user
+   * deleted stays deleted: `POST_V1_BUNDLED`'s own markers already carry that
+   * promise, and quietly resurrecting one here would break it.
+   */
+  private refreshBundledDefinitions(bundledDir: string): void {
+    let files: string[];
+    try {
+      files = fs.readdirSync(bundledDir).filter((f) => f.endsWith('.json'));
+    } catch {
+      return;
+    }
+
+    // ONE marker for the whole bundle, keyed on a stat digest of every shipped
+    // file. Two reasons, and neither is cosmetic.
+    //
+    // A per-(id, hash) marker leaves the previous hash's dotfile behind on every
+    // shipped edit, forever, in the directory `list()` and `getSummaries()`
+    // `readdir` — unbounded, unlike the `.seeded-<id>` markers it sits beside.
+    // And the hash had to come from the file's CONTENT, so the read could not be
+    // skipped: 77 KB re-read and SHA-256'd on every seeding construction, which
+    // is every REPL start, every `assembleContext`, and the `bernard script`
+    // path #452 got down to 17 ms. Measured at 0.202 ms warm.
+    //
+    // Stat metadata instead of bytes: contents cannot change without `mtimeMs`
+    // or `size` moving in any realistic install, which is the same assumption
+    // `MemoryStore`'s read cache already makes and documents. Steady state is
+    // now 13 `stat`s and one `existsSync`, with no file read at all.
+    const digest = createHash('sha256');
+    for (const file of files) {
+      try {
+        const st = fs.statSync(path.join(bundledDir, file));
+        digest.update(`${file}:${st.mtimeMs}:${st.size}\n`);
+      } catch {
+        return; // Cannot characterise the bundle; leave every record alone.
+      }
+    }
+    const hash = digest.digest('hex').slice(0, 12);
+    const marker = path.join(SPECIALISTS_DIR, `${DEFINITION_MARKER_PREFIX}${hash}`);
+
+    seedOnce(marker, () => {
+      // Only reached when the bundle moved, so the sweep and the reads below
+      // cost nothing in steady state.
+      this.pruneDefinitionMarkers(marker);
+      for (const file of files) {
+        try {
+          const dest = path.join(SPECIALISTS_DIR, file);
+          if (!fs.existsSync(dest)) continue;
+          const shipped = JSON.parse(
+            fs.readFileSync(path.join(bundledDir, file), 'utf-8'),
+          ) as Record<string, unknown>;
+          const installed = JSON.parse(fs.readFileSync(dest, 'utf-8')) as Record<string, unknown>;
+          if (!definitionDiffers(shipped, installed)) continue;
+          // Through `writeRecord`, the class's own on-disk convention: it
+          // stamps `updatedAt`, pretty-prints and writes atomically to
+          // `<id>.json`, which this used to re-implement inline. A second copy
+          // means the re-seed keeps writing the old shape the day that method
+          // gains anything. The filename equals the id by the store's own
+          // invariant, so the path is the same either way.
+          this.writeRecord(mergeBundledDefinition(shipped, installed) as unknown as Specialist);
+          debugLog('specialists:definition-refreshed', { id: file.replace(/\.json$/, ''), hash });
+        } catch {
+          // Per-file, so one corrupt record cannot stop the rest.
+        }
+      }
+    });
+  }
+
+  /** Drops markers from earlier bundle versions, so they cannot accumulate. */
+  private pruneDefinitionMarkers(keep: string): void {
+    try {
+      for (const entry of fs.readdirSync(SPECIALISTS_DIR)) {
+        if (!entry.startsWith(DEFINITION_MARKER_PREFIX)) continue;
+        const full = path.join(SPECIALISTS_DIR, entry);
+        if (full !== keep) fs.unlinkSync(full);
+      }
+    } catch {
+      // Best-effort tidying; never block seeding.
     }
   }
 

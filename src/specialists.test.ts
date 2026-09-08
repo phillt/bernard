@@ -712,6 +712,144 @@ describe('SpecialistStore', () => {
     });
   });
 
+  /**
+   * The re-seed is the heart of #519, and `mergeBundledDefinition`'s own tests
+   * only cover the pure merge. Two behaviours here are load-bearing and were
+   * untested: the change DETECTION, whose comparison a well-meaning
+   * simplification would break in one of two silent directions, and the
+   * existence gate, which is what keeps "a deleted bundled record stays
+   * deleted" true.
+   */
+  describe('bundled definition re-seed (#519)', () => {
+    const shipped = {
+      id: 'shell-wrapper',
+      name: 'Shell Wrapper',
+      description: 'd',
+      systemPrompt: 'NEW PROMPT',
+      guidelines: ['new rule'],
+      kind: 'tool-wrapper',
+    };
+
+    /**
+     * Routes reads by path and decides which markers already exist, so a test
+     * can put the store in exactly one of the three states that matter:
+     * unchanged, changed, or record-absent.
+     */
+    function arrange(opts: { installed?: object | null; refreshed?: boolean }): void {
+      _resetBuiltinSpecialistCache();
+      // `mtimeMs`/`size` because the bundle marker is keyed on stat metadata
+      // rather than on file contents — 13 stats and one `existsSync` in steady
+      // state instead of re-reading and hashing 77 KB on every construction.
+      vi.mocked(fs.statSync).mockReturnValue({
+        isDirectory: () => true,
+        mtimeMs: 1,
+        size: 1,
+      } as any);
+      vi.mocked(fs.readdirSync).mockReturnValue(['shell-wrapper.json'] as any);
+      vi.mocked(fs.existsSync).mockImplementation((p: any) => {
+        const path = String(p);
+        // The v1 and post-v1 seed markers exist, so only the refresh pass runs.
+        if (path.includes('.definitions-')) return Boolean(opts.refreshed);
+        if (path.includes('.seeded')) return true;
+        if (path.endsWith('shell-wrapper.json')) return opts.installed !== null;
+        return true;
+      });
+      vi.mocked(fs.readFileSync).mockImplementation((p: any) => {
+        const path = String(p);
+        if (path.includes('builtin-specialists')) return JSON.stringify(shipped) as any;
+        return JSON.stringify(opts.installed ?? {}) as any;
+      });
+    }
+
+    /** The record the refresh wrote, or `undefined` if it wrote nothing. */
+    function written(): any {
+      const call = vi
+        .mocked(fsUtils.atomicWriteFileSync)
+        .mock.calls.find((c) => String(c[0]).endsWith('shell-wrapper.json'));
+      return call ? JSON.parse(String(call[1])) : undefined;
+    }
+
+    it('rewrites an installed record when the shipped definition changed', () => {
+      // Without this, a fix to a bundled prompt reaches only fresh installs —
+      // which is the blocker #519 does not name and most of what this PR is.
+      arrange({
+        installed: {
+          ...shipped,
+          systemPrompt: 'OLD PROMPT',
+          guidelines: ['old rule'],
+          goodExamples: [{ input: 'learned', call: 'here' }],
+          createdAt: '2020-01-01T00:00:00.000Z',
+        },
+      });
+      new SpecialistStore();
+      const record = written();
+      expect(record.systemPrompt).toBe('NEW PROMPT');
+      // `appendExamples` is the one channel `permissionsFor` leaves open on a
+      // bundled record; overwriting it would discard the only user-specific
+      // thing a protected specialist can accumulate, silently, on an upgrade.
+      expect(record.goodExamples).toEqual([{ input: 'learned', call: 'here' }]);
+      expect(record.createdAt).toBe('2020-01-01T00:00:00.000Z');
+    });
+
+    it('writes nothing when the shipped definition is unchanged', () => {
+      // The false-positive direction: a comparison that always differs rewrites
+      // every bundled record on every startup, stamping `updatedAt` each time.
+      arrange({ installed: shipped });
+      new SpecialistStore();
+      expect(written()).toBeUndefined();
+    });
+
+    it('ignores key order, which is not a difference', () => {
+      arrange({
+        installed: {
+          kind: 'tool-wrapper',
+          guidelines: ['new rule'],
+          systemPrompt: 'NEW PROMPT',
+          description: 'd',
+          name: 'Shell Wrapper',
+          id: 'shell-wrapper',
+        },
+      });
+      new SpecialistStore();
+      expect(written()).toBeUndefined();
+    });
+
+    it('does not resurrect a bundled record the user deleted', () => {
+      // `POST_V1_BUNDLED`'s own markers already carry this promise. A refresh
+      // that recreated the file would break it, and quietly.
+      arrange({ installed: null });
+      new SpecialistStore();
+      expect(written()).toBeUndefined();
+    });
+
+    it('leaves exactly one marker behind, however many times the bundle moves', () => {
+      // The per-(id, hash) scheme left the previous hash's dotfile behind on
+      // every shipped edit, forever, in the directory `list()` and
+      // `getSummaries()` readdir — unbounded, unlike the `.seeded-<id>` markers
+      // it sits beside.
+      arrange({ installed: { ...shipped, systemPrompt: 'OLD PROMPT' } });
+      vi.mocked(fs.readdirSync).mockReturnValue([
+        'shell-wrapper.json',
+        '.definitions-oldhash1',
+        '.definitions-oldhash2',
+      ] as any);
+      new SpecialistStore();
+      const unlinked = vi.mocked(fs.unlinkSync).mock.calls.map((c) => String(c[0]));
+      expect(unlinked.some((u) => u.endsWith('.definitions-oldhash1'))).toBe(true);
+      expect(unlinked.some((u) => u.endsWith('.definitions-oldhash2'))).toBe(true);
+      // Never a real record.
+      expect(unlinked.some((u) => u.endsWith('shell-wrapper.json'))).toBe(false);
+    });
+
+    it('runs once per shipped change, not once per startup', () => {
+      // The marker is keyed on a hash of the shipped bytes, so an install that
+      // has already taken this version does no work at all.
+      arrange({ installed: { ...shipped, systemPrompt: 'OLD PROMPT' }, refreshed: true });
+      new SpecialistStore();
+      expect(written()).toBeUndefined();
+    });
+  });
+
   describe('bundled protection', () => {
     const bundledRecord = JSON.stringify({
       id: 'shell-wrapper',

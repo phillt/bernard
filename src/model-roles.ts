@@ -146,6 +146,32 @@ export const MODEL_ROLES: readonly ModelRole[] = [
 /** Every role id, in display order. Iterate this for lineup slots / editor. */
 export const ALL_ROLE_IDS: readonly RoleId[] = MODEL_ROLES.map((r) => r.id);
 
+/**
+ * The one rule about `role` and pins, stated once (#519).
+ *
+ * `specialist-creator` and `agent-builder` both create specialists and
+ * **disagreed about the single most important model-selection field**:
+ * `agent-builder` requires a role and forbids a pin, `specialist-creator`
+ * mentioned neither. That silence is not neutral — `createSpecialistTool`
+ * auto-assigns a policy-resolved `provider`/`model` when a create declares
+ * neither, so the older and more-used creator has been minting **persisted
+ * pins nobody chose**, which is precisely what the off-lineup guard exists to
+ * drop.
+ *
+ * A constant rather than two paragraphs, for the reason `PLAIN_LANGUAGE_RULE`
+ * is one: copies of a rule do not fail, they diverge, and the second one
+ * quietly stops meaning what the first does.
+ *
+ * **Unlike `PLAIN_LANGUAGE_RULE`, nothing interpolates this** — both copies are
+ * strings inside bundled JSON records, which cannot reference a TypeScript
+ * constant. So `bundled-manifest.test.ts` is what actually prevents the
+ * divergence, and this is the canonical text it checks both prompts against.
+ * Worth stating plainly: an exported symbol whose only importer is a test reads
+ * as dead, and deleting it would take the check with it.
+ */
+export const ROLE_NOT_PIN_RULE =
+  'Declare a `role`, never a `provider`/`model` pin. A role lets the active profile choose the model and keep choosing correctly when the profile changes; a pin you invented is the exact thing Bernard drops as stale, and it is the most confusing kind because nobody chose it. Declaring both is rejected outright.';
+
 /** Lookup a role definition by id. */
 export function getRole(id: RoleId): ModelRole {
   const r = MODEL_ROLES.find((x) => x.id === id);
