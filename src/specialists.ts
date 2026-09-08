@@ -525,6 +525,27 @@ export class SpecialistStore {
     return specialist;
   }
 
+  /**
+   * Applies one optional update, where a sentinel value means "remove this
+   * declaration" (#508).
+   *
+   * `undefined` means "don't change", so every clearable field needs a value
+   * that says "clear" — and there were five hand-rolled copies of the same
+   * three-line branch, differing only in the sentinel token, which is the shape
+   * in which a `0` gets pasted next to a `''`. #508's own roadmap promises more
+   * declarable fields, so this is the third edit each one would otherwise need.
+   */
+  private setOrClear<K extends keyof Specialist>(
+    record: Specialist,
+    field: K,
+    value: Specialist[K] | '' | undefined,
+    isClear: (v: NonNullable<typeof value>) => boolean,
+  ): void {
+    if (value === undefined) return;
+    if (isClear(value as NonNullable<typeof value>)) delete record[field];
+    else record[field] = value as Specialist[K];
+  }
+
   /** Stamps `updatedAt` and atomically persists a specialist record. */
   private writeRecord(specialist: Specialist): void {
     specialist.updatedAt = new Date().toISOString();
@@ -553,20 +574,8 @@ export class SpecialistStore {
     if (updates.systemPrompt !== undefined) specialist.systemPrompt = updates.systemPrompt;
     if (updates.guidelines !== undefined) specialist.guidelines = updates.guidelines;
     // Empty string clears the override; undefined means "don't change"
-    if (updates.provider !== undefined) {
-      if (updates.provider === '') {
-        delete specialist.provider;
-      } else {
-        specialist.provider = updates.provider;
-      }
-    }
-    if (updates.model !== undefined) {
-      if (updates.model === '') {
-        delete specialist.model;
-      } else {
-        specialist.model = updates.model;
-      }
-    }
+    this.setOrClear(specialist, 'provider', updates.provider, (v) => v === '');
+    this.setOrClear(specialist, 'model', updates.model, (v) => v === '');
     // One-way: bind an unbound record, never re-bind or unbind. Enforced in
     // the store rather than only at the tool, since this is the property the
     // field exists for.
@@ -580,13 +589,7 @@ export class SpecialistStore {
     }
     // `''` clears the role, matching how provider/model clear — `undefined`
     // means "don't change", so there has to be a way to say "remove it".
-    if (updates.role !== undefined) {
-      if (updates.role === '') {
-        delete specialist.role;
-      } else {
-        specialist.role = updates.role;
-      }
-    }
+    this.setOrClear(specialist, 'role', updates.role, (v) => v === '');
     // An empty object clears params; undefined means "don't change".
     if (updates.params !== undefined) {
       if (Object.keys(updates.params).length === 0) {
@@ -597,18 +600,10 @@ export class SpecialistStore {
     }
     if (updates.kind !== undefined) specialist.kind = updates.kind;
     if (updates.targetTools !== undefined) specialist.targetTools = updates.targetTools;
-    if (updates.stepRatio !== undefined) {
-      if (updates.stepRatio === 0) delete specialist.stepRatio;
-      else specialist.stepRatio = updates.stepRatio;
-    }
-    if (updates.strategy !== undefined) {
-      if (updates.strategy === '') delete specialist.strategy;
-      else specialist.strategy = updates.strategy;
-    }
-    if (updates.toolSurface !== undefined) {
-      if (updates.toolSurface === '') delete specialist.toolSurface;
-      else specialist.toolSurface = updates.toolSurface;
-    }
+    const blank = (v: unknown): boolean => v === '';
+    this.setOrClear(specialist, 'stepRatio', updates.stepRatio, (v) => v === 0);
+    this.setOrClear(specialist, 'strategy', updates.strategy, blank);
+    this.setOrClear(specialist, 'toolSurface', updates.toolSurface, blank);
     if (updates.goodExamples !== undefined) specialist.goodExamples = updates.goodExamples;
     if (updates.badExamples !== undefined) specialist.badExamples = updates.badExamples;
     if (updates.structuredOutput !== undefined)

@@ -221,6 +221,19 @@ describe('the definitions consume the profile', () => {
 });
 
 describe('specialist spend is attributed to a specialist site (#299/#508)', () => {
+  it('EVERY definition declares a site, which is what the fix actually is', () => {
+    // The bug was `def.site ?? 'main'`: an optional field whose omission
+    // silently billed a whole definition's spend to the main layer. Adding two
+    // declarations fixes two definitions; making the field required is what
+    // stops the tenth one repeating it. `tsc` excludes tests, so this asserts
+    // it on the real registry rather than relying on the type alone.
+    registerBuiltinDefinitions();
+    for (const id of definitions.ids()) {
+      expect(definitions.get(id).site, id).toBeDefined();
+    }
+    expect(mcpDelegateDefinition.site).toBeDefined();
+  });
+
   it('specialist and tool-wrapper both declare a site', () => {
     // Without one, `resolveModel` returns no `site` key and `run.ts`'s
     // `def.site ?? 'main'` default stands — so every specialist's spend folded

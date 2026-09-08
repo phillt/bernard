@@ -262,7 +262,7 @@ export async function runDefinition<TInput, TFormatted>(
     // wins over a definition's fixed label (PAC phases), then the resolved
     // model site, then `def.site`, then the `main` layer. Without an override an
     // off-main dispatch folds into `main` — the gap #299 closes.
-    site: opts.telemetrySite ?? def.telemetrySite ?? resolved.site ?? def.site ?? 'main',
+    site: opts.telemetrySite ?? def.telemetrySite ?? resolved.site ?? def.site,
     provider: resolved.provider,
     modelName: resolved.modelName,
   };
@@ -534,9 +534,9 @@ function resolveModel<TInput, TFormatted>(
     // it here so ledger attribution (#258) still labels the dispatch. Tier stays
     // whatever the resolver set (typically undefined → bucketed `pinned`).
     const custom = def.resolveModel(ctx, input, overrides);
-    return { site: def.site ?? 'main', ...custom };
+    return { site: def.site, ...custom };
   }
-  const site = resolveSiteModel(ctx.config, def.site ?? 'main', { overrides });
+  const site = resolveSiteModel(ctx.config, def.site, { overrides });
   return {
     model: site.model,
     providerOptions: site.providerOptions,
@@ -544,7 +544,7 @@ function resolveModel<TInput, TFormatted>(
     provider: site.provider,
     modelName: site.modelName,
     tier: site.tier,
-    site: def.site ?? 'main',
+    site: def.site,
   };
 }
 

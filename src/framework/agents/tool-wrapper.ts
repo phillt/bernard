@@ -8,7 +8,7 @@ import type { AgentContext } from '../context.js';
 import type { Specialist } from '../../specialists.js';
 import { debugLog } from '../../logger.js';
 import type { ToolNameAliasResolver } from '../../mcp-names.js';
-import { resolveSiteModel } from '../../model-policy.js';
+import { resolveSiteModel, type ModelSite } from '../../model-policy.js';
 import { osPromptBlock } from '../../os-info.js';
 import {
   isWrapperParseFailure,
@@ -61,7 +61,7 @@ export interface ToolWrapperInput extends WithAttachments {
  * will read the prompt.
  */
 function suppressesInlineMarkers(ctx: AgentContext, specialist: Specialist): boolean {
-  const site = resolveSiteModel(ctx.config, 'tool-wrapper', { specialist });
+  const site = resolveSiteModel(ctx.config, SITE, { specialist });
   const sdk = ctx.config.customProviders?.[site.provider]?.sdk;
   return !allowsInlineMarkers(getModelProfile(site.provider, site.modelName, sdk).family);
 }
@@ -75,6 +75,14 @@ function suppressesInlineMarkers(ctx: AgentContext, specialist: Specialist): boo
  * Model resolution honours `specialist.provider` / `specialist.model` (looked
  * up live so runtime edits are picked up).
  */
+/**
+ * Written once, read twice: the definition declares it for ledger attribution
+ * and `resolveModel` passes it to `resolveSiteModel` for tiering. Two literals
+ * that must agree, and if they drift the model resolves against a different
+ * site than the spend is billed to — silently.
+ */
+const SITE: ModelSite = 'tool-wrapper';
+
 export const toolWrapperDefinition: AgentDefinition<ToolWrapperInput, WrapperResult> = {
   id: 'tool-wrapper',
   historyMode: 'ephemeral',
@@ -91,7 +99,7 @@ export const toolWrapperDefinition: AgentDefinition<ToolWrapperInput, WrapperRes
   // it, `resolveModel` returns no `site` key and `run.ts` defaults to `'main'`,
   // so any caller that forgets the override attributes wrapper spend to the
   // main layer.
-  site: 'tool-wrapper',
+  site: SITE,
   repairLabel: 'tool-wrapper',
   prefix: (input) => `wrap:${input.slotId}`,
   recordId: (input) => input.specialistId,

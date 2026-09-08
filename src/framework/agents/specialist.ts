@@ -1,7 +1,7 @@
 import type { CoreMessage, Tool } from 'ai';
 import { buildTaskUserMessage } from './user-message.js';
 import type { WithAttachments } from './user-message.js';
-import { resolveSiteModel } from '../../model-policy.js';
+import { resolveSiteModel, type ModelSite } from '../../model-policy.js';
 import { debugLog } from '../../logger.js';
 import { PlanStore } from '../../plan-store.js';
 import { capSubagentResult } from '../../tools/result-cap.js';
@@ -58,6 +58,14 @@ export interface SpecialistInput extends WithAttachments {
  * text-only on the final step. Strategy is `buildStrategy` with the historical
  * 0.25 enforcement ratio.
  */
+/**
+ * Written once, read twice: the definition declares it for ledger attribution
+ * and `resolveModel` passes it to `resolveSiteModel` for tiering. Two literals
+ * that must agree, and if they drift the model resolves against a different
+ * site than the spend is billed to — silently.
+ */
+const SITE: ModelSite = 'specialist';
+
 export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
   id: 'specialist',
   historyMode: 'ephemeral',
@@ -67,7 +75,7 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
   // closed for `tool-wrapper:<id>` and `mcp:<server>` and left open here. The
   // per-id `telemetrySite` that makes it readable comes from `specialist-run`,
   // the same way the wrapper's does; this is the fallback under it.
-  site: 'specialist',
+  site: SITE,
   repairLabel: 'specialist',
   prefix: (input) => `spec:${input.slotId}`,
 
@@ -146,7 +154,7 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
 
   resolveModel(ctx, input, overrides): ResolvedModel {
     const specialist = ctx.stores.specialists.get(input.specialistId);
-    const site = resolveSiteModel(ctx.config, 'specialist', { overrides, specialist });
+    const site = resolveSiteModel(ctx.config, SITE, { overrides, specialist });
     return {
       model: site.model,
       providerOptions: site.providerOptions,
