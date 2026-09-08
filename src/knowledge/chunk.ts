@@ -160,9 +160,13 @@ const ABBREVIATIONS = new Set([
 export function chunkText(source: string, opts: ChunkOptions = {}): Chunk[] {
   const target = opts.targetChars ?? CHUNK_TARGET_CHARS;
   const ceiling = opts.ceilingChars ?? CHUNK_CEILING_CHARS;
-  const overlapBudget = opts.overlapChars ?? CHUNK_OVERLAP_CHARS;
+  const code = opts.mode === 'code';
+  // Overlap borrows whole SENTENCES, which code does not have. Borrowing lines
+  // instead would carry a fragment of a statement into the next chunk, so code
+  // carries none: the ordinal is what stitches a window back together.
+  const overlapBudget = code ? 0 : (opts.overlapChars ?? CHUNK_OVERLAP_CHARS);
 
-  const units = buildUnits(source, target);
+  const units = buildUnits(source, target, code);
   if (units.length === 0) return [];
 
   const chunks: Chunk[] = [];
@@ -220,6 +224,26 @@ export interface ChunkOptions {
   targetChars?: number;
   ceilingChars?: number;
   overlapChars?: number;
+  /**
+   * `code` splits an over-long block on LINE boundaries instead of sentence
+   * ones, and carries no overlap.
+   *
+   * Sentences are not a unit of code. `[.!?]` followed by whitespace matches
+   * inside a method chain and inside a string literal, so prose splitting cuts
+   * expressions in half at points that mean nothing — and the pieces then
+   * tokenize worse, which matters most here because code is where the
+   * chars-per-word-piece ratio is already worst (2.47 measured, against 4.66
+   * for prose).
+   *
+   * **Not tree-sitter, and that is a deliberate deferral rather than an
+   * oversight.** `tree-sitter-wasms` is already a dependency and ships 36
+   * grammars, so syntactic boundaries would cost no new dependency — but the
+   * loader needs `createRequire` and a WASM read, which this module cannot have
+   * without giving up being a pure leaf. It would need a sibling module that
+   * falls back to here, and line boundaries already capture most of the win:
+   * they never split a statement, which is the property that actually matters.
+   */
+  mode?: 'prose' | 'code';
 }
 
 /**
@@ -270,6 +294,15 @@ function sentenceBounds(text: string): number[] {
   return out;
 }
 
+/** Offsets at which a line begins, excluding 0. The code-mode boundary. */
+function lineBounds(text: string): number[] {
+  const out: number[] = [];
+  for (let i = text.indexOf('\n'); i >= 0 && i + 1 < text.length; i = text.indexOf('\n', i + 1)) {
+    out.push(i + 1);
+  }
+  return out;
+}
+
 /** Truncate a heading path oldest-ancestor-first, so the nearest heading survives. */
 function truncateHeading(path: string): string {
   if (path.length <= MAX_HEADING_CHARS) return path;
@@ -290,7 +323,7 @@ function truncateHeading(path: string): string {
  * split, which is an infinite loop on real input the first time someone runs
  * this over a `src/` directory.
  */
-function buildUnits(source: string, target: number): Unit[] {
+function buildUnits(source: string, target: number, code: boolean): Unit[] {
   const blocks = splitBlocks(source, target);
   const out: Unit[] = [];
   for (const block of blocks) {
@@ -300,7 +333,7 @@ function buildUnits(source: string, target: number): Unit[] {
     }
     // Too long to embed whole: paragraphs, then sentences, then a hard cut.
     let first = true;
-    for (const piece of splitLong(block.text, block.start, target)) {
+    for (const piece of splitLong(block.text, block.start, target, code)) {
       out.push({ ...piece, heading: block.heading, breakBefore: first && block.breakBefore });
       first = false;
     }
@@ -472,9 +505,10 @@ function splitLong(
   text: string,
   base: number,
   limit: number,
+  code = false,
 ): Array<{ text: string; start: number; end: number }> {
   const out: Array<{ text: string; start: number; end: number }> = [];
-  const bounds = [0, ...sentenceBounds(text), text.length];
+  const bounds = [0, ...(code ? lineBounds(text) : sentenceBounds(text)), text.length];
   let from = 0;
   for (let b = 1; b < bounds.length; b++) {
     const to = bounds[b];

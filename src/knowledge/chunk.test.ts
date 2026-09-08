@@ -232,3 +232,44 @@ describe('bodies', () => {
     expect(out[0]).not.toContain('# H');
   });
 });
+
+describe('code mode', () => {
+  const code = [
+    'export function resolveSiteModel(config, site) {',
+    '  const lineup = config.lineups[site];',
+    '  return lineup?.roles ?? null;',
+    '}',
+  ]
+    .join('\n')
+    .repeat(40);
+
+  it('splits on line boundaries, never mid-statement', () => {
+    for (const c of chunkText(code, { mode: 'code' })) {
+      const body = c.text.slice(c.prefixLen);
+      // The property is that a split lands at a LINE start, not that a body
+      // starts with a non-space — code is indented, so leading whitespace is
+      // exactly what a correct split preserves.
+      //
+      // A prose split lands on `[.!?]` + whitespace, which inside a method
+      // chain or a string literal cuts an expression at a point that means
+      // nothing, and the pieces then tokenize worse — in the one mode where the
+      // chars-per-word-piece ratio is already worst.
+      expect(c.charStart === 0 || code[c.charStart - 1] === '\n').toBe(true);
+      expect(body.length).toBeGreaterThan(0);
+      expect(c.text.length).toBeLessThanOrEqual(CHUNK_CEILING_CHARS);
+    }
+  });
+
+  it('carries no overlap, because code has no sentences to borrow', () => {
+    for (const c of chunkText(code, { mode: 'code' })) expect(c.prefixLen).toBe(0);
+  });
+
+  it('still bounds a single line longer than the target', () => {
+    // Minified code is one line: line boundaries cannot help, and the hard cut
+    // is what stops the packer having a unit it can never place.
+    const minified = `const x=${'a'.repeat(5000)};`;
+    const chunks = chunkText(minified, { mode: 'code' });
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const c of chunks) expect(c.text.length).toBeLessThanOrEqual(CHUNK_CEILING_CHARS);
+  });
+});
