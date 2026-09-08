@@ -22,6 +22,14 @@ export type { ResolvedToolSurface };
  * its `'full'` was chosen for three bundled wrappers and has applied to every
  * wrapper anyone has written since, so a record must be able to say "not me".
  * Widening is bounded by `targetTools`, a fence for every kind since #507.
+ *
+ * **That justification is only true because `dispatchToolWrapper` reads the
+ * record too.** This resolver is not on the wrapper path: `childTools` are
+ * assembled before `runDefinition` runs, and `toolWrapperDefinition.tools()`
+ * returns them verbatim — so the profile resolved here never reaches a
+ * wrapper's registry, and the field would be inert for exactly the kind the
+ * paragraph above names. Both sites go through `declaredToolSurface`, so they
+ * cannot disagree about what a valid value is.
  */
 export function resolveToolSurface(
   ctx: AgentContext,
