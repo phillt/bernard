@@ -46,10 +46,13 @@ async function main(): Promise<void> {
   const { MemoryStore } = await import('../src/memory.js');
   const { RAGStore } = await import('../src/rag.js');
   const { loadConfig } = await import('../src/config.js');
+  const { assembleContext } = await import('../src/framework/context.js');
   const { MEMORY_DIR } = await import('../src/paths.js');
   const { RoutineStore } = await import('../src/routines.js');
   const { SpecialistStore } = await import('../src/specialists.js');
   const { CandidateStore } = await import('../src/specialist-candidates.js');
+  const { CorrectionCandidateStore } = await import('../src/correction-candidates.js');
+  const { ToolProfileStore } = await import('../src/tool-profiles.js');
   const { resolveReferences } = await import('../src/reference-resolver.js');
 
   type Scenario = {
@@ -147,7 +150,12 @@ async function main(): Promise<void> {
   type ReferenceRunResult = {
     scenarioId: string;
     run: number;
-    resolverStatus: 'noop' | 'resolved' | 'ambiguous';
+    // Mirrors `ResolveResult['status']` in `src/reference-resolver.ts`, which
+    // gained `'unknown'` after this script was written. Widened rather than
+    // cast: `'unknown'` is a real outcome the resolver reports (the reference
+    // named nothing in memory), and collapsing it into `'noop'` would hide the
+    // one status the reference-lookup pass exists to act on.
+    resolverStatus: 'noop' | 'resolved' | 'ambiguous' | 'unknown';
     resolvedEntryCount: number;
     finalText: string;
     passed: boolean;
@@ -206,19 +214,20 @@ async function main(): Promise<void> {
     };
     const ragStore = config.ragEnabled ? new RAGStore() : undefined;
 
-    const agent = new Agent(
+    const ctx = assembleContext({
       config,
       toolOptions,
-      memoryStore,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      ragStore,
-      new RoutineStore(),
-      new SpecialistStore(),
-      new CandidateStore(),
-    );
+      ...(ragStore ? { rag: ragStore } : {}),
+      stores: {
+        memory: memoryStore,
+        routines: new RoutineStore(),
+        specialists: new SpecialistStore(),
+        candidates: new CandidateStore(),
+        correction: new CorrectionCandidateStore(),
+        toolProfiles: new ToolProfileStore(),
+      },
+    });
+    const agent = new Agent(ctx);
 
     const result: RunResult = {
       scenarioId: scenario.id,
@@ -294,19 +303,20 @@ async function main(): Promise<void> {
     };
     const ragStore = config.ragEnabled ? new RAGStore() : undefined;
 
-    const agent = new Agent(
+    const ctx = assembleContext({
       config,
       toolOptions,
-      memoryStore,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      ragStore,
-      new RoutineStore(),
-      new SpecialistStore(),
-      new CandidateStore(),
-    );
+      ...(ragStore ? { rag: ragStore } : {}),
+      stores: {
+        memory: memoryStore,
+        routines: new RoutineStore(),
+        specialists: new SpecialistStore(),
+        candidates: new CandidateStore(),
+        correction: new CorrectionCandidateStore(),
+        toolProfiles: new ToolProfileStore(),
+      },
+    });
+    const agent = new Agent(ctx);
 
     const result: ReferenceRunResult = {
       scenarioId: scenario.id,

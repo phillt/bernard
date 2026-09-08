@@ -32,6 +32,11 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx tsc --noEmit
+      # `scripts/` is outside the base tsconfig (it compiles, with `rootDir:
+      # src`), so without this it is in no gate at all — which is how two of the
+      # three eval scripts silently stopped compiling against the `src/` they
+      # import.
+      - run: npm run typecheck:scripts
 
   build:
     name: Build
