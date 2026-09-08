@@ -354,3 +354,29 @@ describe('runAgent — mid-stream stall guard', () => {
     });
   });
 });
+
+describe('a caller-supplied dispatch id (#512)', () => {
+  it('is the id the run is logged under', () => {
+    // The whole point of the id flowing IN: `runDefinition` assembles its
+    // context message before calling `runAgent`, so it has to know the id at
+    // that moment to file the record under it. If the runner minted its own
+    // anyway, the record would name an id that appears nowhere in the session
+    // trace — the correlation the field exists for, silently broken.
+    (globalThis as { __debugForRunnerTest?: boolean }).__debugForRunnerTest = true;
+    return runAgent(makeSpec({ dispatchId: 'deadbeef' })).then(() => {
+      const start = logCalls.find((c) => c.label === 'agent:dispatch:start');
+      expect(start?.data.dispatchId).toBe('deadbeef');
+      for (const call of logCalls) {
+        if (call.data?.dispatchId) expect(call.data.dispatchId).toBe('deadbeef');
+      }
+    });
+  });
+
+  it('is minted by the runner when the caller supplies none', () => {
+    (globalThis as { __debugForRunnerTest?: boolean }).__debugForRunnerTest = true;
+    return runAgent(makeSpec()).then(() => {
+      const start = logCalls.find((c) => c.label === 'agent:dispatch:start');
+      expect(start?.data.dispatchId).toMatch(/^[0-9a-f]{8}$/);
+    });
+  });
+});

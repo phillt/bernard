@@ -85,9 +85,9 @@ import { HistoryStore } from './history.js';
 import { ProvenanceHistoryStore } from './provenance-history.js';
 import { TurnContextStore } from './turn-context.js';
 import {
-  DispatchContextStore,
-  getDispatchContexts,
-  setDispatchContexts,
+  enableDispatchContextRecording,
+  loadDispatchContexts,
+  saveDispatchContexts,
 } from './dispatch-context-history.js';
 import { assembleContext } from './framework/context.js';
 import { Agent } from './agent.js';
@@ -322,7 +322,10 @@ async function runInkRepl(args: {
   const historyStore = new HistoryStore();
   const provenanceHistoryStore = new ProvenanceHistoryStore();
   const turnContextStore = new TurnContextStore();
-  const dispatchContextStore = new DispatchContextStore();
+  // Only an interactive REPL reads these back, so nothing is recorded until one
+  // says so — a cron daemon or applet host would otherwise retain the bound's
+  // worth of rows that nothing will ever look at (#512).
+  enableDispatchContextRecording();
   const ragStore = config.ragEnabled ? new RAGStore() : undefined;
   const mcpManager = new MCPManager();
 
@@ -565,7 +568,7 @@ async function runInkRepl(args: {
     // Module-level rather than on the agent (#512): `runDefinition` is a free
     // function with no field to hang state on, and every dispatch records here
     // — not only the main agent's.
-    setDispatchContexts(dispatchContextStore.load());
+    loadDispatchContexts();
   }
 
   let cleanedUp = false;
@@ -661,7 +664,7 @@ async function runInkRepl(args: {
       ['history', () => historyStore.save(agent.getHistory())],
       ['provenance', () => provenanceHistoryStore.save(agent.getTurnProvenance())],
       ['turn-context', () => turnContextStore.save(agent.getTurnContext())],
-      ['dispatch-context', () => dispatchContextStore.save(getDispatchContexts())],
+      ['dispatch-context', () => saveDispatchContexts()],
     ] as const) {
       try {
         save();
@@ -696,7 +699,6 @@ async function runInkRepl(args: {
         historyStore,
         provenanceHistoryStore,
         turnContextStore,
-        dispatchContextStore,
         stores: {
           memory: memoryStore,
           routines: routineStore,

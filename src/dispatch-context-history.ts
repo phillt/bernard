@@ -85,15 +85,40 @@ const MAX_RECORDS = 200;
  * disk I/O on the path between assembling a prompt and sending it.
  */
 const records: DispatchContextRecord[] = [];
+let enabled = false;
 
 export function recordDispatchContext(record: DispatchContextRecord): void {
+  if (!enabled) return;
   records.push(record);
   if (records.length > MAX_RECORDS) records.splice(0, records.length - MAX_RECORDS);
 }
 
-/** Newest last, matching the two per-turn stores. */
+/**
+ * Newest last, matching the two per-turn stores.
+ *
+ * A new array over the same record objects, like `Agent.getTurnContext`'s
+ * `[...this.turnContext]` — so a caller cannot re-order or truncate the
+ * recorder, but the records themselves are **read-only by convention**, not by
+ * copy. Deep-cloning up to 200 records on every read would be real work to
+ * defend against a caller mutating a diagnostics row.
+ */
 export function getDispatchContexts(): DispatchContextRecord[] {
   return [...records];
+}
+
+/**
+ * Turns recording on for this process.
+ *
+ * Off by default, and that is the point: `recordDispatchContext` fires per LLM
+ * call in **every** process, but only an interactive REPL ever reads the
+ * records back. A cron daemon or applet host would otherwise accumulate and
+ * retain the bound's worth of rows — plus a reference to every pack's key
+ * arrays — that nothing will ever look at. The same shape as
+ * `def.streaming && getOutputSink()`: a producer that stays quiet until
+ * something is listening.
+ */
+export function enableDispatchContextRecording(): void {
+  enabled = true;
 }
 
 /** Seeds from a resumed session, then continues appending. */
@@ -109,9 +134,43 @@ export function clearDispatchContexts(): void {
 /**
  * Persists the per-dispatch context records. The third {@link PerTurnStore}
  * subclass, beside `TurnContextStore` and `ProvenanceHistoryStore`.
+ *
+ * Module-private: the records live in this module, so a caller that holds the
+ * store still has to fetch the data from here — which is how `/clear` ended up
+ * needing two calls to be correct. {@link loadDispatchContexts} /
+ * {@link saveDispatchContexts} are the whole surface.
  */
-export class DispatchContextStore extends PerTurnStore<DispatchContextRecord> {
+class DispatchContextStore extends PerTurnStore<DispatchContextRecord> {
   constructor() {
     super({ filePath: DISPATCH_CONTEXT_FILE, validate: isDispatchContextRecord });
   }
+}
+
+let store: DispatchContextStore | undefined;
+function fileStore(): DispatchContextStore {
+  store ??= new DispatchContextStore();
+  return store;
+}
+
+/** Seeds the recorder from the last session's file. */
+export function loadDispatchContexts(): void {
+  setDispatchContexts(fileStore().load());
+}
+
+/**
+ * Flushes to disk. Called **once, at exit** — never per turn.
+ *
+ * `PerTurnStore.save` pretty-prints and rewrites the whole array, measured at
+ * 0.65 ms and 354 KB at the record bound; running that inside every turn's
+ * `finally`, on the Ink render path, for a diagnostics record nothing reads
+ * until the session ends, is work for its own sake.
+ */
+export function saveDispatchContexts(): void {
+  fileStore().save(getDispatchContexts());
+}
+
+/** Drops both the in-memory records and the file, for `/clear`. */
+export function clearDispatchContextStore(): void {
+  clearDispatchContexts();
+  fileStore().clear();
 }

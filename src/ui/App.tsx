@@ -87,7 +87,7 @@ import { applyProfileToConfig } from '../config.js';
 import { setToolDetailsVisible, formatFriendlyTimestamp } from '../output.js';
 import { noPromptCacheHint } from '../cost-guardrail.js';
 import { memoryCapNotice } from '../memory-notice.js';
-import { clearDispatchContexts, type DispatchContextStore } from '../dispatch-context-history.js';
+import { clearDispatchContextStore } from '../dispatch-context-history.js';
 import { makeUsageRecorder, makeOutOfTurnUsageRecorder } from '../framework/hooks/token-stats.js';
 import { truncate } from '../text.js';
 import { WIZARD_CATEGORIES_DATA, type WizardFieldData } from '../profiles-wizard-data.js';
@@ -228,7 +228,6 @@ interface AppProps {
   historyStore: HistoryStore;
   provenanceHistoryStore: ProvenanceHistoryStore;
   turnContextStore: TurnContextStore;
-  dispatchContextStore: DispatchContextStore;
   stores: AppStores;
   /** Per-REPL-session allowlist (#179). Owned by the caller so it survives mount. */
   sessionToolAllowlist: Set<string>;
@@ -681,7 +680,6 @@ export function App({
   historyStore,
   provenanceHistoryStore,
   turnContextStore,
-  dispatchContextStore,
   stores,
   sessionToolAllowlist: _sessionToolAllowlist,
   onExit,
@@ -1326,8 +1324,7 @@ export function App({
       historyStore.clear();
       provenanceHistoryStore.clear();
       turnContextStore.clear();
-      dispatchContextStore.clear();
-      clearDispatchContexts();
+      clearDispatchContextStore();
       agent.clearHistory();
       setInterrupted(false);
       // Reset the append-only log and remount <Thread> (via the epoch bump).
@@ -1421,13 +1418,7 @@ export function App({
             'success',
           );
         }
-        persistAgentState({
-          agent,
-          historyStore,
-          provenanceHistoryStore,
-          turnContextStore,
-          dispatchContextStore,
-        });
+        persistAgentState({ agent, historyStore, provenanceHistoryStore, turnContextStore });
       } catch (err) {
         flashToast(
           `Compaction failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -4067,13 +4058,7 @@ export function App({
         errorPanel = formatAgentError(err, debug);
       }
     } finally {
-      persistAgentState({
-        agent,
-        historyStore,
-        provenanceHistoryStore,
-        turnContextStore,
-        dispatchContextStore,
-      });
+      persistAgentState({ agent, historyStore, provenanceHistoryStore, turnContextStore });
       submittingRef.current = false;
       turnAbortRef.current = null;
       setBusy(false);

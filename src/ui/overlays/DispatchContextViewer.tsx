@@ -5,6 +5,10 @@ import { getDispatchContexts, type DispatchContextRecord } from '../../dispatch-
 import { getThemeColors } from '../../theme.js';
 import { truncate } from '../../text.js';
 import { formatTokenCount } from '../../output.js';
+// The chars→tokens divisor, not a third spelled-out `/ 4`: that helper exists
+// so the caller's estimate and `emergencyTruncate`'s answer cannot disagree,
+// and the input here IS the rendered context prefix it measures.
+import { estimatePrefixTokens } from '../../token-estimate.js';
 import { ViewerShell, viewerViewport } from './ViewerShell.js';
 import { MenuRow, MENU_MARKER } from './MenuRow.js';
 import { VIEWER_TABS } from './viewer-tabs.js';
@@ -105,7 +109,7 @@ export function DispatchContextViewer({ onClose, onCycleTab }: Props) {
         ) : (
           records.slice(offset, offset + viewport).map((r, i) => {
             const idx = offset + i;
-            const trailing = ` ${formatTokenCount(estimateChars(r) / 4)}`;
+            const trailing = ` ${formatTokenCount(estimatePrefixTokens(estimateChars(r)))}`;
             const budget = Math.max(10, usableCols - GUTTER - trailing.length);
             return (
               <MenuRow

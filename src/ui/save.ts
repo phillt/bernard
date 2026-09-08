@@ -2,7 +2,6 @@ import type { Agent } from '../agent.js';
 import type { HistoryStore } from '../history.js';
 import type { ProvenanceHistoryStore } from '../provenance-history.js';
 import type { TurnContextStore } from '../turn-context.js';
-import { getDispatchContexts, type DispatchContextStore } from '../dispatch-context-history.js';
 
 /**
  * Persists the agent's current conversation and per-turn provenance to disk.
@@ -21,10 +20,8 @@ export function persistAgentState(args: {
   historyStore: HistoryStore;
   provenanceHistoryStore: ProvenanceHistoryStore;
   turnContextStore?: TurnContextStore;
-  dispatchContextStore?: DispatchContextStore;
 }): void {
-  const { agent, historyStore, provenanceHistoryStore, turnContextStore, dispatchContextStore } =
-    args;
+  const { agent, historyStore, provenanceHistoryStore, turnContextStore } = args;
   try {
     historyStore.save(agent.getHistory());
   } catch (err) {
@@ -40,9 +37,9 @@ export function persistAgentState(args: {
   } catch (err) {
     console.error('Failed to save turn context history:', err);
   }
-  try {
-    dispatchContextStore?.save(getDispatchContexts());
-  } catch (err) {
-    console.error('Failed to save dispatch context history:', err);
-  }
+  // Dispatch-context records are deliberately NOT saved here. This runs in
+  // every turn's `finally`, on the Ink render path, and `PerTurnStore.save`
+  // pretty-prints and rewrites the whole array — 0.65 ms and 354 KB at the
+  // record bound, per turn, for a diagnostics record nothing reads until the
+  // session ends. `index.ts`'s cleanup flushes it once (#512).
 }

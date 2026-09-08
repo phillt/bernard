@@ -24,7 +24,7 @@ import {
   type HookModelInfo,
 } from '../hooks/token-stats.js';
 import type { StepFinishPayload } from '../hooks/types.js';
-import { runAgent, type AgentResult, type AgentSpec } from '../runner.js';
+import { runAgent, newDispatchId, type AgentResult, type AgentSpec } from '../runner.js';
 import type { IterateFn, IterateOpts, StrategyContext } from '../strategies/types.js';
 import { resolveToolSurface } from './tool-surface.js';
 import { recordDispatchContext } from '../../dispatch-context-history.js';
@@ -173,9 +173,6 @@ export async function runDefinition<TInput, TFormatted>(
   // `Promise.all` rather than a deferred await: `def.retrievalQuery(input)` is
   // called outside `resolveRetrieval`'s own try, so a definition-supplied thunk
   // that throws would be an unhandled rejection if `def.tools` rejected first.
-  // Recorded alongside the assembly it fed (#512): the query is resolved once
-  // here and is otherwise invisible outside a debug log.
-  const retrievalQuery = def.retrievalQuery?.(input) ?? undefined;
   const [retrieved, rawTools] = await Promise.all([
     resolveRetrieval(ctx, def, input),
     Promise.resolve(def.tools(ctx, input, surface)),
@@ -384,7 +381,9 @@ export async function runDefinition<TInput, TFormatted>(
   //
   // Resolved fresh on every iterate so memory updates / new RAG hits are
   // reflected, and NOT persisted into the caller's history.
-  const getContextMessages = async (): Promise<CoreMessage[]> => {
+  const getContextMessages = async (
+    onReport?: (report: ContextReport) => void,
+  ): Promise<CoreMessage[]> => {
     let extras: Partial<Omit<ContextMessageInputs, 'memoryStore'>> | null = {};
     if (def.contextInputs) {
       try {
@@ -400,16 +399,13 @@ export async function runDefinition<TInput, TFormatted>(
     const msg = buildContextMessage({
       ...extras,
       // Recorded per assembly, so a sub-agent's own context decision is
-      // inspectable rather than invisible (#512). Held until `runAgent` hands
-      // back the id it logs under, one line below.
-      onReport: (report) => {
-        pendingReport = report;
-      },
+      // inspectable rather than invisible (#512).
+      onReport,
       // A definition that supplied its own results wins: `main` applies
       // stickiness and provenance the runner cannot see, and `cron` pre-fetches
       // before its MCP connect. `?? retrieved` rather than the other order for
       // exactly that reason.
-      ragResults: extras.ragResults ?? retrieved,
+      ragResults: extras.ragResults ?? retrieved.results,
       memoryStore: ctx.stores.memory,
       includeScratch: extras.includeScratch ?? true,
     });
@@ -471,14 +467,22 @@ export async function runDefinition<TInput, TFormatted>(
   };
 
   let stepLimitHit = false;
-  let pendingReport: ContextReport | undefined;
   const innerIterate: IterateFn = async (iterOpts: IterateOpts) => {
     // Reset the partial-progress recorder for this LLM call. Any prior call's
     // messages have already been (or are about to be) pushed into persistent
     // history by the caller's wrapIterate / strategy extras — see the
     // `partialObserver` doc on RunDefinitionOpts.
     partialObserver?.onIterateStart?.();
-    const contextMsgs = await getContextMessages();
+    // Minted here rather than handed back by `runAgent`, so the report the
+    // assembly produces and the id it is filed under are both in scope at the
+    // same point (#512). The callback form needed a mutable slot spanning two
+    // closures plus a manual clear, purely to stop iterate N's report attaching
+    // to iterate N+1's id — a hazard that disappears with the scope.
+    const dispatchId = newDispatchId();
+    let report: ContextReport | undefined;
+    const contextMsgs = await getContextMessages((r) => {
+      report = r;
+    });
     const seedWithContext = insertContextBeforeLastUser(contextMsgs, getSeed());
     const messages = composeMessages(def.historyMode, seedWithContext, iterOpts.extra);
     const sysWithSuffix = iterOpts.systemSuffix ? `${system}\n\n${iterOpts.systemSuffix}` : system;
@@ -497,31 +501,33 @@ export async function runDefinition<TInput, TFormatted>(
     const cached = promptCacheActive
       ? applyAnthropicPromptCache({ system: sysWithSuffix, messages })
       : { system: sysWithSuffix, messages };
+    // One record per LLM call rather than per dispatch, and that is the right
+    // grain: a multi-step dispatch reassembles its context every iterate, and
+    // `agent:dispatch:start` is logged per call too, so the ids line up with
+    // the session trace this is meant to be read beside.
+    if (report) {
+      recordDispatchContext({
+        dispatchId,
+        definitionId: def.id,
+        telemetrySite: modelInfo.site,
+        timestamp: Date.now(),
+        sections: report.sections,
+        ...(report.memory
+          ? { memoryKept: report.memory.kept, memoryDropped: report.memory.dropped }
+          : {}),
+        // From `resolveRetrieval`, which owns the decision — so the record
+        // states what was actually retrieved FOR rather than re-running the
+        // definition's thunk and claiming a query for a dispatch that searched
+        // nothing.
+        ...(retrieved.query ? { retrievalQuery: retrieved.query } : {}),
+      });
+    }
     const r = await runAgent({
       ...baseSpec,
       system: cached.system,
       messages: cached.messages,
       maxSteps: callMaxSteps,
-      // One record per LLM call rather than per dispatch, and that is the right
-      // grain: a multi-step dispatch reassembles its context every iterate, and
-      // `agent:dispatch:start` is logged per call too — so the ids line up
-      // exactly with the session trace they are meant to be read beside.
-      onDispatchId: (dispatchId) => {
-        if (!pendingReport) return;
-        const report = pendingReport;
-        pendingReport = undefined;
-        recordDispatchContext({
-          dispatchId,
-          definitionId: def.id,
-          telemetrySite: modelInfo.site,
-          timestamp: Date.now(),
-          sections: report.sections,
-          ...(report.memory
-            ? { memoryKept: report.memory.kept, memoryDropped: report.memory.dropped }
-            : {}),
-          ...(retrievalQuery ? { retrievalQuery } : {}),
-        });
-      },
+      dispatchId,
     });
     stepLimitHit = r.finishReason === 'tool-calls' && (r.steps?.length ?? 0) >= callMaxSteps;
     return r;

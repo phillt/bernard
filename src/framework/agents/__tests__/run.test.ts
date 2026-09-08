@@ -41,7 +41,11 @@ import type { AgentContext } from '../../context.js';
 import type { BernardConfig } from '../../../config.js';
 import { buildContextMessage } from '../../../context-message.js';
 import { attachMeta } from '../../tools/adapter.js';
-import { clearDispatchContexts, getDispatchContexts } from '../../../dispatch-context-history.js';
+import {
+  clearDispatchContexts,
+  enableDispatchContextRecording,
+  getDispatchContexts,
+} from '../../../dispatch-context-history.js';
 
 function makeConfig(): BernardConfig {
   return {
@@ -120,6 +124,7 @@ describe('runDefinition records what each dispatch was given (#512)', () => {
     // is logged per call too — so the ids line up with the session trace this is
     // meant to be read beside.
     clearDispatchContexts();
+    enableDispatchContextRecording();
     (buildContextMessage as unknown as ReturnType<typeof vi.fn>).mockImplementation(
       (inputs: any) => {
         inputs.onReport?.({ sections: { persistent_memory: 42 } });
@@ -148,6 +153,7 @@ describe('runDefinition records what each dispatch was given (#512)', () => {
   it('records which memory keys were dropped, not just how many', () => {
     // "2 entries were dropped" cannot be acted on; naming them can.
     clearDispatchContexts();
+    enableDispatchContextRecording();
     (buildContextMessage as unknown as ReturnType<typeof vi.fn>).mockImplementation(
       (inputs: any) => {
         inputs.onReport?.({
@@ -166,6 +172,28 @@ describe('runDefinition records what each dispatch was given (#512)', () => {
 
   it('records the retrieval query, which is otherwise only a debug log', async () => {
     clearDispatchContexts();
+    enableDispatchContextRecording();
+    (buildContextMessage as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (inputs: any) => {
+        inputs.onReport?.({ sections: {} });
+        return { role: 'user', content: 'CTX' };
+      },
+    );
+    const ctx = makeCtx();
+    (ctx as any).rag = { search: async () => [] };
+    const def = fakeDefinition({ retrievalQuery: (i: FakeInput) => i.text });
+    await runDefinition(ctx, def, { text: 'why is the sky blue' });
+    expect(getDispatchContexts()[0].retrievalQuery).toBe('why is the sky blue');
+  });
+
+  it('records NO query when nothing was retrieved for', async () => {
+    // The defect the second derivation caused: the recorder re-ran the
+    // definition's thunk outside `resolveRetrieval`'s guards, so a dispatch
+    // with no RAG store — or one whose search threw — recorded a
+    // `retrievalQuery` for a search that never happened. The field's own
+    // docstring says "when it retrieved".
+    clearDispatchContexts();
+    enableDispatchContextRecording();
     (buildContextMessage as unknown as ReturnType<typeof vi.fn>).mockImplementation(
       (inputs: any) => {
         inputs.onReport?.({ sections: {} });
@@ -174,7 +202,7 @@ describe('runDefinition records what each dispatch was given (#512)', () => {
     );
     const def = fakeDefinition({ retrievalQuery: (i: FakeInput) => i.text });
     await runDefinition(makeCtx(), def, { text: 'why is the sky blue' });
-    expect(getDispatchContexts()[0].retrievalQuery).toBe('why is the sky blue');
+    expect(getDispatchContexts()[0].retrievalQuery).toBeUndefined();
   });
 
   it("never attributes one call's context to the next call's id", async () => {
@@ -185,6 +213,7 @@ describe('runDefinition records what each dispatch was given (#512)', () => {
     // missing, in the one surface that exists to answer what a dispatch was
     // given.
     clearDispatchContexts();
+    enableDispatchContextRecording();
     let assemblies = 0;
     (buildContextMessage as unknown as ReturnType<typeof vi.fn>).mockImplementation(
       (inputs: any) => {
@@ -211,6 +240,7 @@ describe('runDefinition records what each dispatch was given (#512)', () => {
     // assembly that emitted nothing is noise in the one surface that exists to
     // answer "what was this dispatch given".
     clearDispatchContexts();
+    enableDispatchContextRecording();
     await runDefinition(makeCtx(), fakeDefinition(), { text: 'hi' });
     expect(getDispatchContexts()).toHaveLength(0);
   });

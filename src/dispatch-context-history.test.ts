@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   clearDispatchContexts,
+  enableDispatchContextRecording,
   getDispatchContexts,
   recordDispatchContext,
   setDispatchContexts,
@@ -18,9 +19,23 @@ function row(over: Partial<DispatchContextRecord> = {}): DispatchContextRecord {
   };
 }
 
-beforeEach(() => clearDispatchContexts());
+beforeEach(() => {
+  clearDispatchContexts();
+  // Off by default in every process, so a cron daemon or applet host retains
+  // nothing it will never read. The REPL turns it on.
+  enableDispatchContextRecording();
+});
 
 describe('the dispatch-context recorder', () => {
+  it('records nothing until a reader turns it on', async () => {
+    // `recordDispatchContext` fires per LLM call in EVERY process, but only an
+    // interactive REPL reads the rows back.
+    vi.resetModules();
+    const fresh = await import('./dispatch-context-history.js');
+    fresh.recordDispatchContext(row());
+    expect(fresh.getDispatchContexts()).toHaveLength(0);
+  });
+
   it('keeps records newest-last, matching the two per-turn stores', () => {
     recordDispatchContext(row({ dispatchId: 'first' }));
     recordDispatchContext(row({ dispatchId: 'second' }));
