@@ -4,21 +4,25 @@ on:
   push:
     branches: [master, bernard-1-0-0, feat/applets, applets-round-2]
   pull_request:
-    # `bernard-1-0-0` is the active release branch — every 1.0.0 PR targets it,
-    # not master, so without it here CI silently never ran on any of them.
+    # **No `branches:` filter, deliberately — an allowlist here fails OPEN.**
     #
-    # `feat/applets` is the long-lived Applets epic branch (#425): its issues
-    # merge into it and it merges into `bernard-1-0-0` once the epic is done.
-    # It needs listing for the same reason — a base branch missing here does
-    # not fail CI, it silently never runs it, which reads as "no checks
-    # required" on every PR in the epic.
+    # A base branch missing from the list does not fail CI, it silently never
+    # runs it, and `gh pr checks` then answers "no checks reported", which reads
+    # as clean. This repo has been burned by that twice: `bernard-1-0-0` was
+    # missing while every 1.0.0 PR targeted it, and `applets-round-2` was
+    # missing while ELEVEN PRs (#481-#491) merged into it with zero checks —
+    # adding it turned up 7 lint errors and 5 unformatted files that had already
+    # shipped.
     #
-    # `applets-round-2` is the round-2 epic branch, and it is the proof the
-    # comment above was not hypothetical: it was never added, so ELEVEN PRs
-    # (#481-#491) merged into it with zero checks — `gh pr checks` answering
-    # "no checks reported" on every one, which reads as clean. Adding it here
-    # turned up 7 lint errors and 5 unformatted files that had already shipped.
-    branches: [master, bernard-1-0-0, feat/applets, applets-round-2]
+    # The comment those two incidents left behind said "remember to add the next
+    # epic branch", which is the fix that keeps not happening. A third case was
+    # live when this was written: #547 and #548 are stacked PRs based on other
+    # PR branches (`feat/retrieval-eval`, `feat/dedup-reinforce`), and no
+    # allowlist can anticipate a base branch that is itself created per stack.
+    #
+    # Every pull request gets checked, whatever it targets. `push:` keeps its
+    # allowlist — that one is about which branches get a build on every commit,
+    # where a whitelist is the right shape and its failure mode is visible.
 
 jobs:
   typecheck:
