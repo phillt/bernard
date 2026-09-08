@@ -10,6 +10,11 @@ import { pacPlannerDefinition } from '../pac-planner.js';
 import { pacActorDefinition } from '../pac-actor.js';
 import { pacCriticDefinition } from '../pac-critic.js';
 import { toolWrapperDefinition } from '../tool-wrapper.js';
+import { subAgentDefinition } from '../sub.js';
+import { taskDefinition } from '../task.js';
+import { specialistDefinition } from '../specialist.js';
+import { mcpDelegateDefinition } from '../mcp-delegate.js';
+import type { CoreMessage } from 'ai';
 
 /**
  * One brief, and the invariant that makes replacing four builders with it safe:
@@ -159,6 +164,61 @@ describe('tool-wrapper keeps its label and gains a data channel', () => {
     } as never);
     const content = (msg as { content: string }).content;
     expect(content.indexOf('author-written')).toBeLessThan(content.indexOf('CALLER BYTES'));
+  });
+});
+
+describe('every delegation door has the data channel', () => {
+  // The half #509 shipped without. A nominal type prevents the ACCIDENT on one
+  // door and leaves the other four with no correct option at all — the natural
+  // code for an applet action dispatched through `specialistDefinition` (which
+  // #423's `boundTo` already contemplates) is `context: renderArgsBlock(a).text`,
+  // the exact assignment `UntrustedData` exists to prevent, reintroduced
+  // because the right field does not exist there.
+  const doors: Array<[string, (data: ReturnType<typeof untrustedData>) => CoreMessage]> = [
+    ['sub', (data) => subAgentDefinition.buildUserMessage({ task: 't', data, slotId: 0 })],
+    ['task', (data) => taskDefinition.buildUserMessage({ task: 't', data, slotId: 0 })],
+    [
+      'specialist',
+      (data) =>
+        specialistDefinition.buildUserMessage({
+          specialistId: 's',
+          task: 't',
+          data,
+          slotId: 0,
+        } as never),
+    ],
+    [
+      'mcp-delegate',
+      (data) =>
+        mcpDelegateDefinition.buildUserMessage({
+          server: 'x',
+          task: 't',
+          data,
+          slotId: 0,
+        } as never),
+    ],
+    [
+      'tool-wrapper',
+      (data) =>
+        toolWrapperDefinition.buildUserMessage({
+          specialistId: 's',
+          input: 't',
+          data,
+          slotId: 0,
+        } as never),
+    ],
+  ];
+
+  it.each(doors)('%s renders caller data, last', (_name, build) => {
+    const content = build(untrustedData('CALLER BYTES')).content as string;
+    expect(content).toContain('CALLER BYTES');
+    expect(content.trimEnd().endsWith('CALLER BYTES')).toBe(true);
+  });
+
+  it.each(doors)('%s is byte-identical when no data is supplied', (name, build) => {
+    // The migration onto one builder must not move the wire format.
+    const content = (build(undefined as never) as { content: string }).content;
+    expect(content).toBe(name === 'tool-wrapper' ? 'Request: t' : 'Task: t');
   });
 });
 

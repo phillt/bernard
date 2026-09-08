@@ -52,14 +52,6 @@ export interface WithAttachments {
   attachments?: DispatchAttachment[];
 }
 
-export interface TaskMessageInput {
-  task: string;
-  context?: string;
-  attachments?: DispatchAttachment[];
-  /** `Task` for most definitions, `Request` for `tool-wrapper`. */
-  label?: string;
-}
-
 /**
  * A phantom brand. Never constructed, never inspected — it exists only so the
  * compiler can tell {@link UntrustedData} from `string`.
@@ -218,7 +210,53 @@ export function buildBriefUserMessage(brief: DispatchBrief): CoreMessage {
 }
 
 /**
+ * The `task` + `context` + `data` shape the five delegation doors share.
+ *
+ * Declared once and `extends`-ed by each dispatch input, so **every** door has
+ * the data channel rather than only `tool-wrapper`. That was the state #509
+ * shipped in, and it was the wrong half of the fix: a nominal type prevents the
+ * *accident* on one door and leaves the other four with no correct option at
+ * all — the natural code for an applet action dispatched through
+ * `specialistDefinition` (which #423's `boundTo` already contemplates) is
+ * `context: renderArgsBlock(args).text`, the exact assignment `UntrustedData`
+ * exists to prevent, reintroduced because the right field does not exist there.
+ */
+export interface DispatchInput extends WithAttachments {
+  task: string;
+  /** Caller-written supporting detail. The instruction channel. */
+  context?: string;
+  /**
+   * The data channel: bytes an external caller supplied, minted only by
+   * `renderArgsBlock`. Rendered last, under its own banner.
+   */
+  data?: UntrustedData;
+}
+
+/** The common brief: a task, an optional context section, and the data channel. */
+export function briefFor(input: DispatchInput & { label?: string }): DispatchBrief {
+  return {
+    label: input.label,
+    task: input.task,
+    sections: [{ label: 'Context', body: input.context ?? '' }],
+    data: input.data,
+    attachments: input.attachments,
+  };
+}
+
+/** {@link briefFor} plus {@link attachTo} — what the five doors build. */
+export function buildDispatchUserMessage(input: DispatchInput & { label?: string }): CoreMessage {
+  return buildBriefUserMessage(briefFor(input));
+}
+
+/**
  * The text half, on its own.
+ *
+ * Kept only for that one caller. Everything else builds a {@link DispatchBrief}
+ * directly — there were briefly two builder APIs for one job, with
+ * `TaskMessageInput` a strict subset of `DispatchBrief` and `renderTaskText`
+ * already a shim over `renderBrief`, which is the state in which a new
+ * definition author has to pick between them and #509's stated payoff — one
+ * vocabulary in one table — goes uncollected.
  *
  * Separately exported because `src/ui/App.tsx` feeds exactly this string to
  * `resolvePolicyDecisionFor` so the policy decision cannot diverge from the
@@ -230,12 +268,8 @@ export function buildBriefUserMessage(brief: DispatchBrief): CoreMessage {
  * Now a thin adapter over {@link renderBrief}: the `Task:` / `Context:` shape
  * is the common brief, not a second renderer.
  */
-export function renderTaskText(input: TaskMessageInput): string {
-  return renderBrief({
-    label: input.label,
-    task: input.task,
-    ...(input.context ? { sections: [{ label: 'Context', body: input.context }] } : {}),
-  });
+export function renderTaskText(input: DispatchInput & { label?: string }): string {
+  return renderBrief(briefFor(input));
 }
 
 /**
@@ -265,9 +299,4 @@ export function attachTo(text: string, attachments?: DispatchAttachment[]): Core
       })),
     ],
   };
-}
-
-/** {@link renderTaskText} plus {@link attachTo} — the shape six definitions share. */
-export function buildTaskUserMessage(input: TaskMessageInput): CoreMessage {
-  return attachTo(renderTaskText(input), input.attachments);
 }
