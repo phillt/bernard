@@ -38,8 +38,9 @@ async function write(
   tool: ReturnType<typeof createMemoryTool>,
   key = 'k',
   content = 'c',
+  execOptions: unknown = {},
 ): Promise<string> {
-  const r = await tool.execute({ action: 'write', key, content } as never, {} as never);
+  const r = await tool.execute({ action: 'write', key, content } as never, execOptions as never);
   return tool.serializeForModel ? tool.serializeForModel(r) : String((r as any).result);
 }
 
@@ -130,5 +131,30 @@ describe('memory write with a contradiction check', () => {
     expect(await write(createMemoryTool(new MemoryStore(), undefined, { config }))).toBe(
       'Memory "k" saved.',
     );
+  });
+});
+
+/**
+ * The check honours the turn's abort signal.
+ *
+ * It makes an LLM call and can raise an `ask_user` overlay, so dropping the
+ * signal left an Esc mid-write with the cheap-tier call still running and the
+ * conflict menu still on screen. `execute`'s second parameter is where it lives
+ * and it was simply not being destructured.
+ */
+describe('cancellation', () => {
+  it('forwards the parent abort signal to the check', async () => {
+    verdict.current = { kind: 'none' };
+    const signal = new AbortController().signal;
+    await write(createMemoryTool(new MemoryStore(), undefined, { config }), 'k', 'c', {
+      abortSignal: signal,
+    });
+    expect(checkContradiction.mock.calls[0]?.[3]).toMatchObject({ abortSignal: signal });
+  });
+
+  it('omits it when the caller supplies none, rather than passing undefined through', async () => {
+    verdict.current = { kind: 'none' };
+    await write(createMemoryTool(new MemoryStore(), undefined, { config }));
+    expect(checkContradiction.mock.calls[0]?.[3]).not.toHaveProperty('abortSignal');
   });
 });
