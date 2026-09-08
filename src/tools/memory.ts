@@ -7,6 +7,9 @@ import { MEMORY_DIR } from '../paths.js';
 import type { BernardTool } from '../framework/tools/types.js';
 import { ok, err } from '../framework/tools/types.js';
 import type { ProvenanceStore } from '../provenance.js';
+import type { BernardConfig } from '../config.js';
+import type { ToolOptions } from './types.js';
+import type { UsageRecorder } from '../framework/hooks/token-stats.js';
 
 /**
  * Split from the scratch tool's schema with #513.
@@ -80,11 +83,132 @@ type ScratchArgs = z.infer<typeof SCRATCH_PARAMETERS>;
  * Returns a {@link BernardTool}; `serializeForModel` reproduces the historical
  * plain-string output (including the `"Error: "` prefix on validation errors).
  *
+ * ## The write-time contradiction check (#373)
+ *
+ * The paragraph above rejects a REFUSING tool, and that still holds — the
+ * check added here never refuses. It notices that an incoming note disagrees
+ * with one already saved and either retires the old one, saying so, or asks.
+ * Its verdict is advisory in the strongest sense: every failure path, and a
+ * missing `config`, resolve to writing exactly as before.
+ *
+ * The three deps below are all optional for that reason, and each absence is a
+ * deliberate degradation rather than a bug: no `config` means no check at all,
+ * no `askUser` means an ambiguous case keeps both (the headless answer, which
+ * `headlessToolOptions` gives for free by omitting the callback), and no
+ * `onUsage` means the spend is unrecorded rather than unmade.
+ *
  * @param memoryStore - The backing MemoryStore instance.
+ * @param provenance - Per-turn source store, for `read` registration.
+ * @param deps - Optional wiring for the contradiction check.
  */
+/**
+ * Runs the write-time contradiction check and acts on it, returning a sentence
+ * to append to the tool result — or `''` when there is nothing to say (#373).
+ *
+ * **Everything here is best-effort by construction.** It returns a string, not
+ * a decision: the caller writes the note either way. A missing `config`, a
+ * failed check, an unparseable verdict, a `supersede` that throws, a user who
+ * cancels the question — all of them come back as `''` or a note, never as a
+ * refusal.
+ *
+ * The import is DYNAMIC and that is load-bearing: this module sits in
+ * `createTools`' eager `audience:'any'` group, and #529 measured **+17 ms** on
+ * every tool-registry build when a `generateText`-owning module was pulled in
+ * from here statically.
+ */
+async function contradictionNote(
+  incoming: { key: string; content: string },
+  store: MemoryStore,
+  deps:
+    | { config?: BernardConfig; askUser?: ToolOptions['askUser']; onUsage?: UsageRecorder }
+    | undefined,
+  abortSignal?: AbortSignal,
+): Promise<string> {
+  if (!deps?.config) return '';
+  try {
+    const [{ checkContradiction }, { consolidationInputs }] = await Promise.all([
+      import('../memory-contradiction.js'),
+      import('../memory-consolidation.js'),
+    ]);
+    const verdict = await checkContradiction(incoming, consolidationInputs(store), deps.config, {
+      ...(abortSignal ? { abortSignal } : {}),
+      ...(deps.onUsage ? { onUsage: deps.onUsage } : {}),
+    });
+    if (verdict.kind === 'none') return '';
+
+    // Archive, never delete. `supersede` writes one front-matter line and
+    // leaves the file where the user can find it, so undoing it is deleting
+    // that line. It needs the replacement to exist, which is why the caller
+    // runs all of this AFTER the write.
+    const retire = (key: string, replacement: string): boolean => {
+      try {
+        return store.supersede(key, replacement) !== null;
+      } catch {
+        return false;
+      }
+    };
+
+    if (verdict.kind === 'supersede') {
+      return retire(verdict.key, incoming.key)
+        ? ` Retired "${verdict.key}": ${verdict.reason} Delete its \`supersededBy\` line to undo.`
+        : ` This may disagree with "${verdict.key}": ${verdict.reason} Both are kept.`;
+    }
+
+    // Ambiguous. With nobody to ask, keep both rather than guess — which is
+    // what `headlessToolOptions` already produces by omitting `askUser`.
+    const KEEP_BOTH = `Keep both`;
+    const REPLACE = `Replace "${verdict.key}" with this`;
+    const DISCARD = `Discard what I just saved`;
+    if (!deps.askUser) {
+      return ` This may disagree with "${verdict.key}": ${verdict.reason} Both are kept.`;
+    }
+    const result = await deps.askUser(
+      [
+        {
+          question: `This looks like it disagrees with "${verdict.key}". ${verdict.reason}`,
+          hint: 'Both notes are saved either way; this only decides which stays visible.',
+          summary: 'Conflicting memory',
+          choices: [KEEP_BOTH, REPLACE, DISCARD],
+          allowOther: false,
+        },
+      ],
+      abortSignal,
+      { recordInTranscript: true },
+    );
+    // A cancelled prompt is not a decision. Keep both — the same answer as
+    // having nobody to ask.
+    if ('cancelled' in result) return ` Both notes are kept.`;
+    const chosen = String(result.answers[0] ?? '');
+
+    if (chosen === REPLACE) {
+      return retire(verdict.key, incoming.key)
+        ? ` Retired "${verdict.key}", as you chose.`
+        : ` Could not retire "${verdict.key}"; both are kept.`;
+    }
+    if (chosen === DISCARD) {
+      // The note is already on disk by now, so "discard" retires the one just
+      // saved. Still not a refusal: the write happened and one deleted
+      // front-matter line brings it back.
+      return retire(incoming.key, verdict.key)
+        ? ` Retired the note just saved, as you chose. "${verdict.key}" stands.`
+        : ` Both notes are kept.`;
+    }
+    return ` Both notes are kept, as you chose.`;
+  } catch {
+    // Fail open, and silently: a check that breaks must be indistinguishable
+    // from a check that found nothing.
+    return '';
+  }
+}
+
 export function createMemoryTool(
   memoryStore: MemoryStore,
   provenance?: ProvenanceStore,
+  deps?: {
+    config?: BernardConfig;
+    askUser?: ToolOptions['askUser'];
+    onUsage?: UsageRecorder;
+  },
 ): BernardTool<MemoryArgs, string> {
   return {
     meta: {
@@ -147,6 +271,9 @@ export function createMemoryTool(
             return err({ type: 'invalid_args', message: 'key is required for write action.' });
           if (!content)
             return err({ type: 'invalid_args', message: 'content is required for write action.' });
+          // Before the write, never instead of it (#373). Whatever this
+          // returns, the note is saved below.
+          const note = await contradictionNote({ key, content }, memoryStore, deps);
           try {
             memoryStore.writeMemory(key, content);
           } catch (e) {
@@ -158,7 +285,7 @@ export function createMemoryTool(
               return err({ type: 'invalid_args', message: e.message });
             throw e;
           }
-          return ok(`Memory "${key}" saved.`);
+          return ok(`Memory "${key}" saved.${note}`);
         }
         case 'supersede': {
           if (!key)
