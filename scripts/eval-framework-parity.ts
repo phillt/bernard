@@ -81,7 +81,10 @@ async function main(): Promise<void> {
   interface Scenario {
     id: string;
     description: string;
-    build: () => { spec: AnyAgentSpec; hookFires: Array<{ hookId: string; payloadKeys: string[] }> };
+    build: () => {
+      spec: AnyAgentSpec;
+      hookFires: Array<{ hookId: string; payloadKeys: string[] }>;
+    };
   }
 
   function makeRecordingHook(id: string, log: Array<{ hookId: string; payloadKeys: string[] }>) {
@@ -196,7 +199,8 @@ async function main(): Promise<void> {
     },
     {
       id: 'specialist-initial',
-      description: 'src/tools/specialist-run.ts — initial call, outputHook("spec:1") + repair + prepareStep.',
+      description:
+        'src/tools/specialist-run.ts — initial call, outputHook("spec:1") + repair + prepareStep.',
       build: () => {
         const fires: Array<{ hookId: string; payloadKeys: string[] }> = [];
         return {
@@ -221,7 +225,18 @@ async function main(): Promise<void> {
       build: () => {
         const fires: Array<{ hookId: string; payloadKeys: string[] }> = [];
         const tokenTarget = { lastStepPromptTokens: 0, spinnerStats: null as any };
-        const tokens = tokenStatsHook(tokenTarget);
+        // `tokenStatsHook` gained a second `HookModelInfo` parameter after this
+        // script was written (see `run.ts`'s call, which passes the resolved
+        // `modelInfo`). A fixed literal rather than a real resolution: this
+        // eval snapshots what reaches `doGenerate`, and the hook's model
+        // attribution never leaves the hook — so a stable stand-in keeps the
+        // snapshot byte-stable, which is the whole point of the file.
+        const tokens = tokenStatsHook(tokenTarget, {
+          bucket: 'premium',
+          site: 'main',
+          provider: 'anthropic',
+          modelName: 'parity-fixture-model',
+        });
         const print = outputHook();
         const wrappedTokens = {
           onStepFinish: (payload: any) => {
