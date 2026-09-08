@@ -131,3 +131,37 @@ describe('createWebReadTool', () => {
     expect(result).toContain('Network timeout');
   });
 });
+
+describe('provenance identity (#549)', () => {
+  it('registers two sources when the same URL is read with different selectors', async () => {
+    // The dedup key is `${kind}:${rawRef}`, so a bare url made
+    // `web_read(url, 'main')` and `web_read(url, 'article')` collide into ONE
+    // entry, and the upgrade-in-place rule then let the longer body silently
+    // win — two different extractions presented as one source, with a quote
+    // checkable against text the caller never saw.
+    const { ProvenanceStore } = await import('../provenance.js');
+    const provenance = new ProvenanceStore();
+    const tool = createWebReadTool(provenance);
+    mockFetch.mockResolvedValue(
+      makeResponse(
+        '<html><body><main>Main body text.</main><article>Article body text, longer.</article></body></html>',
+      ),
+    );
+    await tool.execute({ url: 'https://example.test/p', selector: 'main' }, {} as never);
+    await tool.execute({ url: 'https://example.test/p', selector: 'article' }, {} as never);
+    expect(provenance.size()).toBe(2);
+    const previews = provenance.list().map((s) => s.contentPreview);
+    expect(previews.some((p) => p.includes('Main body'))).toBe(true);
+    expect(previews.some((p) => p.includes('Article body'))).toBe(true);
+  });
+
+  it('still merges two reads of one URL with no selector', async () => {
+    const { ProvenanceStore } = await import('../provenance.js');
+    const provenance = new ProvenanceStore();
+    const tool = createWebReadTool(provenance);
+    mockFetch.mockResolvedValue(makeResponse('<html><body><p>Same page.</p></body></html>'));
+    await tool.execute({ url: 'https://example.test/q' }, {} as never);
+    await tool.execute({ url: 'https://example.test/q' }, {} as never);
+    expect(provenance.size()).toBe(1);
+  });
+});

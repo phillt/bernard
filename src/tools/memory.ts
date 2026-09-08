@@ -296,6 +296,15 @@ export function createMemoryTool(
               label: `memory:${key}`,
               contentPreview: value,
               rawRef: `memory:${key}`,
+              // Retained in full for quote checking (#549). Only two of the
+              // seven producers set this, and the other five fall back through
+              // `sourceBody` to the 2,000-character preview — the exact failure
+              // `verifyText` exists to fix, silently reintroduced. Latent rather
+              // than live today (measured, memory records are median 129 and max
+              // 1,039 bytes on a real install), so this is hardening, not a bug
+              // fix. Deliberately not added to `web_search`, whose snippets ARE
+              // the whole text, nor to tool results, which are bounded elsewhere.
+              verifyText: value,
             });
             return ok(`[Source: ${id}]\n${value}`);
           }
@@ -447,6 +456,9 @@ export function createScratchTool(
               label: `scratch:${key}`,
               contentPreview: value,
               rawRef: `scratch:${key}`,
+              // Retained in full for quote checking (#549), same as the memory
+              // read above.
+              verifyText: value,
             });
             return ok(`[Source: ${id}]\n${value}`);
           }

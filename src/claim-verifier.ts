@@ -132,6 +132,19 @@ function quoteMatcher(quote: string): RegExp | null {
   return new RegExp(pattern, 'i');
 }
 
+/** A quoted span, located in the source that contains it (#549). */
+export interface QuoteLocation {
+  /** The provenance id, e.g. `S3`. */
+  sourceId: string;
+  /** Character offset into the source body the check ran against. */
+  start: number;
+  end: number;
+  /** The text as it appears in the source — whitespace may differ from the quote. */
+  matchedText: string;
+  /** True when only the capped preview was available, not the full retained text. */
+  fromPreview: boolean;
+}
+
 /** The text of a source that a check should run against. */
 function sourceBody(s: SourceItem): string {
   return s.verifyText ?? s.contentPreview;
@@ -150,10 +163,12 @@ function sourceBody(s: SourceItem): string {
  * the region the quote gate already located removes that whole class of false
  * rejection.
  */
-function windowAroundQuote(body: string, quote: string | undefined): string {
+function windowAroundQuote(body: string, quote: string | undefined, at = -1): string {
   if (body.length <= SOURCE_WINDOW_CHARS) return body;
-  const matcher = quote ? quoteMatcher(quote) : null;
-  const at = matcher ? body.search(matcher) : -1;
+  if (at < 0 && quote) {
+    const matcher = quoteMatcher(quote);
+    at = matcher ? body.search(matcher) : -1;
+  }
   if (at < 0) return body.slice(0, SOURCE_WINDOW_CHARS);
   // Centre the window on the match, clamped to the ends of the text.
   const start = Math.max(
@@ -166,11 +181,16 @@ function windowAroundQuote(body: string, quote: string | undefined): string {
   return start > 0 ? `…${slice}` : slice;
 }
 
-function buildUserContent(claim: Claim, sources: SourceItem[]): string {
+function buildUserContent(claim: Claim, sources: SourceItem[], located?: QuoteLocation): string {
   const rendered = sources
     .map((s) => {
       const dated = s.publishedAt ? ` (published ${s.publishedAt})` : '';
-      return `[${s.id}] ${s.label}${dated}\n${windowAroundQuote(sourceBody(s), claim.quote)}`;
+      // The offset is passed through when the quote gate already found it in
+      // THIS source, so the window and the gate cannot disagree about where the
+      // passage is — which is the drift `quoteMatcher`'s docstring exists to
+      // prevent, now closed by sharing the result rather than the regex.
+      const at = located?.sourceId === s.id ? located.start : -1;
+      return `[${s.id}] ${s.label}${dated}\n${windowAroundQuote(sourceBody(s), claim.quote, at)}`;
     })
     .join('\n\n---\n\n');
   // Source first, claim last. The source is shared across every claim citing
@@ -195,9 +215,49 @@ function buildUserContent(claim: Claim, sources: SourceItem[]): string {
  * with what this found.
  */
 export function quoteAppearsIn(quote: string, sources: SourceItem[]): boolean {
+  return locateQuote(quote, sources) !== null;
+}
+
+/**
+ * Where a quoted span sits in the source that contains it (#549).
+ *
+ * **The location was already computed and thrown away.** {@link quoteMatcher}
+ * returns a regex rather than a boolean precisely so "does it appear" and
+ * "where does it appear" cannot drift apart, and {@link windowAroundQuote}
+ * already calls `body.search(matcher)` — that was the only place in the tree
+ * computing a quote's offset, and it discarded it. This makes the answer the
+ * return value.
+ *
+ * `quoteAppearsIn` becomes a thin `!== null` over it, so its existing callers
+ * and tests are untouched: the change is to what the search RETURNS, not to
+ * what it finds.
+ *
+ * Sources are checked in the order given, and the first containing source wins.
+ * A quote appearing in two cited sources is supported by either; picking the
+ * first is stable and needs no rule about which is "better".
+ */
+export function locateQuote(quote: string, sources: readonly SourceItem[]): QuoteLocation | null {
   const matcher = quoteMatcher(quote);
-  if (!matcher) return false;
-  return sources.some((s) => matcher.test(sourceBody(s)));
+  if (!matcher) return null;
+  for (const source of sources) {
+    const body = sourceBody(source);
+    const at = body.search(matcher);
+    if (at < 0) continue;
+    const matched = matcher.exec(body)?.[0] ?? '';
+    return {
+      sourceId: source.id,
+      start: at,
+      end: at + matched.length,
+      matchedText: matched,
+      // Whether the body came from the full retained text or fell back to the
+      // 2,000-character preview. A caller checking a long source needs to know
+      // that "not found" may mean "not found in the first 2,000 characters" —
+      // which is the exact failure `verifyText` exists to prevent, silently
+      // reintroduced for the five producers that do not set it.
+      fromPreview: source.verifyText === undefined,
+    };
+  }
+  return null;
 }
 
 /**
@@ -256,17 +316,22 @@ async function verifyOne(
 
   // Deterministic first: a quote that is not in the source is a fail no model
   // needs to weigh in on, and it catches the exact SourceCheckup failure.
-  if (claim.quote && !quoteAppearsIn(claim.quote, sources)) {
+  const located = claim.quote ? locateQuote(claim.quote, sources) : null;
+  if (claim.quote && !located) {
     return {
       id,
       label,
       status: 'fail',
       evidence: `Quoted text does not appear in ${sources.map((s) => s.id).join(', ')}: "${truncate(claim.quote, 120)}"`,
+      // Structured even on a failure: which sources were checked is the thing a
+      // reader needs in order to disagree, and parsing it back out of the
+      // sentence above is what a descent affordance would otherwise have to do.
+      sources: sources.map((s) => s.id),
     };
   }
 
   const site = resolveSiteModel(config, 'claim-verifier');
-  const userContent = buildUserContent(claim, sources);
+  const userContent = buildUserContent(claim, sources, located ?? undefined);
 
   // Deliberately NOT routed through the LLM sub-call cache. Its key embeds
   // `userContent` verbatim, and the claim text differs on every call, so the
@@ -313,6 +378,12 @@ async function verifyOne(
       label,
       status: parsed.supported ? 'pass' : 'fail',
       evidence: `${sources.map((s) => s.id).join(', ')}: ${parsed.reason}`,
+      sources: sources.map((s) => s.id),
+      // The span the deterministic gate found, carried through so a caller can
+      // go from this verdict to the exact text behind it without re-searching —
+      // and without the caller having to know which of the cited sources
+      // actually contained the quote.
+      ...(located ? { location: { ...located } } : {}),
     };
   } catch (err) {
     debugLog('claim-verifier:error', {

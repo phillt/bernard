@@ -226,3 +226,45 @@ describe('verifyText retention', () => {
     expect(store.get(id)!.verifyText).toBeUndefined();
   });
 });
+
+describe('the dedup key (#549)', () => {
+  it('keeps two extractions of one URL apart when the selector differs', () => {
+    // The key is `${kind}:${rawRef}`, so with a bare url `web_read(url, 'main')`
+    // and `web_read(url, 'article')` collided into one entry and the longer
+    // body silently won — two different extractions presented as one source,
+    // with a quote checkable against text the caller never saw.
+    const store = new ProvenanceStore();
+    const a = store.add({
+      kind: 'web',
+      label: 'main',
+      contentPreview: 'main content',
+      rawRef: 'https://example.test/p#selector=main',
+    });
+    const b = store.add({
+      kind: 'web',
+      label: 'article',
+      contentPreview: 'article content, which is longer',
+      rawRef: 'https://example.test/p#selector=article',
+    });
+    expect(a).not.toBe(b);
+    expect(store.size()).toBe(2);
+  });
+
+  it('still merges two reads of the same URL with no selector', () => {
+    const store = new ProvenanceStore();
+    const a = store.add({
+      kind: 'web',
+      label: 'p',
+      contentPreview: 'short',
+      rawRef: 'https://e.test/p',
+    });
+    const b = store.add({
+      kind: 'web',
+      label: 'p',
+      contentPreview: 'longer body',
+      rawRef: 'https://e.test/p',
+    });
+    expect(a).toBe(b);
+    expect(store.get(a)!.contentPreview).toBe('longer body');
+  });
+});
