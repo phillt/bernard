@@ -274,6 +274,88 @@ describe('supersession archives rather than deletes', () => {
   });
 });
 
+describe('retiring a record in favour of nothing', () => {
+  it('drops it from listMemory but leaves the file', () => {
+    const store = new MemoryStore();
+    store.writeMemory('one-off', 'that is an image I uploaded, it can be ignored');
+    expect(store.retire('one-off')).toBe(true);
+    expect(store.listMemory()).toEqual([]);
+    expect(realFs.existsSync(path.join(memDir, 'one-off.md'))).toBe(true);
+  });
+
+  it('still reads directly, and says when it was retired', () => {
+    const store = new MemoryStore();
+    store.writeMemory('one-off', 'body');
+    store.retire('one-off');
+    const record = store.readRecord('one-off');
+    expect(record?.retiredAt).toBeTruthy();
+    expect(record?.content).toBe('body');
+    // Retired in favour of NOTHING — the whole reason this is not `supersede`.
+    expect(record?.supersededBy).toBeUndefined();
+  });
+
+  it('keeps it in listAllMemory and out of getAllMemoryContents', () => {
+    const store = new MemoryStore();
+    store.writeMemory('keep', 'a');
+    store.writeMemory('drop', 'b');
+    store.retire('drop');
+    expect(store.listAllMemory().sort()).toEqual(['drop', 'keep']);
+    expect([...store.getAllMemoryContents().keys()]).toEqual(['keep']);
+  });
+
+  it('is undone by removing one front-matter line', () => {
+    const store = new MemoryStore();
+    store.writeMemory('one-off', 'body');
+    store.retire('one-off');
+    const p = path.join(memDir, 'one-off.md');
+    realFs.writeFileSync(
+      p,
+      realFs
+        .readFileSync(p, 'utf-8')
+        .split('\n')
+        .filter((l) => !l.startsWith('retiredAt:'))
+        .join('\n'),
+      'utf-8',
+    );
+    expect(new MemoryStore().listMemory()).toEqual(['one-off']);
+  });
+
+  it('does not un-retire a record when it is rewritten', () => {
+    const store = new MemoryStore();
+    store.writeMemory('one-off', 'first');
+    store.retire('one-off');
+    store.writeMemory('one-off', 'second');
+    expect(store.readRecord('one-off')?.retiredAt).toBeTruthy();
+    expect(store.listMemory()).toEqual([]);
+  });
+
+  it('keeps the original timestamp when retired twice', () => {
+    // When it stopped being shown is the fact worth having; a second call
+    // should not quietly restate it as today.
+    // A pinned timestamp, not one read back from a retire that just ran: two
+    // calls in the same millisecond produce the same string either way, so
+    // comparing them races the clock and the test cannot fail.
+    const store = new MemoryStore();
+    store.writeMemory('one-off', 'body');
+    const p = path.join(memDir, 'one-off.md');
+    const OLD = '2020-05-05T00:00:00.000Z';
+    realFs.writeFileSync(
+      p,
+      realFs.readFileSync(p, 'utf-8').replace(/^---\n/, `---\nretiredAt: ${OLD}\n`),
+      'utf-8',
+    );
+    expect(new MemoryStore().readRecord('one-off')!.retiredAt).toBe(OLD);
+
+    const fresh = new MemoryStore();
+    fresh.retire('one-off');
+    expect(fresh.readRecord('one-off')!.retiredAt).toBe(OLD);
+  });
+
+  it('returns false for a key that does not exist', () => {
+    expect(new MemoryStore().retire('nope')).toBe(false);
+  });
+});
+
 describe('the read cache', () => {
   it('does not re-read a file whose mtime has not moved', () => {
     // Asserted by changing the bytes and restoring the mtime, rather than by

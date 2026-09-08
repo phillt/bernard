@@ -91,6 +91,8 @@ import type { PendingPermission } from './apps/permission-consent.js';
 import { GRANTABLE_DIRECTIVES } from './host/csp-grant.js';
 import type { CspGrantSpec } from './apps/manage.js';
 import { AppletCandidateStore } from './applet-candidates.js';
+import { MemoryCandidateStore } from './memory-candidates.js';
+import { memoryProposalBlock } from './memory-proposal.js';
 import { HELP_CONFIG } from './cli-help.js';
 import { appletSuggestionBlock } from './applet-detector.js';
 import { runCorrectionAgent } from './correction.js';
@@ -519,6 +521,22 @@ async function runInkRepl(args: {
     }
   }
 
+  // Memory housekeeping (#529). A NOTICE plus a context block, never a change:
+  // these are the user's own notes, and the pass that produced these proposals
+  // runs in a detached worker that cannot print, so the announcement can only
+  // happen here either way. Given that, "we retired three" and "shall we retire
+  // these three?" cost the same keystroke and only one of them can be wrong.
+  {
+    const { pending: pendingMemory } = new MemoryCandidateStore().pruneOld();
+    if (pendingMemory.length > 0) {
+      emitStartupNotice(
+        `${pendingMemory.length} memory suggestion(s) pending. Ask Bernard about memory housekeeping.`,
+      );
+      const block = memoryProposalBlock(pendingMemory);
+      alertContext = alertContext ? alertContext + '\n\n' + block : block;
+    }
+  }
+
   const agentCtx = assembleContext({
     config,
     toolOptions,
@@ -552,9 +570,19 @@ async function runInkRepl(args: {
       // background worker for fact extraction). It does NOT write a
       // session-summary memory entry — that is deliberately deferred to
       // /clear --save, which runs interactively and can show the user the key.
-      if (ragStore && history.length >= MIN_HISTORY_FOR_FACTS) {
-        const serialized = serializeMessages(history);
-        if (serialized.trim()) {
+      const wantsFacts = Boolean(ragStore) && history.length >= MIN_HISTORY_FOR_FACTS;
+      // Memory consolidation (#529) answers to its OWN gate, not RAG's.
+      //
+      // The condition used to be `ragStore && history.length >= …` alone, and
+      // `ragStore` is undefined unless `config.ragEnabled` — so hanging this
+      // pass off it would have made it silently never run for a user with RAG
+      // off, a setting that has nothing to do with their memory files. It also
+      // does not need a transcript: memory can have changed in a session with
+      // nothing worth extracting.
+      const wantsConsolidation = config.memoryConsolidation;
+      if (wantsFacts || wantsConsolidation) {
+        const serialized = wantsFacts ? serializeMessages(history).trim() || undefined : undefined;
+        {
           fs.mkdirSync(RAG_DIR, { recursive: true });
           const tempFile = path.join(
             RAG_DIR,
@@ -563,9 +591,12 @@ async function runInkRepl(args: {
           fs.writeFileSync(
             tempFile,
             JSON.stringify({
-              serialized,
+              // Omitted rather than sent empty, so the worker's per-arm gate
+              // reads as the same question the spawn asked.
+              ...(serialized ? { serialized } : {}),
               provider: config.provider,
               model: config.model,
+              ...(wantsConsolidation ? { consolidateMemory: true } : {}),
             }),
           );
           const __dirname = path.dirname(fileURLToPath(import.meta.url));

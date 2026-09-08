@@ -133,6 +133,7 @@ export interface ProfileSettings {
    * unconditional. Speech path only; the transcript stays literal.
    */
   voiceNormalizer?: boolean;
+  memoryConsolidation?: boolean;
 }
 
 /** A single named profile entry. */

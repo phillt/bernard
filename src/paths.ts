@@ -90,6 +90,7 @@ export function appletDataDir(appId: string): string {
 export const SPECIALIST_CANDIDATES_DIR = path.join(DATA_DIR, 'specialist-candidates');
 export const CORRECTION_CANDIDATES_DIR = path.join(DATA_DIR, 'correction-candidates');
 export const APPLET_CANDIDATES_DIR = path.join(DATA_DIR, 'applet-candidates');
+export const MEMORY_CANDIDATES_DIR = path.join(DATA_DIR, 'memory-candidates');
 
 /**
  * Per-applet design briefs — intent and decisions (#463).
@@ -147,6 +148,21 @@ export const CRON_LOG_FILE = path.join(STATE_DIR, 'cron-daemon.log');
 /** Applet host process state (#421), mirroring the cron daemon's pair. */
 export const APPLET_HOST_PID_FILE = path.join(STATE_DIR, 'applet-host.pid');
 export const APPLET_HOST_LOG_FILE = path.join(STATE_DIR, 'applet-host.log');
+/**
+ * One ISO timestamp: the inclusion CUTOFF the memory-consolidation pass last
+ * examined up to (#529).
+ *
+ * A cutoff, not a run time, and the difference was a real defect — storing the
+ * run time made the trigger set and the input set exact complements, so a
+ * record withheld as too fresh was never examined again unless a later write
+ * re-triggered the gate. `rag-worker.ts`'s `runMemoryConsolidation` carries the
+ * trace.
+ *
+ * State rather than data: it says nothing about the user's memories, only about
+ * when Bernard last looked, and losing it costs one redundant pass. A content
+ * hash was the alternative and is not needed — #513 already stamps every write.
+ */
+export const MEMORY_CONSOLIDATED_MARKER = path.join(STATE_DIR, '.memory-consolidated');
 /**
  * Per-applet port and session token (#421).
  *

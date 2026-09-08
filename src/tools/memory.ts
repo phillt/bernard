@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import type { MemoryStore } from '../memory.js';
 import { MemoryKeyCollisionError } from '../memory.js';
+import { MemoryCandidateStore } from '../memory-candidates.js';
+import { describeProposal } from '../memory-proposal.js';
 import { MEMORY_DIR } from '../paths.js';
 import type { BernardTool } from '../framework/tools/types.js';
 import { ok, err } from '../framework/tools/types.js';
@@ -15,9 +17,12 @@ import type { ProvenanceStore } from '../provenance.js';
  */
 const MEMORY_PARAMETERS = z.object({
   action: z
-    .enum(['list', 'read', 'write', 'delete', 'supersede'])
+    .enum(['list', 'read', 'write', 'delete', 'supersede', 'retire', 'proposals'])
     .describe('The action to perform'),
-  key: z.string().optional().describe('The memory key (required for read/write/delete/supersede)'),
+  key: z
+    .string()
+    .optional()
+    .describe('The memory key (required for read/write/delete/supersede/retire)'),
   content: z.string().optional().describe('The content to write (required for write)'),
   replacement: z
     .string()
@@ -25,6 +30,16 @@ const MEMORY_PARAMETERS = z.object({
     .describe(
       'For supersede: the key of the memory that replaces this one. It must already exist.',
     ),
+  proposalId: z
+    .string()
+    .optional()
+    .describe(
+      'For proposals: the id shown in the Memory Housekeeping block, to mark accepted or declined.',
+    ),
+  decision: z
+    .enum(['accepted', 'declined'])
+    .optional()
+    .describe('For proposals: what the user decided about proposalId. Omit to just list them.'),
 });
 
 const SCRATCH_PARAMETERS = z.object({
@@ -39,7 +54,29 @@ type ScratchArgs = z.infer<typeof SCRATCH_PARAMETERS>;
 /**
  * Creates the persistent memory tool backed by on-disk markdown files.
  *
- * Supports list, read, write, and delete actions for cross-session recall.
+ * ## The `description` is the entire write-side policy, not one prompt among many
+ *
+ * Worth stating because a prompt tweak reads as hopeful otherwise. `writeMemory`
+ * has exactly one non-machinery caller — the `write` case below — and nothing in
+ * `agent-prompt.ts`, `agent.ts` or `framework/agents/` tells the model what is
+ * worth saving. So this string is 100% of the instruction surface, and
+ * tightening it from "anything worth recalling later" (which admits "that's an
+ * image I uploaded, that can be ignored") to a stays-true/merely-happened
+ * distinction changes the whole of it.
+ *
+ * The structural alternatives were weighed and are worse. A tool that REFUSES an
+ * episodic write needs the same semantic judgement `memory-consolidation.ts`
+ * measures as undecidable from text, and its failure mode is far worse: a false
+ * refusal silently loses a standing fact at the moment the user asked to keep
+ * it. A `kind: 'standing' | 'episodic'` argument would make the episodic
+ * category deterministically retirable, which is the real prize — but it is a
+ * self-report from the same model that wrote the detritus under an instruction
+ * not to. The non-self-report version is USE, not intent: an episodic record is
+ * never recalled again. Memory has no per-key access signal because it is
+ * injected wholesale, so that is net-new work and the honest direction rather
+ * than something this change could have done.
+ *
+ * Supports list, read, write, delete, supersede, retire and proposals actions for cross-session recall.
  * Returns a {@link BernardTool}; `serializeForModel` reproduces the historical
  * plain-string output (including the `"Error: "` prefix on validation errors).
  *
@@ -66,12 +103,23 @@ export function createMemoryTool(
       // strict would pop a confirm menu on every list — both intolerable.
       isWriteAction: (args) => {
         const action = (args as { action?: string } | undefined)?.action;
-        return action === 'write' || action === 'delete' || action === 'supersede';
+        // `retire` and a decided `proposals` call are writes. Omitting either
+        // is the fail-open #513 found in `readOnlyWrap`: a new mutating action
+        // that no gate classifies is one an unattended dispatch may make with
+        // nobody to ask. A bare `proposals` read is not a write.
+        return (
+          action === 'write' ||
+          action === 'delete' ||
+          action === 'supersede' ||
+          action === 'retire' ||
+          (action === 'proposals' &&
+            (args as { decision?: string } | undefined)?.decision !== undefined)
+        );
       },
     },
-    description: `Persistent memory that survives across sessions. Use this to remember user preferences, project knowledge, or anything worth recalling later. Stored as files on disk at ${MEMORY_DIR}. When a memory is replaced by a newer one, use action 'supersede' rather than 'delete': the retired note stops being shown but stays on disk, so a wrong call costs nothing.`,
+    description: `Persistent memory that survives across sessions. Use this for things that stay TRUE and will matter again: user preferences, standing instructions, project knowledge, contact details. Do NOT save a record of something that merely happened — a message you already sent, a link you already followed, a file the user mentioned once. Those cost context on every request forever and help no future turn. Stored as files on disk at ${MEMORY_DIR}. When a memory is replaced by a newer one use action 'supersede'; when one is simply spent and nothing replaces it use 'retire'. Prefer either over 'delete': the note stops being shown but stays on disk, so a wrong call costs nothing.`,
     parameters: MEMORY_PARAMETERS,
-    execute: async ({ action, key, content, replacement }) => {
+    execute: async ({ action, key, content, replacement, proposalId, decision }) => {
       switch (action) {
         case 'list': {
           const keys = memoryStore.listMemory();
@@ -133,6 +181,42 @@ export function createMemoryTool(
             `Memory "${key}" retired in favour of "${replacement}". ` +
               `It is no longer shown, and its file is still on disk.`,
           );
+        }
+        case 'retire': {
+          if (!key)
+            return err({ type: 'invalid_args', message: 'key is required for retire action.' });
+          if (!memoryStore.retire(key)) return ok(`No memory found for key "${key}".`);
+          return ok(
+            `Memory "${key}" retired. It is no longer shown, and its file is still on disk.`,
+          );
+        }
+        case 'proposals': {
+          const store = new MemoryCandidateStore();
+          if (!proposalId) {
+            const pending = store.listPending();
+            if (pending.length === 0) return ok('No memory suggestions pending.');
+            return ok(
+              `Pending memory suggestions:\n${pending
+                .map((c) => `  (${c.id}) ${describeProposal(c.proposal)}`)
+                .join('\n')}`,
+            );
+          }
+          if (!decision)
+            return err({
+              type: 'invalid_args',
+              message: 'decision is required when proposalId is given.',
+            });
+          // One call. `MemoryCandidateStore.updateStatus` stamps `decidedAt`
+          // itself on a rejection — deliberately, and pinned by a test — so
+          // routing a decline through `decline()` buys nothing here. An earlier
+          // comment claimed otherwise, describing a hazard the applet store has
+          // and this one was written not to.
+          const done = store.updateStatus(
+            proposalId,
+            decision === 'declined' ? 'rejected' : 'accepted',
+          );
+          if (!done) return ok(`No memory suggestion found with id "${proposalId}".`);
+          return ok(`Memory suggestion "${proposalId}" marked ${decision}.`);
         }
         case 'delete': {
           if (!key)

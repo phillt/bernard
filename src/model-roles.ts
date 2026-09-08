@@ -194,4 +194,9 @@ export const SITE_ROLE: Record<ModelSite, RoleId> = {
   // class, then verbalize per class. The cheap tier is what keeps a pass that
   // runs after every spoken turn affordable.
   'speech-normalizer': 'classifier',
+  // Deciding "do these two notes say the same thing, and is this one still
+  // worth keeping" is classification over a corpus, not synthesis of one — the
+  // pass never rewrites a memory, it only groups and labels. The `merge` kind
+  // does draft text, but it is a PROPOSAL a user accepts, not a write.
+  'memory-consolidator': 'classifier',
 };

@@ -836,6 +836,72 @@ describe('loadConfig voiceNormalizer (#432)', () => {
   });
 });
 
+describe('loadConfig memoryConsolidation (#529)', () => {
+  // Mirrors the voiceNormalizer block, and the "unrelated truthy value" case is
+  // the one that matters: this is a DEFAULT-TRUE flag, so copying voiceTts's
+  // default-false `=== 'true' | '1'` test would invert it silently. The
+  // resolution comment in config.ts warns about exactly that.
+  beforeEach(() => {
+    fsMock.existsSync.mockReturnValue(false);
+    fsMock.readFileSync.mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-test');
+    vi.stubEnv('OPENAI_API_KEY', '');
+    vi.stubEnv('XAI_API_KEY', '');
+    vi.stubEnv('BERNARD_PROVIDER', '');
+    vi.stubEnv('BERNARD_MODEL', '');
+    vi.stubEnv('BERNARD_MEMORY_CONSOLIDATION', '');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it('defaults to true when env var is unset', () => {
+    vi.unstubAllEnvs();
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-test');
+    expect(loadConfig().memoryConsolidation).toBe(true);
+  });
+
+  it('disables when BERNARD_MEMORY_CONSOLIDATION is "false"', () => {
+    vi.stubEnv('BERNARD_MEMORY_CONSOLIDATION', 'false');
+    expect(loadConfig().memoryConsolidation).toBe(false);
+  });
+
+  it('disables when BERNARD_MEMORY_CONSOLIDATION is "0"', () => {
+    vi.stubEnv('BERNARD_MEMORY_CONSOLIDATION', '0');
+    expect(loadConfig().memoryConsolidation).toBe(false);
+  });
+
+  it('is not disabled by an unrelated truthy-looking value', () => {
+    vi.stubEnv('BERNARD_MEMORY_CONSOLIDATION', 'yes');
+    expect(loadConfig().memoryConsolidation).toBe(true);
+  });
+
+  it('prefs.memoryConsolidation takes precedence over env var', () => {
+    vi.stubEnv('BERNARD_MEMORY_CONSOLIDATION', 'true');
+    let callCount = 0;
+    fsMock.readFileSync.mockImplementation(() => {
+      callCount++;
+      if (callCount <= 1) throw new Error('ENOENT');
+      return profilesFile({ provider: 'anthropic', model: 'test', memoryConsolidation: false });
+    });
+    expect(loadConfig().memoryConsolidation).toBe(false);
+  });
+
+  it('a CLI override beats the stored preference', () => {
+    let callCount = 0;
+    fsMock.readFileSync.mockImplementation(() => {
+      callCount++;
+      if (callCount <= 1) throw new Error('ENOENT');
+      return profilesFile({ provider: 'anthropic', model: 'test', memoryConsolidation: false });
+    });
+    expect(loadConfig({ memoryConsolidation: true }).memoryConsolidation).toBe(true);
+  });
+});
+
 describe('loadConfig confirmMode (#144)', () => {
   beforeEach(() => {
     fsMock.existsSync.mockReturnValue(false);
