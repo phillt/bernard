@@ -158,7 +158,8 @@ export class RAGStore {
   /** A legacy store was read; write the stamp back on the next persist. */
   private needsStamp = false;
   /** The mismatch is stated once per process, not once per query. */
-  private mismatchWarned = false;
+  /** See {@link retrievalDisabledReason}. Non-null IS the once-per-process latch. */
+  private disabledReason: string | null = null;
 
   constructor(config?: RAGStoreConfig) {
     this.topKPerDomain = config?.topKPerDomain ?? DEFAULT_TOP_K_PER_DOMAIN;
@@ -674,18 +675,39 @@ export class RAGStore {
   }
 
   /**
-   * Says it once per process, loudly enough to be seen.
+   * Records the mismatch and logs it; **does not print**.
    *
    * `debugLog` alone would reproduce the original defect one level up — the
-   * whole point is that this failure was invisible without `BERNARD_DEBUG`.
-   * `console.error` is the only channel this module has that a user sees, and
-   * repeating it per query would bury the session.
+   * whole point is that this failure was invisible without `BERNARD_DEBUG` —
+   * but a `console.error` from here is the wrong channel and would be invisible
+   * for a different reason. RAG search runs mid-turn (`recall-filter`, the main
+   * agent's own retrieval), and in the default full-screen REPL Ink owns the
+   * alternate screen buffer: a raw stderr write at the cursor corrupts the
+   * current frame and is then overwritten on Ink's next ~32 ms render. The
+   * warning deliberately made "loud enough to be seen" would be the one most
+   * likely not to be seen.
+   *
+   * So this module exposes STATE and lets each front end surface it in its own
+   * channel — `catalog-notice.ts`'s `provider-wiped` precedent exactly, and for
+   * the same stated reason: "your retrieval is returning nothing" has to
+   * outlive a keystroke, so the REPL pushes a transcript notice rather than a
+   * toast, and `runHeadless` writes it to the job log where an operator will
+   * read it later.
    */
   private warnMismatchOnce(message: string): void {
     debugLog('rag:model-mismatch', { message });
-    if (this.mismatchWarned) return;
-    this.mismatchWarned = true;
-    console.error(`\n⚠ Memory retrieval is disabled.\n${message}\n`);
+    this.disabledReason = message;
+  }
+
+  /**
+   * Why retrieval is returning nothing, or `null` when it is healthy.
+   *
+   * Latched on first detection and never cleared: the condition is a property
+   * of the store on disk versus the active embedder, and neither changes
+   * within a process.
+   */
+  retrievalDisabledReason(): string | null {
+    return this.disabledReason;
   }
 
   /**

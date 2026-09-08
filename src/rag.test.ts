@@ -163,34 +163,41 @@ describe('RAGStore', () => {
         dimensions: 768,
         memories: [record],
       });
-      const err = vi.spyOn(console, 'error').mockImplementation(() => {});
-      try {
-        const store = await createStore();
-        // The facts are still THERE — the whole point of refusing rather than
-        // discarding. Only retrieval stops.
-        expect(store.listMemories()).toHaveLength(1);
-        expect(await store.search('a stored fact with testing keywords')).toEqual([]);
-        const said = err.mock.calls.flat().join(' ');
-        expect(said).toContain('some-other/embedder');
-        expect(said).toContain('Xenova/all-MiniLM-L6-v2');
-        expect(said).toContain('intact');
-      } finally {
-        err.mockRestore();
-      }
+      const store = await createStore();
+      // The facts are still THERE — the whole point of refusing rather than
+      // discarding. Only retrieval stops.
+      expect(store.listMemories()).toHaveLength(1);
+      expect(await store.search('a stored fact with testing keywords')).toEqual([]);
+      // Asserted on the STATE, not on a print. This module deliberately does
+      // not `console.error`: search runs mid-turn, and a raw stderr write into
+      // Ink's alternate screen buffer corrupts the frame and is overwritten on
+      // the next render — so the warning would be invisible in exactly the
+      // session it matters in. Each front end reads this and surfaces it in its
+      // own channel.
+      const said = store.retrievalDisabledReason() ?? '';
+      expect(said).toContain('some-other/embedder');
+      expect(said).toContain('Xenova/all-MiniLM-L6-v2');
+      expect(said).toContain('intact');
     });
 
-    it('says it once, not once per query', async () => {
+    it('never prints, so it cannot corrupt the REPL frame it would land in', async () => {
       seed({ version: 1, model: 'other', dimensions: 768, memories: [record] });
       const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const out = vi.spyOn(console, 'log').mockImplementation(() => {});
       try {
         const store = await createStore();
         for (let i = 0; i < 3; i++) {
           store.clearTurnCache();
           await store.search('a stored fact with testing keywords');
         }
-        expect(err).toHaveBeenCalledTimes(1);
+        expect(err).not.toHaveBeenCalled();
+        expect(out).not.toHaveBeenCalled();
+        // …and the state is latched, so a front end announces it once however
+        // many searches ran.
+        expect(store.retrievalDisabledReason()).toContain('other');
       } finally {
         err.mockRestore();
+        out.mockRestore();
       }
     });
 
@@ -198,13 +205,9 @@ describe('RAGStore', () => {
       // Both read paths go through `embedQuery`, so the refusal is written
       // once rather than at each entry point.
       seed({ version: 1, model: 'other', dimensions: 768, memories: [record] });
-      const err = vi.spyOn(console, 'error').mockImplementation(() => {});
-      try {
-        const store = await createStore();
-        expect(await store.searchWithIds('a stored fact with testing keywords')).toEqual([]);
-      } finally {
-        err.mockRestore();
-      }
+      const store = await createStore();
+      expect(await store.searchWithIds('a stored fact with testing keywords')).toEqual([]);
+      expect(store.retrievalDisabledReason()).not.toBeNull();
     });
 
     it('refuses on dimensionality alone, with the same model name', async () => {
@@ -217,14 +220,9 @@ describe('RAGStore', () => {
         dimensions: 768,
         memories: [record],
       });
-      const err = vi.spyOn(console, 'error').mockImplementation(() => {});
-      try {
-        const store = await createStore();
-        expect(await store.search('a stored fact with testing keywords')).toEqual([]);
-        expect(err.mock.calls.flat().join(' ')).toContain('768');
-      } finally {
-        err.mockRestore();
-      }
+      const store = await createStore();
+      expect(await store.search('a stored fact with testing keywords')).toEqual([]);
+      expect(store.retrievalDisabledReason()).toContain('768');
     });
 
     it('does not refuse when the stamp matches', async () => {

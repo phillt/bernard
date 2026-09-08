@@ -14,7 +14,13 @@ const mockMcpManager = vi.hoisted(() => ({
 }));
 
 const mockRagSearch = vi.hoisted(() => vi.fn().mockResolvedValue([]));
-const mockRagStoreCtor = vi.hoisted(() => vi.fn(() => ({ search: mockRagSearch })));
+const mockRagStoreCtor = vi.hoisted(() =>
+  // `retrievalDisabledReason` is on the real store's surface (#520):
+  // `runHeadless` reads it and writes the reason to the run log, because
+  // `RAGStore` deliberately does not print — a raw stderr write is the wrong
+  // channel for the REPL, which owns the terminal.
+  vi.fn(() => ({ search: mockRagSearch, retrievalDisabledReason: () => null })),
+);
 
 const mockRunDefinition = vi.hoisted(() =>
   vi.fn().mockResolvedValue({ formatted: 'done', stepLimitHit: false }),
@@ -92,7 +98,9 @@ beforeEach(() => {
   });
   mockRagSearch.mockResolvedValue([]);
   mockRunDefinition.mockResolvedValue({ formatted: 'done', stepLimitHit: false });
-  mockRagStoreCtor.mockImplementation(() => ({ search: mockRagSearch }) as any);
+  mockRagStoreCtor.mockImplementation(
+    () => ({ search: mockRagSearch, retrievalDisabledReason: () => null }) as any,
+  );
 });
 
 describe('resolvePosture', () => {
@@ -415,5 +423,36 @@ describe('runHeadless', () => {
     const res = await runHeadless(opts());
     expect(res.env.ctx).toBeDefined();
     expect(res.env.runId).toEqual(expect.any(String));
+  });
+});
+
+/**
+ * A dead embedding store is reported where an operator will see it (#520).
+ *
+ * `RAGStore` records the mismatch and does not print: search runs mid-turn and
+ * a raw stderr write into Ink's alternate screen buffer is corrupted and then
+ * overwritten, so the warning made "loud enough to be seen" was the one least
+ * likely to be. Each front end surfaces it in its own channel — the REPL pushes
+ * a transcript notice, and this writes it to the run log, which for cron is the
+ * job log. Without it an unattended job answers worse, forever, silently.
+ */
+describe('runHeadless reports disabled retrieval', () => {
+  it('writes the reason to the run log', async () => {
+    mockRagStoreCtor.mockImplementation(
+      () =>
+        ({
+          search: mockRagSearch,
+          retrievalDisabledReason: () => 'written by other/model at 768',
+        }) as any,
+    );
+    const log = vi.fn();
+    await runHeadless(opts({ ragQuery: 'why', log }));
+    expect(log.mock.calls.flat().join(' ')).toContain('written by other/model at 768');
+  });
+
+  it('says nothing when retrieval is healthy', async () => {
+    const log = vi.fn();
+    await runHeadless(opts({ ragQuery: 'why', log }));
+    expect(log.mock.calls.flat().join(' ')).not.toContain('retrieval is disabled');
   });
 });
