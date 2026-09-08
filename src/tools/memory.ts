@@ -278,7 +278,7 @@ export function createMemoryTool(
     },
     description: `Persistent memory that survives across sessions. Use this for things that stay TRUE and will matter again: user preferences, standing instructions, project knowledge, contact details. Do NOT save a record of something that merely happened — a message you already sent, a link you already followed, a file the user mentioned once. Those cost context on every request forever and help no future turn. Stored as files on disk at ${MEMORY_DIR}. When a memory is replaced by a newer one use action 'supersede'; when one is simply spent and nothing replaces it use 'retire'. Prefer either over 'delete': the note stops being shown but stays on disk, so a wrong call costs nothing.`,
     parameters: MEMORY_PARAMETERS,
-    execute: async ({ action, key, content, replacement, proposalId, decision }) => {
+    execute: async ({ action, key, content, replacement, proposalId, decision }, execOptions) => {
       switch (action) {
         case 'list': {
           const keys = memoryStore.listMemory();
@@ -317,7 +317,18 @@ export function createMemoryTool(
           // also means a write that fails its collision guard costs no model
           // call at all. Whatever this returns, the note above is already
           // saved; this only decides which of the two stays visible.
-          const note = await contradictionNote({ key, content }, memoryStore, deps);
+          //
+          // `execOptions.abortSignal`, not nothing: the check makes an LLM call
+          // and can raise an `ask_user` overlay, and every in-turn subcall in
+          // this repo honours the parent signal. Dropped, an Esc mid-write left
+          // the cheap-tier call running to completion and an aborted turn could
+          // not tear down the conflict menu.
+          const note = await contradictionNote(
+            { key, content },
+            memoryStore,
+            deps,
+            execOptions?.abortSignal,
+          );
           return ok(`Memory "${key}" saved.${note}`);
         }
         case 'supersede': {
