@@ -40,7 +40,7 @@ import { debugLog, traceLlm } from './logger.js';
 import { mapWithConcurrency } from './concurrency.js';
 import { resolveSiteModel } from './model-policy.js';
 import type { ProvenanceStore, SourceItem } from './provenance.js';
-import { verdictOf, type Check } from './rubric.js';
+import { verdictOf, type Check, type CheckLocation } from './rubric.js';
 import { parseStructuredOutput } from './structured-output.js';
 import { truncate } from './text.js';
 import { usageRecordFromSite, type UsageRecorder } from './framework/hooks/token-stats.js';
@@ -132,21 +132,27 @@ function quoteMatcher(quote: string): RegExp | null {
   return new RegExp(pattern, 'i');
 }
 
-/** A quoted span, located in the source that contains it (#549). */
-export interface QuoteLocation {
-  /** The provenance id, e.g. `S3`. */
-  sourceId: string;
-  /** Character offset into the source body the check ran against. */
-  start: number;
-  end: number;
-  /** The text as it appears in the source — whitespace may differ from the quote. */
-  matchedText: string;
-  /** True when only the capped preview was available, not the full retained text. */
-  fromPreview: boolean;
-}
+/**
+ * A quoted span, located in the source that contains it (#549).
+ *
+ * An alias for {@link CheckLocation} rather than a second declaration of the
+ * same five fields. This module already imports from `rubric.ts`, so there was
+ * never a dependency reason for the copy — and the assignment that carried one
+ * into the other was a `{ ...located }` spread, which is exactly what would
+ * have hidden a divergence: adding a field to one side compiles fine.
+ */
+export type QuoteLocation = CheckLocation;
 
-/** The text of a source that a check should run against. */
-function sourceBody(s: SourceItem): string {
+/**
+ * The text of a source that a check should run against.
+ *
+ * Exported since #549 so `cite locate` uses it rather than re-deriving
+ * `verifyText ?? contentPreview`. If the two ever diverged, `locateQuote`'s
+ * offsets would index a different string than the window sliced around them —
+ * a correct offset with silently wrong surrounding text, which is the one
+ * output of `locate` a reader cannot check.
+ */
+export function sourceBody(s: SourceItem): string {
   return s.verifyText ?? s.contentPreview;
 }
 
@@ -163,12 +169,13 @@ function sourceBody(s: SourceItem): string {
  * the region the quote gate already located removes that whole class of false
  * rejection.
  */
-function windowAroundQuote(body: string, quote: string | undefined, at = -1): string {
+function windowAroundQuote(body: string, quote: string | undefined, located = -1): string {
   if (body.length <= SOURCE_WINDOW_CHARS) return body;
-  if (at < 0 && quote) {
-    const matcher = quoteMatcher(quote);
-    at = matcher ? body.search(matcher) : -1;
-  }
+  // A local rather than a reassigned parameter: `located` is the offset the
+  // quote gate already found in THIS source, and the fallback search below can
+  // only fire for the other cited sources — `verifyOne` returns early when a
+  // quote is set and nothing matched anywhere.
+  const at = located >= 0 ? located : quote ? (body.search(quoteMatcher(quote) ?? /$^/) ?? -1) : -1;
   if (at < 0) return body.slice(0, SOURCE_WINDOW_CHARS);
   // Centre the window on the match, clamped to the ends of the text.
   const start = Math.max(
@@ -316,17 +323,18 @@ async function verifyOne(
 
   // Deterministic first: a quote that is not in the source is a fail no model
   // needs to weigh in on, and it catches the exact SourceCheckup failure.
+  const sourceIds = sources.map((s) => s.id);
   const located = claim.quote ? locateQuote(claim.quote, sources) : null;
   if (claim.quote && !located) {
     return {
       id,
       label,
       status: 'fail',
-      evidence: `Quoted text does not appear in ${sources.map((s) => s.id).join(', ')}: "${truncate(claim.quote, 120)}"`,
+      evidence: `Quoted text does not appear in ${sourceIds.join(', ')}: "${truncate(claim.quote, 120)}"`,
       // Structured even on a failure: which sources were checked is the thing a
       // reader needs in order to disagree, and parsing it back out of the
       // sentence above is what a descent affordance would otherwise have to do.
-      sources: sources.map((s) => s.id),
+      sources: sourceIds,
     };
   }
 
@@ -377,13 +385,13 @@ async function verifyOne(
       id,
       label,
       status: parsed.supported ? 'pass' : 'fail',
-      evidence: `${sources.map((s) => s.id).join(', ')}: ${parsed.reason}`,
-      sources: sources.map((s) => s.id),
+      evidence: `${sourceIds.join(', ')}: ${parsed.reason}`,
+      sources: sourceIds,
       // The span the deterministic gate found, carried through so a caller can
       // go from this verdict to the exact text behind it without re-searching —
       // and without the caller having to know which of the cited sources
       // actually contained the quote.
-      ...(located ? { location: { ...located } } : {}),
+      ...(located ? { location: located } : {}),
     };
   } catch (err) {
     debugLog('claim-verifier:error', {
