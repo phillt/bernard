@@ -335,7 +335,7 @@ describe('the <specialists> roster is bounded', () => {
   it('keeps everything when the roster fits', () => {
     const pack = packSpecialists([spec('a'), spec('b')]);
     expect(pack.keptLines).toHaveLength(2);
-    expect(pack.dropped).toEqual([]);
+    expect(pack.dropped).toBe(0);
   });
 
   it('drops whole entries past the budget and never exceeds it', () => {
@@ -343,8 +343,8 @@ describe('the <specialists> roster is bounded', () => {
     // complete, dispatchable specialist.
     const many = Array.from({ length: 400 }, (_, i) => spec(`s${i}`, 200));
     const pack = packSpecialists(many);
-    expect(pack.dropped.length).toBeGreaterThan(0);
-    expect(pack.keptLines.length + pack.dropped.length).toBe(400);
+    expect(pack.dropped).toBeGreaterThan(0);
+    expect(pack.keptLines.length + pack.dropped).toBe(400);
     expect(pack.keptLines.join('\n').length).toBeLessThanOrEqual(MAX_SPECIALIST_ROSTER_CHARS);
   });
 
@@ -355,7 +355,6 @@ describe('the <specialists> roster is bounded', () => {
     const many = Array.from({ length: 400 }, (_, i) => spec(`s${i}`, 200));
     const pack = packSpecialists(many, [{ id: 's399', name: 'S399', score: 0.9 }]);
     expect(pack.keptLines[0]).toContain('s399');
-    expect(pack.dropped).not.toContain('s399');
   });
 
   it('says it truncated, and names the way back', () => {
@@ -374,6 +373,16 @@ describe('the <specialists> roster is bounded', () => {
       .content as string;
     expect(body).toContain('- a — A:');
     expect(body).not.toContain('omitted to fit');
+  });
+
+  it('still renders the note when a single entry exceeds the whole budget', () => {
+    // `keptLines` is empty here, and the section must not vanish: an absent
+    // `<specialists>` block is indistinguishable from having no specialists at
+    // all, which is the one reading that stops the agent looking for them.
+    const huge = [spec('enormous', MAX_SPECIALIST_ROSTER_CHARS + 100)];
+    const body = buildContextMessage({ specialistSummaries: huge })!.content as string;
+    expect(body).toContain('<specialists>');
+    expect(body).toContain('omitted to fit');
   });
 
   it('renders no section at all for an empty roster', () => {

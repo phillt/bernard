@@ -272,7 +272,7 @@ export type SpecialistUpdates = Partial<
  * ({@link MAX_SPECIALIST_ROSTER_CHARS}). The two are a pair: the roster is
  * re-billed on every step, so before the budget existed this constant was the
  * only thing bounding a per-step context cost, and doubling it would have taken
- * a 45-record install from ~2,064 tokens per turn to ~4,587. With whole entries
+ * a 45-record install from ~2,498 tokens per turn to well over 5,000. With whole entries
  * dropped by relevance, the record count and the context cost are independent.
  */
 export const MAX_SPECIALISTS = 100;
