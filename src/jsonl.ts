@@ -65,6 +65,89 @@ export function readJsonlTail<T = unknown>(filePath: string, limit?: number): T[
 }
 
 /**
+ * Every record NEWER than a cursor, oldest-first, reading backwards from EOF.
+ *
+ * The difference from {@link readJsonlTail} is not performance, it is
+ * correctness. That one takes a fixed `limit`, and its limit bounds only the
+ * PARSE — it `readFileSync`s the whole file and then slices — so a consumer
+ * using it as a queue silently drops everything between its cursor and the
+ * start of the window. `runSpecialistRecall` was doing exactly that: scanning a
+ * fixed 500 entries against a timestamp marker, and reporting the loss it could
+ * detect without being able to recover it.
+ *
+ * Reading backwards makes the window the cursor. Everything since the marker is
+ * returned however many entries precede it, and nothing before it is parsed —
+ * so this is also strictly less I/O than a tail read on the file that motivated
+ * it (measured 6.7 MB / 2,354 entries on a real install).
+ *
+ * `isOlderThanCursor` decides where to stop; a predicate rather than a
+ * timestamp, so the caller keeps its own notion of order — the reasoning log's
+ * `ts` is an ISO string, and a future caller may key on something else. A record
+ * the predicate cannot judge is KEPT: on an append-only log the only thing worse
+ * than re-reading a record is not reading it.
+ *
+ * Fail-open like its neighbours: `[]` on any I/O error or missing file.
+ *
+ * @param maxRecords A ceiling on one pass, so a consumer that has not run in a
+ *   very long time cannot pull an unbounded number of records into memory.
+ *   Reached without meeting the cursor, the result is truncated at the OLDEST
+ *   end — the newest records are the ones a caller cannot afford to lose.
+ */
+export function readJsonlSince<T = unknown>(
+  filePath: string,
+  isOlderThanCursor: (entry: T) => boolean,
+  maxRecords = 5000,
+): T[] {
+  let fd: number | undefined;
+  try {
+    if (!fs.existsSync(filePath)) return [];
+    fd = fs.openSync(filePath, 'r');
+    let pos = fs.fstatSync(fd).size;
+    // The partial first line of the chunk just read; the chunk BEFORE it
+    // completes it.
+    let carry = '';
+    const out: T[] = [];
+    while (pos > 0 && out.length < maxRecords) {
+      const size = Math.min(BACKWARD_CHUNK_BYTES, pos);
+      pos -= size;
+      const buf = Buffer.alloc(size);
+      fs.readSync(fd, buf, 0, size, pos);
+      const lines = (buf.toString('utf-8') + carry).split('\n');
+      // Unless we reached the file's start, the first element continues into
+      // the chunk that precedes this one.
+      carry = pos > 0 ? (lines.shift() ?? '') : '';
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        let parsed: T;
+        try {
+          parsed = JSON.parse(line) as T;
+        } catch {
+          continue; // malformed line, as everywhere else in this module
+        }
+        if (isOlderThanCursor(parsed)) return out.reverse();
+        out.push(parsed);
+        if (out.length >= maxRecords) break;
+      }
+    }
+    return out.reverse();
+  } catch {
+    return [];
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // best-effort
+      }
+    }
+  }
+}
+
+/** How much of a JSONL file {@link readJsonlSince} pulls in at a time. */
+const BACKWARD_CHUNK_BYTES = 64 * 1024;
+
+/**
  * Trim a JSONL file to its last `keep` lines via an atomic tmp+rename write.
  * No-ops when the file is absent or already within budget. Never throws.
  */

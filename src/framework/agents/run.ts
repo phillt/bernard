@@ -147,6 +147,21 @@ export interface RunDefinitionResult<TFormatted> {
    * the shape #315/#322 exist to remove. Memoized, so repeated calls are free.
    */
   toolBytes: () => number;
+  /**
+   * The registry this dispatch actually ran with, augmentation and all.
+   *
+   * Exposed for ONE reason: `captureToolCalls` redacts a tool's arguments and
+   * result only when it is handed the registry to read `ToolMeta.sensitiveArgs`
+   * / `sensitiveResult` from, and the persona path had no way to get one — it
+   * calls `runDefinition` and the tools are built inside. So a persona's `shell`
+   * command or an MCP tool's credentials went verbatim into the reasoning log,
+   * which since #501 is read back and fed to a model. The wrapper path passes
+   * its own `childTools` and was never affected.
+   *
+   * A plain field rather than a thunk, unlike {@link toolBytes}: this is the
+   * object that already exists, not a measurement over it.
+   */
+  tools: Record<string, unknown>;
 }
 
 /**
@@ -630,7 +645,7 @@ export async function runDefinition<TInput, TFormatted>(
     stepLimitHit,
     steps: result.steps?.length ?? 0,
   });
-  return { result, formatted, resolved, stepLimitHit, toolBytes };
+  return { result, formatted, resolved, stepLimitHit, toolBytes, tools: rawTools };
 }
 
 function resolveModel<TInput, TFormatted>(

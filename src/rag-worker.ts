@@ -47,7 +47,11 @@ import { consolidationInputs, proposeConsolidation } from './memory-consolidatio
 import { MEMORY_CONSOLIDATED_MARKER, SPECIALIST_RECALL_MARKER } from './paths.js';
 import { debugLog } from './logger.js';
 import { extractSpecialistNotes } from './specialist-recall.js';
-import { readReasoningLog, type ReasoningLogEntry } from './reasoning-log.js';
+import {
+  readReasoningLog,
+  readReasoningLogSince,
+  type ReasoningLogEntry,
+} from './reasoning-log.js';
 import { atomicWriteFileSync } from './fs-utils.js';
 import { truncate } from './text.js';
 import { SpecialistStore } from './specialists.js';
@@ -120,23 +124,30 @@ export interface TempPayload {
 async function runSpecialistRecall(config: BernardConfig): Promise<void> {
   const lastCutoff = readCutoffMarker(SPECIALIST_RECALL_MARKER);
   const cutoff = Date.now();
-  const scanned = readReasoningLog(RECALL_LOG_SCAN);
+  // A CURSOR once a marker exists, not a fixed window. A tail read's limit
+  // bounds the parse and not the read, so everything between the marker and the
+  // start of the window was dropped — reported by the line below and never
+  // recovered. `readReasoningLogSince` reads backwards from EOF and stops at the
+  // marker, so every dispatch since the last pass is seen however many precede
+  // it, and nothing older is parsed at all.
+  //
+  // The first run has no marker and nothing to be exact about, so it takes the
+  // tail: reading a whole rotated log to extract from a session that already
+  // ended would be paying for history nobody asked for.
+  const scanned =
+    lastCutoff === null ? readReasoningLog(RECALL_LOG_SCAN) : readReasoningLogSince(lastCutoff);
   const entries = scanned.filter((e) => {
     const t = Date.parse(e.ts);
-    return (
-      Boolean(e.specialistId) &&
-      Number.isFinite(t) &&
-      (lastCutoff === null || t > lastCutoff) &&
-      t <= cutoff
-    );
+    return Boolean(e.specialistId) && Number.isFinite(t) && t <= cutoff;
   });
 
-  // A tail read is a window, not a queue: if even the OLDEST entry we scanned is
-  // already newer than the marker, dispatches between the two were dropped and
-  // this pass will never see them. Nothing rotates this log, so the window is
-  // the only bound — say so rather than let the loss be silent, which is the
-  // failure shape a cursor over an append-only log is prone to.
-  if (lastCutoff !== null && scanned.length >= RECALL_LOG_SCAN) {
+  // Loss is still possible and is still reported — rotation can evict entries
+  // between two passes, and the backwards read has its own ceiling. Both show up
+  // the same way: the oldest record we could reach is already newer than the
+  // marker, so the ones in between are gone. Say so rather than let it be
+  // silent, which is the failure shape a cursor over an append-only log is
+  // prone to.
+  if (lastCutoff !== null && scanned.length > 0) {
     const oldest = Date.parse(scanned[0]?.ts ?? '');
     if (Number.isFinite(oldest) && oldest > lastCutoff) {
       debugLog('specialist-recall:window-truncated', { scanned: scanned.length, lastCutoff });
@@ -266,6 +277,15 @@ function renderRun(e: ReasoningLogEntry): string {
     `Task: ${e.input}`,
     calls ? `Tools used:\n${calls}` : '  (no tool calls)',
     `Outcome (${e.status}): ${truncate(String(e.finalOutput ?? ''), 600)}`,
+    // The error text, which this rendered NOWHERE — `ReasoningLogEntry` has
+    // carried `error` since the log existed and only the coarse `status` label
+    // reached the prompt. So the pass whose first instruction is "a mistake it
+    // made and what the correct approach turned out to be" was shown that
+    // something failed and never what. Bounded like its neighbours; omitted
+    // when absent, which is every successful run and every persona entry (that
+    // path infers `status` from an `Error:` prefix and has no envelope to take
+    // an error from).
+    ...(e.error ? [`Error: ${truncate(e.error, 400)}`] : []),
   ].join('\n');
 }
 

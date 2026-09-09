@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import {
   appendJsonl,
+  readJsonlSince,
   readJsonlTail,
   rotateJsonlByCount,
   listFilesByMtime,
@@ -48,6 +49,71 @@ describe('readJsonlTail', () => {
     fs.writeFileSync(file, '\n{"i":0}\nnot json{{\n{"i":1}\n\n{"i":2}\n');
     expect(readJsonlTail<{ i: number }>(file).map((r) => r.i)).toEqual([0, 1, 2]);
     expect(readJsonlTail<{ i: number }>(file, 2).map((r) => r.i)).toEqual([1, 2]);
+  });
+});
+
+describe('readJsonlSince', () => {
+  const write = (n: number) =>
+    fs.writeFileSync(
+      path.join(dir, 'log.jsonl'),
+      Array.from({ length: n }, (_, i) => `{"i":${i}}`).join('\n') + '\n',
+    );
+  const file = () => path.join(dir, 'log.jsonl');
+  const since = (cutoff: number, max?: number) =>
+    readJsonlSince<{ i: number }>(file(), (e) => e.i <= cutoff, max).map((r) => r.i);
+
+  it('returns [] for a missing file', () => {
+    expect(readJsonlSince(path.join(dir, 'nope.jsonl'), () => false)).toEqual([]);
+  });
+
+  it('returns everything after the cursor, oldest-first', () => {
+    write(10);
+    expect(since(6)).toEqual([7, 8, 9]);
+  });
+
+  it('is unaffected by how many records precede the cursor', () => {
+    // The property a tail read cannot have, and the reason this exists: a fixed
+    // window silently drops everything between the cursor and the window's
+    // start, which is how a cursor over an append-only log loses work.
+    write(5000);
+    expect(since(4996)).toEqual([4997, 4998, 4999]);
+  });
+
+  it('spans a chunk boundary without splitting a record', () => {
+    // The one thing a backwards chunked read gets wrong if the carry is
+    // mishandled: the first line of a chunk continues into the chunk BEFORE it.
+    // 64 KB of chunk against ~12-byte records puts thousands of boundaries in
+    // play, and a dropped carry corrupts exactly one record per chunk.
+    write(20_000);
+    expect(fs.statSync(file()).size).toBeGreaterThan(64 * 1024);
+    // An explicit ceiling: the default is 5,000, which this deliberately exceeds
+    // so the chunk loop runs many times.
+    expect(since(-1, 20_000)).toHaveLength(20_000);
+    expect(since(19_990)).toEqual([19_991, 19_992, 19_993, 19_994, 19_995, 19_996, 19_997, 19_998, 19_999]); // prettier-ignore
+  });
+
+  it('returns everything when nothing is older than the cursor', () => {
+    write(3);
+    expect(since(-1)).toEqual([0, 1, 2]);
+  });
+
+  it('keeps a record the predicate cannot judge', () => {
+    // On an append-only log the only thing worse than re-reading a record is
+    // not reading it, so an unparseable cursor field must not read as "old".
+    fs.writeFileSync(file(), '{"i":0}\n{"ts":"garbage"}\n{"i":2}\n');
+    const out = readJsonlSince<{ i?: number }>(file(), (e) => typeof e.i === 'number' && e.i <= 0);
+    expect(out).toHaveLength(2);
+  });
+
+  it('skips blank and malformed lines', () => {
+    fs.writeFileSync(file(), '\n{"i":0}\nnot json{{\n{"i":1}\n\n{"i":2}\n');
+    expect(since(0)).toEqual([1, 2]);
+  });
+
+  it('truncates at the OLDEST end when it hits its ceiling', () => {
+    // The newest records are the ones a caller cannot afford to lose.
+    write(100);
+    expect(since(-1, 3)).toEqual([97, 98, 99]);
   });
 });
 

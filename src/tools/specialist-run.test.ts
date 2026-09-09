@@ -1009,6 +1009,56 @@ describe('a persona dispatch writes a reasoning-log entry', () => {
     expect(entry?.status).toBe('ok');
   });
 
+  it('REDACTS an argument the tool declared sensitive', async () => {
+    // The privacy defect this path shipped with (#557). `captureToolCalls`
+    // consults `ToolMeta.sensitiveArgs` / `sensitiveResult` only when it is
+    // handed the registry, and this path had no registry to hand it — the tools
+    // are built inside `runDefinition`. So a persona's `shell` command or an MCP
+    // tool's credentials went verbatim into the reasoning log, and since #501
+    // those bytes are read back and fed to a model.
+    //
+    // Driven through an MCP-shaped tool because no BUILT-IN declares
+    // `sensitiveArgs` today — it is the affordance an MCP tool or an extension
+    // uses, which is exactly the population whose arguments are worth hiding.
+    const secretTool = {
+      // `__bernardMeta`, the key `readToolMeta` actually reads, with the `kind`
+      // it requires — an MCP tool carries this via `wrapMCPTool`.
+      __bernardMeta: {
+        name: 'vault_read',
+        kind: 'read',
+        sensitiveArgs: ['token'],
+        sensitiveResult: true,
+      },
+      description: 'x',
+      parameters: {},
+      execute: async () => 'ok',
+    };
+    mockGenerateText.mockResolvedValue({
+      text: 'Done.',
+      steps: [
+        {
+          toolCalls: [{ toolName: 'vault_read', args: { path: '/a', token: 'hunter2' } }],
+          toolResults: [{ result: 'the secret body' }],
+        },
+      ],
+      response: { messages: [] },
+    });
+    const ctx = makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore);
+    ctx.mcp.tools = { vault_read: secretTool as never };
+    const tool = createSpecialistRunTool(ctx);
+    await tool.execute!(
+      { specialistId: 'email-triage', task: 'read the vault' },
+      { toolCallId: '1', messages: [], abortSignal: undefined as never },
+    );
+    const entry = vi.mocked(appendReasoningLog).mock.calls.at(-1)?.[0];
+    const call = entry?.toolCalls[0];
+    expect(JSON.stringify(call?.args)).not.toContain('hunter2');
+    expect(call?.resultPreview).not.toContain('the secret body');
+    // …and the non-sensitive argument survives, or "redaction" is just deletion
+    // and the log stops being useful for the thing it exists for.
+    expect(JSON.stringify(call?.args)).toContain('/a');
+  });
+
   it('marks a failed run as an error, from the `Error:` prefix', async () => {
     // A persona returns a string, not a `WrapperResult`, so the verdict comes
     // from the same prefix `detectResultFailure` reads — there is no envelope.

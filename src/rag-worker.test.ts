@@ -85,6 +85,15 @@ vi.mock('./specialist-recall.js', () => ({
 vi.mock('./reasoning-log.js', async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   readReasoningLog: (...a: any[]) => mockReadJsonlTail(...(a as [])),
+  // The cursor reader is mocked over the SAME array and applies the cursor
+  // itself, mirroring the real one. Leaving it to the real implementation would
+  // read the (empty) temp-home log and make every marker test pass for a reason
+  // that has nothing to do with the code under test.
+  readReasoningLogSince: (cursorMs: number) =>
+    (mockReadJsonlTail() as Array<{ ts: string }>).filter((e) => {
+      const t = Date.parse(e.ts);
+      return !Number.isFinite(t) || t > cursorMs;
+    }),
 }));
 
 vi.mock('./memory-consolidation.js', () => ({
@@ -614,6 +623,35 @@ describe('rag-worker (runWorkerForFile)', () => {
 
       expect(mockExtractNotes).not.toHaveBeenCalled();
       fs.rmSync(SPECIALIST_RECALL_MARKER, { force: true });
+    });
+
+    it('shows the model the error text, not just that something failed', async () => {
+      // `ReasoningLogEntry.error` has existed since the log did and reached the
+      // prompt nowhere — only the coarse `status` label. The extractor's first
+      // instruction is "a mistake it made and what the correct approach turned
+      // out to be", which it cannot follow from "status: error" alone.
+      mockReadJsonlTail.mockReturnValue([
+        Object.assign(run('coder'), {
+          status: 'invalid_args',
+          error: 'file_write requires `path`, received `pth`',
+        }),
+      ]);
+      write({ provider: 'anthropic', model: 'm', specialistRecall: true });
+
+      await runWorkerForFile(tempFile);
+
+      expect(mockExtractNotes.mock.calls[0][1]).toContain('received `pth`');
+    });
+
+    it('omits the error line entirely for a run that succeeded', async () => {
+      // Guards the guard: an unconditional line would put `Error:` under every
+      // successful run, which teaches the extractor the opposite lesson.
+      mockReadJsonlTail.mockReturnValue([run('coder')]);
+      write({ provider: 'anthropic', model: 'm', specialistRecall: true });
+
+      await runWorkerForFile(tempFile);
+
+      expect(mockExtractNotes.mock.calls[0][1]).not.toContain('Error:');
     });
 
     it('feeds the model the NEWEST runs, and stops at the budget', async () => {
