@@ -5,6 +5,7 @@ import { loadConfig } from './config.js';
 import { assembleContext, scopeContext } from './framework/context.js';
 import type { AgentContext, AgentContextMCP, AgentContextStores } from './framework/context.js';
 import { RAGStore, type RAGSearchResult } from './rag.js';
+import { specialistRagFor } from './specialist-rag.js';
 import { debugLog } from './logger.js';
 import { MCPManager } from './mcp.js';
 import { registerBuiltinDefinitions } from './framework/agents/index.js';
@@ -298,6 +299,7 @@ export async function runHeadless<TInput, TFormatted>(
         toolOptions: headlessToolOptions(posture, config.shellTimeout),
         mcp: mcpSnapshot,
         rag: ragStore,
+        ragForOwner: ragStore ? specialistRagFor : undefined,
         // Constructed UNSCOPED and fenced once, by `scopeContext` below.
         //
         // **Do not add a pre-assembly corpus search here.** The RAG fence has

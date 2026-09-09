@@ -89,15 +89,15 @@ describe('resolveDispatchProfile', () => {
   const input = { specialistId: 'spec' };
 
   it('is empty when the definition names no record', () => {
-    expect(resolveDispatchProfile(ctxWith({}), { id: 'x' }, input)).toEqual({});
+    expect(resolveDispatchProfile(ctxWith({}), { id: 'x' }, input).profile).toEqual({});
   });
 
   it('is empty when the record does not exist', () => {
-    expect(resolveDispatchProfile(ctxWith(), def, input)).toEqual({});
+    expect(resolveDispatchProfile(ctxWith(), def, input).profile).toEqual({});
   });
 
   it('is empty when the record declares nothing — today’s behaviour, byte for byte', () => {
-    expect(resolveDispatchProfile(ctxWith({}), def, input)).toEqual({});
+    expect(resolveDispatchProfile(ctxWith({}), def, input).profile).toEqual({});
   });
 
   it('reads the three fields a record may declare', () => {
@@ -106,7 +106,7 @@ describe('resolveDispatchProfile', () => {
         ctxWith({ stepRatio: 0.2, strategy: 'react', toolSurface: 'full' }),
         def,
         input,
-      ),
+      ).profile,
     ).toEqual({ stepRatio: 0.2, strategy: 'react', toolSurface: 'full' });
   });
 
@@ -122,11 +122,13 @@ describe('resolveDispatchProfile', () => {
     // Validated, not trusted: the value comes off a user-editable JSON file,
     // and this runs before every dispatch, so a throw here is a broken record
     // taking down every turn that touches it.
-    expect(resolveDispatchProfile(ctxWith({ stepRatio }), def, input).stepRatio).toBeUndefined();
+    expect(
+      resolveDispatchProfile(ctxWith({ stepRatio }), def, input).profile.stepRatio,
+    ).toBeUndefined();
   });
 
   it('falls back on an unknown strategy or surface rather than passing it through', () => {
-    const profile = resolveDispatchProfile(
+    const { profile } = resolveDispatchProfile(
       ctxWith({
         strategy: 'coordinator' as never,
         toolSurface: 'everything' as never,
@@ -141,7 +143,7 @@ describe('resolveDispatchProfile', () => {
     // Per-field, not all-or-nothing: one typo must not silently discard a
     // declaration the user got right.
     expect(
-      resolveDispatchProfile(ctxWith({ stepRatio: 99, strategy: 'react' }), def, input),
+      resolveDispatchProfile(ctxWith({ stepRatio: 99, strategy: 'react' }), def, input).profile,
     ).toEqual({ strategy: 'react' });
   });
 
@@ -156,7 +158,7 @@ describe('resolveDispatchProfile', () => {
         },
       },
     } as unknown as AgentContext;
-    expect(resolveDispatchProfile(ctx, def, input)).toEqual({});
+    expect(resolveDispatchProfile(ctx, def, input).profile).toEqual({});
   });
 });
 
@@ -202,7 +204,8 @@ describe('the definitions consume the profile', () => {
       resolveToolSurface(
         ctx,
         toolWrapperDefinition,
-        resolveDispatchProfile(ctx, toolWrapperDefinition, { specialistId: 'spec' } as never),
+        resolveDispatchProfile(ctx, toolWrapperDefinition, { specialistId: 'spec' } as never)
+          .profile,
       ).surface,
     ).toBe(declaredToolSurface({ toolSurface: 'worker' }));
   });

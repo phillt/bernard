@@ -2156,7 +2156,7 @@ export function App({
         }
         // Delete path — confirm with the standard two-item menu (house style).
         if (!(await confirmDeletion(requestMenu, s.name))) continue; // back to list
-        const swept = deleteSpecialist(s.id, { specialists: stores.specialists });
+        const swept = deleteSpecialist(s.id, stores.specialists);
         flashToast(
           swept.memories > 0
             ? `Deleted ${s.name} and ${swept.memories} of its memories.`

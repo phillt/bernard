@@ -665,6 +665,8 @@ export function loadPreferences(): {
       typeof parsed.voiceNormalizer === 'boolean' ? parsed.voiceNormalizer : undefined,
     memoryConsolidation:
       typeof parsed.memoryConsolidation === 'boolean' ? parsed.memoryConsolidation : undefined,
+    specialistRecall:
+      typeof parsed.specialistRecall === 'boolean' ? parsed.specialistRecall : undefined,
   };
 }
 
@@ -1553,6 +1555,7 @@ const PROFILE_SCOPED_KEYS: ReadonlyArray<keyof BernardConfig> = [
   'voiceWarmupMs',
   'voiceNormalizer',
   'memoryConsolidation',
+  'specialistRecall',
 ];
 
 /**

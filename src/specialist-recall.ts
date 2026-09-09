@@ -39,7 +39,7 @@ const NOTE_MAX_CHARS = 500;
 const RECALL_MAX_TOKENS = 1024;
 
 /** Below this a dispatch has not done enough to be worth a model call. */
-export const MIN_TRANSCRIPT_CHARS = 400;
+const MIN_TRANSCRIPT_CHARS = 400;
 
 const ResponseSchema = z.object({
   notes: z

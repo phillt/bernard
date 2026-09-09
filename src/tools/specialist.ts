@@ -472,7 +472,7 @@ export function createSpecialistTool(
             ) as AgentDefinition<{ specialistId: string }, unknown>;
             // The resolver reads exactly one thing off the context, and this is
             // the store it would have read.
-            const profile = resolveDispatchProfile(
+            const { profile } = resolveDispatchProfile(
               { stores: { specialists: store } } as never,
               def,
               {
@@ -758,7 +758,7 @@ export function createSpecialistTool(
               // The sweep, not the bare record delete: a specialist's memories
               // are owned by its id, and once that id stops resolving nothing
               // can read them or clean them up.
-              const { deleted, memories } = deleteSpecialist(id, { specialists: store });
+              const { deleted, memories } = deleteSpecialist(id, store);
               if (!deleted) return `No specialist found with id "${id}".`;
               return memories > 0
                 ? `Specialist "${id}" deleted, along with ${memories} ${plural(memories, 'memory', 'memories')} it owned.`

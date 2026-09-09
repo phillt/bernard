@@ -131,17 +131,47 @@ export async function resolveRetrieval<TInput>(
   ctx: AgentContext,
   def: Pick<AgentDefinition<TInput, unknown>, 'id' | 'retrievalQuery'>,
   input: TInput,
+  owner?: string,
 ): Promise<Retrieval> {
   if (!ctx.rag || !def.retrievalQuery) return {};
   const query = def.retrievalQuery(input);
   if (!query) return {};
   try {
-    const results = await ctx.rag.search(query);
+    // BOTH stores, and the merge is the point of the per-specialist one (#501).
+    // Its purpose is that `maxMemories`, the dedup scan and `prune()` become
+    // per-owner — not that a specialist stops seeing the user's own facts, which
+    // would be a silent behaviour change for every specialist that already
+    // exists. Searched in parallel because they are independent files, and the
+    // owner's is empty until its first closing pass, so the common cost is one
+    // embed shared by two scans.
+    const ownerStore = owner ? ctx.ragForOwner?.(owner) : undefined;
+    const [shared, own] = await Promise.all([
+      ctx.rag.search(query),
+      ownerStore ? ownerStore.search(query) : Promise.resolve([]),
+    ]);
+    // Re-ranked across the two rather than concatenated: `similarity` is the
+    // one scale both report on, so a weak hit from one must not outrank a
+    // strong hit from the other purely by being in the first array.
+    //
+    // **Re-ranked, not re-capped.** Each store already applied its own
+    // threshold and `maxResults` before returning, and a fact that cleared one
+    // store's bar is worth exactly as much as one that cleared the other's — so
+    // a second cap here could only drop a fact for the accident of which file it
+    // lives in. The context cost is bounded by the two stores' own caps, and the
+    // owner's store is the small one: it holds what that specialist learned
+    // about itself, not a session history.
+    //
+    // `shared` is returned by identity when the owner contributed nothing,
+    // which is every unowned dispatch and every specialist before its first
+    // closing pass.
+    const results =
+      own.length === 0 ? shared : [...shared, ...own].sort((a, b) => b.similarity - a.similarity);
     if (results.length > 0) {
       debugLog('dispatch:rag', {
         definition: def.id,
         query: query.slice(0, 100),
         results: results.length,
+        ...(own.length > 0 ? { owner, ownerResults: own.length } : {}),
       });
     }
     return { query, results };

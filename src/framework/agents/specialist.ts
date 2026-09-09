@@ -46,8 +46,16 @@ export interface SpecialistInput extends DispatchInput {
   slotId: number;
   planStore: PlanStore;
   /**
-   * The four dispatch tools, offered to this record's `targetTools` filter so a
-   * persona can delegate to narrower specialists — and only if it names one.
+   * A BUILDER for the four dispatch tools, offered to this record's
+   * `targetTools` filter so a persona can delegate to narrower specialists —
+   * and only if it names one.
+   *
+   * A builder rather than the tools themselves, because every dispatch tool
+   * closes over the context it was built from and `runDefinition` scopes a
+   * context only for the dispatch it is starting. A pre-built overlay therefore
+   * carries the PARENT's unowned, unfenced stores, and the persona's own fence
+   * becomes a publishing channel the moment it delegates. `tools()` calls this
+   * with the scoped ctx.
    *
    * Supplied by the caller rather than imported here, because importing them
    * would be an import cycle (see `tools()`), and because the caller is the only
@@ -55,11 +63,11 @@ export interface SpecialistInput extends DispatchInput {
    * the safe answer**: a caller that supplies nothing gets a leaf, which is what
    * every persona was before this.
    *
-   * `applet` is deliberately not among them, exactly as it is absent from
-   * `dispatchToolWrapper`'s list — the three overlays differing by that one key
-   * is what stops `applet-styler` re-entering its own dispatch.
+   * `applet` is deliberately not among them — `buildDispatchOverlay` does not
+   * construct one, which is what stops `applet-styler` re-entering its own
+   * dispatch.
    */
-  dispatchTools?: Record<string, Tool>;
+  dispatchTools?: (ctx: AgentContext) => Record<string, Tool>;
 }
 
 /**
@@ -252,7 +260,10 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
  * filter with a fourth opinion about what an empty list means.
  */
 function grantedDispatchTools(ctx: AgentContext, input: SpecialistInput): Record<string, Tool> {
-  const overlay = input.dispatchTools;
+  // Built from THIS dispatch's ctx — the scoped one `runDefinition` shadowed in
+  // — not from the parent's. A pre-built overlay would carry the parent's
+  // unowned stores into every sub-agent this persona delegates to.
+  const overlay = input.dispatchTools?.(ctx);
   if (!overlay) return {};
   const record = ctx.stores.specialists.get(input.specialistId);
   return buildChildTools({ targetTools: record?.targetTools }, overlay, ctx.mcp?.resolveAlias);

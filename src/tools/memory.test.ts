@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMemoryTool, createScratchTool } from './memory.js';
-import { MemoryKeyCollisionError, MemorySupersedeError } from '../memory.js';
+import {
+  MemoryKeyCollisionError,
+  MemoryOwnerCollisionError,
+  MemorySupersedeError,
+} from '../memory.js';
 import { MemoryStore } from '../memory.js';
 
 vi.mock('node:fs', () => ({
@@ -38,6 +42,17 @@ describe('createMemoryTool', () => {
     vi.mocked(fs.readdirSync).mockReturnValue([] as any);
     vi.mocked(fs.existsSync).mockReturnValue(false);
     vi.mocked(fs.readFileSync).mockImplementation(() => {
+      const err: any = new Error('ENOENT');
+      err.code = 'ENOENT';
+      throw err;
+    });
+    // Modelled on the real syscall rather than left as a no-op: `deleteMemory`
+    // reports "not found" from the unlink's own ENOENT now, which is one
+    // syscall and one race fewer than a preceding `existsSync` — and is the
+    // shape `deleteByOwner` needs, since it never had that check. A mock that
+    // silently succeeds makes both delete cases pass for the wrong reason.
+    vi.mocked(fs.unlinkSync).mockImplementation((p) => {
+      if (vi.mocked(fs.existsSync)(p as string)) return;
       const err: any = new Error('ENOENT');
       err.code = 'ENOENT';
       throw err;
@@ -269,6 +284,20 @@ describe('memory tool: the #513 additions', () => {
     const out = await runSerialized(tool, { action: 'write', key: 'foo/bar', content: 'x' });
     expect(out).toMatch(/^Error: /);
     expect(out).toContain('foo bar');
+  });
+
+  it('an OWNER collision comes back the same way, rather than escaping', async () => {
+    // It was missing from the guard's instanceof chain, so the one refusal a
+    // specialist meets most often — a key the user already used — escaped as an
+    // AI-SDK `ToolExecutionError`, which is exactly what this guard exists to
+    // prevent. Correctable by picking a different key, so `invalid_args`.
+    vi.spyOn(store, 'writeMemory').mockImplementation(() => {
+      throw new MemoryOwnerCollisionError('deploy', null);
+    });
+    const envelope = await tool.execute({ action: 'write', key: 'deploy', content: 'x' }, {});
+    expect(envelope.status).toBe('error');
+    expect(envelope.status === 'error' && envelope.error.type).toBe('invalid_args');
+    expect(tool.serializeForModel(envelope)).toContain('belongs to the user');
   });
 
   it('classifies every mutating action as a write, for both permission gates', () => {

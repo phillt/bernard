@@ -169,18 +169,26 @@ export interface DispatchToolWrapperArgs {
  * Lives here because `createToolWrapperRunTool` is defined in this module, so a
  * standalone leaf would be the one placement that cycles.
  *
- * The `specialist_run` self-reference is why this returns a fresh object rather
- * than a constant: the thunk lets the tool hand the same overlay to the persona
- * it dispatches, so delegation does not silently truncate at depth 1.
+ * `specialist_run` is handed this BUILDER rather than the object being built,
+ * which is what stops the fence being a publishing channel. Every tool here
+ * closes over the `ctx` it was built from, and `runDefinition` scopes its ctx —
+ * memory ownership (#501) and the three `memoryScope` axes (#511) — only for
+ * the dispatch it is starting. So a pre-built overlay handed down to a persona
+ * carries the PARENT's unscoped stores: the persona's own `memory write` is
+ * fenced, and the sub-agent it delegates to writes straight into the shared
+ * pool, which is exactly the hazard CLAUDE.md records for `memoryScope`.
+ * Rebuilding from the scoped ctx at the point of use is the same "scope early,
+ * let the runner re-derive" treatment `dispatchToolWrapper` gives `childTools`.
+ * A builder rather than a self-referential thunk also removes a closure over
+ * the object it is a member of.
  */
 export function buildDispatchOverlay(ctx: AgentContext): Record<string, Tool> {
-  const overlay: Record<string, Tool> = {
+  return {
     agent: createSubAgentTool(ctx),
     task: toolToAISDK(createTaskTool(ctx)),
-    specialist_run: createSpecialistRunTool(ctx, () => overlay),
+    specialist_run: createSpecialistRunTool(ctx, buildDispatchOverlay),
     tool_wrapper_run: createToolWrapperRunTool(ctx),
   };
-  return overlay;
 }
 
 /**

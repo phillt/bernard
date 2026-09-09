@@ -492,4 +492,47 @@ describe('memory ownership', () => {
     seed('legacy.md', 'Some older note.');
     expect(new MemoryStore().readMemory('legacy')).toBe('Some older note.');
   });
+
+  it('refuses to let a specialist ANNEX one of the user’s keys', async () => {
+    // The direction the first cut got wrong, and the worst of the two.
+    // `ownsOrShared` is true when the record is unowned — right for a read,
+    // catastrophic for a write: the specialist overwrote the user's memory AND
+    // stamped its own name on it, so the note became invisible to main, to
+    // `/memory` and to consolidation forever. The keys are model-invented and
+    // written unattended at session close, which is the worst place available
+    // for a silent overwrite.
+    new MemoryStore().writeMemory('deploy', 'the user’s own note');
+    expect(() => new MemoryStore().asOwner('coder').writeMemory('deploy', 'stolen')).toThrow(
+      /belongs to the user/,
+    );
+    expect(new MemoryStore().readMemory('deploy')).toBe('the user’s own note');
+  });
+
+  it.each(['retire', 'delete'] as const)(
+    'refuses %s across owners, not just write',
+    async (action) => {
+      // The gate is one predicate at one chokepoint (`assertOwns`) precisely so
+      // a fourth mutating path cannot be admitted by default — which is what
+      // `writeMemory`'s own inline check allowed, since `retire`, `supersede`
+      // and `deleteMemory` each checked the key fence and nothing else.
+      new MemoryStore().asOwner('coder').writeMemory('note', 'coder version');
+      const main = new MemoryStore();
+      expect(() => (action === 'retire' ? main.retire('note') : main.deleteMemory('note'))).toThrow(
+        /belongs to "coder"/,
+      );
+      expect(new MemoryStore().asOwner('coder').readMemory('note')).toBe('coder version');
+    },
+  );
+
+  it('lets each agent keep its own record under one key', async () => {
+    // Guards the guard above: the refusals must not be "nobody may write a key
+    // that exists", which would break every ordinary overwrite.
+    const coder = new MemoryStore().asOwner('coder');
+    coder.writeMemory('note', 'first');
+    coder.writeMemory('note', 'second');
+    expect(coder.readMemory('note')).toBe('second');
+    new MemoryStore().writeMemory('plain', 'a');
+    new MemoryStore().writeMemory('plain', 'b');
+    expect(new MemoryStore().readMemory('plain')).toBe('b');
+  });
 });

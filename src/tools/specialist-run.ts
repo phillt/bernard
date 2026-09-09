@@ -45,9 +45,14 @@ import { captureToolCalls } from './capture-tool-calls.js';
  * @param ctx - Assembled AgentContext (config, stores, mcp, toolOptions, optional RAG).
  */
 /**
- * @param dispatchTools A thunk returning the four dispatch tools, so a persona
- * can delegate to narrower specialists. Supplied by the caller rather than built
- * here, and that is forced rather than chosen: `specialist_run` must be able to
+ * @param dispatchTools A BUILDER for the four dispatch tools, so a persona can
+ * delegate to narrower specialists. It takes the context to build them from,
+ * and that parameter is the fence: every dispatch tool closes over its ctx, and
+ * `runDefinition` scopes a ctx only for the dispatch it starts — so a pre-built
+ * overlay would hand the persona's sub-agents the PARENT's unowned, unfenced
+ * stores, turning the fence into a publishing channel. `specialistDefinition`
+ * calls it with the scoped ctx. Supplied by the caller rather than built here,
+ * and that is forced rather than chosen: `specialist_run` must be able to
  * contain `specialist_run`, so *something* has to be lazy, and today
  * `tool-wrapper-run.ts` imports this module while this module imports nothing
  * back — which is the only reason that cycle does not exist. Building the four
@@ -55,9 +60,8 @@ import { captureToolCalls } from './capture-tool-calls.js';
  * cycle into a call-time one, which is #452's deadlock (it hung
  * `specialist.target-tools.test.ts` when tried).
  *
- * So the overlay comes from the two places that already construct all four
- * without a cycle: `main.ts` and `tool-wrapper-run.ts`. A **thunk**, because
- * `main.ts` builds its overlay in the same object literal that calls this.
+ * So the builder comes from the one place that already constructs all four
+ * without a cycle: `buildDispatchOverlay` in `tool-wrapper-run.ts`.
  *
  * **Omission is the safe answer** — a caller that passes nothing dispatches a
  * leaf, which is what every persona was before this. Deliberately NOT extracted
@@ -67,7 +71,7 @@ import { captureToolCalls } from './capture-tool-calls.js';
  */
 export function createSpecialistRunTool(
   ctx: AgentContext,
-  dispatchTools?: () => Record<string, Tool>,
+  dispatchTools?: (ctx: AgentContext) => Record<string, Tool>,
 ): Tool {
   registerBuiltinDefinitions();
   const { config } = ctx;
@@ -165,7 +169,10 @@ export function createSpecialistRunTool(
                   attachments: loaded.read(),
                   slotId: id,
                   planStore,
-                  ...(canDelegate && dispatchTools ? { dispatchTools: dispatchTools() } : {}),
+                  // Passed through unbuilt: `specialistDefinition.tools`
+                  // invokes it with the SCOPED ctx, which is the only place one
+                  // exists.
+                  ...(canDelegate && dispatchTools ? { dispatchTools } : {}),
                 };
                 const { result, formatted } = await runDefinition(ctx, def, input, {
                   abortSignal: execOptions.abortSignal,

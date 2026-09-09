@@ -37,9 +37,9 @@ describe('deleteSpecialist', () => {
     coder.writeMemory('style-rules', 'Two-space indent.');
     coder.writeMemory('build-notes', 'Run npm ci first.');
 
-    const result = m.deleteSpecialist('coder', { specialists });
+    const result = m.deleteSpecialist('coder', specialists);
 
-    expect(result).toEqual({ deleted: true, memories: 2, rag: false });
+    expect(result).toEqual({ deleted: true, memories: 2 });
     expect(specialists.get('coder')).toBeUndefined();
     // Asserted from an OWNED view, not from main's: main could not see these
     // even when they existed, so a main-side check would pass either way.
@@ -57,7 +57,7 @@ describe('deleteSpecialist', () => {
     new m.MemoryStore().writeMemory('deploy-process', 'Tag, then push.');
     new m.MemoryStore().asOwner('coder').writeMemory('style-rules', 'x');
 
-    expect(m.deleteSpecialist('coder', { specialists }).memories).toBe(1);
+    expect(m.deleteSpecialist('coder', specialists).memories).toBe(1);
     expect(new m.MemoryStore().readMemory('deploy-process')).toBe('Tag, then push.');
   });
 
@@ -69,7 +69,7 @@ describe('deleteSpecialist', () => {
     new m.MemoryStore().asOwner('coder').writeMemory('coder-note', 'a');
     new m.MemoryStore().asOwner('designer').writeMemory('designer-note', 'b');
 
-    m.deleteSpecialist('coder', { specialists });
+    m.deleteSpecialist('coder', specialists);
 
     expect(specialists.get('designer')).toBeDefined();
     expect(new m.MemoryStore().asOwner('designer').readMemory('designer-note')).toBe('b');
@@ -84,7 +84,7 @@ describe('deleteSpecialist', () => {
     specialists.createFull({ id: 'coder', ...RECORD } as never);
     new m.MemoryStore().asOwner('coder').writeMemory('secret-note', 'old agent');
 
-    m.deleteSpecialist('coder', { specialists });
+    m.deleteSpecialist('coder', specialists);
     specialists.createFull({ id: 'coder', ...RECORD } as never);
 
     expect(new m.MemoryStore().asOwner('coder').readMemory('secret-note')).toBeNull();
@@ -93,11 +93,7 @@ describe('deleteSpecialist', () => {
   it('reports a missing specialist rather than throwing', async () => {
     const m = await load();
     const specialists = new m.SpecialistStore({ seed: false });
-    expect(m.deleteSpecialist('nope', { specialists })).toEqual({
-      deleted: false,
-      memories: 0,
-      rag: false,
-    });
+    expect(m.deleteSpecialist('nope', specialists)).toEqual({ deleted: false, memories: 0 });
   });
 
   it('refuses a bundled specialist without touching its memories', async () => {
@@ -108,13 +104,13 @@ describe('deleteSpecialist', () => {
     const specialists = new m.SpecialistStore({ seed: false });
     new m.MemoryStore().asOwner('shell-wrapper').writeMemory('kept', 'still here');
 
-    expect(() => m.deleteSpecialist('shell-wrapper', { specialists })).toThrow();
+    expect(() => m.deleteSpecialist('shell-wrapper', specialists)).toThrow();
     expect(new m.MemoryStore().asOwner('shell-wrapper').readMemory('kept')).toBe('still here');
   });
 });
 
 describe('deleteSpecialist sweeps the specialist’s own RAG store', () => {
-  it('removes the directory, and reports it', async () => {
+  it('removes the directory', async () => {
     // A store per specialist is a DIRECTORY, which is the payoff over a
     // namespace column: `RAGStore` can only delete by id and has no owner axis,
     // so a namespaced sweep would mean loading the whole store, filtering, and
@@ -128,16 +124,19 @@ describe('deleteSpecialist sweeps the specialist’s own RAG store', () => {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(`${dir}/memories.json`, '{"memories":[]}');
 
-    expect(m.deleteSpecialist('coder', { specialists }).rag).toBe(true);
+    // Asserted on the FILESYSTEM rather than on a returned flag: the flag was
+    // read by nothing outside this file, and the directory being gone is the
+    // property that matters.
+    m.deleteSpecialist('coder', specialists);
     expect(fs.existsSync(dir)).toBe(false);
   });
 
-  it('reports no RAG store when the specialist never had one', async () => {
-    // Guards the guard: an unconditional `true` would claim a sweep that never
-    // happened, on every specialist that never wrote a fact.
+  it('leaves a specialist that never wrote a fact alone', async () => {
+    // Guards the guard: an unconditional `rmSync` on a directory that does not
+    // exist must not throw and take the record delete's report with it.
     const m = await load();
     const specialists = new m.SpecialistStore({ seed: false });
     specialists.createFull({ id: 'quiet', ...RECORD } as never);
-    expect(m.deleteSpecialist('quiet', { specialists }).rag).toBe(false);
+    expect(m.deleteSpecialist('quiet', specialists)).toEqual({ deleted: true, memories: 0 });
   });
 });

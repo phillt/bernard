@@ -84,7 +84,7 @@ export function deleteApplet(appId: string): DeleteResult {
     try {
       // The full sweep, so a bound specialist's owned memories go with it —
       // the same reason the direct delete path uses it.
-      deleteSpecialist(bound.id, { specialists });
+      deleteSpecialist(bound.id, specialists);
       boundSpecialists.push(bound.id);
     } catch {
       // A bundled specialist cannot be bound (nothing binds them) and cannot

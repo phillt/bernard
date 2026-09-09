@@ -152,13 +152,15 @@ export class MemorySupersedeError extends Error {
 }
 
 export class MemoryOwnerCollisionError extends Error {
+  /** @param owner The record's owner, or `null` for the user's own. */
   constructor(
     readonly key: string,
-    readonly owner: string,
+    readonly owner: string | null,
   ) {
     super(
-      `Memory key "${key}" already belongs to "${owner}" and cannot be overwritten from here. ` +
-        `Choose a different key, or ask that specialist directly.`,
+      `Memory key "${key}" already belongs to ${owner === null ? 'the user' : `"${owner}"`} ` +
+        `and cannot be modified from here. ` +
+        `Choose a different key, or ask that agent directly.`,
     );
     this.name = 'MemoryOwnerCollisionError';
   }
@@ -358,16 +360,40 @@ export class MemoryStore {
    * composes with it: a coder agent can be both owned and key-fenced, and the
    * two narrow independently.
    *
-   * Unlike `scoped`, this is NOT monotone — a view can be re-owned, because the
-   * owner is set once by the runner from the dispatch's own `recordId` and is
-   * never taken from anything a model can influence. Making it monotone would
-   * mean the main agent could never be reached again from inside a dispatch,
-   * which is not a property anything wants.
+   * Unlike `scoped`, this is deliberately NOT monotone, and the reason is
+   * nesting rather than convenience: a persona that delegates to a second
+   * persona must give the child its OWN name, not inherit the parent's, or two
+   * specialists share one namespace and the fence means nothing between them.
+   * That is safe because the owner is set by the runner from the dispatch's own
+   * `recordId` and can be neither supplied by a caller nor influenced by a
+   * model — see `scopeContext`, the one production caller.
    */
-  asOwner(owner: string | null): MemoryStore {
-    if (owner === this.owner) return this;
+  asOwner(owner: string): MemoryStore {
+    return owner === this.owner ? this : this.withFields({ owner });
+  }
+
+  /**
+   * A view of this store with `patch` applied, sharing everything else.
+   *
+   * `Object.create` + `Object.assign`, the idiom `RAGStore.scoped` uses, and
+   * for a reason beyond consistency: a hand-copied field list silently RESETS
+   * any field added to this class later to its initializer in every view.
+   * `scratch` and `cache` ride along by reference, which is the whole point of
+   * a view — but so does whatever comes next, without anyone remembering. It
+   * also skips `new MemoryStore()`'s `mkdirSync`.
+   *
+   * One constructor for both narrowing axes, so that rule lives in one place
+   * rather than beside whichever view was written first. The patch type names
+   * exactly the two narrowing fields — `Partial<MemoryStore>` reaches only the
+   * PUBLIC members, so it cannot express either of them, and a wider type would
+   * let a view override `scratch` or `cache` and quietly stop being a view.
+   */
+  private withFields(patch: {
+    owner?: string | null;
+    scope?: readonly string[] | null;
+  }): MemoryStore {
     const view = Object.create(MemoryStore.prototype) as MemoryStore;
-    Object.assign(view, this, { owner });
+    Object.assign(view, this, patch);
     return view;
   }
 
@@ -391,15 +417,7 @@ export class MemoryStore {
     if (!patterns) return this;
     const base = this.scope;
     const next = base === null ? [...patterns] : patterns.filter((p) => keyInScope(p, base));
-    // `Object.create` + `Object.assign`, the idiom `RAGStore.scoped` uses, and
-    // for a reason beyond consistency: a hand-copied field list silently RESETS
-    // any field added to this class later to its initializer in every view.
-    // `scratch` and `cache` ride along by reference, which is the whole point
-    // of a view — but so does whatever comes next, without anyone remembering.
-    // It also skips `new MemoryStore()`'s `mkdirSync`.
-    const view = Object.create(MemoryStore.prototype) as MemoryStore;
-    Object.assign(view, this, { scope: next });
-    return view;
+    return this.withFields({ scope: next });
   }
 
   /** Whether this instance may see `key`. Always true for the unscoped store. */
@@ -413,6 +431,42 @@ export class MemoryStore {
     // "in scope" means must not have to be made twice, and the throwing copy is
     // the one that gates writes.
     if (!this.allows(key)) throw new MemoryScopeError(key, this.scope ?? []);
+  }
+
+  /**
+   * Refuses a mutation of a record this view does not own, in EITHER direction.
+   *
+   * The single gate every persistent mutation calls — `writeMemory`,
+   * `supersede`, `retire`, `deleteMemory` — so an action added later cannot
+   * land outside it. That is the `readOnlyWrap` / `storeErrorGuard` lesson
+   * applied to ownership: the read gate lives at one chokepoint (`load`) and
+   * the write gate has to as well, or a fourth mutating path is admitted by
+   * default.
+   *
+   * **The comparison is symmetric identity, not `ownsOrShared`.** That
+   * predicate is right for READS — an unowned record is the user's standing
+   * instruction and everyone should see it — and catastrophic for writes: it is
+   * true when `existing.owner` is undefined, so a specialist writing a key the
+   * user already used would overwrite the user's memory *and stamp its own name
+   * on it*, making it invisible to `main`, to `/memory` and to consolidation
+   * forever. The keys here are model-invented and written unattended at session
+   * close, which is the worst possible place for a silent overwrite.
+   *
+   * Deliberately NOT folded into {@link assertWritable}: that one also gates
+   * scratch, which is in-memory, session-scoped and has no owner, so checking
+   * ownership there would mean loading a persistent file to write a scratch
+   * note.
+   */
+  private assertOwns(key: string): void {
+    this.assertWritable(key);
+    // `loadRaw`, not `load`: a record owned by someone else is invisible to
+    // reads by design, and the refusal has to see it. Cached — `writeMemory`'s
+    // own `loadRaw` two lines later is a validated cache hit, not a second read.
+    const existing = this.loadRaw(key)?.parsed;
+    if (!existing) return;
+    const owner = existing.owner ?? null;
+    if (owner === this.owner) return;
+    throw new MemoryOwnerCollisionError(toSingleLine(key), owner);
   }
 
   // --- Persistent Memory (disk-backed) ---
@@ -435,12 +489,16 @@ export class MemoryStore {
     // any route. `loadRaw` is what the WRITE path uses instead — a collision has
     // to be visible even when the colliding record is not readable, or two
     // agents silently overwrite one file.
-    return loaded && this.ownsOrShared(loaded.parsed) ? loaded : null;
+    return loaded && this.ownsOrShared(loaded.parsed.owner) ? loaded : null;
   }
 
-  /** Whether this view may read a record with this owner. */
-  private ownsOrShared(parsed: ParsedMemoryFile): boolean {
-    return parsed.owner === undefined || parsed.owner === this.owner;
+  /**
+   * Whether this view may READ a record with this owner. An unowned record is
+   * the user's own standing instruction and stays visible to everyone; see
+   * {@link assertOwns} for why writes use a stricter test.
+   */
+  private ownsOrShared(owner: string | undefined): boolean {
+    return owner === undefined || owner === this.owner;
   }
 
   private loadRaw(key: string): { parsed: ParsedMemoryFile; mtimeMs: number } | null {
@@ -490,11 +548,30 @@ export class MemoryStore {
     return out;
   }
 
-  /** Every key on disk, including superseded ones. */
+  /** Every key on disk, including superseded ones. Applies the key fence. */
   listAllMemory(): string[] {
-    const files = fs.readdirSync(MEMORY_DIR);
-    const keys = files.filter((f) => f.endsWith('.md')).map((f) => f.replace(/\.md$/, ''));
+    const keys = this.allKeysOnDisk();
     return this.scope === null ? keys : keys.filter((k) => this.allows(k));
+  }
+
+  /**
+   * Every key on disk, ignoring both fences — the one readdir this class does.
+   *
+   * `listAllMemory` layers the key scope on top; `load` layers ownership. A
+   * missing directory reads as an empty store rather than throwing, matching
+   * `readMemory`'s treatment of a missing file; the constructor `mkdirSync`s,
+   * so it takes an external `rm` to reach.
+   */
+  private allKeysOnDisk(): string[] {
+    try {
+      return fs
+        .readdirSync(MEMORY_DIR)
+        .filter((f) => f.endsWith('.md'))
+        .map((f) => f.replace(/\.md$/, ''));
+    } catch (err) {
+      if (isMissingFile(err)) return [];
+      throw err;
+    }
   }
 
   /**
@@ -568,18 +645,16 @@ export class MemoryStore {
     // only about reads. A write you cannot read back is incoherent, and an
     // unscoped write from a fenced worker turns the fence into a PUBLISHING
     // channel: the worker writes, and `main` renders it next turn.
-    this.assertWritable(key);
+    // Both fences, through the one gate every persistent mutation shares. It
+    // refuses a record this view does not own — in either direction, which is
+    // what stops a specialist quietly annexing one of the user's keys.
+    this.assertOwns(key);
     // `loadRaw`, not `load`: a record owned by someone else is invisible to
-    // reads by design, and a write must still see it. Otherwise main and a
-    // specialist that both chose the key `deploy` would silently overwrite one
-    // file, which is the one way ownership could lose data rather than hide it.
+    // reads by design, and a write must still see it. Cached from `assertOwns`.
     const existing = this.loadRaw(key)?.parsed;
     const incoming = toSingleLine(key);
     if (existing?.key && existing.key !== incoming) {
       throw new MemoryKeyCollisionError(incoming, existing.key);
-    }
-    if (existing && !this.ownsOrShared(existing)) {
-      throw new MemoryOwnerCollisionError(incoming, existing.owner ?? 'another agent');
     }
     const filePath = this.filePath(key);
     atomicWriteFileSync(
@@ -618,8 +693,10 @@ export class MemoryStore {
    */
   supersede(key: string, replacement: string): boolean {
     // Both ends: retiring an in-scope record in favour of one this dispatch
-    // cannot see would leave a pointer into the dark.
-    this.assertWritable(key);
+    // cannot see would leave a pointer into the dark. Only `key` is MUTATED, so
+    // only it needs ownership; the replacement's readability is enforced by the
+    // `this.load(replacement)` check below, which applies the owner gate.
+    this.assertOwns(key);
     this.assertWritable(replacement);
     const record = this.readRecord(key);
     if (!record) return false;
@@ -681,7 +758,7 @@ export class MemoryStore {
    * second call should not quietly restate it as today.
    */
   retire(key: string): boolean {
-    this.assertWritable(key);
+    this.assertOwns(key);
     const record = this.readRecord(key);
     if (!record) return false;
     const filePath = this.filePath(key);
@@ -717,47 +794,44 @@ export class MemoryStore {
    */
   deleteByOwner(owner: string): number {
     let deleted = 0;
-    for (const key of this.listAllKeysUnfiltered()) {
-      const parsed = this.loadRaw(key)?.parsed;
-      if (parsed?.owner !== owner) continue;
-      const filePath = this.filePath(key);
-      try {
-        fs.unlinkSync(filePath);
-        this.cache.delete(filePath);
-        deleted++;
-      } catch (err) {
-        // Best-effort per file: a sweep the caller cannot resume must not stop
-        // half-way, which is `deleteApplet`'s rule for its bound-specialist row.
-        if (!isMissingFile(err)) throw err;
-      }
+    // `allKeysOnDisk`, not `listAllMemory`: the sweep deletes precisely what
+    // this view cannot READ, so it must see past ownership. It does NOT see
+    // past the key fence — `loadRaw` still applies `allows` — and the one
+    // caller (`deleteSpecialist`) uses an unscoped store, which is what makes
+    // that sound; a scoped caller would under-sweep silently, so do not add one.
+    //
+    // `unlinkKey` returning `false` rather than throwing is what keeps this
+    // best-effort per file: a sweep the caller cannot resume must not stop
+    // half-way, which is `deleteApplet`'s rule for its bound-specialist row.
+    for (const key of this.allKeysOnDisk()) {
+      if (this.loadRaw(key)?.parsed.owner !== owner) continue;
+      if (this.unlinkKey(key)) deleted++;
     }
     return deleted;
   }
 
-  /**
-   * Every key on disk, ignoring BOTH fences.
-   *
-   * `listAllMemory` applies the key scope; `load` applies ownership. A sweep has
-   * to see past both — it is deleting precisely what this view cannot read.
-   */
-  private listAllKeysUnfiltered(): string[] {
-    try {
-      return fs
-        .readdirSync(MEMORY_DIR)
-        .filter((f) => f.endsWith('.md'))
-        .map((f) => f.replace(/\.md$/, ''));
-    } catch (err) {
-      if (isMissingFile(err)) return [];
-      throw err;
-    }
-  }
-
   /** Deletes a persistent memory entry. Returns `true` if the entry existed and was removed. */
   deleteMemory(key: string): boolean {
-    this.assertWritable(key);
+    this.assertOwns(key);
+    return this.unlinkKey(key);
+  }
+
+  /**
+   * Unlinks one key's file and invalidates its cache entry. Returns `false`
+   * when the file was not there.
+   *
+   * Shared by {@link deleteMemory} and {@link deleteByOwner} so cache
+   * invalidation on delete is stated once — the sort of thing that otherwise
+   * gets updated in one of two places.
+   */
+  private unlinkKey(key: string): boolean {
     const filePath = this.filePath(key);
-    if (!fs.existsSync(filePath)) return false;
-    fs.unlinkSync(filePath);
+    try {
+      fs.unlinkSync(filePath);
+    } catch (err) {
+      if (isMissingFile(err)) return false;
+      throw err;
+    }
     this.cache.delete(filePath);
     return true;
   }

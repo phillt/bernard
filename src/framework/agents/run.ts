@@ -186,7 +186,7 @@ export async function runDefinition<TInput, TFormatted>(
   // no `ctx` and `resolveToolSurface` gets no `input`, so neither can reach the
   // record it is running. Cheap and total: no `recordId` on the definition, or
   // no record on disk, and it is a frozen empty object.
-  const profile = resolveDispatchProfile(rootCtx, def, input);
+  const { profile, recordId } = resolveDispatchProfile(rootCtx, def, input);
 
   // The scope fence (#511), and the SHADOWING is the mechanism. Every `ctx`
   // below this line is the scoped one without a single reference being
@@ -199,12 +199,10 @@ export async function runDefinition<TInput, TFormatted>(
   // The owner comes from the definition's own `recordId` — the declared way to
   // find the record a dispatch names — so it cannot be supplied by a caller or
   // influenced by a model. A definition that names no record runs as the user.
-  // An empty id is not an owner. `??` would keep `''` and stamp every memory
-  // with a blank owner that nothing can ever match, so the check is explicit
-  // rather than leaning on falsiness.
-  const recordId = def.recordId?.(input);
-  const owner = recordId && recordId.length > 0 ? recordId : undefined;
-  const ctx = withUsageRecorder(scopeContext(rootCtx, profile, owner));
+  // Taken off the resolver's own return rather than calling `def.recordId` a
+  // second time: it is a definition-supplied thunk, and a second call also
+  // meant a second copy of the emptiness guard.
+  const ctx = withUsageRecorder(scopeContext(rootCtx, profile, recordId));
   // What this dispatch is fenced to, for the record only. The two terms cannot
   // both be set today — a caller supplies one exactly when there is no record
   // to declare it — and if they ever could, the applied fence is their
@@ -237,7 +235,7 @@ export async function runDefinition<TInput, TFormatted>(
   // called outside `resolveRetrieval`'s own try, so a definition-supplied thunk
   // that throws would be an unhandled rejection if `def.tools` rejected first.
   const [retrieved, rawTools] = await Promise.all([
-    resolveRetrieval(ctx, def, input),
+    resolveRetrieval(ctx, def, input, recordId),
     Promise.resolve(def.tools(ctx, input, surface)),
   ]);
   // Tools first, then the prompt that describes them: `task` interpolates

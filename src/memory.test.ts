@@ -173,7 +173,13 @@ describe('MemoryStore', () => {
     });
 
     it('deleteMemory returns false when file does not exist', () => {
+      // Through the unlink's own ENOENT rather than a prior `existsSync`: the
+      // check-then-act pair was one syscall and one race more than needed, and
+      // `unlinkKey` is shared with `deleteByOwner`, which never had it.
       vi.mocked(fs.existsSync).mockReturnValue(false);
+      vi.mocked(fs.unlinkSync).mockImplementationOnce(() => {
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
       expect(store.deleteMemory('missing')).toBe(false);
     });
 

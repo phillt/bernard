@@ -3,6 +3,7 @@ import { SpecialistStore } from './specialists.js';
 import * as fs from 'node:fs';
 import { specialistRagDir } from './paths.js';
 import { debugLog } from './logger.js';
+import { forgetSpecialistRag } from './specialist-rag.js';
 
 /**
  * Deleting a specialist, across every store keyed by its id.
@@ -47,31 +48,35 @@ import { debugLog } from './logger.js';
  */
 export interface DeleteSpecialistResult {
   deleted: boolean;
-  /** Memories that went with it. */
+  /**
+   * Memories that went with it.
+   *
+   * The only swept count that is reported, because it is the only one a caller
+   * says anything about — `/specialists` and the `specialist` tool both tell
+   * the user how many notes went. Whether a RAG directory existed is in the
+   * debug line instead: a field nothing reads is a field that drifts.
+   */
   memories: number;
-  /** Whether it had its own RAG store, and it went too. */
-  rag: boolean;
 }
 
 export function deleteSpecialist(
   id: string,
-  stores?: { specialists?: SpecialistStore; memory?: MemoryStore },
+  specialists: SpecialistStore = new SpecialistStore({ seed: false }),
 ): DeleteSpecialistResult {
-  const specialists = stores?.specialists ?? new SpecialistStore({ seed: false });
-
   // The record first, so the id stops resolving before anything keyed on it is
   // touched — and because this is the step that can REFUSE. `delete` throws
   // `ProtectedSpecialistError` for a bundled record, and sweeping a bundled
   // specialist's memories before discovering it cannot be deleted would destroy
   // data for a record that then stays on disk.
   const deleted = specialists.delete(id);
-  if (!deleted) return { deleted: false, memories: 0, rag: false };
+  if (!deleted) return { deleted: false, memories: 0 };
 
   let memories = 0;
   try {
-    // Unscoped and unowned: `deleteByOwner` reads past both fences, which it
-    // must, because these are exactly the records no view can see.
-    memories = (stores?.memory ?? new MemoryStore()).deleteByOwner(id);
+    // Unowned, deliberately: `deleteByOwner` reads past the OWNER fence, which
+    // it must, because these are exactly the records no view can see. It does
+    // not read past the key fence, so the store has to be an unscoped one.
+    memories = new MemoryStore().deleteByOwner(id);
   } catch (err) {
     // The record is already gone, so a failure here must not throw: it would
     // report a delete that DID happen as a failure, and the caller cannot
@@ -89,6 +94,12 @@ export function deleteSpecialist(
   // and re-serializing it.
   let rag = false;
   try {
+    // The cached handle first: a long-lived process would otherwise keep a store
+    // pointed at a directory that is about to go, and a specialist re-created
+    // under the same id would inherit the deleted one's in-memory facts — the
+    // one way "delete means delete" could be false while the directory really
+    // is gone.
+    forgetSpecialistRag(id);
     const dir = specialistRagDir(id);
     if (fs.existsSync(dir)) {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -101,5 +112,5 @@ export function deleteSpecialist(
     });
   }
   debugLog('specialist:deleted', { specialistId: id, memories, rag });
-  return { deleted: true, memories, rag };
+  return { deleted: true, memories };
 }

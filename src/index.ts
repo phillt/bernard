@@ -79,6 +79,7 @@ import { listProfiles } from './profiles.js';
 import { MemoryStore } from './memory.js';
 import { serializeMessages, MIN_HISTORY_FOR_FACTS } from './context.js';
 import { RAGStore } from './rag.js';
+import { specialistRagFor, flushSpecialistRagStores } from './specialist-rag.js';
 import { RoutineStore } from './routines.js';
 import { SpecialistStore } from './specialists.js';
 import { CandidateStore } from './specialist-candidates.js';
@@ -554,6 +555,9 @@ async function runInkRepl(args: {
     // `AgentContextMCP` can never be silently dropped here (#305).
     mcp: mcpSnapshot,
     rag: ragStore,
+    // Gated on the same flag as the shared store: a session with RAG off must
+    // not open a per-specialist one either.
+    ragForOwner: ragStore ? specialistRagFor : undefined,
     // Unconditional: constructing a corpus handle opens no database — it is a
     // scope array and a stamp — so it costs a session with no libraries
     // nothing, and the tool group builds nothing without one.
@@ -680,6 +684,7 @@ async function runInkRepl(args: {
       // `unref`ed so it can never hold the process open, which means it is a
       // backstop and THIS is the flush that actually runs on a clean exit.
       ['rag', () => ragStore?.flush()],
+      ['specialist-rag', () => flushSpecialistRagStores()],
     ] as const) {
       try {
         save();

@@ -77,12 +77,14 @@ const mockSpecialistGet = vi.fn((id: string) => ({ id }) as unknown);
 
 vi.mock('./specialist-recall.js', () => ({
   extractSpecialistNotes: (...a: any[]) => mockExtractNotes(...(a as [])),
-  MIN_TRANSCRIPT_CHARS: 400,
 }));
 
-vi.mock('./jsonl.js', async (orig) => ({
+// The reasoning log's own reader, not `jsonl.js` beneath it: `readJsonlTail` is
+// shared with `session-telemetry` and the script log, and mocking a module three
+// unrelated readers go through is broader than this suite needs.
+vi.mock('./reasoning-log.js', async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
-  readJsonlTail: (...a: any[]) => mockReadJsonlTail(...(a as [])),
+  readReasoningLog: (...a: any[]) => mockReadJsonlTail(...(a as [])),
 }));
 
 vi.mock('./memory-consolidation.js', () => ({
@@ -612,6 +614,62 @@ describe('rag-worker (runWorkerForFile)', () => {
 
       expect(mockExtractNotes).not.toHaveBeenCalled();
       fs.rmSync(SPECIALIST_RECALL_MARKER, { force: true });
+    });
+
+    it('feeds the model the NEWEST runs, and stops at the budget', async () => {
+      // Two defects in one line. `runs.map(render).join().slice(0, MAX)` built
+      // 825 KB to keep 75 KB on a real log — the bound-during-construction rule
+      // #347 already states — and, worse, the log is oldest-first, so the front
+      // slice fed the model the OLDEST 7 of `shell-wrapper`'s 265 runs and
+      // discarded the 258 most recent. What a specialist did last is the part
+      // worth learning from.
+      const many = Array.from({ length: 60 }, (_, i) =>
+        Object.assign(run('coder'), { input: `run-${i}` }),
+      );
+      mockReadJsonlTail.mockReturnValue(many);
+      write({ provider: 'anthropic', model: 'm', specialistRecall: true });
+
+      await runWorkerForFile(tempFile);
+
+      const transcript = mockExtractNotes.mock.calls[0][1] as string;
+      expect(transcript).toContain('run-59');
+      expect(transcript).not.toContain('run-0\n');
+      expect(transcript.length).toBeLessThanOrEqual(12_000);
+    });
+
+    it('runs the specialists in parallel rather than one after another', async () => {
+      // The arm otherwise decides how long the detached worker lives: cheap-tier
+      // latency is p50 4.7 s, so four specialists cost 19 s in sequence and one
+      // round trip fanned out — the shape `extractDomainFacts` already uses.
+      let live = 0;
+      let peak = 0;
+      mockExtractNotes.mockImplementation(async () => {
+        peak = Math.max(peak, ++live);
+        await new Promise((r) => setTimeout(r, 5));
+        live--;
+        return [];
+      });
+      mockReadJsonlTail.mockReturnValue([run('a'), run('b'), run('c')]);
+      write({ provider: 'anthropic', model: 'm', specialistRecall: true });
+
+      await runWorkerForFile(tempFile);
+
+      expect(peak).toBe(3);
+    });
+
+    it('one specialist failing does not cost the others their notes', async () => {
+      // `Promise.allSettled`, not `Promise.all`: a rejected extraction must not
+      // discard work the siblings already did, in a detached process nobody is
+      // watching.
+      mockExtractNotes.mockImplementation(async (id: string) =>
+        id === 'a' ? Promise.reject(new Error('boom')) : [{ key: 'k', content: 'c' }],
+      );
+      mockReadJsonlTail.mockReturnValue([run('a'), run('b')]);
+      write({ provider: 'anthropic', model: 'm', specialistRecall: true });
+
+      await runWorkerForFile(tempFile);
+
+      expect(mockWriteMemory).toHaveBeenCalledWith('k', 'c');
     });
   });
 });

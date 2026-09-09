@@ -38,7 +38,6 @@ export const PROFILES_MIGRATED_MARKER = path.join(CONFIG_DIR, '.migrated-to-prof
 export const MEMORY_DIR = path.join(DATA_DIR, 'memory');
 export const RAG_DIR = path.join(DATA_DIR, 'rag');
 export const MEMORIES_FILE = path.join(RAG_DIR, 'memories.json');
-export const LAST_SESSION_FILE = path.join(RAG_DIR, 'last-session.txt');
 
 /**
  * A specialist's own RAG directory.

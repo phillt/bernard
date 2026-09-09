@@ -28,6 +28,7 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig, type BernardConfig } from './config.js';
 import { extractDomainFacts } from './context.js';
 import { RAGStore } from './rag.js';
+import { specialistRagFor } from './specialist-rag.js';
 import { CandidateStore, MAX_PENDING_CANDIDATES } from './specialist-candidates.js';
 import {
   AppletCandidateStore,
@@ -43,17 +44,12 @@ import {
   isSuppressed as isMemorySuppressed,
 } from './memory-candidates.js';
 import { consolidationInputs, proposeConsolidation } from './memory-consolidation.js';
-import {
-  MEMORY_CONSOLIDATED_MARKER,
-  SPECIALIST_RECALL_MARKER,
-  TOOL_WRAPPER_LOG,
-  specialistRagDir,
-} from './paths.js';
-import { readJsonlTail } from './jsonl.js';
+import { MEMORY_CONSOLIDATED_MARKER, SPECIALIST_RECALL_MARKER } from './paths.js';
 import { debugLog } from './logger.js';
 import { extractSpecialistNotes } from './specialist-recall.js';
-import type { ReasoningLogEntry } from './reasoning-log.js';
+import { readReasoningLog, type ReasoningLogEntry } from './reasoning-log.js';
 import { atomicWriteFileSync } from './fs-utils.js';
+import { truncate } from './text.js';
 import { SpecialistStore } from './specialists.js';
 import { detectSpecialistCandidate } from './specialist-detector.js';
 
@@ -122,18 +118,29 @@ export interface TempPayload {
  * complements, so the most recent work is never examined.
  */
 async function runSpecialistRecall(config: BernardConfig): Promise<void> {
-  const lastCutoff = lastRecallAt();
+  const lastCutoff = readCutoffMarker(SPECIALIST_RECALL_MARKER);
   const cutoff = Date.now();
-  const entries = readJsonlTail<ReasoningLogEntry>(TOOL_WRAPPER_LOG, RECALL_LOG_SCAN)
-    .filter((e) => {
-      const t = Date.parse(e.ts);
-      return Number.isFinite(t) && (lastCutoff === null || t > lastCutoff) && t <= cutoff;
-    })
-    .filter((e) => e.specialistId);
-  if (entries.length === 0) {
-    // Still stamped: otherwise a quiet session re-scans the same tail forever.
-    stampRecall(cutoff);
-    return;
+  const scanned = readReasoningLog(RECALL_LOG_SCAN);
+  const entries = scanned.filter((e) => {
+    const t = Date.parse(e.ts);
+    return (
+      Boolean(e.specialistId) &&
+      Number.isFinite(t) &&
+      (lastCutoff === null || t > lastCutoff) &&
+      t <= cutoff
+    );
+  });
+
+  // A tail read is a window, not a queue: if even the OLDEST entry we scanned is
+  // already newer than the marker, dispatches between the two were dropped and
+  // this pass will never see them. Nothing rotates this log, so the window is
+  // the only bound — say so rather than let the loss be silent, which is the
+  // failure shape a cursor over an append-only log is prone to.
+  if (lastCutoff !== null && scanned.length >= RECALL_LOG_SCAN) {
+    const oldest = Date.parse(scanned[0]?.ts ?? '');
+    if (Number.isFinite(oldest) && oldest > lastCutoff) {
+      debugLog('specialist-recall:window-truncated', { scanned: scanned.length, lastCutoff });
+    }
   }
 
   // Grouped so one specialist that ran five times gets ONE extraction over all
@@ -146,83 +153,149 @@ async function runSpecialistRecall(config: BernardConfig): Promise<void> {
     else byOwner.set(e.specialistId, [e]);
   }
 
-  const store = new SpecialistStore({ seed: false });
+  const specialists = new SpecialistStore({ seed: false });
   const memory = new MemoryStore();
-  for (const [specialistId, runs] of byOwner) {
-    // A deleted specialist's notes would be written under an owner nothing can
-    // resolve — unreadable the moment they land, and swept by nothing because
-    // the sweep already ran.
-    if (!store.get(specialistId)) continue;
-    const transcript = runs.map(renderRun).join('\n\n').slice(0, RECALL_TRANSCRIPT_MAX);
-    const notes = await extractSpecialistNotes(specialistId, transcript, config, {
-      abortSignal: AbortSignal.timeout(WORKER_RECALL_TIMEOUT_MS),
-    });
-    const owned = memory.asOwner(specialistId);
-    for (const note of notes) {
-      try {
-        owned.writeMemory(note.key, note.content);
-      } catch (err) {
-        // A key collision with another owner, or an unwritable key. One bad
-        // note must not cost the specialist the rest of them.
-        debugLog('specialist-recall:write-failed', {
-          specialistId,
-          key: note.key,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
+  // Fanned out rather than awaited in turn, the shape `extractDomainFacts`
+  // already uses for its own per-domain calls. These are independent — different
+  // specialist, different transcript, different memory owner — and cheap-tier
+  // latency measures p50 4.7 s, so four specialists cost 19 s in sequence and
+  // one round trip in parallel. This arm otherwise decides how long the detached
+  // worker lives.
+  await Promise.allSettled(
+    Array.from(byOwner, async ([specialistId, runs]) => {
+      // A deleted specialist's notes would be written under an owner nothing can
+      // resolve — unreadable the moment they land, and swept by nothing because
+      // the sweep already ran.
+      if (!specialists.get(specialistId)) return;
+      const notes = await extractSpecialistNotes(
+        specialistId,
+        renderTranscript(runs, RECALL_TRANSCRIPT_MAX),
+        config,
+        { abortSignal: AbortSignal.timeout(WORKER_RECALL_TIMEOUT_MS) },
+      );
+      writeOwnedNotes(memory, specialistId, notes);
+      await seedSpecialistRag(specialistId, notes);
+      debugLog('specialist-recall:wrote', { specialistId, runs: runs.length, notes: notes.length });
+    }),
+  );
+  // Stamped unconditionally, including when nothing matched: otherwise a quiet
+  // session re-scans the same tail forever.
+  writeCutoffMarker(SPECIALIST_RECALL_MARKER, cutoff);
+}
+
+/** The notes a specialist just learned, under its own name. */
+function writeOwnedNotes(
+  memory: MemoryStore,
+  specialistId: string,
+  notes: ReadonlyArray<{ key: string; content: string }>,
+): void {
+  const owned = memory.asOwner(specialistId);
+  for (const note of notes) {
+    try {
+      owned.writeMemory(note.key, note.content);
+    } catch (err) {
+      // A key collision with another owner, or an unwritable key. One bad note
+      // must not cost the specialist the rest of them.
+      debugLog('specialist-recall:write-failed', {
+        specialistId,
+        key: note.key,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
-    // The same notes into the specialist's OWN RAG store, which is what makes
-    // that store non-empty at all — the producer gap #501 left open. It is a
-    // separate directory, so its 5,000 cap, its 0.92 dedup scan and its
-    // `prune()` are all its own: nothing it writes can evict a fact of the
-    // user's, and nothing of the user's can evict one of its.
-    if (notes.length > 0) {
-      try {
-        const store = new RAGStore({ dir: specialistRagDir(specialistId) });
-        await store.addFacts(
-          notes.map((n) => n.content),
-          'exit',
-        );
-        store.flush();
-      } catch (err) {
-        debugLog('specialist-recall:rag-failed', {
-          specialistId,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-    debugLog('specialist-recall:wrote', { specialistId, runs: runs.length, notes: notes.length });
   }
-  stampRecall(cutoff);
+}
+
+/**
+ * The same notes into the specialist's OWN RAG store, which is what makes that
+ * store non-empty at all — the producer gap #501 left open.
+ *
+ * A separate directory, so its 5,000 cap, its 0.92 dedup scan and its `prune()`
+ * are all its own: nothing it writes can evict a fact of the user's, and nothing
+ * of the user's can evict one of its.
+ */
+async function seedSpecialistRag(
+  specialistId: string,
+  notes: ReadonlyArray<{ content: string }>,
+): Promise<void> {
+  if (notes.length === 0) return;
+  try {
+    const rag = specialistRagFor(specialistId);
+    await rag.addFacts(
+      notes.map((n) => n.content),
+      'exit',
+    );
+    rag.flush();
+  } catch (err) {
+    debugLog('specialist-recall:rag-failed', {
+      specialistId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
+ * One specialist's runs, NEWEST first, rendered only as far as the budget.
+ *
+ * Both halves matter. Rendering everything and then slicing built 825 KB to keep
+ * 75 KB on a real log — the bound-during-construction rule `truncateResult`
+ * (#347) already states — and, worse, `runs` is in log order, so a front slice
+ * fed the model the OLDEST 7 of `shell-wrapper`'s 265 runs and discarded the 258
+ * most recent. What a specialist did last session is the part worth learning
+ * from.
+ */
+function renderTranscript(runs: readonly ReasoningLogEntry[], budget: number): string {
+  const out: string[] = [];
+  let used = 0;
+  for (let i = runs.length - 1; i >= 0; i--) {
+    const rendered = renderRun(runs[i]);
+    if (used + rendered.length > budget) break;
+    out.push(rendered);
+    used += rendered.length + 2;
+  }
+  return out.join('\n\n');
 }
 
 /** One logged run, as the extractor sees it. */
 function renderRun(e: ReasoningLogEntry): string {
   const calls = e.toolCalls
-    .map((c) => `  - ${c.tool}(${JSON.stringify(c.args)}) -> ${c.resultPreview}`)
+    // Bounded: `resultPreview` is already capped upstream, but `args` is not,
+    // and one `file_write` call can otherwise be the whole transcript budget.
+    .map((c) => `  - ${c.tool}(${truncate(JSON.stringify(c.args), 200)}) -> ${c.resultPreview}`)
     .join('\n');
   return [
     `Task: ${e.input}`,
     calls ? `Tools used:\n${calls}` : '  (no tool calls)',
-    `Outcome (${e.status}): ${String(e.finalOutput ?? '').slice(0, 600)}`,
+    `Outcome (${e.status}): ${truncate(String(e.finalOutput ?? ''), 600)}`,
   ].join('\n');
 }
 
-function lastRecallAt(): number | null {
+/**
+ * The two cutoff markers, read and written through one pair.
+ *
+ * Both arms store the inclusion CUTOFF rather than the run time — the invariant
+ * #529 had to correct once, because storing the run time makes the trigger set
+ * and the input set exact complements. Two hand-written copies had already
+ * diverged on whether to `mkdirSync` first; one pair keeps the invariant and its
+ * failure handling in one place.
+ *
+ * Best-effort in both directions: a marker that cannot be read or written costs
+ * a repeated pass, not correctness.
+ */
+function readCutoffMarker(file: string): number | null {
   try {
-    const t = Date.parse(fs.readFileSync(SPECIALIST_RECALL_MARKER, 'utf-8').trim());
+    const t = Date.parse(fs.readFileSync(file, 'utf-8').trim());
     return Number.isFinite(t) ? t : null;
   } catch {
     return null;
   }
 }
 
-function stampRecall(cutoff: number): void {
+function writeCutoffMarker(file: string, cutoff: number): void {
   try {
-    fs.mkdirSync(path.dirname(SPECIALIST_RECALL_MARKER), { recursive: true });
-    atomicWriteFileSync(SPECIALIST_RECALL_MARKER, new Date(cutoff).toISOString() + '\n');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    atomicWriteFileSync(file, new Date(cutoff).toISOString() + '\n');
   } catch {
-    // A marker that cannot be written costs a repeated scan, not correctness.
+    // Losing it costs one redundant pass.
   }
 }
 
@@ -269,15 +342,6 @@ const FRESH_GRACE_MS = 24 * 60 * 60 * 1000;
  * Note this is a CUTOFF, not a run time. Storing "when we last ran" was a real
  * defect; the docstring on {@link runMemoryConsolidation} has the trace.
  */
-function lastConsolidatedAt(): number | null {
-  try {
-    const t = Date.parse(fs.readFileSync(MEMORY_CONSOLIDATED_MARKER, 'utf-8').trim());
-    return Number.isFinite(t) ? t : null;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Proposes what memory could shed, and queues it. Writes no memory.
  *
@@ -297,7 +361,7 @@ function lastConsolidatedAt(): number | null {
  */
 async function runMemoryConsolidation(config: BernardConfig): Promise<void> {
   const store = new MemoryStore();
-  const lastCutoff = lastConsolidatedAt();
+  const lastCutoff = readCutoffMarker(MEMORY_CONSOLIDATED_MARKER);
   const cutoff = Date.now() - FRESH_GRACE_MS;
   const writtenAt = (e: { writtenAt?: string }) => (e.writtenAt ? Date.parse(e.writtenAt) : 0);
 
@@ -355,13 +419,8 @@ async function runMemoryConsolidation(config: BernardConfig): Promise<void> {
     candidates.create(proposal, 'exit');
   }
 
-  try {
-    // The CUTOFF, not `now` — see the partition above.
-    atomicWriteFileSync(MEMORY_CONSOLIDATED_MARKER, new Date(cutoff).toISOString() + '\n');
-  } catch {
-    // Best-effort, like every other marker in the repo. Losing it costs one
-    // redundant pass, not correctness.
-  }
+  // The CUTOFF, not `now` — see the partition above.
+  writeCutoffMarker(MEMORY_CONSOLIDATED_MARKER, cutoff);
 }
 
 export async function runWorkerForFile(filePath: string): Promise<void> {

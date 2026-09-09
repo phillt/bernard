@@ -82,6 +82,20 @@ export interface AgentContext {
   mcp: AgentContextMCP;
   rag?: RAGStore;
   /**
+   * This specialist's own RAG store, by id (#501).
+   *
+   * Supplied by whichever composition root already imports `rag.ts`, the way
+   * `rag` itself is, so the framework keeps a type-only edge to that graph.
+   * Absent means no per-specialist retrieval — which is every process that has
+   * RAG turned off, and every caller written before this.
+   *
+   * A factory rather than a resolved store because the owner is not known until
+   * `runDefinition` reads the dispatch's `recordId`, and because opening one
+   * reads a file: a resolved handle on every context would pay for a store that
+   * an unowned dispatch never touches.
+   */
+  ragForOwner?: (specialistId: string) => RAGStore;
+  /**
    * Ingested document libraries this dispatch may read (#516).
    *
    * Optional because a process with no corpus has none, and because
@@ -146,6 +160,8 @@ export interface AssembleContextInput {
   toolOptions: ToolOptions;
   mcp?: Partial<AgentContextMCP>;
   rag?: RAGStore;
+  /** See {@link AgentContext.ragForOwner}. */
+  ragForOwner?: (specialistId: string) => RAGStore;
   knowledge?: KnowledgeCorpus;
   stores?: Partial<AgentContextStores>;
   provenance?: ProvenanceStore;
@@ -176,6 +192,7 @@ export function assembleContext(input: AssembleContextInput): AgentContext {
       resolveAlias: input.mcp?.resolveAlias ?? (() => null),
     },
     rag: input.rag,
+    ragForOwner: input.ragForOwner,
     knowledge: input.knowledge,
     toolOptions: input.toolOptions,
     provenance: input.provenance ?? new ProvenanceStore(),
