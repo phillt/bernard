@@ -161,6 +161,16 @@ interface ScopeAxisSpec {
    */
   readonly label: string;
   /**
+   * What a well-formed entry looks like, in a sentence a model can act on.
+   *
+   * On the table because {@link validate} is here: a refusal that says only
+   * "rejected" sends a caller guessing at the same axis repeatedly, and a
+   * message written at the creation boundary instead would be a second copy of
+   * a rule this entry already owns. `specialist` renders it; a fourth axis
+   * arrives with its own.
+   */
+  readonly hint: string;
+  /**
    * Whether one declared entry is well-formed — a THUNK, not a predicate.
    *
    * `knowledgeScope`'s check is an existence test against the domain registry
@@ -225,6 +235,7 @@ export interface ScopeAxis extends ScopeAxisSpec {
 const AXES = {
   memoryScope: {
     label: 'memory',
+    hint: 'each entry is an exact memory key, or a prefix ending in "*" (e.g. "proj-*")',
     // Matches the SANITIZED key, which is the correctness argument rather than
     // a convenience: `MemoryStore` repairs names rather than rejecting them, so
     // `"pro j-secret"` and `"proj-secret"` address one file and must get one
@@ -239,6 +250,7 @@ const AXES = {
   },
   knowledgeScope: {
     label: 'knowledge',
+    hint: `each entry is a RAG domain that exists: ${getDomainIds().join(', ')}`,
     // The existing RAG `domain` axis — no new field, no migration, no
     // re-embedding: every record is already labelled and `scoreAndRank` already
     // groups by domain, so a scoped search is the same ranking over a smaller
@@ -252,6 +264,7 @@ const AXES = {
   },
   corpusScope: {
     label: 'corpus',
+    hint: 'each entry is a knowledge-library id — lowercase letters, digits and dashes',
     // Shape, never existence, and that is what makes this a separate field from
     // `knowledgeScope` rather than a reuse of it. That axis's predicate asks
     // whether a DOMAIN exists, so a library name in it resolves to `[]` —

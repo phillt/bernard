@@ -3,7 +3,14 @@ import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 import { SPECIALISTS_DIR } from './paths.js';
 import { RESERVED_NAMES } from './reserved-names.js';
-import type { ScopeSelection } from './framework/agents/dispatch-profile.js';
+// A VALUE import, and the graph it pulls is already eager here: `logger`,
+// `domains`, `memory` and the `knowledge/ids` leaf are all on `assembleContext`'s
+// path, which constructs a `SpecialistStore` beside a `MemoryStore`.
+import {
+  SCOPE_AXES,
+  type ScopeField,
+  type ScopeSelection,
+} from './framework/agents/dispatch-profile.js';
 import {
   atomicWriteFileSync,
   seedOnce,
@@ -55,13 +62,13 @@ export interface SpecialistBadExample extends SpecialistExample {
  * while "verify against the task and nothing else" is a coherent posture.
  * Validated at resolution, never trusted.
  *
- * **Not on `CreateSpecialistInput`, deliberately.** The `specialist` tool's
- * schema does not expose them — `SpecialistUpdates` clears a field with a
- * sentinel and an array has none that is not already meaningful, since `[]`
- * must mean deny-all and so cannot also mean clear. Day-one authoring is
- * hand-edited JSON, which goes through this type; adding them to the create
- * input would leave a plumbed-looking route nobody can reach and would read as
- * "already done" to whoever lands the authoring surface.
+ * **The clearing sentinel is `''`, not `[]`.** #511 recorded this as the
+ * blocker for an authoring surface — a sentinel had to be found and `[]` was
+ * already spoken for, since it means deny-all. `''` is the answer the tree
+ * already had: `role`, `strategy` and `toolSurface` all clear with it, and it
+ * cannot collide with a declaration here because it is not an array. So the
+ * field's three states are `undefined` (don't change), `[]` (deny-all) and `''`
+ * (remove the fence), each spelled differently from the others.
  */
 export interface Specialist extends ScopeSelection {
   id: string;
@@ -203,7 +210,7 @@ export interface SpecialistSummary {
 /** Maximum examples retained per list (oldest drop-off during correction updates). */
 export const MAX_EXAMPLES_PER_LIST = 10;
 
-export interface CreateSpecialistInput {
+export interface CreateSpecialistInput extends ScopeSelection {
   id: string;
   name: string;
   description: string;
@@ -222,6 +229,11 @@ export interface CreateSpecialistInput {
   strategy?: 'normal' | 'react';
   /** See {@link Specialist.toolSurface}. */
   toolSurface?: 'full' | 'worker';
+  /**
+   * The three fences (#511), spread from {@link ScopeSelection} rather than
+   * re-listed: `SCOPE_AXES` is the source and a hand-written copy here is one
+   * more place a fourth axis has to be remembered.
+   */
   goodExamples?: SpecialistExample[];
   badExamples?: SpecialistBadExample[];
   structuredOutput?: boolean;
@@ -263,6 +275,15 @@ export type SpecialistUpdates = Partial<
   stepRatio?: number;
   strategy?: 'normal' | 'react' | '';
   toolSurface?: 'full' | 'worker' | '';
+} & {
+  /**
+   * The three fences (#511), each with the same `''` clear.
+   *
+   * Mapped over {@link ScopeField} rather than written out, so a fourth axis is
+   * declarable through `update` the day it exists — the direction `SCOPE_AXES`
+   * exists to make cheap.
+   */
+  [K in ScopeField]?: string[] | '';
 };
 
 /**
@@ -592,6 +613,16 @@ export class SpecialistStore {
       ...(input.stepRatio !== undefined ? { stepRatio: input.stepRatio } : {}),
       ...(input.strategy !== undefined ? { strategy: input.strategy } : {}),
       ...(input.toolSurface !== undefined ? { toolSurface: input.toolSurface } : {}),
+      // Over the table, so a fourth fence is stored without an edit here. The
+      // spread is guarded per axis for the reason the fields above are: a
+      // record that declares nothing must stay clean on disk, since `undefined`
+      // and "absent" are the same state and only one of them serializes.
+      ...Object.fromEntries(
+        SCOPE_AXES.filter((axis) => input[axis.field] !== undefined).map((axis) => [
+          axis.field,
+          input[axis.field],
+        ]),
+      ),
       ...(input.goodExamples !== undefined ? { goodExamples: input.goodExamples } : {}),
       ...(input.badExamples !== undefined ? { badExamples: input.badExamples } : {}),
       ...(input.structuredOutput !== undefined ? { structuredOutput: input.structuredOutput } : {}),
@@ -685,6 +716,13 @@ export class SpecialistStore {
     this.setOrClear(specialist, 'stepRatio', updates.stepRatio, (v) => v === 0);
     this.setOrClear(specialist, 'strategy', updates.strategy, blank);
     this.setOrClear(specialist, 'toolSurface', updates.toolSurface, blank);
+    // The fences, over the table rather than three more lines: `''` clears,
+    // `[]` is a real declaration meaning deny-all, and `undefined` leaves the
+    // record alone. `blank` is the same predicate the two above use, which is
+    // what makes "an array can never be mistaken for a clear" structural.
+    for (const axis of SCOPE_AXES) {
+      this.setOrClear(specialist, axis.field, updates[axis.field], blank);
+    }
     if (updates.goodExamples !== undefined) specialist.goodExamples = updates.goodExamples;
     if (updates.badExamples !== undefined) specialist.badExamples = updates.badExamples;
     if (updates.structuredOutput !== undefined)
