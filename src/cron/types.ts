@@ -1,7 +1,26 @@
+import type { ScopeSelection } from '../framework/agents/dispatch-profile.js';
 import type { ToolErrorType } from '../framework/tools/types.js';
 
-/** A recurring task that Bernard executes on a cron schedule. */
-export interface CronJob {
+/**
+ * A recurring task that Bernard executes on a cron schedule.
+ *
+ * `extends ScopeSelection` carries the knowledge fences (#511, #516) — the same
+ * three fields `Specialist` and `DispatchProfile` declare, inherited rather
+ * than copied so a fourth axis reaches cron for free (#552). That is already
+ * how this job type got its corpus fence: `cron/runner.ts` passes the whole
+ * record and names no axis.
+ *
+ * **Unset means unscoped**, matching `toolMode`'s house rule below: an unset
+ * posture field preserves legacy behaviour and the job author opts in.
+ * Deny-by-default is the stronger security position in the abstract and is
+ * deliberately rejected here — silently blanking every existing job's memory
+ * overnight surfaces as "the job answered worse", which #510 already records as
+ * the quietest failure mode in this repo, and cron is where it would be
+ * quietest. The RAG fence is orthogonal to `prompt`, which bounds retrieval by
+ * SIMILARITY: that is not a fence and was never claimed to be, and the two
+ * multiply.
+ */
+export interface CronJob extends ScopeSelection {
   /** Unique identifier (UUID). */
   id: string;
   /** Human-readable label for the job. */
@@ -48,27 +67,6 @@ export interface CronJob {
    * and `toolMode`.
    */
   skipPermissions?: boolean;
-  /**
-   * Memory keys this job may read and write (#511).
-   *
-   * **Unset means unscoped**, matching `toolMode`'s stated house rule two
-   * fields up: an unset posture field preserves legacy behaviour and the job
-   * author opts in. Deny-by-default is the stronger security position in the
-   * abstract and is deliberately rejected here — silently blanking every
-   * existing job's memory overnight surfaces as "the job answered worse", which
-   * #510 already records as the quietest failure mode in this repo, and cron is
-   * where it would be quietest.
-   */
-  memoryScope?: string[];
-  /**
-   * RAG domains this job may retrieve from (#511). Unset means unscoped.
-   *
-   * Orthogonal to `prompt`, which bounds retrieval by SIMILARITY. That is not a
-   * fence and was never claimed to be; the two multiply.
-   */
-  knowledgeScope?: string[];
-  /** Knowledge libraries this job may read (#516). Unset is unscoped. */
-  corpusScope?: string[];
   /**
    * Per-job wall clock in milliseconds (#326). Falls back to
    * `BERNARD_CRON_JOB_TIMEOUT_MS`, then to a 30-minute default; `0` disables

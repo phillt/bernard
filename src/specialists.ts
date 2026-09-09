@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 import { SPECIALISTS_DIR } from './paths.js';
 import { RESERVED_NAMES } from './reserved-names.js';
+import type { ScopeSelection } from './framework/agents/dispatch-profile.js';
 import {
   atomicWriteFileSync,
   seedOnce,
@@ -42,7 +43,27 @@ export interface SpecialistBadExample extends SpecialistExample {
   fix: string;
 }
 
-export interface Specialist {
+/**
+ * `extends ScopeSelection` carries the knowledge fences (#511, #516) — one
+ * declaration shared with `DispatchProfile`, `CronJob` and the dispatch-context
+ * record, so a fourth axis reaches every one of them at once (#552).
+ *
+ * Absent means unscoped, which is what every record has today and what keeps
+ * these fields a capability rather than a migration. **An empty array is
+ * honoured as deny-all**, which diverges from `targetToolsScopeError`'s
+ * rejection of `targetTools: []` — correctly, because "no tools" is incoherent
+ * while "verify against the task and nothing else" is a coherent posture.
+ * Validated at resolution, never trusted.
+ *
+ * **Not on `CreateSpecialistInput`, deliberately.** The `specialist` tool's
+ * schema does not expose them — `SpecialistUpdates` clears a field with a
+ * sentinel and an array has none that is not already meaningful, since `[]`
+ * must mean deny-all and so cannot also mean clear. Day-one authoring is
+ * hand-edited JSON, which goes through this type; adding them to the create
+ * input would leave a plumbed-looking route nobody can reach and would read as
+ * "already done" to whoever lands the authoring surface.
+ */
+export interface Specialist extends ScopeSelection {
   id: string;
   name: string;
   description: string;
@@ -134,39 +155,6 @@ export interface Specialist {
    * {@link targetTools}, which is a fence for every kind since #507.
    */
   toolSurface?: 'full' | 'worker';
-  /**
-   * Memory keys this specialist may read and write (#511).
-   *
-   * Exact keys, or prefixes ending in `*`. Absent means unscoped, which is what
-   * every record has today and what keeps this change a capability rather than
-   * a migration. **An empty array is honoured as deny-all**, which diverges
-   * from `targetToolsScopeError`'s rejection of `targetTools: []` — correctly,
-   * because "no tools" is incoherent while "verify against the task and nothing
-   * else" is a coherent posture. Validated at resolution, never trusted.
-   *
-   * **Not on `CreateSpecialistInput`, deliberately.** The `specialist` tool's
-   * schema does not expose it — `SpecialistUpdates` clears a field with a
-   * sentinel and an array has none that is not already meaningful, since `[]`
-   * must mean deny-all and so cannot also mean clear. Day-one authoring is
-   * hand-edited JSON, which goes through this type; adding the field to the
-   * create input would leave a plumbed-looking route nobody can reach and
-   * would read as "already done" to whoever lands the authoring surface.
-   */
-  memoryScope?: string[];
-  /**
-   * RAG domains this specialist may retrieve from (#511).
-   *
-   * Validated against the domain registry. Absent means unscoped.
-   */
-  knowledgeScope?: string[];
-  /**
-   * Knowledge libraries this specialist may read (#516). Unset is unscoped.
-   *
-   * Deliberately NOT on `CreateSpecialistInput`, for `memoryScope`'s reason: an
-   * array has no clearing sentinel that is not already meaningful, since `[]`
-   * must mean deny-all.
-   */
-  corpusScope?: string[];
   /** Correct usage patterns used for few-shot priming. */
   goodExamples?: SpecialistExample[];
   /** Failed usage patterns with their corrected form. */

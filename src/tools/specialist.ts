@@ -23,6 +23,7 @@ import {
   DISPATCH_STRATEGIES,
   DISPATCH_TOOL_SURFACES,
   MAX_STEP_RATIO,
+  SCOPE_AXES,
 } from '../framework/agents/dispatch-profile.js';
 import { scopeList } from '../text.js';
 
@@ -513,16 +514,23 @@ export function createSpecialistTool(
             // profile. `[]` is a real posture — deny-all — so it is rendered as
             // "(nothing)" rather than folded into "none declared"; the two mean
             // opposite things and the resolver already keeps them apart.
-            for (const [label, declared, resolved] of [
-              ['memoryScope', record.memoryScope, profile.memoryScope],
-              ['knowledgeScope', record.knowledgeScope, profile.knowledgeScope],
-              ['corpusScope', record.corpusScope, profile.corpusScope],
-            ] as const) {
+            // Field names, not the viewer's short labels: this surface prints
+            // what you would type into the JSON, and the two vocabularies are
+            // both user-visible — which is why the table carries both rather
+            // than unifying them (#552).
+            for (const axis of SCOPE_AXES) {
+              // Named `field`, not `label`: the table also carries a `label`
+              // (`memory` / `knowledge` / `corpus`) for the viewer, and binding
+              // a local called `label` inside the one loop that must NOT use it
+              // is an invitation to "fix" this back.
+              const field = axis.field;
+              const declared = record[axis.field];
+              const resolved = profile[axis.field];
               if (resolved === undefined) continue;
-              lines.push(`${label}: ${scopeList(resolved)}`);
+              lines.push(`${field}: ${scopeList(resolved)}`);
               const dropped = Array.isArray(declared) ? declared.length - resolved.length : null;
               if (dropped === null) {
-                lines.push(`  ⚠ declared ${label} is not a list, so this dispatch reads nothing`);
+                lines.push(`  ⚠ declared ${field} is not a list, so this dispatch reads nothing`);
               } else if (dropped > 0) {
                 lines.push(
                   `  ⚠ ${dropped} declared entr${dropped === 1 ? 'y is' : 'ies are'} invalid and dropped`,

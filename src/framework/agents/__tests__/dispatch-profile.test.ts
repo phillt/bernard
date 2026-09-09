@@ -5,6 +5,10 @@ import {
   resolveDispatchProfile,
   declaredToolSurface,
   MAX_STEP_RATIO,
+  SCOPE_AXES,
+  applyStandaloneScopes,
+  declaredScope,
+  pickScopes,
 } from '../dispatch-profile.js';
 import { resolveToolSurface } from '../tool-surface.js';
 import { specialistDefinition } from '../specialist.js';
@@ -241,5 +245,97 @@ describe('specialist spend is attributed to a specialist site (#299/#508)', () =
     // tell you a persona was expensive said the main agent was.
     expect(specialistDefinition.site).toBe('specialist');
     expect(toolWrapperDefinition.site).toBe('tool-wrapper');
+  });
+});
+
+describe('SCOPE_AXES (#552)', () => {
+  /**
+   * The table is what turns "eleven touch points, nine of them uniform" into
+   * one entry — so the properties worth pinning are the ones the TYPE cannot
+   * state and the ones a future reader would otherwise re-derive.
+   *
+   * The two compile-time properties are deliberately NOT asserted here.
+   * `tsconfig.json` excludes every test file from the program, so a
+   * `@ts-expect-error` in one is compiled by nothing — it looks like a guard
+   * and is decoration, the mistake `user-message.ts` records paying for. The
+   * `satisfies Record<ScopeField, ScopeAxis>` in the module itself is the real
+   * check: deleting an entry and adding a stray one both fail `npm run build`.
+   */
+  it('is honoured by declaredScope for every axis it declares', () => {
+    // What the type cannot state. `ScopeField` is `keyof typeof AXES`, so a
+    // missing axis is unrepresentable rather than merely rejected — but nothing
+    // in the type stops `declaredScope` from skipping one. Built from the table
+    // rather than from three literal names, so it is not a re-listing of what
+    // the table already says.
+    const declared = Object.fromEntries(SCOPE_AXES.map((a) => [a.field, []]));
+    expect(Object.keys(declaredScope(declared)).sort()).toEqual(
+      SCOPE_AXES.map((a) => a.field).sort(),
+    );
+  });
+
+  it('gives each axis a distinct field and a distinct label', () => {
+    // Two vocabularies, both user-visible: `specialist inspect` prints the
+    // field name, the dispatch-context viewer prints the label. A duplicate in
+    // either collapses two fences into one line.
+    expect(new Set(SCOPE_AXES.map((a) => a.field)).size).toBe(SCOPE_AXES.length);
+    expect(new Set(SCOPE_AXES.map((a) => a.label)).size).toBe(SCOPE_AXES.length);
+  });
+
+  it('builds its validator per call, because one axis closes over live state', () => {
+    // `knowledgeScope`'s predicate snapshots the domain registry. A predicate
+    // built at module load would freeze that snapshot for the process; the
+    // thunk is what keeps it a per-validation read.
+    const axis = SCOPE_AXES.find((a) => a.field === 'knowledgeScope')!;
+    expect(axis.validate()).not.toBe(axis.validate());
+  });
+
+  it('marks exactly one axis as having a ctx-free application point', () => {
+    // `headless.ts` applies the RAG fence a second time, before
+    // `assembleContext`, to overlap the MCP connect. That asymmetry is real —
+    // memory has one point, knowledge two, corpus one — and it lives in the
+    // table so nobody has to know it.
+    expect(SCOPE_AXES.filter((a) => a.standalone).map((a) => a.field)).toEqual(['knowledgeScope']);
+  });
+
+  it('applies only the axes marked for the store it was handed', () => {
+    const calls: (readonly string[] | null | undefined)[] = [];
+    const store = {
+      scoped(scope: readonly string[] | null | undefined) {
+        calls.push(scope);
+        return store;
+      },
+    };
+    applyStandaloneScopes(store, 'rag', { memoryScope: ['k'], knowledgeScope: ['general'] });
+    // Once, with the RAG fence — never with the memory one, which would fence
+    // the wrong store with the wrong vocabulary and silently match nothing.
+    // The store kind is a PARAMETER for exactly this reason: the marked set has
+    // one member today, and what matters is what happens when it does not.
+    expect(calls).toEqual([['general']]);
+  });
+
+  it('drops every axis when no axis is marked for that store', () => {
+    // Guards the guard: the assertion above passes if the filter is dropped and
+    // `knowledgeScope` merely happens to be the last axis applied.
+    const calls: unknown[] = [];
+    const store = {
+      scoped(scope: readonly string[] | null | undefined) {
+        calls.push(scope);
+        return store;
+      },
+    };
+    applyStandaloneScopes(store, 'memory' as never, { knowledgeScope: ['general'] });
+    expect(calls).toEqual([]);
+  });
+
+  it('pickScopes keeps a deny-all fence and drops only an absent one', () => {
+    // `[]` is a real posture and must reach the record: dropping it would make
+    // "fenced to nothing" and "not fenced" render identically on the one
+    // surface that exists to tell a fence apart from a bad retrieval. This is
+    // also what the conditional spreads it replaces did, since `[]` is truthy.
+    expect(pickScopes({ memoryScope: ['k*'], knowledgeScope: [] })).toEqual({
+      memoryScope: ['k*'],
+      knowledgeScope: [],
+    });
+    expect(pickScopes({})).toEqual({});
   });
 });

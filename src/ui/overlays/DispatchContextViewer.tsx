@@ -5,6 +5,7 @@ import { getDispatchContexts, type DispatchContextRecord } from '../../dispatch-
 import { getThemeColors } from '../../theme.js';
 import { truncate, scopeList } from '../../text.js';
 import { formatTokenCount } from '../../output.js';
+import { SCOPE_AXES } from '../../framework/agents/dispatch-profile.js';
 // The chars→tokens divisor, not a third spelled-out `/ 4`: that helper exists
 // so the caller's estimate and `emergencyTruncate`'s answer cannot disagree,
 // and the input here IS the rendered context prefix it measures.
@@ -160,7 +161,14 @@ function summaryLine(r: DispatchContextRecord): string {
   return `${r.definitionId}${site}${warn} · ${r.dispatchId}`;
 }
 
-function detailBody(r: DispatchContextRecord): string {
+/**
+ * Exported for `knowledge/__tests__/fence.test.ts`, which used to assert on
+ * this file's SOURCE TEXT — regex-matching the header guard and a literal
+ * interpolation. That was the regression test for the #550 bug, and a
+ * table-driven rewrite breaks it by construction, so it is replaced by a
+ * behavioural assertion against the renderer itself.
+ */
+export function detailBody(r: DispatchContextRecord): string {
   const parts: string[] = [
     `${r.definitionId} · ${r.telemetrySite} · dispatch ${r.dispatchId}`,
     '',
@@ -177,11 +185,15 @@ function detailBody(r: DispatchContextRecord): string {
   // the whole section silently absent on exactly the dispatch the record exists
   // to explain. A fence and a bad retrieval look identical from outside, and
   // this is the surface that tells them apart.
-  if (r.memoryScope || r.knowledgeScope || r.corpusScope) {
+  // Driven by the table, so the header guard and the lines cannot disagree
+  // about which axes exist — the #550 bug was exactly that disagreement, one
+  // axis short in the guard (#552).
+  if (SCOPE_AXES.some((axis) => r[axis.field])) {
     parts.push('', 'Scoped to:');
-    if (r.memoryScope) parts.push(`  memory: ${scopeList(r.memoryScope)}`);
-    if (r.knowledgeScope) parts.push(`  knowledge: ${scopeList(r.knowledgeScope)}`);
-    if (r.corpusScope) parts.push(`  corpus: ${scopeList(r.corpusScope)}`);
+    for (const axis of SCOPE_AXES) {
+      const value = r[axis.field];
+      if (value) parts.push(`  ${axis.label}: ${scopeList(value)}`);
+    }
   }
   if (r.retrievalQuery) {
     parts.push('', 'Retrieved for:', `  ${r.retrievalQuery}`);

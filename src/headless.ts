@@ -10,7 +10,7 @@ import { MCPManager } from './mcp.js';
 import { registerBuiltinDefinitions } from './framework/agents/index.js';
 import { runDefinition } from './framework/agents/run.js';
 import type { AgentDefinition } from './framework/agents/types.js';
-import type { DispatchProfile } from './framework/agents/dispatch-profile.js';
+import { applyStandaloneScopes, type ScopeSelection } from './framework/agents/dispatch-profile.js';
 import { initShellParser } from './permissions/shell-ast.js';
 
 /**
@@ -92,7 +92,7 @@ export interface RunHeadlessOpts<TInput, TFormatted> {
    * `runDefinition` re-derives from the dispatched record and narrowing is
    * idempotent, so a scope that arrives both ways is applied once in effect.
    */
-  scope?: Pick<DispatchProfile, 'memoryScope' | 'knowledgeScope' | 'corpusScope'>;
+  scope?: ScopeSelection;
   /** Wall clock in ms. `null` disables it. */
   timeoutMs: number | null;
   /** The caller's own signal, composed with the wall clock. */
@@ -250,15 +250,14 @@ export async function runHeadless<TInput, TFormatted>(
     // Scoped BEFORE the search, not after: this one runs ahead of
     // `assembleContext` (deliberately, to overlap the MCP connect), so it is
     // the one retrieval a ctx-level fence cannot reach.
-    // `scoped(undefined)` returns the receiver, so this needs no guard of its
-    // own — one place decides what an absent scope means.
-    ragSearch = ragStore
-      ?.scoped(scope.knowledgeScope)
-      .search(ragQuery)
-      .catch((err: unknown) => {
-        debugLog(`${debugLabel}:rag:error`, err instanceof Error ? err.message : String(err));
-        return undefined;
-      });
+    // Named through the CAPABILITY rather than the axis: `applyStandaloneScopes`
+    // applies every fence that declares a ctx-free application point, so a
+    // fourth one is a table edit rather than a tenth touch point here.
+    const scopedStore = ragStore && applyStandaloneScopes(ragStore, 'rag', scope);
+    ragSearch = scopedStore?.search(ragQuery).catch((err: unknown) => {
+      debugLog(`${debugLabel}:rag:error`, err instanceof Error ? err.message : String(err));
+      return undefined;
+    });
   }
 
   const mcpManager = new MCPManager();

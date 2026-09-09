@@ -15,7 +15,7 @@ import { VerificationStore } from '../agent-status.js';
 import { VerificationTracker } from '../verification-tracker.js';
 import type { Check } from '../rubric.js';
 import type { ToolNameAliasResolver } from '../mcp-names.js';
-import type { DispatchProfile } from './agents/dispatch-profile.js';
+import { SCOPE_AXES, type DispatchProfile } from './agents/dispatch-profile.js';
 
 export interface AgentContextStores {
   memory: MemoryStore;
@@ -208,30 +208,30 @@ export function assembleContext(input: AssembleContextInput): AgentContext {
  * what keeps its tool block byte-identical for the prompt cache (#269).
  */
 export function scopeContext(ctx: AgentContext, profile: DispatchProfile): AgentContext {
-  const { memoryScope, knowledgeScope, corpusScope } = profile;
-  // **The third term is load-bearing and fails silently without a test.** Omit
-  // `corpusScope` here and a corpus-only fence returns the unscoped context —
-  // every such fence becomes a no-op, with every other test still green.
-  if (memoryScope === undefined && knowledgeScope === undefined && corpusScope === undefined) {
-    return ctx;
-  }
-  // Narrowing is monotone and idempotent in both stores, so re-scoping an
+  // **There is no early return, and that is the fix.** The guard here was the
+  // silent-failure site (#550): it named the axes by hand, the third term was
+  // forgotten, and a corpus-only fence returned the unscoped context — every
+  // such fence a no-op with every other test green. The loop below already
+  // returns `ctx` BY IDENTITY when no axis is declared (no arm fires), so the
+  // guard was a second scan restating what the loop guarantees, and a second
+  // place to forget an axis. Identity is what keeps `main`'s tool block
+  // byte-identical for the prompt cache (#269), and it is now structural.
+  //
+  // Narrowing is monotone and idempotent in all three stores, so re-scoping an
   // already-scoped context can only ever narrow further. That is what lets
   // `tool-wrapper-run.ts` scope early for its pre-assembled child tools and
   // still let `runDefinition` re-derive.
-  // **The two axes stay independent**, which is why the memory arm keeps a
-  // guard of its own rather than leaning on `scoped(undefined)` returning the
-  // receiver: a knowledge-only fence must not reach for the memory store at
-  // all. `rag` needs no such guard — it is already reached conditionally.
-  return {
-    ...ctx,
-    stores:
-      memoryScope === undefined
-        ? ctx.stores
-        : { ...ctx.stores, memory: ctx.stores.memory.scoped(memoryScope) },
-    rag: ctx.rag?.scoped(knowledgeScope),
-    knowledge: ctx.knowledge?.scoped(corpusScope),
-  };
+  //
+  // **Each arm runs only when its own field is declared**, which is what keeps
+  // the axes independent: a knowledge-only fence must not reach for the memory
+  // store at all, and `ctx.stores` keeps its identity for anything that does
+  // not fence memory.
+  let out = ctx;
+  for (const axis of SCOPE_AXES) {
+    const value = profile[axis.field];
+    if (value !== undefined) out = axis.apply(out, value);
+  }
+  return out;
 }
 
 /**
