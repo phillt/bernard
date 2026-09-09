@@ -78,28 +78,185 @@ export interface DispatchProfile {
   stepRatio?: number;
   strategy?: DispatchStrategy;
   toolSurface?: DispatchToolSurface;
-  /** Memory keys this dispatch may read and write (#511). Absent means unscoped. */
-  memoryScope?: string[];
-  /** RAG domains this dispatch may retrieve from (#511). Absent means unscoped. */
-  knowledgeScope?: string[];
   /**
-   * Knowledge libraries this dispatch may read (#516). Absent means unscoped.
+   * The knowledge fences. One field per store, and each is described by its
+   * entry in {@link SCOPE_AXES} rather than here — everything downstream reads
+   * the table, so a rationale written beside the declaration is a rationale
+   * nobody arrives at.
    *
-   * **A separate field from `knowledgeScope`, not a reuse of it**, and the
-   * reasons are specific rather than tidiness. That field's predicate is an
-   * existence check against the frozen domain registry, so a library name in it
-   * resolves to `[]` — silent deny-all. `declaredScope` runs before every
-   * dispatch including `main`, from a call site outside the only `try`, so its
-   * predicate must not reach disk. And `headless.ts` applies the knowledge
-   * fence ctx-free by calling `.scoped()` on the RAG store directly, so one
-   * array holding two namespaces would need a partition rule correct in two
-   * places or a cron run would fence differently from an interactive one — and
-   * a fence that is wrong is indistinguishable from a bad retrieval.
-   *
-   * Memory and knowledge were already two fields for two stores. A third store
-   * gets a third; that is the existing shape, not a new mechanism.
+   * Absent means unscoped; `[]` means deny-all. They are declared as ordinary
+   * optional members because {@link ScopeField} is derived FROM them: the three
+   * are the only `string[]` members of this interface, which is what separates
+   * them structurally from `stepRatio` / `strategy` / `toolSurface` and makes
+   * the table's key set a compile-time consequence rather than a second list.
    */
+  memoryScope?: string[];
+  knowledgeScope?: string[];
   corpusScope?: string[];
+}
+
+/**
+ * The scope fields of a {@link DispatchProfile}, DERIVED rather than re-listed
+ * (#552).
+ *
+ * Adding a fourth axis used to mean eleven touch points, nine of them
+ * character-for-character uniform — and the first attempt missed two of them,
+ * both silently. This type is what turns the two directions of that mistake
+ * into compile errors: `SCOPE_AXES` is typed `Record<ScopeField, …>`, so an
+ * axis that exists on the profile and not in the table fails to typecheck, and
+ * so does a table key that is not a profile field. A runtime list would
+ * re-encode the same three names by hand, which is the thing being removed.
+ *
+ * `-?` strips the optionality so `string[] | undefined` does not swallow every
+ * member; `string[] extends T` (rather than the other way round) is what admits
+ * exactly the `string[]` members and rejects `number` and the two string
+ * unions.
+ */
+export type ScopeField = {
+  [K in keyof DispatchProfile]-?: string[] extends DispatchProfile[K] ? K : never;
+}[keyof DispatchProfile];
+
+/** Just the fences — what a caller declares, and what a record reports it ran under. */
+export type ScopeSelection = Pick<DispatchProfile, ScopeField>;
+
+/**
+ * Anything that narrows itself to a subset and returns the same kind.
+ *
+ * Structural on purpose: `MemoryStore`, `RAGStore` and `KnowledgeCorpus` all
+ * satisfy it, and naming them here would give this module — which runs before
+ * every dispatch in the process, `main` included — a runtime edge to three
+ * stores it never constructs.
+ */
+export interface Narrowing<T> {
+  scoped(scope: readonly string[] | null | undefined): T;
+}
+
+/**
+ * One fence: the field, how to say it, how to check it, and where to apply it.
+ *
+ * The table replaces nine uniform touch points. The two that are NOT uniform
+ * are the reason `apply` is a function rather than a store name, and the reason
+ * `standalone` exists — see each below.
+ */
+export interface ScopeAxis {
+  /** The field, on the profile and on every record that can declare one. */
+  readonly field: ScopeField;
+  /**
+   * Short name for a surface that has already said "Scoped to:".
+   *
+   * Deliberately not unified with the field name: `specialist inspect` prints
+   * `memoryScope` and the dispatch-context viewer prints `memory`, both are
+   * user-visible, and collapsing them would change output for no gain. The
+   * entry carries both vocabularies rather than picking one.
+   */
+  readonly label: string;
+  /**
+   * Whether one declared entry is well-formed — a THUNK, not a predicate.
+   *
+   * `knowledgeScope`'s check is an existence test against the domain registry
+   * and closes over a `Set` that must be built when validation runs, not when
+   * this module loads. The other two are stateless module-level functions and
+   * ignore the extra call.
+   */
+  readonly validate: () => (value: unknown) => boolean;
+  /**
+   * Narrows the one store this axis fences, on a context.
+   *
+   * A function per axis rather than declarative data, because the three arms
+   * genuinely reach different places: `memoryScope` is nested one level and
+   * rebuilds `{ ...ctx.stores, memory }`, while the other two are flat optional
+   * chains on `ctx.rag` and `ctx.knowledge`. Each arm is applied only when its
+   * own field is declared, which is what preserves `ctx.stores` IDENTITY for a
+   * fence that does not touch memory.
+   */
+  readonly apply: (ctx: AgentContext, value: string[]) => AgentContext;
+  /**
+   * A second, ctx-free application point — populated by exactly one axis.
+   *
+   * `headless.ts` starts its RAG search BEFORE `assembleContext`, deliberately,
+   * to overlap the ~1.1-1.6 s MCP connect, so that one retrieval is the single
+   * thing a ctx-level fence cannot reach. So `memoryScope` has one application
+   * point, `knowledgeScope` has two, and `corpusScope` has one plus a standing
+   * comment in `headless.ts` forbidding a second. Modelled here so the
+   * asymmetry is a property of the table rather than a fact you have to know.
+   */
+  readonly standalone?: 'rag';
+}
+
+/**
+ * The three fences, in the order every surface renders them.
+ *
+ * Typed `Record<ScopeField, …>` and then flattened, so both directions of the
+ * #550 mistake are compile errors: drop an entry and the object no longer
+ * satisfies the record; add one that is not a profile field and the key is
+ * rejected. Iterated as an array because every consumer wants order.
+ */
+const AXES = {
+  memoryScope: {
+    field: 'memoryScope',
+    label: 'memory',
+    // Matches the SANITIZED key, which is the correctness argument rather than
+    // a convenience: `MemoryStore` repairs names rather than rejecting them, so
+    // `"pro j-secret"` and `"proj-secret"` address one file and must get one
+    // verdict. The pattern language is deliberately tiny — an exact key, or a
+    // prefix ending in `*` — because a fence written in a language is one
+    // nobody can read at a glance.
+    validate: () => isValidScopePattern,
+    apply: (ctx, value) => ({
+      ...ctx,
+      stores: { ...ctx.stores, memory: ctx.stores.memory.scoped(value) },
+    }),
+  },
+  knowledgeScope: {
+    field: 'knowledgeScope',
+    label: 'knowledge',
+    // The existing RAG `domain` axis — no new field, no migration, no
+    // re-embedding: every record is already labelled and `scoreAndRank` already
+    // groups by domain, so a scoped search is the same ranking over a smaller
+    // corpus rather than a truncated result.
+    validate: () => {
+      const known = new Set(getDomainIds());
+      return (v: unknown) => typeof v === 'string' && known.has(v);
+    },
+    apply: (ctx, value) => ({ ...ctx, rag: ctx.rag?.scoped(value) }),
+    standalone: 'rag',
+  },
+  corpusScope: {
+    field: 'corpusScope',
+    label: 'corpus',
+    // Shape, never existence, and that is what makes this a separate field from
+    // `knowledgeScope` rather than a reuse of it. That axis's predicate asks
+    // whether a DOMAIN exists, so a library name in it resolves to `[]` —
+    // silent deny-all. `isValidLibraryId` is a zero-import leaf precisely so
+    // this predicate cannot touch disk or throw, and a well-formed id naming a
+    // library nobody has created yet is KEPT: it already fails closed by
+    // matching nothing. Memory and knowledge were already two fields for two
+    // stores; a third store gets a third.
+    validate: () => isValidLibraryId,
+    apply: (ctx, value) => ({ ...ctx, knowledge: ctx.knowledge?.scoped(value) }),
+  },
+} as const satisfies Record<ScopeField, ScopeAxis>;
+
+export const SCOPE_AXES: readonly ScopeAxis[] = Object.values(AXES);
+
+/**
+ * Applies every axis with a ctx-free application point to a store that narrows
+ * itself.
+ *
+ * One consumer today — `headless.ts`'s pre-connect RAG search — and it exists
+ * so that consumer names the CAPABILITY rather than the axis. A fourth fence
+ * that also had to be applied before context assembly would then be a table
+ * edit, which is the whole point of #552; hard-coding `.scoped(scope
+ * .knowledgeScope)` there is the tenth touch point.
+ */
+export function applyStandaloneScopes<T extends Narrowing<T>>(store: T, scope: ScopeSelection): T {
+  let out = store;
+  for (const axis of SCOPE_AXES) {
+    // `scoped(undefined)` returns the receiver, so an undeclared axis needs no
+    // guard — one place decides what an absent scope means.
+    if (axis.standalone === 'rag') out = out.scoped(scope[axis.field]);
+  }
+  return out;
 }
 
 /** Empty profile, shared so the common path allocates nothing. */
@@ -151,42 +308,24 @@ export function declaredToolSurface(record: {
  * while "verify against the task and nothing else" is a coherent posture.
  */
 export function declaredScope(
-  record: { memoryScope?: unknown; knowledgeScope?: unknown; corpusScope?: unknown },
+  record: Partial<Record<ScopeField, unknown>>,
   rejected?: Record<string, unknown>,
-): Pick<DispatchProfile, 'memoryScope' | 'knowledgeScope' | 'corpusScope'> {
-  const scopeOf = (
-    raw: unknown,
-    valid: (v: unknown) => boolean,
-    field: string,
-  ): string[] | undefined => {
-    if (raw === undefined) return undefined;
+): ScopeSelection {
+  const out: ScopeSelection = {};
+  for (const axis of SCOPE_AXES) {
+    const raw = record[axis.field];
+    if (raw === undefined) continue;
     if (!Array.isArray(raw)) {
-      if (rejected) rejected[field] = raw;
-      return [];
+      if (rejected) rejected[axis.field] = raw;
+      out[axis.field] = [];
+      continue;
     }
+    const valid = axis.validate();
     const kept = raw.filter(valid) as string[];
-    if (kept.length !== raw.length && rejected) rejected[field] = raw.filter((v) => !valid(v));
-    return kept;
-  };
-  const knownDomains = new Set(getDomainIds());
-  const memoryScope = scopeOf(record.memoryScope, isValidScopePattern, 'memoryScope');
-  const knowledgeScope = scopeOf(
-    record.knowledgeScope,
-    (v) => typeof v === 'string' && knownDomains.has(v),
-    'knowledgeScope',
-  );
-  // Shape, never existence. `isValidLibraryId` is a zero-import leaf precisely
-  // so this predicate cannot touch disk or throw — and a well-formed id naming
-  // a library that does not exist yet is KEPT, because dropping it is what
-  // makes `knowledgeScope` unusable for libraries today: it would resolve to
-  // `[]`, i.e. deny-all. A scope naming a missing library already fails closed
-  // by matching nothing.
-  const corpusScope = scopeOf(record.corpusScope, isValidLibraryId, 'corpusScope');
-  return {
-    ...(memoryScope !== undefined ? { memoryScope } : {}),
-    ...(knowledgeScope !== undefined ? { knowledgeScope } : {}),
-    ...(corpusScope !== undefined ? { corpusScope } : {}),
-  };
+    if (kept.length !== raw.length && rejected) rejected[axis.field] = raw.filter((v) => !valid(v));
+    out[axis.field] = kept;
+  }
+  return out;
 }
 
 /**

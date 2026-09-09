@@ -27,7 +27,7 @@ import type { StepFinishPayload } from '../hooks/types.js';
 import { runAgent, newDispatchId, type AgentResult, type AgentSpec } from '../runner.js';
 import type { IterateFn, IterateOpts, StrategyContext } from '../strategies/types.js';
 import { resolveToolSurface } from './tool-surface.js';
-import { resolveDispatchProfile, type DispatchProfile } from './dispatch-profile.js';
+import { resolveDispatchProfile, SCOPE_AXES, type ScopeSelection } from './dispatch-profile.js';
 import { scopeContext, withUsageRecorder } from '../context.js';
 import { recordDispatchContext } from '../../dispatch-context-history.js';
 import { resolveRetrieval } from './retrieval.js';
@@ -118,7 +118,7 @@ export interface RunDefinitionOpts {
    * design telling you the runner should not interrogate a store to find out
    * what it was told.
    */
-  declaredScope?: Pick<DispatchProfile, 'memoryScope' | 'knowledgeScope' | 'corpusScope'>;
+  declaredScope?: ScopeSelection;
 }
 
 export interface RunDefinitionResult<TFormatted> {
@@ -202,6 +202,16 @@ export async function runDefinition<TInput, TFormatted>(
   // to declare it — and if they ever could, the applied fence is their
   // intersection, since `scopeContext` narrows monotonically at each site.
   const fence = { ...profile, ...(opts.declaredScope ?? {}) };
+  // Flattened over the table rather than three conditional spreads at the
+  // record, so an axis added to `DispatchProfile` is recorded without anyone
+  // remembering — and an unrecorded fence is the one shape that makes a fence
+  // and a bad retrieval indistinguishable, which is the whole reason the record
+  // carries them.
+  const declaredFence: ScopeSelection = {};
+  for (const axis of SCOPE_AXES) {
+    const value = fence[axis.field];
+    if (value) declaredFence[axis.field] = value;
+  }
   const { config } = ctx;
   const surface = resolveToolSurface(ctx, def, profile);
   // Retrieval, resolved once per dispatch for the same reason and in the same
@@ -583,9 +593,7 @@ export async function runDefinition<TInput, TFormatted>(
         // invisible in the one record that exists to explain a short memory
         // list, because a `CronJob` is not a specialist record and
         // `resolveDispatchProfile` cannot see it.
-        ...(fence.memoryScope ? { memoryScope: fence.memoryScope } : {}),
-        ...(fence.knowledgeScope ? { knowledgeScope: fence.knowledgeScope } : {}),
-        ...(fence.corpusScope ? { corpusScope: fence.corpusScope } : {}),
+        ...declaredFence,
       });
     }
     const r = await runAgent({

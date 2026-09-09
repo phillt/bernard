@@ -252,6 +252,41 @@ describe('inspect shows declared against resolved', () => {
     );
   });
 
+  it("names each fence by its FIELD, not the viewer's short label", async () => {
+    // Two vocabularies, both user-visible, and the table carries both rather
+    // than unifying them (#552): this surface prints what you would type into
+    // the JSON, while the dispatch-context viewer prints `memory` / `knowledge`
+    // / `corpus` under a line that has already said "Scoped to:". Nothing
+    // pinned that before the table existed, so a later tidy-up collapsing them
+    // would have changed this output silently.
+    const { createSpecialistTool, paths } = await load();
+    const tool = createSpecialistTool(undefined, undefined, { maxSteps: 20 } as never);
+    await tool.execute(
+      {
+        action: 'create',
+        id: 'fenced',
+        name: 'Fenced',
+        description: 'x',
+        systemPrompt: 'x',
+      } as never,
+      {} as never,
+    );
+    // Hand-edited, because the create schema deliberately does not expose the
+    // fences — an array has no clearing sentinel that is not already meaningful.
+    const file = path.join(paths.SPECIALISTS_DIR, 'fenced.json');
+    const record = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    record.memoryScope = ['deploy-*'];
+    record.corpusScope = ['handbook'];
+    fs.writeFileSync(file, JSON.stringify(record));
+
+    const out = await tool.execute({ action: 'inspect', id: 'fenced' } as never, {} as never);
+    expect(out).toContain('memoryScope: deploy-*');
+    expect(out).toContain('corpusScope: handbook');
+    // An undeclared axis is absent, not rendered as unscoped — `[]` is a real
+    // posture here and the two must stay distinguishable.
+    expect(out).not.toContain('knowledgeScope:');
+  });
+
   it('says when a declared value is being ignored', async () => {
     // The single most useful thing this command can say, and the thing a second
     // implementation of the resolution would get exactly backwards: it would

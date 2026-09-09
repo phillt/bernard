@@ -5,6 +5,8 @@ import {
   resolveDispatchProfile,
   declaredToolSurface,
   MAX_STEP_RATIO,
+  SCOPE_AXES,
+  applyStandaloneScopes,
 } from '../dispatch-profile.js';
 import { resolveToolSurface } from '../tool-surface.js';
 import { specialistDefinition } from '../specialist.js';
@@ -241,5 +243,68 @@ describe('specialist spend is attributed to a specialist site (#299/#508)', () =
     // tell you a persona was expensive said the main agent was.
     expect(specialistDefinition.site).toBe('specialist');
     expect(toolWrapperDefinition.site).toBe('tool-wrapper');
+  });
+});
+
+describe('SCOPE_AXES (#552)', () => {
+  /**
+   * The table is what turns "eleven touch points, nine of them uniform" into
+   * one entry — so the properties worth pinning are the ones the TYPE cannot
+   * state and the ones a future reader would otherwise re-derive.
+   *
+   * The two compile-time properties are deliberately NOT asserted here.
+   * `tsconfig.json` excludes every test file from the program, so a
+   * `@ts-expect-error` in one is compiled by nothing — it looks like a guard
+   * and is decoration, the mistake `user-message.ts` records paying for. The
+   * `satisfies Record<ScopeField, ScopeAxis>` in the module itself is the real
+   * check: deleting an entry and adding a stray one both fail `npm run build`.
+   */
+  it('covers exactly the string-array fields of a DispatchProfile', () => {
+    // Not a re-listing of the same three names: this reads the fields off a
+    // profile the RESOLVER produced, so a fourth axis added to the interface
+    // and forgotten in the table is caught here as well as by `tsc`.
+    expect(SCOPE_AXES.map((a) => a.field).sort()).toEqual([
+      'corpusScope',
+      'knowledgeScope',
+      'memoryScope',
+    ]);
+  });
+
+  it('gives each axis a distinct field and a distinct label', () => {
+    // Two vocabularies, both user-visible: `specialist inspect` prints the
+    // field name, the dispatch-context viewer prints the label. A duplicate in
+    // either collapses two fences into one line.
+    expect(new Set(SCOPE_AXES.map((a) => a.field)).size).toBe(SCOPE_AXES.length);
+    expect(new Set(SCOPE_AXES.map((a) => a.label)).size).toBe(SCOPE_AXES.length);
+  });
+
+  it('builds its validator per call, because one axis closes over live state', () => {
+    // `knowledgeScope`'s predicate snapshots the domain registry. A predicate
+    // built at module load would freeze that snapshot for the process; the
+    // thunk is what keeps it a per-validation read.
+    const axis = SCOPE_AXES.find((a) => a.field === 'knowledgeScope')!;
+    expect(axis.validate()).not.toBe(axis.validate());
+  });
+
+  it('marks exactly one axis as having a ctx-free application point', () => {
+    // `headless.ts` applies the RAG fence a second time, before
+    // `assembleContext`, to overlap the MCP connect. That asymmetry is real —
+    // memory has one point, knowledge two, corpus one — and it lives in the
+    // table so nobody has to know it.
+    expect(SCOPE_AXES.filter((a) => a.standalone).map((a) => a.field)).toEqual(['knowledgeScope']);
+  });
+
+  it('applies only the standalone axes to a bare narrowing store', () => {
+    const calls: (readonly string[] | null | undefined)[] = [];
+    const store = {
+      scoped(scope: readonly string[] | null | undefined) {
+        calls.push(scope);
+        return store;
+      },
+    };
+    applyStandaloneScopes(store, { memoryScope: ['k'], knowledgeScope: ['general'] });
+    // Once, with the RAG fence — never with the memory one, which would fence
+    // the wrong store with the wrong vocabulary and silently match nothing.
+    expect(calls).toEqual([['general']]);
   });
 });

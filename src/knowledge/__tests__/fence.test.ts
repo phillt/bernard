@@ -172,20 +172,48 @@ describe('the registry', () => {
 });
 
 describe('the record and its renderer', () => {
+  const record = (scope: Partial<Record<string, string[]>>) =>
+    ({
+      dispatchId: 'ab12',
+      definitionId: 'specialist',
+      telemetrySite: 'specialist:s',
+      timestamp: 0,
+      sections: { persistent_memory: 10 },
+      ...scope,
+    }) as never;
+
   it('renders a corpus-only fence, which had no header at all', async () => {
     // The guard was `memoryScope || knowledgeScope`, so a corpus-only fence
     // rendered NO "Scoped to:" section — not a missing line inside an otherwise
     // correct block, but the whole thing absent on exactly the dispatch the
     // record exists to explain. A fence and a bad retrieval look identical from
     // outside; this is the surface that tells them apart.
-    const src = await import('node:fs').then((fs) =>
-      fs.readFileSync(
-        new URL('../../ui/overlays/DispatchContextViewer.tsx', import.meta.url),
-        'utf-8',
-      ),
+    //
+    // Asserted on the RENDERER, not on the file's source text. The predecessor
+    // regex-matched the guard expression and a literal interpolation, which
+    // pinned one spelling of the fix rather than the behaviour — and the
+    // table-driven form (#552) has neither string in it while being correct.
+    const { detailBody } = await import('../../ui/overlays/DispatchContextViewer.js');
+    const out = detailBody(record({ corpusScope: ['alpha'] }));
+    expect(out).toContain('Scoped to:');
+    expect(out).toContain('corpus: alpha');
+  });
+
+  it('renders every axis, and only the ones declared', async () => {
+    const { detailBody } = await import('../../ui/overlays/DispatchContextViewer.js');
+    const all = detailBody(
+      record({ memoryScope: ['k*'], knowledgeScope: ['general'], corpusScope: ['alpha'] }),
     );
-    const guard = /if \(r\.memoryScope \|\| r\.knowledgeScope[^)]*\)/.exec(src)?.[0] ?? '';
-    expect(guard, 'the scope header guard ignores an axis').toContain('r.corpusScope');
-    expect(src).toContain('corpus: ${scopeList(r.corpusScope)}');
+    for (const line of ['memory: k*', 'knowledge: general', 'corpus: alpha']) {
+      expect(all).toContain(line);
+    }
+    expect(detailBody(record({ memoryScope: ['k*'] }))).not.toContain('corpus:');
+  });
+
+  it('renders no header at all when nothing is fenced', async () => {
+    // Guards the guard: every assertion above would pass if the header were
+    // unconditional, which would report a fence on every unscoped dispatch.
+    const { detailBody } = await import('../../ui/overlays/DispatchContextViewer.js');
+    expect(detailBody(record({}))).not.toContain('Scoped to:');
   });
 });
