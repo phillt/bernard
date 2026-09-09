@@ -44,6 +44,7 @@ import {
   isSuppressed as isMemorySuppressed,
 } from './memory-candidates.js';
 import { consolidationInputs, proposeConsolidation } from './memory-consolidation.js';
+import { keysRetiredBy } from './memory-proposal.js';
 import { MEMORY_CONSOLIDATED_MARKER, SPECIALIST_RECALL_MARKER } from './paths.js';
 import { debugLog } from './logger.js';
 import { extractSpecialistNotes } from './specialist-recall.js';
@@ -134,24 +135,25 @@ async function runSpecialistRecall(config: BernardConfig): Promise<void> {
   // The first run has no marker and nothing to be exact about, so it takes the
   // tail: reading a whole rotated log to extract from a session that already
   // ended would be paying for history nobody asked for.
-  const scanned =
-    lastCutoff === null ? readReasoningLog(RECALL_LOG_SCAN) : readReasoningLogSince(lastCutoff);
-  const entries = scanned.filter((e) => {
+  const read =
+    lastCutoff === null
+      ? { entries: readReasoningLog(RECALL_LOG_SCAN), reachedCursor: true }
+      : readReasoningLogSince(lastCutoff);
+  const entries = read.entries.filter((e) => {
     const t = Date.parse(e.ts);
     return Boolean(e.specialistId) && Number.isFinite(t) && t <= cutoff;
   });
 
   // Loss is still possible and is still reported — rotation can evict entries
-  // between two passes, and the backwards read has its own ceiling. Both show up
-  // the same way: the oldest record we could reach is already newer than the
-  // marker, so the ones in between are gone. Say so rather than let it be
-  // silent, which is the failure shape a cursor over an append-only log is
-  // prone to.
-  if (lastCutoff !== null && scanned.length > 0) {
-    const oldest = Date.parse(scanned[0]?.ts ?? '');
-    if (Number.isFinite(oldest) && oldest > lastCutoff) {
-      debugLog('specialist-recall:window-truncated', { scanned: scanned.length, lastCutoff });
-    }
+  // between two passes, and the backwards read has its own ceiling.
+  //
+  // **From the reader's own verdict, not from the entries.** Every entry it
+  // returns is newer than the cursor BY CONSTRUCTION, so the obvious test —
+  // "is the oldest one already newer than the marker?" — is a tautology that
+  // fires on every ordinary session, which would turn the one loss signal into
+  // noise. `reachedCursor` is the fact only the scan knows.
+  if (!read.reachedCursor) {
+    debugLog('specialist-recall:window-truncated', { scanned: read.entries.length, lastCutoff });
   }
 
   // Grouped so one specialist that ran five times gets ONE extraction over all
@@ -172,27 +174,49 @@ async function runSpecialistRecall(config: BernardConfig): Promise<void> {
   // latency measures p50 4.7 s, so four specialists cost 19 s in sequence and
   // one round trip in parallel. This arm otherwise decides how long the detached
   // worker lives.
+  // The oldest entry belonging to a specialist whose extraction could not run,
+  // so the marker can be held back behind it. See below.
+  let unread: number | null = null;
   await Promise.allSettled(
     Array.from(byOwner, async ([specialistId, runs]) => {
       // A deleted specialist's notes would be written under an owner nothing can
       // resolve — unreadable the moment they land, and swept by nothing because
       // the sweep already ran.
       if (!specialists.get(specialistId)) return;
-      const notes = await extractSpecialistNotes(
+      const { notes, failed } = await extractSpecialistNotes(
         specialistId,
         renderTranscript(runs, RECALL_TRANSCRIPT_MAX),
         config,
         { abortSignal: AbortSignal.timeout(WORKER_RECALL_TIMEOUT_MS) },
       );
+      if (failed) {
+        const oldest = Math.min(...runs.map((r) => Date.parse(r.ts)).filter(Number.isFinite));
+        if (Number.isFinite(oldest)) unread = unread === null ? oldest : Math.min(unread, oldest);
+        return;
+      }
       writeOwnedNotes(memory, specialistId, notes);
-      await seedSpecialistRag(specialistId, notes);
+      // Independent of each other — both only need the notes — so they overlap
+      // rather than the embed waiting behind a cheap-tier round trip measured at
+      // p50 4.7 s. This arm uses the fanned-out shape everywhere else.
+      await Promise.all([
+        seedSpecialistRag(specialistId, notes),
+        consolidateOwnedNotes(memory, specialistId, config),
+      ]);
       debugLog('specialist-recall:wrote', { specialistId, runs: runs.length, notes: notes.length });
-      await consolidateOwnedNotes(memory, specialistId, config);
     }),
   );
-  // Stamped unconditionally, including when nothing matched: otherwise a quiet
-  // session re-scans the same tail forever.
-  writeCutoffMarker(SPECIALIST_RECALL_MARKER, cutoff);
+  // Stamped unconditionally when every look succeeded, INCLUDING when nothing
+  // matched: otherwise a quiet session re-scans the same window forever.
+  //
+  // **Held back behind a failed look, which is the other half of making the read
+  // exact.** `extractSpecialistNotes` fails closed, so a timed-out cheap-tier
+  // call came back indistinguishable from "nothing worth remembering" — and the
+  // marker then advanced past those dispatches, which are never seen again. An
+  // exact reader with an unconditional commit is still a queue that loses work,
+  // just on the common path rather than the rare one. Retreating to just before
+  // the oldest entry of every failed group restores at-least-once: those
+  // dispatches are re-read next session, and the ones that succeeded are not.
+  writeCutoffMarker(SPECIALIST_RECALL_MARKER, unread === null ? cutoff : unread - 1);
 }
 
 /** The notes a specialist just learned, under its own name. */
@@ -238,12 +262,19 @@ function writeOwnedNotes(
  *
  * ## Why it writes where the user's pass proposes
  *
- * The same asymmetry `writeOwnedNotes` already rests on: these records are
- * private to one specialist and are deleted with it, so a wrong retirement
- * changes one agent's behaviour rather than everything, and reviewing N
- * specialists' proposal queues at every startup is a queue nobody drains. It
- * also stays reversible on exactly the same terms as the user's — `retire`
- * archives in place, and one deleted front-matter line undoes it.
+ * Because **reviewing N specialists' proposal queues at every startup is a queue
+ * nobody drains**, and a queue nobody drains is a feature nobody has. That is the
+ * load-bearing reason; the blast-radius one is weaker than it first reads and is
+ * recorded as an accepted risk rather than an argument. #529's case for proposing
+ * was that a wrongly-retired standing instruction **fails silently** — the model
+ * stops seeing it and simply answers differently — and that applies MORE here,
+ * not less, because nobody watches a specialist's behaviour at all. "One
+ * front-matter line undoes it" has the same defect: nobody will, because nobody
+ * notices.
+ *
+ * The symmetric design exists and is net-new work: `MemoryCandidate.owner` plus
+ * a REPL-side applier calling `memoryStore.asOwner(c.owner).retire(key)`, which
+ * needs no content across the fence and no new privilege for `main`.
  *
  * ## Cost
  *
@@ -258,12 +289,10 @@ async function consolidateOwnedNotes(
   config: BernardConfig,
 ): Promise<void> {
   const owned = memory.asOwner(specialistId);
-  let entries;
-  try {
-    entries = consolidationInputs(owned);
-  } catch {
-    return;
-  }
+  // Unguarded, like the sibling call in `runMemoryConsolidation`: this runs
+  // inside `Promise.allSettled`, which already absorbs a throw, and a local
+  // `try` only cost the `entries` binding its type.
+  const entries = consolidationInputs(owned);
   if (entries.length < MIN_OWNED_NOTES_TO_CONSOLIDATE) return;
   const proposals = await proposeConsolidation(entries, config, {
     abortSignal: AbortSignal.timeout(WORKER_RECALL_TIMEOUT_MS),
@@ -271,10 +300,11 @@ async function consolidateOwnedNotes(
   });
   let retired = 0;
   for (const p of proposals) {
-    // `merge` is deliberately not applied — see above.
-    if (p.kind === 'merge') continue;
-    const doomed = p.kind === 'duplicate' ? p.keys.filter((k) => k !== p.keeper) : p.keys;
-    for (const key of doomed) {
+    // `keysRetiredBy` is the shared reading of which keys a proposal removes,
+    // living beside the sentence a user reads — so the applier and the
+    // description cannot disagree about a kind. It returns nothing for `merge`,
+    // which is why that skip is no longer written out here.
+    for (const key of keysRetiredBy(p)) {
       try {
         // Superseded where there is a keeper to point at, retired where there is
         // not — the distinction `MemoryRecord` draws between "X replaced this"
@@ -415,11 +445,13 @@ const WORKER_CONSOLIDATE_TIMEOUT_MS = 60_000;
 const WORKER_RECALL_TIMEOUT_MS = 60_000;
 
 /**
- * How far back to scan the reasoning log.
+ * How far back the FIRST run scans, before a marker exists.
  *
- * The marker normally makes this a short read, but the log is append-only and
- * rotated by count, so a first run — or one after a long gap — would otherwise
- * parse the whole file. 500 entries is far more than any session produces.
+ * Only that run: every later pass reads backwards to the marker instead, so this
+ * does not bound the steady state and sizing it as though it did would be wrong.
+ * A first run has no cursor and nothing to be exact about — 500 entries is far
+ * more than any session produces, and reading the whole rotated file to extract
+ * from sessions that already ended is history nobody asked for.
  */
 const RECALL_LOG_SCAN = 500;
 

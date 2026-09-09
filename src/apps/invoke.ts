@@ -7,7 +7,7 @@ import { SpecialistStore } from '../specialists.js';
 import { classifyError } from '../error-taxonomy.js';
 import { describeParseFailure } from '../structured-output.js';
 import { sendToSessions } from '../inbox/send.js';
-import { appendJsonl, rotateJsonlByCount } from '../jsonl.js';
+import { appendJsonlBounded } from '../jsonl.js';
 import { SCRIPT_LOG_FILE } from '../paths.js';
 import { debugLog } from '../logger.js';
 
@@ -151,12 +151,12 @@ export function effectiveTimeoutMs(
 }
 
 function recordInvocation(entry: InvocationLogRow): void {
-  try {
-    appendJsonl(SCRIPT_LOG_FILE, entry);
-    rotateJsonlByCount(SCRIPT_LOG_FILE, SCRIPT_LOG_KEEP);
-  } catch {
-    // The log must never take down an invocation.
-  }
+  // Through the shared bounder rather than a hand-paired append + rotate: this
+  // file was one of the two this pattern was copied FROM, and the copy cost a
+  // third logger 25.7 ms per write before it was noticed. The rows here are
+  // ~250 bytes so the naive form was cheap, which is exactly why it read as a
+  // safe thing to imitate.
+  appendJsonlBounded(SCRIPT_LOG_FILE, entry, SCRIPT_LOG_KEEP);
 }
 
 /**

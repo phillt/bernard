@@ -15,7 +15,7 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { atomicWriteFileSync } from './fs-utils.js';
+import { atomicWriteFileSyncUnique } from './fs-utils.js';
 
 /** Dirs already `mkdir`'d this process — avoids a syscall on every append. */
 const readyDirs = new Set<string>();
@@ -88,6 +88,14 @@ export function readJsonlTail<T = unknown>(filePath: string, limit?: number): T[
  *
  * Fail-open like its neighbours: `[]` on any I/O error or missing file.
  *
+ * **`reachedCursor` is the half a caller using this as a queue needs**, and is
+ * why this returns an object rather than an array. Every entry returned is newer
+ * than the cursor BY CONSTRUCTION, so a caller cannot tell "I saw everything"
+ * from "I stopped early" by inspecting them — any test it writes against the
+ * oldest one is a tautology. False means the scan ran out of file or out of
+ * ceiling without ever meeting the cursor, i.e. records between the two are
+ * gone: rotation evicted them, or there are more than one pass will carry.
+ *
  * @param maxRecords A ceiling on one pass, so a consumer that has not run in a
  *   very long time cannot pull an unbounded number of records into memory.
  *   Reached without meeting the cursor, the result is truncated at the OLDEST
@@ -97,26 +105,45 @@ export function readJsonlSince<T = unknown>(
   filePath: string,
   isOlderThanCursor: (entry: T) => boolean,
   maxRecords = 5000,
-): T[] {
+): { entries: T[]; reachedCursor: boolean } {
   let fd: number | undefined;
   try {
-    if (!fs.existsSync(filePath)) return [];
+    // An absent file has no records before the cursor either, so there is
+    // nothing lost — `true` keeps a first run from reporting a gap.
+    if (!fs.existsSync(filePath)) return { entries: [], reachedCursor: true };
     fd = fs.openSync(filePath, 'r');
     let pos = fs.fstatSync(fd).size;
-    // The partial first line of the chunk just read; the chunk BEFORE it
-    // completes it.
-    let carry = '';
+    // One buffer for the whole scan rather than a fresh 64 KB per chunk; the
+    // explicit `length` argument to `readSync` is what makes reuse safe on the
+    // final short chunk.
+    const buf = Buffer.allocUnsafe(BACKWARD_CHUNK_BYTES);
+    // The partial first line of the chunk just read, as FRAGMENTS in
+    // newest-to-oldest order; the chunk before it completes them. A string
+    // concatenated per chunk is quadratic in how many chunks one line spans —
+    // measured 974 ms for a single 16 MB row against 21 ms to read the file
+    // whole — and `captureToolCalls` stores a tool's `args` verbatim, so a
+    // `file_write` of an applet page is an ordinary megabyte-sized row. Joined
+    // only when a newline is actually found, so a long line is copied once.
+    let carry: string[] = [];
     const out: T[] = [];
     while (pos > 0 && out.length < maxRecords) {
       const size = Math.min(BACKWARD_CHUNK_BYTES, pos);
       pos -= size;
-      const buf = Buffer.alloc(size);
       fs.readSync(fd, buf, 0, size, pos);
-      const lines = (buf.toString('utf-8') + carry).split('\n');
+      const text = buf.toString('utf-8', 0, size);
+      // A chunk with no newline is entirely part of one record that continues
+      // before it — accumulate it and concatenate nothing. This is the line that
+      // makes the fragment list worth having: joining per chunk would copy every
+      // byte of a long record once per chunk it spans.
+      if (pos > 0 && !text.includes('\n')) {
+        carry.unshift(text);
+        continue;
+      }
+      const lines = (text + carry.join('')).split('\n');
       // Unless we reached the file's start, the first element continues into
       // the chunk that precedes this one.
-      carry = pos > 0 ? (lines.shift() ?? '') : '';
-      for (let i = lines.length - 1; i >= 0; i--) {
+      carry = pos > 0 ? [lines.shift() ?? ''] : [];
+      for (let i = lines.length - 1; i >= 0 && out.length < maxRecords; i--) {
         const line = lines[i].trim();
         if (!line) continue;
         let parsed: T;
@@ -125,14 +152,16 @@ export function readJsonlSince<T = unknown>(
         } catch {
           continue; // malformed line, as everywhere else in this module
         }
-        if (isOlderThanCursor(parsed)) return out.reverse();
+        if (isOlderThanCursor(parsed)) return { entries: out.reverse(), reachedCursor: true };
         out.push(parsed);
-        if (out.length >= maxRecords) break;
       }
     }
-    return out.reverse();
+    // Out of file or out of ceiling without meeting the cursor.
+    return { entries: out.reverse(), reachedCursor: false };
   } catch {
-    return [];
+    // A read that failed saw nothing, so it cannot claim to have seen
+    // everything — the caller must be free to try again.
+    return { entries: [], reachedCursor: false };
   } finally {
     if (fd !== undefined) {
       try {
@@ -148,6 +177,54 @@ export function readJsonlSince<T = unknown>(
 const BACKWARD_CHUNK_BYTES = 64 * 1024;
 
 /**
+ * Rows appended per file since this process last trimmed it, so the trim can be
+ * amortised. Per-process, like every other counter in this module's callers.
+ */
+const sinceRotate = new Map<string, number>();
+
+/**
+ * How far past `keep` a file is allowed to drift before a trim. One rewrite per
+ * `keep * (SLACK - 1)` appends, so the file is bounded within 25% of what the
+ * caller asked for and no append pays for the rewrite of the one before it.
+ */
+const ROTATE_SLACK = 1.25;
+
+/**
+ * Append one record and keep the file near `keep` rows, amortised.
+ *
+ * **The pairing three loggers had written by hand, and the reason it needed to
+ * be one function.** `appendJsonl` + `rotateJsonlByCount` on every append reads,
+ * splits and atomically rewrites the WHOLE file each time — and rotation pins
+ * the file *at* `keep` rows, which is exactly the size that forces a rewrite on
+ * the next append. Measured on the real 6.7 MB reasoning log at 2,000 rows:
+ * **25.7 ms per append**, synchronously, on the return path of every dispatch,
+ * against 0.012 ms for the append alone. Ink throttles rendering at 32 ms, so one
+ * log write was eating most of a frame. The two pre-existing callers did not feel
+ * it because their rows are ~250 bytes; the reasoning log's are ~2.8 KB, which is
+ * why copying their shape transferred the code and not the cost.
+ *
+ * Amortising puts it at **0.035 ms** and one rewrite per `keep / 4` appends.
+ * The counter is per-process and starts at zero, so a fresh process trims on its
+ * first append — which is also what re-bounds a file some other process grew.
+ *
+ * Never throws: a logging failure must not propagate into the hot path.
+ */
+export function appendJsonlBounded(filePath: string, entry: unknown, keep: number): void {
+  try {
+    appendJsonl(filePath, entry);
+    const n = (sinceRotate.get(filePath) ?? 0) + 1;
+    if (n < Math.ceil(keep * (ROTATE_SLACK - 1))) {
+      sinceRotate.set(filePath, n);
+      return;
+    }
+    sinceRotate.set(filePath, 0);
+    rotateJsonlByCount(filePath, keep);
+  } catch {
+    // best-effort, like every other write here
+  }
+}
+
+/**
  * Trim a JSONL file to its last `keep` lines via an atomic tmp+rename write.
  * No-ops when the file is absent or already within budget. Never throws.
  */
@@ -159,7 +236,12 @@ export function rotateJsonlByCount(filePath: string, keep: number): void {
       .split('\n')
       .filter((l) => l.trim().length > 0);
     if (lines.length <= keep) return;
-    atomicWriteFileSync(filePath, lines.slice(-keep).join('\n') + '\n');
+    // UNIQUE temp name: `fs-utils.ts` says to use this variant wherever two
+    // processes can write the same file, and the reasoning log has four writers
+    // (the REPL, the cron daemon, the applet host and `bernard script`). A fixed
+    // suffix leaves one orphan that the next write overwrites; the unique form
+    // unlinks its own on failure.
+    atomicWriteFileSyncUnique(filePath, lines.slice(-keep).join('\n') + '\n');
   } catch {
     // best-effort
   }

@@ -112,3 +112,18 @@ export function memoryProposalBlock(
     "Whatever the user decides, record it with the `memory` tool's `proposals` action — `accepted` once you have applied it, `declined` if they say no. An unrecorded decision comes back next session. Do not argue with a no.",
   ].join('\n');
 }
+
+/**
+ * Which keys a proposal actually removes, if it is applied.
+ *
+ * Shared so an applier and the sentence a user reads cannot disagree about a
+ * kind: the dispositions were stated in prose here, in the schema's own field
+ * docs, and a third time as a ternary in `rag-worker.ts`'s owned-consolidation
+ * applier. `merge` removes nothing — it proposes NEW text, which is a write a
+ * caller has to decide about rather than a removal it can just do.
+ */
+export function keysRetiredBy(p: MemoryProposal): string[] {
+  if (p.kind === 'merge') return [];
+  if (p.kind === 'duplicate') return p.keys.filter((k) => k !== p.keeper);
+  return [...p.keys];
+}

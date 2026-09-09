@@ -21,11 +21,20 @@ const mockConfig = vi.hoisted(() => ({
 }));
 
 vi.mock('./rag.js', () => ({
-  RAGStore: vi.fn(() => mockRAGStore),
+  // `storageFile` derives from the `dir` it was constructed with, because that
+  // is the property under test for `clear-facts`: it must name the store it is
+  // about to destroy, not the main one.
+  RAGStore: vi.fn((cfg?: { dir?: string }) => ({
+    ...mockRAGStore,
+    storageFile: `${cfg?.dir ?? '/main/rag'}/memories.json`,
+  })),
 }));
 
 const mockSpecialistIds = vi.hoisted(() => ({ ids: [] as string[] }));
-vi.mock('./specialist-rag.js', () => ({
+vi.mock('./specialist-rag.js', async (orig) => ({
+  // `specialistFactsNotice` comes from the real module over the mocked id list,
+  // so the sentence under test is the one users see rather than a restatement.
+  ...(await orig<Record<string, unknown>>()),
   listSpecialistRagIds: () => mockSpecialistIds.ids,
 }));
 
@@ -418,18 +427,17 @@ describe('the --specialist flag', () => {
   });
 
   it('refuses an unknown id and names the ones that exist', async () => {
+    // Thrown rather than returned as a message: `index.ts` already wraps both
+    // commands in a `try` that prints it, so the three hand-written narrowings
+    // the first cut had bought nothing.
     mockSpecialistIds.ids = ['coder', 'designer'];
-    await factsList('typo');
-    const errs = mockOutput.printError.mock.calls.map((c: unknown[]) => c[0] as string);
-    expect(errs.join(' ')).toContain('coder, designer');
+    await expect(factsList('typo')).rejects.toThrow(/coder, designer/);
     // Nothing was opened, so nothing could be deleted from the wrong store.
-    expect(dirOfLastStore()).toBeUndefined();
+    expect(vi.mocked(RAGStore)).not.toHaveBeenCalled();
   });
 
   it('says so plainly when no specialist has learned anything yet', async () => {
-    await factsList('coder');
-    const errs = mockOutput.printError.mock.calls.map((c: unknown[]) => c[0] as string);
-    expect(errs.join(' ')).toContain('No specialist has its own facts yet');
+    await expect(factsList('coder')).rejects.toThrow(/No specialist has its own facts yet/);
   });
 
   it('names the other stores on the user`s own listing', async () => {
@@ -437,6 +445,18 @@ describe('the --specialist flag', () => {
     await factsList();
     expect(infoMessages().join('\n')).toContain('bernard facts --specialist <id>');
     expect(infoMessages().join('\n')).toContain('coder, designer');
+  });
+
+  it('names them after a SEARCH that found something, too', async () => {
+    // The divergence the `string | null` footer had already produced: the search
+    // path printed it only when there were zero results, so a user who searched
+    // and got hits was never told the other stores existed.
+    mockSpecialistIds.ids = ['coder'];
+    mockRAGStore.searchWithIds.mockResolvedValue([
+      { id: '1', fact: 'a fact', similarity: 0.9, domain: 'general' },
+    ]);
+    await factsSearch('anything');
+    expect(infoMessages().join('\n')).toContain('bernard facts --specialist <id>');
   });
 
   it('prints nothing extra when there are no other stores', async () => {

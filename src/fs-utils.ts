@@ -215,3 +215,27 @@ export function seedBundledJsonDir(
     // best-effort
   }
 }
+
+/**
+ * The names of the directories directly under `dir`, sorted. `[]` when `dir`
+ * does not exist or cannot be read.
+ *
+ * The fourth copy of this dance is what made it a function: `KnowledgeCorpus`,
+ * `bundledAppIds` and the specialist-RAG listing each had their own
+ * `readdirSync(dir, { withFileTypes: true })` + dirent filter + fail-open catch,
+ * and `jsonl.listFilesByMtime` owns the file-shaped sibling.
+ *
+ * Fail-open like its neighbours here: an unreadable directory is an empty one,
+ * because every caller is answering "what exists?" for a listing.
+ */
+export function listSubdirectories(dir: string): string[] {
+  try {
+    return fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort();
+  } catch {
+    return [];
+  }
+}

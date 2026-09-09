@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { APPS_DIR, appletAssetDir } from '../paths.js';
-import { atomicWriteFileSync, seedBundledJsonDir } from '../fs-utils.js';
+import { atomicWriteFileSync, seedBundledJsonDir, listSubdirectories } from '../fs-utils.js';
 import {
   parseAppManifest,
   parseRawAppManifest,
@@ -68,18 +68,10 @@ function seedAssets(bundledDir: string, destDir: string): void {
  * answers "where did this come from", not "may I touch it".
  */
 export function bundledAppIds(): Set<string> {
-  try {
-    return new Set(
-      fs
-        .readdirSync(bundledAppsDir(), { withFileTypes: true })
-        .filter((e) => e.isDirectory())
-        .map((e) => e.name),
-    );
-  } catch {
-    // A build without `builtin-apps/` copied in: everything reads as the
-    // user's, which is the safer way to be wrong — it hides nothing.
-    return new Set();
-  }
+  // `listSubdirectories` fails open to `[]` for the reason this catch gave: a
+  // build without `builtin-apps/` copied in reads everything as the user's,
+  // which is the safer way to be wrong — it hides nothing.
+  return new Set(listSubdirectories(bundledAppsDir()));
 }
 
 function bundledAppsDir(): string {

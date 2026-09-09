@@ -1,7 +1,7 @@
 import type { CronLogStep } from '../../cron/log-store.js';
 import type { AgentHook } from './types.js';
 import { readToolMeta } from '../tools/adapter.js';
-import { redactArgs, REDACTED, boundedStringify } from '../tools/redact.js';
+import { redactArgs, REDACTED, boundValue } from '../tools/redact.js';
 
 /**
  * Maximum chars to keep per tool result before truncating in the log.
@@ -32,21 +32,11 @@ const CRON_RESULT_MAX_LEN = 10240;
  * The signal that an entry is bounded rather than complete. One helper so the
  * two paths can't drift — it is the only thing a log reader has to go on.
  */
-function mark(text: string, total: number): string {
-  return `${text}... (truncated, ${total} chars total)`;
-}
-
-function truncateResult(result: unknown, maxLen: number): unknown {
-  if (typeof result === 'string') {
-    return result.length > maxLen ? mark(result.slice(0, maxLen), result.length) : result;
-  }
-  const { text, bounded } = boundedStringify(result, maxLen);
-  // `bounded` rather than `text.length > maxLen`: once the budget starts
-  // dropping keys the serialized form can come back UNDER the cap, and a
-  // length-only test would then hand back the original unbounded object.
-  if (!bounded) return result;
-  return mark(text.slice(0, maxLen), text.length);
-}
+// `boundValue` (`framework/tools/redact.ts`) is this function, lifted: the
+// reasoning log needs the same keep-structure-if-it-fits treatment for the
+// `finalOutput` and `args` it persists, and a second copy of the `bounded`
+// subtlety below is how the two drift.
+const truncateResult = boundValue;
 
 /**
  * Accumulates structured step records into the caller-supplied `steps` array

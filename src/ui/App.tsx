@@ -89,8 +89,8 @@ import { noPromptCacheHint } from '../cost-guardrail.js';
 import { memoryCapNotice } from '../memory-notice.js';
 import { clearDispatchContextStore } from '../dispatch-context-history.js';
 import { makeUsageRecorder, makeOutOfTurnUsageRecorder } from '../framework/hooks/token-stats.js';
-import { truncate, scopeList, plural } from '../text.js';
-import { listSpecialistRagIds } from '../specialist-rag.js';
+import { truncate, scopeList } from '../text.js';
+import { listSpecialistRagIds, specialistFactsNotice } from '../specialist-rag.js';
 import { SCOPE_AXES } from '../framework/agents/dispatch-profile.js';
 import { WIZARD_CATEGORIES_DATA, type WizardFieldData } from '../profiles-wizard-data.js';
 import {
@@ -1396,10 +1396,15 @@ export function App({
         return;
       }
       const own = byOwner.get(null) ?? [];
+      // The owned groups, derived ONCE and reused by both the branch and the
+      // loop. `byOwner.size <= 1` stood in for this and was wrong when the single
+      // entry WAS a specialist: `own` is then empty and the toast read
+      // `Persistent memories (0):` while the notes sat beside it.
+      const owned = [...byOwner].filter(([o]) => o !== null);
       // A toast when there is nothing to group — byte-identical to what this
       // printed before, which is every install until a specialist learns
       // something.
-      if (byOwner.size <= 1) {
+      if (owned.length === 0) {
         flashToast(`Persistent memories (${own.length}): ${own.join(', ')}`);
         return;
       }
@@ -1409,7 +1414,7 @@ export function App({
           ? own.map((k) => ({ text: `  ${k}`, dim: true }))
           : [{ text: '  (none)', dim: true }]),
       ];
-      for (const [owner, keys] of [...byOwner].filter(([o]) => o !== null)) {
+      for (const [owner, keys] of owned) {
         lines.push({ text: '' });
         lines.push({ text: `${owner} (${keys.length})`, bold: true });
         for (const k of keys) lines.push({ text: `  ${k}`, dim: true });
@@ -1662,18 +1667,18 @@ export function App({
         lines.push({ text: 'Most recent (up to 10):', bold: true });
         for (const f of recent) lines.push({ text: `  ${f}`, dim: true });
       }
-      // The other stores exist and this panel could not see them. Suppressed
-      // when there are none, so today's output is unchanged on every install
-      // where no specialist has learned anything.
-      const specialistStores = listSpecialistRagIds();
-      if (specialistStores.length > 0) {
+      // The other stores exist and this panel could not see them. Through the
+      // shared renderer, because `bernard facts` says the same sentence and the
+      // two had already been written in two spellings on the day they landed —
+      // copies of a sentence do not fail, they diverge. `null` is the
+      // suppression rule, so today's output is unchanged on every install where
+      // no specialist has learned anything.
+      const notice = specialistFactsNotice(listSpecialistRagIds());
+      if (notice) {
         lines.push({ text: '' });
-        lines.push({
-          text: `${specialistStores.length} specialist ${plural(specialistStores.length, 'store', 'stores')} also hold facts:`,
-          bold: true,
-        });
-        lines.push({ text: `  ${specialistStores.join(', ')}`, dim: true });
-        lines.push({ text: '  bernard facts --specialist <id>', dim: true });
+        lines.push({ text: notice.summary, bold: true });
+        lines.push({ text: `  ${notice.ids.join(', ')}`, dim: true });
+        lines.push({ text: `  ${notice.hint}`, dim: true });
       }
       showInfo('RAG memories', lines);
       return;
@@ -5280,10 +5285,8 @@ function buildDebugReportLines(
   // surface whose whole job is to say what is there.
   const memoryByOwner = stores.memory.listAllByOwner();
   const ownMemories = memoryByOwner.get(null)?.length ?? 0;
-  const ownedMemories = [...memoryByOwner].reduce(
-    (n, [owner, keys]) => (owner === null ? n : n + keys.length),
-    0,
-  );
+  const ownedMemories =
+    [...memoryByOwner.values()].reduce((n, keys) => n + keys.length, 0) - ownMemories;
   lines.push({
     text: `  Persistent memories: ${ownMemories}${ownedMemories > 0 ? ` (+${ownedMemories} owned by specialists)` : ''}`,
     dim: true,

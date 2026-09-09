@@ -37,8 +37,10 @@ import type { AgentContext } from '../framework/context.js';
  * wants to observe a call replaces the method it cares about.
  */
 export function makeMemoryDouble(): Record<string, unknown> {
-  const store: Record<string, unknown> = {};
-  Object.assign(store, {
+  // A plain literal: the arrows only dereference `store` when called, long after
+  // the assignment, so the `Object.assign`-onto-an-empty-object dance this used
+  // to need was never needed.
+  const store: Record<string, unknown> = {
     asOwner: () => store,
     scoped: () => store,
     listMemory: () => [],
@@ -54,9 +56,7 @@ export function makeMemoryDouble(): Record<string, unknown> {
     writeScratch: () => {},
     deleteScratch: () => false,
     clearScratch: () => {},
-    // `main.ts` reaches for this when building the tool-profiles prompt.
-    list: () => [],
-  });
+  };
   return store;
 }
 
@@ -108,11 +108,12 @@ export function makeTestContext(overrides: Partial<AgentContext> = {}): AgentCon
       // the shape of context a real dispatch can never be handed.
       resolveAlias: () => null,
     },
-    stores,
     provenance: undefined,
     verification: { record: () => {} },
     policyDecision: undefined,
     ...overrides,
-    ...(overrides.stores ? { stores: { ...stores, ...(overrides.stores as object) } } : {}),
+    // After `...overrides`, so this wins, and unconditional — the base always
+    // has every store, so there is nothing for a conditional spread to guard.
+    stores: { ...stores, ...((overrides.stores ?? {}) as object) },
   } as unknown as AgentContext;
 }

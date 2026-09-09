@@ -83,13 +83,30 @@ Return {"notes": []} when nothing durable came up. That is the common case and i
  * costs a specialist one session's learning, while a hallucinated note is a
  * standing instruction it will act on every run afterwards.
  */
+/**
+ * What one extraction produced, and whether it ran at all.
+ *
+ * `failed` is the half the CALLER needs and cannot infer: this function fails
+ * closed, so a timed-out round trip and a session with nothing worth remembering
+ * both return no notes. The caller advances a cursor past the entries it just
+ * read — so without this, a cheap-tier call failing silently discards those
+ * dispatches forever, which is the exact loss the cursor was introduced to stop.
+ * "Nothing to learn" must advance the marker; "could not look" must not.
+ */
+export interface SpecialistNotesResult {
+  notes: SpecialistNote[];
+  failed: boolean;
+}
+
 export async function extractSpecialistNotes(
   specialistId: string,
   transcript: string,
   config: BernardConfig,
   opts: { abortSignal?: AbortSignal; onUsage?: UsageRecorder } = {},
-): Promise<SpecialistNote[]> {
-  if (transcript.trim().length < MIN_TRANSCRIPT_CHARS) return [];
+): Promise<SpecialistNotesResult> {
+  // Not a failure: there is genuinely nothing here to extract from, and the
+  // caller should move past it.
+  if (transcript.trim().length < MIN_TRANSCRIPT_CHARS) return { notes: [], failed: false };
 
   const site = resolveSiteModel(config, 'specialist-recall');
   try {
@@ -124,20 +141,24 @@ export async function extractSpecialistNotes(
         specialistId,
         raw: result.text.slice(0, 200),
       });
-      return [];
+      // A reply we could not read is a failed look, not an empty one.
+      return { notes: [], failed: true };
     }
     // Bounded here rather than trusted from the model: `MAX_NOTES_PER_SPECIALIST`
     // is what stops one talkative session filling a specialist's whole context
     // budget, and the model is the last thing that should decide it.
-    return parsed.notes
-      .filter((n) => n.key.trim().length > 0 && n.content.trim().length > 0)
-      .slice(0, MAX_NOTES_PER_SPECIALIST)
-      .map((n) => ({ key: n.key.trim(), content: n.content.trim().slice(0, NOTE_MAX_CHARS) }));
+    return {
+      notes: parsed.notes
+        .filter((n) => n.key.trim().length > 0 && n.content.trim().length > 0)
+        .slice(0, MAX_NOTES_PER_SPECIALIST)
+        .map((n) => ({ key: n.key.trim(), content: n.content.trim().slice(0, NOTE_MAX_CHARS) })),
+      failed: false,
+    };
   } catch (err) {
     debugLog('specialist-recall:error', {
       specialistId,
       message: err instanceof Error ? err.message : String(err),
     });
-    return [];
+    return { notes: [], failed: true };
   }
 }

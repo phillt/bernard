@@ -31,6 +31,7 @@ import { resolveDispatchProfile, pickScopes, type ScopeSelection } from './dispa
 import { scopeContext, withUsageRecorder } from '../context.js';
 import { recordDispatchContext } from '../../dispatch-context-history.js';
 import { resolveRetrieval } from './retrieval.js';
+import { metaLookup, type ToolMetaLookup } from '../../tools/capture-tool-calls.js';
 import { visionRefusal } from './vision-gate.js';
 import { seedBudgetRefusal } from './seed-budget.js';
 import { hasImagePart, isVisionCapableModel, stripImagesFromHistory } from '../../image.js';
@@ -148,20 +149,23 @@ export interface RunDefinitionResult<TFormatted> {
    */
   toolBytes: () => number;
   /**
-   * The registry this dispatch actually ran with, augmentation and all.
+   * Redaction metadata for the tools this dispatch ran with.
    *
-   * Exposed for ONE reason: `captureToolCalls` redacts a tool's arguments and
-   * result only when it is handed the registry to read `ToolMeta.sensitiveArgs`
-   * / `sensitiveResult` from, and the persona path had no way to get one — it
-   * calls `runDefinition` and the tools are built inside. So a persona's `shell`
-   * command or an MCP tool's credentials went verbatim into the reasoning log,
-   * which since #501 is read back and fed to a model. The wrapper path passes
-   * its own `childTools` and was never affected.
+   * Exposed for ONE reason: `captureToolCalls` scrubs a tool's arguments and
+   * result against `ToolMeta.sensitiveArgs` / `sensitiveResult`, and the persona
+   * path had no way to reach either — it calls `runDefinition` and the tools are
+   * built inside. So a persona's `shell` command or an MCP tool's credentials
+   * went verbatim into the reasoning log, which since #501 is read back and fed
+   * to a model. The wrapper path passes its own `childTools` and was never
+   * affected.
    *
-   * A plain field rather than a thunk, unlike {@link toolBytes}: this is the
-   * object that already exists, not a measurement over it.
+   * **A lookup, not the registry.** Publishing the registry would put every
+   * tool's `execute` — the UN-augmented one, with the deny, write-scope and
+   * confirm gates stripped off — on the public result of every dispatch in the
+   * product, so that one consumer could read two booleans. Same reasoning as
+   * `toolBytes` beside it: publish the answer, not the thing that can answer.
    */
-  tools: Record<string, unknown>;
+  toolMeta: ToolMetaLookup;
 }
 
 /**
@@ -645,7 +649,7 @@ export async function runDefinition<TInput, TFormatted>(
     stepLimitHit,
     steps: result.steps?.length ?? 0,
   });
-  return { result, formatted, resolved, stepLimitHit, toolBytes, tools: rawTools };
+  return { result, formatted, resolved, stepLimitHit, toolBytes, toolMeta: metaLookup(rawTools) };
 }
 
 function resolveModel<TInput, TFormatted>(

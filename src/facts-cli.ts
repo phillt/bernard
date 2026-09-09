@@ -1,55 +1,60 @@
 import * as fs from 'node:fs';
 import * as readline from 'node:readline';
-import * as path from 'node:path';
 import { RAGStore } from './rag.js';
 import type { RAGSearchResultWithId } from './rag.js';
 import { getDomain } from './domains.js';
 import { loadConfig } from './config.js';
 import { printInfo, printError } from './output.js';
-import { specialistRagDir, MEMORIES_FILE } from './paths.js';
-import { listSpecialistRagIds } from './specialist-rag.js';
-import { plural } from './text.js';
+import { specialistRagDir } from './paths.js';
+import { listSpecialistRagIds, specialistFactsNotice } from './specialist-rag.js';
 
 const MAX_FILE_QUERY_LENGTH = 10000;
 
 /**
- * Which store a command addresses, and where it lives.
+ * Which store a command addresses.
  *
  * Every command here constructed a bare `new RAGStore()` and had no flags at
  * all — which was right when there was one store and silently wrong the moment
  * a specialist got its own (#501). The `dir` is the entire difference; `RAGStore`
- * has taken one since that change.
+ * has taken one since that change, and owns its own file path, so nothing here
+ * re-derives `memories.json`.
  *
- * Returns an error STRING rather than throwing, because an unknown id is a
- * user typo and deserves the ids that do exist, not a stack trace.
+ * THROWS on an unknown id rather than returning a union every caller has to
+ * narrow: `src/index.ts` already wraps both commands in a `try` that prints the
+ * message, so the three hand-written narrowings bought nothing. The message still
+ * names the ids that do exist, because an unknown one is a user typo.
  */
-function resolveStore(specialist?: string): { store: RAGStore; file: string } | string {
-  if (specialist === undefined) return { store: new RAGStore(), file: MEMORIES_FILE };
+function resolveStore(specialist?: string): RAGStore {
+  if (specialist === undefined) return new RAGStore();
   const known = listSpecialistRagIds();
   if (!known.includes(specialist)) {
-    return known.length === 0
-      ? `No specialist has its own facts yet. They are written at session close, ` +
-          `for specialists that ran.`
-      : `No facts for specialist "${specialist}". Known: ${known.join(', ')}.`;
+    throw new Error(
+      known.length === 0
+        ? `No specialist has its own facts yet. They are written at session close, ` +
+            `for specialists that ran.`
+        : `No facts for specialist "${specialist}". Known: ${known.join(', ')}.`,
+    );
   }
-  const dir = specialistRagDir(specialist);
-  return { store: new RAGStore({ dir }), file: path.join(dir, 'memories.json') };
+  return new RAGStore({ dir: specialistRagDir(specialist) });
 }
 
 /**
- * The line that tells a user the other stores exist.
+ * Tells the user the other stores exist, once, with both guards inside.
  *
- * Suppressed when there are none, so today's output is byte-identical on an
- * install where no specialist has learned anything — which is every install
- * until one runs.
+ * A printer rather than a getter, because as a `string | null` it was three
+ * `if (footer)` sites that had ALREADY diverged: `factsSearch` printed it only on
+ * the zero-result path, so a user who searched and got hits was never told the
+ * other stores existed. The sentence itself comes from `specialistFactsNotice`,
+ * shared with the REPL's `/rag`.
  */
-function specialistFooter(): string | null {
-  const ids = listSpecialistRagIds();
-  if (ids.length === 0) return null;
-  return (
-    `\n${ids.length} specialist ${plural(ids.length, 'store', 'stores')} also hold facts ` +
-    `(${ids.join(', ')}) — bernard facts --specialist <id>`
-  );
+function printSpecialistFooter(specialist?: string): void {
+  // Never inside a specialist's own listing: it has no siblings to point at and
+  // the reader is already there on purpose.
+  if (specialist !== undefined) return;
+  const notice = specialistFactsNotice(listSpecialistRagIds());
+  if (!notice) return;
+  printInfo(`\n${notice.summary} ${notice.ids.join(', ')}`);
+  printInfo(`  ${notice.hint}`);
 }
 
 function confirm(prompt: string): Promise<boolean> {
@@ -181,25 +186,18 @@ export async function factsList(specialist?: string): Promise<void> {
     return;
   }
 
-  const resolved = resolveStore(specialist);
-  if (typeof resolved === 'string') {
-    printError(resolved);
-    return;
-  }
-  const results = resolved.store.listMemories();
-  // Only on the user's own listing: a specialist's store does not have siblings
-  // to point at, and the reader is already there on purpose.
-  const footer = specialist === undefined ? specialistFooter() : null;
+  const ragStore = resolveStore(specialist);
+  const results = ragStore.listMemories();
 
   if (results.length === 0) {
     printInfo(specialist ? `No facts stored for "${specialist}".` : 'No facts stored.');
-    if (footer) printInfo(footer);
+    printSpecialistFooter(specialist);
     return;
   }
 
   displayResults(results, false);
-  if (footer) printInfo(footer);
-  await promptDelete(results, resolved.store);
+  printSpecialistFooter(specialist);
+  await promptDelete(results, ragStore);
 }
 
 /**
@@ -213,12 +211,7 @@ export async function clearFacts(specialist?: string): Promise<void> {
     return;
   }
 
-  const resolved = resolveStore(specialist);
-  if (typeof resolved === 'string') {
-    printError(resolved);
-    return;
-  }
-  const ragStore = resolved.store;
+  const ragStore = resolveStore(specialist);
   const total = ragStore.count();
 
   if (total === 0) {
@@ -240,11 +233,12 @@ export async function clearFacts(specialist?: string): Promise<void> {
   }
   printInfo(`    ${'Total:'.padEnd(maxLen)}  ${String(total).padStart(6)} facts`);
   printInfo('');
-  // The store's own file, not the main-store constant this used to print
-  // unconditionally — which named the wrong path the moment a `--specialist`
-  // flag existed, on the one screen whose whole job is to say what is about to
-  // be destroyed.
-  printInfo(`  Storage: ${resolved.file}`);
+  // The store's own file, asked of the store. This printed the imported
+  // `MEMORIES_FILE` unconditionally — the wrong path the moment a `--specialist`
+  // flag existed, on the one screen whose whole job is to say what is about to be
+  // destroyed — and the first fix re-derived `memories.json` here instead, which
+  // is the same mistake one step removed.
+  printInfo(`  Storage: ${ragStore.storageFile}`);
   printInfo('');
 
   const answer = await promptLine('  Type "yes, delete all facts" to confirm: ');
@@ -286,21 +280,16 @@ export async function factsSearch(query: string, specialist?: string): Promise<v
     }
   }
 
-  const resolved = resolveStore(specialist);
-  if (typeof resolved === 'string') {
-    printError(resolved);
-    return;
-  }
-  const ragStore = resolved.store;
+  const ragStore = resolveStore(specialist);
   const results = await ragStore.searchWithIds(searchQuery);
 
   if (results.length === 0) {
     printInfo('No matching facts found.');
-    const footer = specialist === undefined ? specialistFooter() : null;
-    if (footer) printInfo(footer);
+    printSpecialistFooter(specialist);
     return;
   }
 
   displayResults(results, true);
+  printSpecialistFooter(specialist);
   await promptDelete(results, ragStore);
 }

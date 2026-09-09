@@ -6,6 +6,7 @@ import { KnowledgeCorpus } from '../corpus.js';
 import { KnowledgeStore, closeAllKnowledgeStores } from '../store.js';
 import { knowledgeDir } from '../../paths.js';
 import { createTools } from '../../tools/index.js';
+import { makeMemoryDouble } from '../../__tests__/agent-context.js';
 import type { AgentContext } from '../../framework/context.js';
 import type { ToolOptions } from '../../tools/types.js';
 import type { DispatchContextRecord } from '../../dispatch-context-history.js';
@@ -128,7 +129,9 @@ describe('declaredScope', () => {
 
 describe('the registry', () => {
   const options = {} as ToolOptions;
-  const memory = { scoped: () => memory } as never;
+  // The shared double (#318): this is one of the two files the `scoped` break
+  // took, and a local copy is how the next narrowing field takes it again.
+  const memory = makeMemoryDouble() as never;
 
   it('builds no knowledge tool without a corpus handle', () => {
     // Fail-closed by construction: the tool cannot exist unfenced, because it

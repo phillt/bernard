@@ -550,6 +550,16 @@ describe('memory ownership', () => {
     expect(new MemoryStore().listAllByOwner().get('coder')).toEqual(['kept']);
   });
 
+  it('refuses to enumerate owners from a NARROWED view', async () => {
+    // The fence is supposed to be a property of the object, and this method
+    // reads past it — so anything holding a view could reach every other
+    // specialist's keys with one call, and every fenced dispatch holds one
+    // (`createTools` is handed a `MemoryStore`). The user's own unowned store is
+    // the only legitimate caller, which is what the two UI sites hold.
+    expect(() => new MemoryStore().asOwner('coder').listAllByOwner()).toThrow();
+    expect(() => new MemoryStore().scoped(['proj-*']).listAllByOwner()).not.toThrow();
+  });
+
   it('returns keys and never content', async () => {
     // The whole concession: names and counts are what a user needs, and nothing
     // here renders a body, so this cannot become a route into one.

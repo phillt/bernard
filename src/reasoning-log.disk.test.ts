@@ -39,30 +39,65 @@ const lineCount = (file: string) =>
   fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean).length;
 
 describe('the file stays bounded', () => {
-  it('rotates on append rather than growing forever', async () => {
+  // `keep` (2,000) plus the 25% slack `appendJsonlBounded` trades for not
+  // rewriting the whole file on every append — the naive pairing measured
+  // 25.7 ms per write on the real 6.7 MB log, synchronously, on every dispatch.
+  const CEILING = 2500;
+
+  it('stays bounded rather than growing forever', async () => {
     // The writer owns rotation — `apps/invocation-log.ts` states the rule, and
-    // `apps/invoke.ts` / `apps/capability-log.ts` are the two loggers that
-    // already follow it. This one had a rotate function nothing called.
+    // the two loggers beside it already follow it. This one had a rotate
+    // function nothing called.
     const { appendReasoningLog, TOOL_WRAPPER_LOG } = await load();
-    for (let i = 0; i < 2100; i++) appendReasoningLog(at(i));
-    expect(lineCount(TOOL_WRAPPER_LOG)).toBeLessThanOrEqual(2000);
+    for (let i = 0; i < 3000; i++) appendReasoningLog(at(i));
+    expect(lineCount(TOOL_WRAPPER_LOG)).toBeLessThanOrEqual(CEILING);
   });
 
-  it('keeps the NEWEST entries when it rotates', async () => {
+  it('stays bounded across many multiples of the budget', async () => {
+    // Guards the guard: a one-shot trim would pass the case above and still grow
+    // without limit. 6,000 appends is three budgets' worth.
+    const { appendReasoningLog, TOOL_WRAPPER_LOG } = await load();
+    for (let i = 0; i < 6000; i++) appendReasoningLog(at(i));
+    expect(lineCount(TOOL_WRAPPER_LOG)).toBeLessThanOrEqual(CEILING);
+  });
+
+  it('keeps the NEWEST entries when it trims', async () => {
     const { appendReasoningLog, readReasoningLog, TOOL_WRAPPER_LOG } = await load();
-    for (let i = 0; i < 2100; i++) appendReasoningLog(at(i, { input: `run-${i}` }));
-    expect(lineCount(TOOL_WRAPPER_LOG)).toBeLessThanOrEqual(2000);
-    expect(readReasoningLog(1).at(-1)?.input).toBe('run-2099');
+    for (let i = 0; i < 3000; i++) appendReasoningLog(at(i, { input: `run-${i}` }));
+    expect(lineCount(TOOL_WRAPPER_LOG)).toBeLessThanOrEqual(CEILING);
+    expect(readReasoningLog(1).at(-1)?.input).toBe('run-2999');
   });
 
-  it('caps a field so one entry cannot dwarf the rows around it', async () => {
-    // The row budget is a COUNT, which is `apps/invoke.ts`'s stated reason for
-    // its own per-field cap. `finalOutput` is a whole dispatch's answer.
+  it('caps every field, so one entry cannot dwarf the rows around it', async () => {
+    // A count budget is only honest if EVERY field is capped, and the first cut
+    // capped four of five — it left `toolCalls[].args` out on the argument that
+    // the renderer bounds it, which is a PROMPT bound and not a disk one.
+    // Measured, `args` is where the mass is: the largest real one is a 15.7 KB
+    // `shell` invocation, and a `file_write` carries a whole file.
     const { appendReasoningLog, readReasoningLog } = await load();
-    appendReasoningLog(at(1, { finalOutput: 'x'.repeat(50_000), error: 'y'.repeat(50_000) }));
+    appendReasoningLog(
+      at(1, {
+        finalOutput: 'x'.repeat(50_000),
+        error: 'y'.repeat(50_000),
+        toolCalls: [
+          { tool: 'file_write', args: { content: 'z'.repeat(50_000) }, resultPreview: 'ok' },
+        ],
+      }),
+    );
     const entry = readReasoningLog(1)[0];
     expect(String(entry.finalOutput).length).toBeLessThan(3000);
     expect(entry.error!.length).toBeLessThan(3000);
+    expect(JSON.stringify(entry.toolCalls[0].args).length).toBeLessThan(3000);
+  });
+
+  it('leaves a small args object structured', async () => {
+    // Guards the guard: the cap keeps structure when it fits, or the log stops
+    // being replayable — which is what it exists for.
+    const { appendReasoningLog, readReasoningLog } = await load();
+    appendReasoningLog(
+      at(1, { toolCalls: [{ tool: 'shell', args: { command: 'ls' }, resultPreview: 'ok' }] }),
+    );
+    expect(readReasoningLog(1)[0].toolCalls[0].args).toEqual({ command: 'ls' });
   });
 
   it('leaves a structured finalOutput structured', async () => {
@@ -84,14 +119,17 @@ describe('reading since a cursor', () => {
     const base = Date.parse('2026-01-01T00:00:00.000Z');
     for (let i = 0; i < 1500; i++) appendReasoningLog(at(base + i * 1000, { input: `run-${i}` }));
     const since = readReasoningLogSince(base + 1496 * 1000);
-    expect(since.map((e) => e.input)).toEqual(['run-1497', 'run-1498', 'run-1499']);
+    expect(since.entries.map((e) => e.input)).toEqual(['run-1497', 'run-1498', 'run-1499']);
+    // And it says it got all of them — the fact a caller cannot infer from the
+    // entries, since every one is newer than the cursor by construction.
+    expect(since.reachedCursor).toBe(true);
   });
 
   it('returns nothing when the cursor is at the end', async () => {
     const { appendReasoningLog, readReasoningLogSince } = await load();
     const base = Date.parse('2026-01-01T00:00:00.000Z');
     appendReasoningLog(at(base));
-    expect(readReasoningLogSince(base)).toEqual([]);
+    expect(readReasoningLogSince(base).entries).toEqual([]);
   });
 
   it('keeps an entry whose timestamp will not parse', async () => {
@@ -100,11 +138,11 @@ describe('reading since a cursor', () => {
     const { appendReasoningLog, readReasoningLogSince } = await load();
     const base = Date.parse('2026-01-01T00:00:00.000Z');
     appendReasoningLog(at(base, { ts: 'not-a-date' }));
-    expect(readReasoningLogSince(base + 10_000)).toHaveLength(1);
+    expect(readReasoningLogSince(base + 10_000).entries).toHaveLength(1);
   });
 
   it('returns [] rather than throwing when the log does not exist', async () => {
     const { readReasoningLogSince } = await load();
-    expect(readReasoningLogSince(0)).toEqual([]);
+    expect(readReasoningLogSince(0)).toEqual({ entries: [], reachedCursor: true });
   });
 });

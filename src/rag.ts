@@ -378,6 +378,19 @@ export class RAGStore {
   private readonly memoriesFile: string;
   private readonly lastSessionFile: string;
 
+  /**
+   * Where this store's facts live, for a surface that has to name it.
+   *
+   * The store owns the path, so nothing outside has to re-derive it. `facts-cli`
+   * printed the main-store constant unconditionally — the wrong path the moment
+   * a `--specialist` flag existed, on the one screen whose job is to say what is
+   * about to be destroyed — and then re-derived `memories.json` itself, which is
+   * the same mistake one step removed.
+   */
+  get storageFile(): string {
+    return this.memoriesFile;
+  }
+
   constructor(config?: RAGStoreConfig) {
     this.dir = config?.dir ?? RAG_DIR;
     this.memoriesFile = path.join(this.dir, 'memories.json');

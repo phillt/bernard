@@ -60,10 +60,17 @@ describe('readJsonlSince', () => {
     );
   const file = () => path.join(dir, 'log.jsonl');
   const since = (cutoff: number, max?: number) =>
-    readJsonlSince<{ i: number }>(file(), (e) => e.i <= cutoff, max).map((r) => r.i);
+    readJsonlSince<{ i: number }>(file(), (e) => e.i <= cutoff, max).entries.map((r) => r.i);
+  const reached = (cutoff: number, max?: number) =>
+    readJsonlSince<{ i: number }>(file(), (e) => e.i <= cutoff, max).reachedCursor;
 
-  it('returns [] for a missing file', () => {
-    expect(readJsonlSince(path.join(dir, 'nope.jsonl'), () => false)).toEqual([]);
+  it('returns [] for a missing file, and claims to have reached the cursor', () => {
+    // Nothing before the cursor either, so nothing was lost — a first run must
+    // not report a gap.
+    expect(readJsonlSince(path.join(dir, 'nope.jsonl'), () => false)).toEqual({
+      entries: [],
+      reachedCursor: true,
+    });
   });
 
   it('returns everything after the cursor, oldest-first', () => {
@@ -92,9 +99,41 @@ describe('readJsonlSince', () => {
     expect(since(19_990)).toEqual([19_991, 19_992, 19_993, 19_994, 19_995, 19_996, 19_997, 19_998, 19_999]); // prettier-ignore
   });
 
+  it('reads a single record that spans many chunks, intact', () => {
+    // Eleven 64 KB chunks for one record, which is the case the fragment list
+    // exists for: concatenating the carry per chunk copies every byte once per
+    // chunk it spans. Measured — 0.7 MB: 2.6 ms concat / 1.4 ms fragments;
+    // 4 MB: 63.4 / 8.1; 16 MB: 994.7 / 29.7. Deliberately NOT asserted on the
+    // clock: the separation only becomes reliable at a file size not worth
+    // writing per test run, and a flaky timing test across three shuffled CI
+    // seeds is worse than a recorded measurement. What IS asserted is the
+    // property a mishandled carry breaks — the record comes back whole.
+    //
+    // Reachable rather than theoretical: `captureToolCalls` stores a tool's
+    // `args` verbatim, so a `file_write` of an applet page is an ordinary
+    // megabyte-sized row.
+    const big = 'x'.repeat(700_000);
+    fs.writeFileSync(file(), `{"i":0}\n${JSON.stringify({ i: 1, big })}\n{"i":2}\n`);
+    const out = readJsonlSince<{ i: number; big?: string }>(file(), (e) => e.i <= 0);
+    expect(out.entries.map((r) => r.i)).toEqual([1, 2]);
+    expect(out.entries[0].big).toHaveLength(700_000);
+  });
+
   it('returns everything when nothing is older than the cursor', () => {
     write(3);
     expect(since(-1)).toEqual([0, 1, 2]);
+  });
+
+  it('reports reaching the cursor, and not reaching it', () => {
+    // The half a caller using this as a queue needs, and the half it CANNOT
+    // infer: every entry returned is newer than the cursor by construction, so
+    // any test against the oldest one is a tautology.
+    write(10);
+    expect(reached(6)).toBe(true);
+    // The cursor is older than every record, so the scan runs out of file.
+    expect(reached(-5)).toBe(false);
+    // …and so does hitting the ceiling.
+    expect(reached(-1, 3)).toBe(false);
   });
 
   it('keeps a record the predicate cannot judge', () => {
@@ -102,7 +141,7 @@ describe('readJsonlSince', () => {
     // not reading it, so an unparseable cursor field must not read as "old".
     fs.writeFileSync(file(), '{"i":0}\n{"ts":"garbage"}\n{"i":2}\n');
     const out = readJsonlSince<{ i?: number }>(file(), (e) => typeof e.i === 'number' && e.i <= 0);
-    expect(out).toHaveLength(2);
+    expect(out.entries).toHaveLength(2);
   });
 
   it('skips blank and malformed lines', () => {

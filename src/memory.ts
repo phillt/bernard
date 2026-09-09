@@ -567,14 +567,44 @@ export class MemoryStore {
    * model sees.
    */
   listAllByOwner(): Map<string | null, string[]> {
+    // **A narrowed view may not call this.** The fence is supposed to be a
+    // property of the object — #511's "unrepresentable rather than remembered" —
+    // and a method that reads past it would make one half of that breakable by
+    // one call from anything holding a view, which is every fenced dispatch
+    // (`createTools` is handed a `MemoryStore`). The user's own unowned store is
+    // the only caller there can be, which is exactly what the two UI call sites
+    // hold.
+    if (this.owner !== null) {
+      throw new MemoryScopeError('(all owners)', this.scope ?? []);
+    }
     const out = new Map<string | null, string[]>();
-    for (const key of this.allKeysOnDisk()) {
-      const parsed = this.loadRaw(key)?.parsed;
-      if (!parsed || isRetired(parsed)) continue;
+    for (const { key, parsed } of this.rawEntriesOnDisk()) {
+      if (isRetired(parsed)) continue;
       const owner = parsed.owner ?? null;
       const list = out.get(owner);
       if (list) list.push(key);
       else out.set(owner, [key]);
+    }
+    return out;
+  }
+
+  /**
+   * Every record on disk with its parse, ignoring BOTH fences.
+   *
+   * One traversal for the two readers that have to see past ownership —
+   * {@link listAllByOwner} and {@link deleteByOwner}. `liveEntries` is the
+   * owner-fenced variant of the same walk and stays separate, because it goes
+   * through `load` precisely so the fence applies.
+   *
+   * A fourth retirement state is the thing to keep in mind here: `isRetired`
+   * exists so that test is written once, and three copies of this loop is three
+   * places to forget to call it.
+   */
+  private rawEntriesOnDisk(): Array<{ key: string; parsed: ParsedMemoryFile }> {
+    const out: Array<{ key: string; parsed: ParsedMemoryFile }> = [];
+    for (const key of this.allKeysOnDisk()) {
+      const parsed = this.loadRaw(key)?.parsed;
+      if (parsed) out.push({ key, parsed });
     }
     return out;
   }
@@ -834,8 +864,8 @@ export class MemoryStore {
     // `unlinkKey` returning `false` rather than throwing is what keeps this
     // best-effort per file: a sweep the caller cannot resume must not stop
     // half-way, which is `deleteApplet`'s rule for its bound-specialist row.
-    for (const key of this.allKeysOnDisk()) {
-      if (this.loadRaw(key)?.parsed.owner !== owner) continue;
+    for (const { key, parsed } of this.rawEntriesOnDisk()) {
+      if (parsed.owner !== owner) continue;
       if (this.unlinkKey(key)) deleted++;
     }
     return deleted;
