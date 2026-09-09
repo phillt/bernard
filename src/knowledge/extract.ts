@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { defaultHasBin } from '../voice-service.js';
 import { htmlToMarkdown } from '../html-text.js';
 import { normalizeSource } from './chunk.js';
 
@@ -147,16 +148,6 @@ export function modeFor(filePath: string): ExtractMode {
   return CODE_EXTENSIONS.has(path.extname(filePath).toLowerCase()) ? 'code' : 'prose';
 }
 
-/** Default PATH probe. Mirrors `voice-service.ts`'s, including the `which`. */
-function onPath(bin: string): boolean {
-  try {
-    execFileSync('which', [bin], { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * The PDF text extractor to use, or `null`.
  *
@@ -164,8 +155,14 @@ function onPath(bin: string): boolean {
  * that shells out to `which` measures the machine it runs on, so the
  * absent-binary path — the one with a user-facing message — would be untestable
  * anywhere Poppler happens to be installed.
+ *
+ * The default probe is SHARED with `voice-service.ts` rather than mirrored.
+ * Copying `resolveBackend`'s SHAPE is right — injected probe, platform as a
+ * parameter — but its six-line body is not a shape, and `which` is absent on
+ * Windows, so two copies fail identically in two files and fixing one leaves
+ * the other.
  */
-export function resolvePdfReader(probe: (bin: string) => boolean = onPath): string | null {
+export function resolvePdfReader(probe: (bin: string) => boolean = defaultHasBin): string | null {
   return probe('pdftotext') ? 'pdftotext' : null;
 }
 

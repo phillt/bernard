@@ -118,6 +118,19 @@ export interface SpinnerStats {
   sessionTelemetry?: SessionTelemetry;
 }
 
+/**
+ * Bytes as `512 B` / `1.4 KB` / `3.2 MB`.
+ *
+ * Here rather than beside its one caller because this is where the other
+ * `format*` renderers live, and the alternative is discovering a second copy
+ * later — `image.ts` already inlines the MB half.
+ */
+export function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 /** Token counts can arrive NaN/undefined when a turn errors early; treat those as 0. */
 export function finiteOr0(n: number): number {
   return Number.isFinite(n) ? n : 0;

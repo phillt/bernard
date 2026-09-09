@@ -253,3 +253,33 @@ describe('bounds', () => {
     expect((await searchCorpus(corpus(), provider, '   ')).hits).toEqual([]);
   });
 });
+
+describe('abutting windows', () => {
+  it('merges two hits whose windows only touch', async () => {
+    // `mergeWindows` coalesces `from <= to + 1`; the inline predicate this
+    // replaced required strict overlap, so two anchors one ordinal apart
+    // survived as separate hits sharing a boundary — the same text charged
+    // twice inside one budget.
+    const out = await searchCorpus(corpus(['docs']), provider, 'lighthouse', {
+      neighbours: 0,
+      limit: 5,
+    });
+    // Asserted on RANGES, not on flattened endpoints: a single-chunk window has
+    // the same value at both ends, so flattening reports a gap of zero between
+    // a hit and itself.
+    const ranges = out.hits
+      .filter((h) => h.uri === '/docs.md')
+      .map((h) => h.ordinals)
+      .sort((a, b) => a[0] - b[0]);
+    for (let i = 1; i < ranges.length; i++) {
+      expect(ranges[i][0], 'two returned windows abut').toBeGreaterThan(ranges[i - 1][1] + 1);
+    }
+    // Guards the guard: chunks 0 and 1 BOTH match this query, so under the old
+    // strict-overlap predicate they came back as two separate hits sharing a
+    // boundary. Chunk 3 also matches and is legitimately its own hit, so the
+    // property is "0 and 1 did not both survive", not "there is one hit".
+    const starts = ranges.map((r) => r[0]);
+    expect(starts).toContain(0);
+    expect(starts).not.toContain(1);
+  });
+});

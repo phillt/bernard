@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import { EMBEDDING_DIMENSIONS, EMBEDDING_MODEL_ID } from '../embeddings.js';
 import * as path from 'node:path';
 import { knowledgeDir } from '../paths.js';
 import { isValidLibraryId } from './ids.js';
@@ -129,4 +130,31 @@ export class KnowledgeCorpus {
     const next = this.scope === null ? [...ids] : ids.filter((id) => this.scope!.includes(id));
     return new KnowledgeCorpus(this.identity, next);
   }
+}
+
+/**
+ * What this build embeds with, without awaiting the model.
+ *
+ * Constants rather than `getEmbeddingProvider()`, so a corpus handle can be
+ * constructed synchronously at a composition root. `rag.ts` keeps its own copy
+ * of the dimensionality for the same reason: its `persist` is synchronous and
+ * the provider is not.
+ */
+export function embeddingIdentity(): EmbeddingIdentity {
+  return { model: EMBEDDING_MODEL_ID, dimensions: EMBEDDING_DIMENSIONS };
+}
+
+/**
+ * An unfenced corpus handle. Callers that need a fence apply one.
+ *
+ * Here rather than in `manage.ts`, which is where it started: that module
+ * reaches `ingest.js` → `extract.js` → PDF extraction and `node:child_process`,
+ * and `index.ts` imported this four-line function statically — so every
+ * `bernard` process paid ~13 ms for a graph almost none of them touch. Measured
+ * at ~6.5 ms from here. `index.ts` already defers `knowledge/cli.js` with a
+ * comment about exactly this cost; the static import three lines away had
+ * quietly paid it anyway.
+ */
+export function openCorpus(): KnowledgeCorpus {
+  return new KnowledgeCorpus(embeddingIdentity());
 }

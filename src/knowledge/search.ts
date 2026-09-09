@@ -1,9 +1,9 @@
 import { cosineSimilarity } from '../embeddings.js';
 import type { EmbeddingProvider } from '../embeddings.js';
-import { LexicalIndex, namesASymbol, reciprocalRankFusion, RRF_K } from '../lexical.js';
+import { namesASymbol, reciprocalRankFusion, RRF_K } from '../lexical.js';
 import type { KnowledgeCorpus } from './corpus.js';
-import type { ChunkRow, KnowledgeStore } from './store.js';
-import { stitchWindow } from './stitch.js';
+import type { ChunkKey, ChunkRow, KnowledgeStore } from './store.js';
+import { mergeWindows, stitchWindow } from './stitch.js';
 
 /**
  * Retrieval over a knowledge corpus (#516) — dense plus lexical, fused by RRF.
@@ -151,19 +151,16 @@ export async function searchCorpus(
   const indexByKey = new Map<string, number>();
   const cosineByKey = new Map<string, number>();
 
-  const admit = (
-    library: string,
-    store: KnowledgeStore,
-    chunkId: number,
-    sourceId: number,
-    ordinal: number,
-    cosine: number,
-  ): number => {
-    const key = `${library}:${chunkId}`;
+  // Takes the candidate itself rather than its six fields spread out: the
+  // positional signature had to be re-declared verbatim as a parameter type
+  // where `scoreLexically` accepts it, so adding a field to `Candidate` meant
+  // editing two places that TypeScript could not relate.
+  const admit = (c: Candidate): number => {
+    const key = `${c.library}:${c.chunkId}`;
     const existing = indexByKey.get(key);
     if (existing !== undefined) return existing;
     const index = candidates.length;
-    candidates.push({ library, store, chunkId, sourceId, ordinal, cosine });
+    candidates.push(c);
     indexByKey.set(key, index);
     return index;
   };
@@ -182,7 +179,14 @@ export async function searchCorpus(
       cosineByKey.set(`${id}:${v.id}`, cos);
       if (cos < threshold) continue;
       denseScored.push({
-        index: admit(id, store, v.id, v.sourceId, v.ordinal, cos),
+        index: admit({
+          library: id,
+          store,
+          chunkId: v.id,
+          sourceId: v.sourceId,
+          ordinal: v.ordinal,
+          cosine: cos,
+        }),
         cosine: cos,
       });
     }
@@ -201,13 +205,15 @@ export async function searchCorpus(
   // `LexicalIndex.score` returns only non-zero scores, so a query whose terms
   // appear nowhere contributes no candidates at all.
   const lexicalUsed = namesASymbol(query);
-  const lexicalHits = new Set<number>();
   const rankings: number[][] = [];
   if (denseRanking.length > 0) rankings.push(denseRanking);
-  if (lexicalUsed) {
-    const lexicalRanking = scoreLexically(stores, query, cosineByKey, admit, lexicalHits);
-    if (lexicalRanking.length > 0) rankings.push(lexicalRanking);
-  }
+  // Derived from the ranking rather than accumulated into a mutated
+  // out-parameter: every `hits.add(i)` was paired with an `out.push(i)` that
+  // never separated, so the set was the ranking, stored twice and kept in step
+  // by hand.
+  const lexicalRanking = lexicalUsed ? scoreLexically(stores, query, cosineByKey, admit) : [];
+  const lexicalHits = new Set(lexicalRanking);
+  if (lexicalRanking.length > 0) rankings.push(lexicalRanking);
   if (rankings.length === 0) return { ...empty, lexicalUsed };
 
   const fused = reciprocalRankFusion(rankings);
@@ -217,20 +223,43 @@ export async function searchCorpus(
   // A neighbour pulled in for an earlier hit must not also occupy a rank of its
   // own: that is the same text twice inside one budget, and it collapses the
   // effective result count.
-  const anchors: Array<{ candidate: Candidate; rank: number; from: number; to: number }> = [];
+  //
+  // Window arithmetic goes through `mergeWindows` rather than being re-derived
+  // here, and the difference is behavioural rather than tidiness: that helper
+  // coalesces windows that merely ABUT (`from <= to + 1`), while the inline
+  // predicate this replaces required strict overlap. Two anchors one ordinal
+  // apart therefore survived as separate hits whose windows share a boundary —
+  // exactly the "same text charged twice inside one budget" failure the helper
+  // exists to prevent, and its tests were pinning behaviour the shipped code
+  // did not have.
+  const anchors: Array<{
+    index: number;
+    candidate: Candidate;
+    rank: number;
+    from: number;
+    to: number;
+  }> = [];
   for (const [rank, index] of fused.entries()) {
     const c = candidates[index];
-    const from = Math.max(0, c.ordinal - neighbours);
-    const to = c.ordinal + neighbours;
+    // One anchor at a time, because a rank is only claimed by the FIRST anchor
+    // whose window covers a region — merging the whole set up front would lose
+    // which candidate each surviving window belongs to.
+    const [span] = mergeWindows(
+      [{ sourceId: c.sourceId, ordinal: c.ordinal }],
+      neighbours,
+      neighbours,
+    );
     const covered = anchors.some(
       (a) =>
         a.candidate.library === c.library &&
         a.candidate.sourceId === c.sourceId &&
-        from <= a.to &&
-        to >= a.from,
+        // `+ 1` on both sides, matching `mergeWindows`: abutting windows are one
+        // continuous run of text with nothing between them.
+        span.from <= a.to + 1 &&
+        span.to + 1 >= a.from,
     );
     if (covered) continue;
-    anchors.push({ candidate: c, rank, from, to });
+    anchors.push({ index, candidate: c, rank, from: span.from, to: span.to });
     if (anchors.length >= limit) break;
   }
 
@@ -241,7 +270,11 @@ export async function searchCorpus(
     const { candidate: c } = anchor;
     const rows = c.store.chunksInRange(c.sourceId, anchor.from, anchor.to);
     if (rows.length === 0) continue;
-    const source = c.store.listSources().find((s) => s.id === c.sourceId);
+    // A single-row lookup, not `listSources().find(...)`: that ran a correlated
+    // COUNT(*) per source over the whole table, once per hit, to compute a
+    // chunk count this loop discards. 2.597 ms -> 0.0038 ms per call at 2,000
+    // sources.
+    const source = c.store.getSourceById(c.sourceId);
     let text = stitchWindow(rows as ChunkRow[]);
     if (used + text.length > maxChars) {
       // Lowest-ranked hits are cut first: the budget goes to the best answers
@@ -270,7 +303,9 @@ export async function searchCorpus(
       text,
       score: 1 / (RRF_K + anchor.rank + 1),
       cosine: c.cosine,
-      channels: lexicalHits.has(candidates.indexOf(c)) ? ['dense', 'lexical'] : ['dense'],
+      // The index was in hand at the fused loop; `candidates.indexOf(c)` was a
+      // linear re-scan for a value already computed.
+      channels: lexicalHits.has(anchor.index) ? ['dense', 'lexical'] : ['dense'],
     });
   }
 
@@ -290,46 +325,52 @@ function scoreLexically(
   stores: readonly { id: string; store: KnowledgeStore }[],
   query: string,
   cosineByKey: ReadonlyMap<string, number>,
-  admit: (
-    library: string,
-    store: KnowledgeStore,
-    chunkId: number,
-    sourceId: number,
-    ordinal: number,
-    cosine: number,
-  ) => number,
-  hits: Set<number>,
+  admit: (c: Candidate) => number,
 ): number[] {
-  const rows: Array<{
+  // **One index per LIBRARY, cached on the store's write generation**, rather
+  // than one built over the union on every search. Measured, building over
+  // 5,000 chunks is 672 ms, and it was thrown away at return — 575 ms of a
+  // 600 ms symbol-naming search. The per-library split is what makes the cache
+  // possible at all: a union index is invalidated by a write to any library.
+  //
+  // The cost of splitting is that IDF is now per library rather than corpus-
+  // wide, so a term common in one library and rare in another scores by its
+  // own library's statistics. That is the same granularity `rag.ts` uses
+  // (per store, not per domain) and is the right one here: a library is a
+  // corpus, and a term's rarity is a property of the corpus it sits in.
+  const perLibrary: Array<{
     library: string;
     store: KnowledgeStore;
-    id: number;
-    sourceId: number;
-    ordinal: number;
+    position: number;
+    row: ChunkKey;
   }> = [];
-  const texts: string[] = [];
+  const scores: Array<{ at: number; score: number }> = [];
   for (const { id, store } of stores) {
-    for (const row of store.scanTexts()) {
-      rows.push({ library: id, store, id: row.id, sourceId: row.sourceId, ordinal: row.ordinal });
-      texts.push(row.text);
+    const { index, rows: keys } = store.lexicalIndex();
+    if (keys.length === 0) continue;
+    const base = perLibrary.length;
+    for (const row of keys)
+      perLibrary.push({ library: id, store, position: perLibrary.length, row });
+    for (const [position, score] of index.score(query)) {
+      scores.push({ at: base + position, score });
     }
   }
-  if (texts.length === 0) return [];
+  if (perLibrary.length === 0) return [];
 
-  const scored = new LexicalIndex(texts).score(query);
+  const scored = new Map(scores.map((s) => [s.at, s.score] as const));
   const out: number[] = [];
   for (const [position] of [...scored.entries()].sort((a, b) => b[1] - a[1])) {
-    const row = rows[position];
-    const index = admit(
-      row.library,
-      row.store,
-      row.id,
-      row.sourceId,
-      row.ordinal,
-      cosineByKey.get(`${row.library}:${row.id}`) ?? 0,
+    const entry = perLibrary[position];
+    out.push(
+      admit({
+        library: entry.library,
+        store: entry.store,
+        chunkId: entry.row.id,
+        sourceId: entry.row.sourceId,
+        ordinal: entry.row.ordinal,
+        cosine: cosineByKey.get(`${entry.library}:${entry.row.id}`) ?? 0,
+      }),
     );
-    hits.add(index);
-    out.push(index);
   }
   return out;
 }

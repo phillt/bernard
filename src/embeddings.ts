@@ -49,12 +49,11 @@ let cachedProvider: EmbeddingProvider | null | undefined;
  * business and is noted rather than smuggled in.
  */
 export const EMBEDDING_DIMENSIONS = 384;
-const DIMENSIONS = EMBEDDING_DIMENSIONS;
 
 /**
  * The model id, exported so a persisted store can be stamped with it (#520).
  *
- * Hardcoded, like `DIMENSIONS` — `EmbeddingProvider` is an interface built to
+ * Hardcoded, like `EMBEDDING_DIMENSIONS` — `EmbeddingProvider` is an interface built to
  * allow a swap, but nothing configures which model is loaded, and deciding
  * whether to swap is #520's other half and stays open.
  */
@@ -140,12 +139,14 @@ export async function getEmbeddingProvider(): Promise<EmbeddingProvider | null> 
         const data = output.data as Float32Array;
         const results: number[][] = [];
         for (let i = 0; i < texts.length; i++) {
-          results.push(Array.from(data.slice(i * DIMENSIONS, (i + 1) * DIMENSIONS)));
+          results.push(
+            Array.from(data.slice(i * EMBEDDING_DIMENSIONS, (i + 1) * EMBEDDING_DIMENSIONS)),
+          );
         }
         return results;
       },
       dimensions(): number {
-        return DIMENSIONS;
+        return EMBEDDING_DIMENSIONS;
       },
       modelId(): string {
         return EMBEDDING_MODEL_ID;

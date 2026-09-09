@@ -4,7 +4,7 @@ import { attachMeta } from '../framework/tools/adapter.js';
 import { getEmbeddingProvider } from '../embeddings.js';
 import type { KnowledgeCorpus } from '../knowledge/corpus.js';
 import { searchCorpus } from '../knowledge/search.js';
-import { stitchWindow } from '../knowledge/stitch.js';
+import { readSource } from '../knowledge/manage.js';
 
 /**
  * `knowledge` — read the user's ingested document libraries (#516).
@@ -110,20 +110,23 @@ export function createKnowledgeTool(corpus: KnowledgeCorpus) {
         if (!library || !uri) {
           return 'Error: `library` and `uri` are required when action is "read".';
         }
-        const store = corpus.open(library);
+        // Shared with the CLI rather than reimplemented. The default window
+        // size and the clamping rule lived in two files, so changing the CLI's
+        // left the tool silently on the old one — which is exactly what the
+        // returns-rather-than-prints layer exists to prevent.
+        const read = readSource(corpus, library, uri, {
+          ...(from !== undefined ? { from } : {}),
+          ...(to !== undefined ? { to } : {}),
+        });
         // Out of scope and absent answer the same way, so a fenced dispatch
         // cannot enumerate the catalogue it was fenced from.
-        if (!store) return `Error: no library "${library}".`;
-        const source = store.getSource(uri);
-        if (!source) return `Error: library "${library}" has no source "${uri}".`;
-        const start = Math.max(0, from ?? 0);
-        const end = Math.min(source.chunkCount - 1, to ?? start + 4);
+        if (!read.ok) return `Error: ${read.error}`;
         return JSON.stringify({
-          uri: source.uri,
-          ...(source.title ? { title: source.title } : {}),
-          chunks: [start, end],
-          total: source.chunkCount,
-          text: stitchWindow(store.chunksInRange(source.id, start, end)),
+          uri: read.uri,
+          ...(read.title ? { title: read.title } : {}),
+          chunks: [read.from, read.to],
+          total: read.total,
+          text: read.text,
         });
       },
     }),

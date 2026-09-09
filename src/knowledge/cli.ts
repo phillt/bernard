@@ -1,5 +1,7 @@
 import { printError, printInfo } from '../output.js';
-import { closeAllKnowledgeStores } from './store.js';
+import { plural } from '../text.js';
+import { formatBytes } from '../output.js';
+import { openCorpus } from './corpus.js';
 import {
   addSources,
   createLibrary,
@@ -25,24 +27,17 @@ const fail = (message: string): void => {
   process.exitCode = 1;
 };
 
-function humanBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 export function knowledgeList(): void {
-  const out = listLibraries();
-  if (!out.ok) return fail(out.error);
-  if (out.libraries.length === 0) {
+  const libraries = listLibraries();
+  if (libraries.length === 0) {
     printInfo('No knowledge libraries yet. Create one with `bernard knowledge create <id>`.');
     return;
   }
-  for (const lib of out.libraries) {
+  for (const lib of libraries) {
     const label = lib.title === lib.id ? lib.id : `${lib.id} — ${lib.title}`;
     printInfo(
-      `${label}\n  ${lib.sources} source${lib.sources === 1 ? '' : 's'}, ` +
-        `${lib.chunks} chunk${lib.chunks === 1 ? '' : 's'}, ${humanBytes(lib.bytes)}`,
+      `${label}\n  ${lib.sources} ${plural(lib.sources, 'source', 'sources')}, ` +
+        `${lib.chunks} ${plural(lib.chunks, 'chunk', 'chunks')}, ${formatBytes(lib.bytes)}`,
     );
   }
 }
@@ -67,7 +62,7 @@ export function knowledgeStats(id: string): void {
       `  embedded with ${out.summary.stamp?.model ?? 'unknown'} at ` +
       `${out.summary.stamp?.dimensions ?? '?'} dimensions\n` +
       `  ${out.summary.sources} sources, ${out.summary.chunks} chunks, ` +
-      `${humanBytes(out.summary.bytes)}`,
+      `${formatBytes(out.summary.bytes)}`,
   );
   for (const s of out.sources) {
     printInfo(`  ${s.uri}  (${s.chunkCount} chunks, ingested ${s.ingestedAt.slice(0, 10)})`);
@@ -119,7 +114,6 @@ export async function knowledgeAdd(
     );
   }
   for (const f of out.failed) printError(`  ${f.uri}: ${f.reason}`);
-  closeAllKnowledgeStores();
 }
 
 export async function knowledgeSearch(
@@ -140,7 +134,6 @@ export async function knowledgeSearch(
         ? 'No libraries to search.'
         : `Nothing in ${out.searched.join(', ')} matched.`,
     );
-    closeAllKnowledgeStores();
     return;
   }
   for (const hit of out.hits) {
@@ -151,7 +144,6 @@ export async function knowledgeSearch(
     );
   }
   if (out.truncated) printInfo('… more matched than fits in the output budget.');
-  closeAllKnowledgeStores();
 }
 
 export function knowledgeRead(
@@ -159,10 +151,9 @@ export function knowledgeRead(
   uri: string,
   opts: { from?: number; to?: number } = {},
 ): void {
-  const out = readSource(id, uri, opts);
+  const out = readSource(openCorpus(), id, uri, opts);
   if (!out.ok) return fail(out.error);
   printInfo(
     `${out.title ?? out.uri}  (chunks ${out.from}-${out.to} of ${out.total})\n\n${out.text}`,
   );
-  closeAllKnowledgeStores();
 }

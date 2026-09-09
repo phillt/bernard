@@ -114,27 +114,24 @@ export async function chunkWithinBudget(
     return { chunks, target, overBudget: 0, verified: false };
   }
 
+  // One exit, and `overBudget` is whatever the last count actually said. The
+  // predecessor returned from three points inside the loop and a fourth after
+  // it that was UNREACHABLE — and that fourth claimed `overBudget: 0`, so
+  // anyone raising `MAX_RESPLIT_ROUNDS` would have "fixed" the return that
+  // cannot run and left the one that can reporting a number it invented.
+  let overBudget = 0;
   for (let round = 0; round < MAX_RESPLIT_ROUNDS; round++) {
     const counts = await provider.countWordPieces(chunks.map((c) => c.text));
-    const worst = Math.max(...counts);
-    if (worst <= EMBEDDING_MAX_WORD_PIECES) {
-      return { chunks, target, overBudget: 0, verified: true };
-    }
-    if (round === MAX_RESPLIT_ROUNDS - 1) {
-      return {
-        chunks,
-        target,
-        overBudget: counts.filter((n) => n > EMBEDDING_MAX_WORD_PIECES).length,
-        verified: true,
-      };
-    }
+    overBudget = counts.filter((n) => n > EMBEDDING_MAX_WORD_PIECES).length;
+    if (overBudget === 0 || round === MAX_RESPLIT_ROUNDS - 1) break;
     // Scale by the observed ratio with a 10% margin, so the next round lands
     // under rather than exactly on the ceiling. `Math.max` keeps a pathological
     // ratio (one word piece per character) from collapsing the target to zero.
+    const worst = Math.max(...counts);
     target = Math.max(64, Math.floor((target * EMBEDDING_MAX_WORD_PIECES * 0.9) / worst));
     chunks = chunkText(text, { targetChars: target, mode });
   }
-  return { chunks, target, overBudget: 0, verified: true };
+  return { chunks, target, overBudget, verified: true };
 }
 
 /**

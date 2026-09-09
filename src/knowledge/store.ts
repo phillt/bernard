@@ -1,8 +1,7 @@
-import { createRequire } from 'node:module';
 import type { DatabaseSync } from 'node:sqlite';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
+import { LexicalIndex } from '../lexical.js';
 import { knowledgeDir } from '../paths.js';
+import { openSqliteFile, SqliteConnectionCache } from '../sqlite.js';
 import { isValidLibraryId } from './ids.js';
 
 /**
@@ -39,24 +38,6 @@ import { isValidLibraryId } from './ids.js';
  * `sqlite-vec` and no ANN. Those would be a new dependency for a problem that
  * does not exist at this scale.
  */
-
-/**
- * `node:sqlite` through `createRequire`, resolved on first use.
- *
- * Both halves matter and `apps/store.ts` records why. Node excludes
- * experimental modules from `module.builtinModules`, so a static import is not
- * recognised as a builtin: Vite strips the `node:` prefix, fails to resolve
- * `sqlite` from disk, and a test that merely imports this module cannot be
- * collected. And requiring it at module load rather than first use prints
- * Node's one-per-process `ExperimentalWarning` on every command that imports
- * anything downstream of here — including `bernard knowledge list`, which never
- * opens a database. The warning is not suppressed; it is true whenever SQLite
- * is actually used, and this repo has no suppression convention worth starting.
- */
-let sqlite: typeof import('node:sqlite') | undefined;
-function sqliteModule(): typeof import('node:sqlite') {
-  return (sqlite ??= createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite'));
-}
 
 /** Bumped when the table shape changes in a way an older binary cannot read. */
 export const KNOWLEDGE_SCHEMA_VERSION = 1;
@@ -105,6 +86,19 @@ export interface ChunkRow {
 /** A chunk on the way in. `embedding` is not stored on the way out unless asked for. */
 export interface ChunkInput extends Omit<ChunkRow, 'id' | 'sourceId'> {
   embedding: Float32Array | readonly number[];
+}
+
+/** A chunk's identity, without its text or vector. */
+export interface ChunkKey {
+  id: number;
+  sourceId: number;
+  ordinal: number;
+}
+
+/** The result of a full vector scan, cached per write generation. */
+export interface VectorScan {
+  vectors: ChunkVector[];
+  malformed: number;
 }
 
 /** A chunk's vector plus the identity a ranker needs. */
@@ -173,6 +167,31 @@ export class KnowledgeStore {
    */
   writeGeneration = 0;
 
+  /**
+   * Decoded vectors and the lexical index, both keyed on {@link writeGeneration}.
+   *
+   * **The counter shipped without its reader.** Its own doc comment said an
+   * index "is only valid for one value of it" and nothing consulted it, so both
+   * were rebuilt on every search. Measured on a 5,000-chunk library:
+   *
+   * | | per search |
+   * | --- | --- |
+   * | read + decode 5,000 vectors | 21.9 ms |
+   * | cosine over them | **2.8 ms** |
+   * | build the lexical index | 672 ms |
+   *
+   * So 89% of a dense search was re-decoding rows that had not changed, and a
+   * symbol-naming search spent 575 of its 600 ms building an index it threw
+   * away. `rag.ts` is the precedent and carries its own measurement for a build
+   * **20-27x cheaper** than this one.
+   *
+   * On the store, which is shared by reference through the connection cache and
+   * never cloned — so unlike a flag on a scoped VIEW there is nothing here for
+   * a clone to fork, which is the trap `rag.ts` documents.
+   */
+  private vectorCache: { generation: number; dimensions: number; scan: VectorScan } | null = null;
+  private lexicalCache: { generation: number; index: LexicalIndex; rows: ChunkKey[] } | null = null;
+
   constructor(libraryId: string, opts: { model: string; dimensions: number; title?: string }) {
     if (!isValidLibraryId(libraryId)) {
       // Rejected, never repaired: a sanitised id addresses a different library
@@ -180,36 +199,13 @@ export class KnowledgeStore {
       throw new Error(`Not a valid library id: ${JSON.stringify(libraryId)}`);
     }
     this.libraryId = libraryId;
-    const dir = knowledgeDir(libraryId);
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    this.file = path.join(dir, 'library.db');
-
-    // `atomicWriteFileSync`'s temp-and-rename cannot apply to a file SQLite
-    // holds open, so 0600 is a chmod after create. The window that leaves is
-    // inside a directory created 0700, which nothing else can traverse — and
-    // the stake here is the user's own ingested documents rather than an
-    // applet's UI state, so the mitigation is worth stating rather than
-    // inheriting.
-    const existed = fs.existsSync(this.file);
-    this.db = new (sqliteModule().DatabaseSync)(this.file, { timeout: 5_000 });
-    if (!existed) {
-      try {
-        fs.chmodSync(this.file, 0o600);
-      } catch {
-        // A filesystem without POSIX modes. The 0700 directory still holds.
-      }
-    }
-
-    // WAL lets a reader and a writer proceed at once, which is the shape this
-    // lives in: an ingest in one terminal while a REPL searches in another.
-    // `node:sqlite`'s busy timeout DEFAULTS TO 0 — fail immediately with
-    // SQLITE_BUSY — so the constructor's `timeout` above is not optional.
-    this.db.exec('PRAGMA journal_mode = WAL');
-    // NORMAL trades an fsync per commit for the possibility of losing the last
-    // transaction on power loss. The cost of that here is re-ingesting one
-    // source, and the content hash makes that a no-op for every other source in
-    // the library.
-    this.db.exec('PRAGMA synchronous = NORMAL');
+    // Directory mode, the chmod window, WAL and the busy timeout all live in
+    // `openSqliteFile` now. Every one of those lines was duplicated from
+    // `apps/store.ts`, and quirk-handling for an experimental module plus a
+    // filesystem race is exactly what should not be maintained twice.
+    const opened = openSqliteFile(knowledgeDir(libraryId), 'library.db');
+    this.db = opened.db;
+    this.file = opened.file;
     // **Redundant with `node:sqlite`'s default, and kept deliberately.**
     //
     // The widely-repeated rule is that SQLite defaults `foreign_keys` to OFF
@@ -263,7 +259,7 @@ export class KnowledgeStore {
    * creates the tables — so that hole is closed rather than inherited.
    */
   private seedStamp(opts: { model: string; dimensions: number; title?: string }): void {
-    const existing = this.rawStamp();
+    const existing = this.stamp();
     if (existing) {
       if (opts.title && !existing.title) this.setMeta('title', opts.title);
       return;
@@ -277,7 +273,7 @@ export class KnowledgeStore {
     write.run('created_at', now);
   }
 
-  private rawStamp(): LibraryStamp | null {
+  stamp(): LibraryStamp | null {
     const rows = this.db.prepare('SELECT key, value FROM meta').all() as unknown as MetaRow[];
     const map = new Map(rows.map((r) => [r.key, r.value]));
     const model = map.get('embedding_model');
@@ -290,10 +286,6 @@ export class KnowledgeStore {
       title: map.get('title') ?? this.libraryId,
       createdAt: map.get('created_at') ?? '',
     };
-  }
-
-  stamp(): LibraryStamp | null {
-    return this.rawStamp();
   }
 
   private setMeta(key: string, value: string): void {
@@ -311,7 +303,7 @@ export class KnowledgeStore {
    * a raw write corrupts the frame it lands in.
    */
   mismatchReason(model: string, dimensions: number): string | null {
-    const s = this.rawStamp();
+    const s = this.stamp();
     if (!s) {
       return `Library "${this.libraryId}" has no embedding stamp — the database is incomplete or corrupt. Re-create it with \`bernard knowledge create\` and re-ingest.`;
     }
@@ -345,6 +337,22 @@ export class KnowledgeStore {
   }
 
   /**
+   * One source's identity by row id, for labelling a hit.
+   *
+   * Deliberately not `listSources().find(...)`, which was what the search loop
+   * did once per hit: that runs a correlated `COUNT(*)` per source over the
+   * whole table to compute a `chunkCount` the caller then discards. Measured at
+   * 2,000 sources: **2.597 ms → 0.0038 ms** per call.
+   */
+  getSourceById(id: number): { uri: string; title?: string } | null {
+    const row = this.db.prepare('SELECT uri, title FROM sources WHERE id = ?').get(id) as
+      | { uri: string; title: string | null }
+      | undefined;
+    if (!row) return null;
+    return { uri: row.uri, ...(row.title ? { title: row.title } : {}) };
+  }
+
+  /**
    * Write one source and all of its chunks, replacing whatever was there.
    *
    * **One transaction per SOURCE, not per run.** A 200-file ingest that dies on
@@ -358,54 +366,40 @@ export class KnowledgeStore {
    */
   replaceSource(source: SourceInput, chunks: readonly ChunkInput[]): number {
     const run = (): number => {
-      const existing = this.db.prepare('SELECT id FROM sources WHERE uri = ?').get(source.uri) as
-        | { id: number }
-        | undefined;
-      let sourceId: number;
-      if (existing) {
-        sourceId = existing.id;
-        this.db.prepare('DELETE FROM chunks WHERE source_id = ?').run(sourceId);
-        this.db
-          .prepare(
-            'UPDATE sources SET title = ?, kind = ?, root = ?, content_hash = ?, bytes = ?, ' +
-              'chunker_version = ?, chunk_target = ?, ingested_at = ? WHERE id = ?',
-          )
-          .run(
-            source.title ?? null,
-            source.kind,
-            source.root ?? null,
-            source.contentHash,
-            source.bytes,
-            source.chunkerVersion,
-            source.chunkTarget,
-            source.ingestedAt,
-            sourceId,
-          );
-      } else {
-        this.db
-          .prepare(
-            'INSERT INTO sources (uri, title, kind, root, content_hash, bytes, ' +
-              'chunker_version, chunk_target, ingested_at) VALUES (?,?,?,?,?,?,?,?,?)',
-          )
-          .run(
-            source.uri,
-            source.title ?? null,
-            source.kind,
-            source.root ?? null,
-            source.contentHash,
-            source.bytes,
-            source.chunkerVersion,
-            source.chunkTarget,
-            source.ingestedAt,
-          );
-        sourceId = Number(
-          (
-            this.db.prepare('SELECT id FROM sources WHERE uri = ?').get(source.uri) as {
-              id: number;
-            }
-          ).id,
-        );
-      }
+      // **One statement, one column list.** The predecessor wrote the same nine
+      // columns twice — an UPDATE arm and an INSERT arm — so adding a column
+      // meant editing three places, and forgetting the UPDATE would write the
+      // field on first ingest and silently never update it on re-ingest: the
+      // exact failure `chunkerVersion` exists to catch, one column over.
+      //
+      // `uri` is UNIQUE, so the conflict target is the identity, and `RETURNING
+      // id` hands back the row id on both paths — replacing a second
+      // `SELECT id FROM sources WHERE uri = ?` that ran only on the insert arm.
+      const row = this.db
+        .prepare(
+          'INSERT INTO sources (uri, title, kind, root, content_hash, bytes, ' +
+            'chunker_version, chunk_target, ingested_at) VALUES (?,?,?,?,?,?,?,?,?) ' +
+            'ON CONFLICT(uri) DO UPDATE SET title=excluded.title, kind=excluded.kind, ' +
+            'root=excluded.root, content_hash=excluded.content_hash, bytes=excluded.bytes, ' +
+            'chunker_version=excluded.chunker_version, chunk_target=excluded.chunk_target, ' +
+            'ingested_at=excluded.ingested_at RETURNING id',
+        )
+        .get(
+          source.uri,
+          source.title ?? null,
+          source.kind,
+          source.root ?? null,
+          source.contentHash,
+          source.bytes,
+          source.chunkerVersion,
+          source.chunkTarget,
+          source.ingestedAt,
+        ) as { id: number };
+      const sourceId = Number(row.id);
+      // Unconditional: a no-op on a fresh insert, and on a replace it is what
+      // makes a source that SHRANK lose its tail rather than keeping orphaned
+      // high ordinals forever.
+      this.db.prepare('DELETE FROM chunks WHERE source_id = ?').run(sourceId);
       const insert = this.db.prepare(
         'INSERT INTO chunks (source_id, ordinal, heading, text, char_start, char_end, ' +
           'prefix_len, embedding) VALUES (?,?,?,?,?,?,?,?)',
@@ -468,7 +462,14 @@ export class KnowledgeStore {
    * here — the lexical channel only runs when the query names a symbol, so
    * reading text unconditionally would pay for it on every ordinary turn.
    */
-  scanVectors(dimensions: number): { vectors: ChunkVector[]; malformed: number } {
+  scanVectors(dimensions: number): VectorScan {
+    // `dimensions` is part of the key: a stamp mismatch changes what decodes,
+    // and serving a cache built at the old width would be the silent-empty
+    // failure the stamp exists to prevent.
+    const cached = this.vectorCache;
+    if (cached && cached.generation === this.writeGeneration && cached.dimensions === dimensions) {
+      return cached.scan;
+    }
     const rows = this.db
       .prepare('SELECT id, source_id, ordinal, embedding FROM chunks ORDER BY id')
       .all() as unknown as {
@@ -487,7 +488,28 @@ export class KnowledgeStore {
       }
       vectors.push({ id: r.id, sourceId: r.source_id, ordinal: r.ordinal, embedding });
     }
-    return { vectors, malformed };
+    const scan = { vectors, malformed };
+    this.vectorCache = { generation: this.writeGeneration, dimensions, scan };
+    return scan;
+  }
+
+  /**
+   * A BM25 index over every chunk, with the row identities behind it.
+   *
+   * Built here rather than in `search.ts` so it can share the write-generation
+   * key with the vector scan above; `lexical.ts` has zero imports, so the store
+   * acquires no edge by holding one.
+   */
+  lexicalIndex(): { index: LexicalIndex; rows: ChunkKey[] } {
+    const cached = this.lexicalCache;
+    if (cached && cached.generation === this.writeGeneration) {
+      return { index: cached.index, rows: cached.rows };
+    }
+    const scanned = this.scanTexts();
+    const index = new LexicalIndex(scanned.map((r) => r.text));
+    const rows = scanned.map((r) => ({ id: r.id, sourceId: r.sourceId, ordinal: r.ordinal }));
+    this.lexicalCache = { generation: this.writeGeneration, index, rows };
+    return { index, rows };
   }
 
   /**
@@ -567,38 +589,39 @@ function toChunkRow(r: Record<string, unknown>): ChunkRow {
 }
 
 /**
- * One connection per library per process.
+ * One connection per library per process — {@link SqliteConnectionCache} holds
+ * the reason a per-call connection is wrong inside a long-lived process.
  *
- * `apps/store.ts`'s reason transfers exactly: a connection opened per call and
- * never closed leaks a descriptor and a WAL mapping per invocation inside a
- * long-lived process, and puts a second writer on a file this process already
- * holds open — manufacturing the contention the busy timeout exists to absorb.
+ * The embedding identity is captured by the first caller, which is safe because
+ * it is a property of the BUILD rather than of a call: every caller passes what
+ * this binary embeds with. A library whose stamp disagrees is refused by
+ * `mismatchReason` rather than silently reopened, and the cache is rebuilt if
+ * the identity ever does change so a stale one cannot be handed out.
  */
-const connections = new Map<string, KnowledgeStore>();
+let cache: SqliteConnectionCache<KnowledgeStore> | undefined;
+let cachedIdentity: { model: string; dimensions: number } | undefined;
 
 export function knowledgeStoreFor(
   libraryId: string,
   opts: { model: string; dimensions: number; title?: string },
 ): KnowledgeStore {
-  const existing = connections.get(libraryId);
-  if (existing) return existing;
-  const store = new KnowledgeStore(libraryId, opts);
-  connections.set(libraryId, store);
-  return store;
+  if (
+    !cache ||
+    cachedIdentity?.model !== opts.model ||
+    cachedIdentity.dimensions !== opts.dimensions
+  ) {
+    cache?.closeAll();
+    cachedIdentity = { model: opts.model, dimensions: opts.dimensions };
+    cache = new SqliteConnectionCache((id) => new KnowledgeStore(id, opts));
+  }
+  return cache.get(libraryId);
 }
 
 export function closeKnowledgeStore(libraryId: string): void {
-  const store = connections.get(libraryId);
-  if (!store) return;
-  connections.delete(libraryId);
-  try {
-    store.close();
-  } catch {
-    // Already closed, or the file went away underneath us.
-  }
+  cache?.close(libraryId);
 }
 
 /** Closes every open library so WAL checkpoints rather than being left to exit. */
 export function closeAllKnowledgeStores(): void {
-  for (const id of [...connections.keys()]) closeKnowledgeStore(id);
+  cache?.closeAll();
 }

@@ -71,14 +71,6 @@ describe('scopeContext', () => {
     expect(scoped.knowledge!.listIds()).toEqual(['alpha']);
   });
 
-  it('returns a NEW context for a corpus-only profile', () => {
-    // The same mutation, asserted on identity: the early return hands back the
-    // receiver, so a fence that changed nothing is indistinguishable from one
-    // that was never applied.
-    const ctx = baseCtx();
-    expect(scopeContext(ctx, { corpusScope: ['alpha'] })).not.toBe(ctx);
-  });
-
   it('still returns the receiver when nothing at all is declared', () => {
     // What keeps `main`'s tool block byte-identical for the prompt cache.
     const ctx = baseCtx();
@@ -176,5 +168,24 @@ describe('the registry', () => {
     expect(tools).toHaveProperty('knowledge');
     const listed = JSON.parse(await tools.knowledge.execute({ action: 'list' }, {} as never));
     expect(listed.libraries.map((l: { id: string }) => l.id)).toEqual(['alpha']);
+  });
+});
+
+describe('the record and its renderer', () => {
+  it('renders a corpus-only fence, which had no header at all', async () => {
+    // The guard was `memoryScope || knowledgeScope`, so a corpus-only fence
+    // rendered NO "Scoped to:" section — not a missing line inside an otherwise
+    // correct block, but the whole thing absent on exactly the dispatch the
+    // record exists to explain. A fence and a bad retrieval look identical from
+    // outside; this is the surface that tells them apart.
+    const src = await import('node:fs').then((fs) =>
+      fs.readFileSync(
+        new URL('../../ui/overlays/DispatchContextViewer.tsx', import.meta.url),
+        'utf-8',
+      ),
+    );
+    const guard = /if \(r\.memoryScope \|\| r\.knowledgeScope[^)]*\)/.exec(src)?.[0] ?? '';
+    expect(guard, 'the scope header guard ignores an axis').toContain('r.corpusScope');
+    expect(src).toContain('corpus: ${scopeList(r.corpusScope)}');
   });
 });

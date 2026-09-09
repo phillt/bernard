@@ -1,5 +1,5 @@
 import * as crypto from 'node:crypto';
-import { openCorpus } from './knowledge/manage.js';
+import { openCorpus } from './knowledge/corpus.js';
 import * as fs from 'node:fs';
 import { loadConfig } from './config.js';
 import { assembleContext, scopeContext } from './framework/context.js';

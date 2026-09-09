@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isValidLibraryId, LIBRARY_ID_RE } from './ids.js';
+import { isValidLibraryId } from './ids.js';
 
 describe('isValidLibraryId', () => {
   it.each(['a', 'docs', 'bernard-docs', '9lives', 'a'.repeat(64)])('accepts %j', (id) => {
@@ -39,7 +39,8 @@ describe('isValidLibraryId', () => {
     const src = await import('node:fs').then((fs) =>
       fs.readFileSync(new URL('./ids.ts', import.meta.url), 'utf-8'),
     );
+    // The whole test. A `LIBRARY_ID_RE.source` truthiness check used to sit
+    // beside this and could not fail for any non-empty regex.
     expect(src).not.toMatch(/^\s*import\s/m);
-    expect(LIBRARY_ID_RE.source).toBeTruthy();
   });
 });

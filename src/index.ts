@@ -73,7 +73,7 @@ import { getLocalVersion, startupUpdateCheck, interactiveUpdate } from './update
 import { factsList, factsSearch, clearFacts } from './facts-cli.js';
 import { migrateFromLegacy } from './migrate.js';
 import { MCP_CONFIG_PATH, PROFILES_PATH, PREFS_PATH, RAG_DIR } from './paths.js';
-import { openCorpus } from './knowledge/manage.js';
+import { openCorpus } from './knowledge/corpus.js';
 import * as fs from 'node:fs';
 import { listProfiles } from './profiles.js';
 import { MemoryStore } from './memory.js';
@@ -1285,7 +1285,12 @@ program
           case 'search': {
             if (!target)
               throw new Error('Usage: bernard knowledge search <query> [--library <id>]');
-            await cli.knowledgeSearch([target, arg].filter(Boolean).join(' '), {
+            // Every word after the action, not just the two declared
+            // positionals: `[target, arg].join(' ')` silently dropped the third
+            // and later words of an unquoted query — the most natural way to
+            // type one. The `add` arm eight lines above already collects this
+            // way; two argument strategies in one action is how that diverged.
+            await cli.knowledgeSearch(command.args.slice(1).join(' '), {
               ...(options.library ? { library: options.library } : {}),
               ...(options.limit !== undefined ? { limit: options.limit } : {}),
               ...(options.neighbours !== undefined ? { neighbours: options.neighbours } : {}),
@@ -1315,6 +1320,13 @@ program
       } catch (err) {
         printError(err instanceof Error ? err.message : String(err));
         process.exit(1);
+      } finally {
+        // Once, here, rather than on each command's exit paths — `search` had
+        // it on two of its own and `list`/`create`/`stats` had it on none, an
+        // inconsistency that reads as intentional and is not. This action
+        // already wraps every arm.
+        const { closeAllKnowledgeStores } = await import('./knowledge/store.js');
+        closeAllKnowledgeStores();
       }
     },
   );

@@ -1,13 +1,13 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import {
-  EMBEDDING_DIMENSIONS,
-  EMBEDDING_MODEL_ID,
-  getEmbeddingProvider,
-  type EmbeddingProvider,
-} from '../embeddings.js';
+import { getEmbeddingProvider, type EmbeddingProvider } from '../embeddings.js';
 import { knowledgeDir } from '../paths.js';
-import { KnowledgeCorpus, type LibrarySummary } from './corpus.js';
+import {
+  embeddingIdentity,
+  openCorpus,
+  type KnowledgeCorpus,
+  type LibrarySummary,
+} from './corpus.js';
 import { isValidLibraryId } from './ids.js';
 import { collectSources, ingestFiles, type IngestOutcome, type IngestProgress } from './ingest.js';
 import { searchCorpus, type KnowledgeSearchResult } from './search.js';
@@ -31,18 +31,20 @@ import { stitchWindow } from './stitch.js';
 
 export type Outcome<T> = { ok: false; error: string } | ({ ok: true } & T);
 
-/** What this build embeds with, without awaiting the model. */
-export function embeddingIdentity(): { model: string; dimensions: number } {
-  return { model: EMBEDDING_MODEL_ID, dimensions: EMBEDDING_DIMENSIONS };
+/**
+ * A caller's path or URL as the store spells it.
+ *
+ * One definition, because `removeSource` and `readSource` are the delete and
+ * the read of ONE identity: if one grows a scheme case and the other does not,
+ * they silently disagree about which document is which.
+ */
+function resolveSourceUri(uri: string): string {
+  return path.isAbsolute(uri) || uri.includes('://') ? uri : path.resolve(uri);
 }
 
-/** An unfenced corpus handle. Callers that need a fence apply one. */
-export function openCorpus(): KnowledgeCorpus {
-  return new KnowledgeCorpus(embeddingIdentity());
-}
-
-export function listLibraries(): Outcome<{ libraries: LibrarySummary[] }> {
-  return { ok: true, libraries: openCorpus().list() };
+/** Never fails — a missing knowledge directory is "no libraries", not an error. */
+export function listLibraries(): LibrarySummary[] {
+  return openCorpus().list();
 }
 
 export function createLibrary(id: string, title?: string): Outcome<{ id: string; path: string }> {
@@ -74,7 +76,7 @@ export function removeLibrary(id: string): Outcome<{ id: string }> {
 export function removeSource(id: string, uri: string): Outcome<{ uri: string }> {
   const store = openCorpus().open(id);
   if (!store) return { ok: false, error: `No library "${id}".` };
-  const target = path.isAbsolute(uri) || uri.includes('://') ? uri : path.resolve(uri);
+  const target = resolveSourceUri(uri);
   if (!store.deleteSource(target)) {
     return { ok: false, error: `Library "${id}" has no source "${target}".` };
   }
@@ -84,12 +86,24 @@ export function removeSource(id: string, uri: string): Outcome<{ uri: string }> 
 export function libraryStats(
   id: string,
 ): Outcome<{ summary: LibrarySummary; sources: SourceRow[] }> {
-  const corpus = openCorpus();
-  const store = corpus.open(id);
+  const store = openCorpus().open(id);
   if (!store) return { ok: false, error: `No library "${id}".` };
-  const summary = corpus.list().find((l) => l.id === id);
-  if (!summary) return { ok: false, error: `No library "${id}".` };
-  return { ok: true, summary, sources: store.listSources() };
+  // Built from the store already in hand. `corpus.list().find(...)` opened,
+  // stamped and ran `stats()` over EVERY library to describe one.
+  const stamp = store.stamp();
+  const stats = store.stats();
+  return {
+    ok: true,
+    summary: {
+      id,
+      title: stamp?.title ?? id,
+      sources: stats.sources,
+      chunks: stats.chunks,
+      bytes: stats.bytes,
+      ...(stamp ? { stamp } : {}),
+    },
+    sources: store.listSources(),
+  };
 }
 
 export interface AddOptions {
@@ -180,15 +194,24 @@ export interface ReadOptions {
   to?: number;
 }
 
-/** A run of one source's chunks, stitched back into continuous text. */
+/**
+ * A run of one source's chunks, stitched back into continuous text.
+ *
+ * Takes a CORPUS rather than reaching for `openCorpus()`, so the `knowledge`
+ * tool — which holds a fenced one and cannot use the unfenced default — shares
+ * this decision instead of copying it. The default window size and the clamping
+ * rule lived in two files otherwise, and the "returns rather than prints" layer
+ * that exists precisely so two front ends can share a decision had one.
+ */
 export function readSource(
+  corpus: KnowledgeCorpus,
   id: string,
   uri: string,
   opts: ReadOptions = {},
 ): Outcome<{ uri: string; title?: string; from: number; to: number; text: string; total: number }> {
-  const store = openCorpus().open(id);
+  const store = corpus.open(id);
   if (!store) return { ok: false, error: `No library "${id}".` };
-  const target = path.isAbsolute(uri) || uri.includes('://') ? uri : path.resolve(uri);
+  const target = resolveSourceUri(uri);
   const source = store.getSource(target);
   if (!source) return { ok: false, error: `Library "${id}" has no source "${target}".` };
 

@@ -110,7 +110,13 @@ export function normalizeSource(text: string): string {
   return text.replace(/^﻿/, '').replace(/\r\n?/g, '\n');
 }
 
-/** A span of the source that the packer may not split further. */
+/**
+ * A span of the source that the packer may not split further.
+ *
+ * `splitBlocks` produces these too — they were briefly a separate `Block` type
+ * with the identical five fields, which cost a reader a diff across 230 lines
+ * to learn there was no distinction.
+ */
 interface Unit {
   text: string;
   start: number;
@@ -159,7 +165,6 @@ const ABBREVIATIONS = new Set([
  */
 export function chunkText(source: string, opts: ChunkOptions = {}): Chunk[] {
   const target = opts.targetChars ?? CHUNK_TARGET_CHARS;
-  const ceiling = opts.ceilingChars ?? CHUNK_CEILING_CHARS;
   const code = opts.mode === 'code';
   // Overlap borrows whole SENTENCES, which code does not have. Borrowing lines
   // instead would carry a fragment of a statement into the next chunk, so code
@@ -199,7 +204,7 @@ export function chunkText(source: string, opts: ChunkOptions = {}): Chunk[] {
       // heading path or the overlap rule breaks without noticing. A chunk over
       // the ceiling is a silently truncated embedding, so the last step cuts
       // rather than trusts.
-      text: capText(`${prefix}${overlap}${body}`, ceiling),
+      text: capText(`${prefix}${overlap}${body}`, CHUNK_CEILING_CHARS),
       ...(heading ? { heading } : {}),
       charStart: pending[0].start,
       charEnd: pending[pending.length - 1].end,
@@ -222,7 +227,6 @@ export function chunkText(source: string, opts: ChunkOptions = {}): Chunk[] {
 
 export interface ChunkOptions {
   targetChars?: number;
-  ceilingChars?: number;
   overlapChars?: number;
   /**
    * `code` splits an over-long block on LINE boundaries instead of sentence
@@ -328,7 +332,7 @@ function buildUnits(source: string, target: number, code: boolean): Unit[] {
   const out: Unit[] = [];
   for (const block of blocks) {
     if (block.text.length <= target) {
-      out.push({ ...block, breakBefore: block.breakBefore });
+      out.push(block);
       continue;
     }
     // Too long to embed whole: paragraphs, then sentences, then a hard cut.
@@ -341,14 +345,6 @@ function buildUnits(source: string, target: number, code: boolean): Unit[] {
   return out;
 }
 
-interface Block {
-  text: string;
-  start: number;
-  end: number;
-  heading: string;
-  breakBefore: boolean;
-}
-
 /**
  * Headings, fences and paragraphs, in one pass, carrying the heading path.
  *
@@ -357,8 +353,8 @@ interface Block {
  * chunk state its own heading twice. `pendingBreak` carries the forced boundary
  * onto whatever content follows.
  */
-function splitBlocks(source: string, target: number): Block[] {
-  const out: Block[] = [];
+function splitBlocks(source: string, target: number): Unit[] {
+  const out: Unit[] = [];
   const lines = source.split('\n');
   const headings: string[] = [];
   let offset = 0;
