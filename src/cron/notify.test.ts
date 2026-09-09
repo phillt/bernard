@@ -25,15 +25,30 @@ vi.mock('node:os', () => ({
   platform: () => mockPlatform,
 }));
 
-import { sendNotification } from './notify.js';
+/**
+ * Imported per test, not once at the top.
+ *
+ * `notify.ts` holds a module-level `clickListenerRegistered` flag flipped on
+ * first call, which no mock reset can reach — so "registers click listener on
+ * first call" was only true when it happened to run first, and it carried a
+ * comment saying so with nothing enforcing it. A fresh module instance per test
+ * makes "first call" true by construction. Same treatment `reasoning-log.test.ts`
+ * already gives its own `logsDirReady` flag.
+ */
+async function loadNotify() {
+  vi.resetModules();
+  return (await import('./notify.js')).sendNotification;
+}
 
 describe('sendNotification', () => {
-  beforeEach(() => {
+  let sendNotification: Awaited<ReturnType<typeof loadNotify>>;
+
+  beforeEach(async () => {
     vi.clearAllMocks();
     mockPlatform = 'linux';
+    sendNotification = await loadNotify();
   });
 
-  // This test must run first — the click listener is registered once per module lifecycle
   it('registers click listener on first call', () => {
     sendNotification({
       title: 'T',

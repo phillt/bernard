@@ -12,6 +12,12 @@ describe('createMCPAddUrlTool', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // `clearAllMocks` clears call RECORDS and nothing else — not the
+    // implementation. The last test in this file makes `addMCPUrlServer` throw,
+    // and without this every earlier test that runs after it inherits the throw
+    // and reports `Error adding server: Server "dup" already exists`. Four of
+    // the file's five tests, decided by which one happened to run first.
+    vi.mocked(addMCPUrlServer).mockReset();
     tool = createMCPAddUrlTool();
   });
 

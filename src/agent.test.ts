@@ -745,6 +745,15 @@ describe('Agent', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Implementations, not just call records. `clearAllMocks` leaves both the
+    // implementation and the unconsumed `*Once` queue, so a test that sets
+    // `mockExtractRecentUserTexts.mockReturnValue([...])` sets it for every test
+    // that runs after it — which is what made the two `buildRAGQuery`
+    // assertions order-dependent. Re-seeded to the factory defaults rather than
+    // reset, because `mockReset` in vitest 1.6.1 nulls a `vi.fn(impl)` default
+    // instead of restoring it.
+    mockExtractRecentUserTexts.mockReset().mockReturnValue([]);
+    mockExtractRecentToolContext.mockReset().mockReturnValue('');
     store = new MemoryStore();
   });
 

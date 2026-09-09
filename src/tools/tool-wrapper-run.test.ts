@@ -622,6 +622,29 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     specialistStore = createMockSpecialistStore();
     correctionStore = createMockCorrectionStore();
 
+    // `mockReset` on `generateText` specifically, to drain its `*Once` QUEUE.
+    // `clearAllMocks` clears call records and leaves queued once-values, and a
+    // once-value outranks the base implementation — so the two tests below that
+    // queue one (`mockResolvedValueOnce`, `mockRejectedValueOnce`) handed the
+    // leftover to whichever test ran next, which is what made the successful-run
+    // assertion order-dependent.
+    vi.mocked(generateText).mockReset();
+
+    // Same reasoning for `wrapWrapperResult`, which three tests below rebind to
+    // return an error envelope permanently — so the successful-run assertion
+    // read `status: 'error'` whenever one of them ran first. Re-seeded to the
+    // factory's own default rather than left nulled, because `mockReset` in
+    // vitest 1.6.1 replaces a `vi.fn(impl)` with `() => undefined` instead of
+    // restoring it.
+    vi.mocked(wrapWrapperResult).mockReset();
+    vi.mocked(wrapWrapperResult).mockImplementation((text: string) => {
+      try {
+        return JSON.parse(text);
+      } catch {
+        return { status: 'ok', result: text };
+      }
+    });
+
     // Restore sensible defaults after clearAllMocks.
     vi.mocked(withSlot).mockImplementation((fn) => fn({ id: 1 }));
     vi.mocked(resolveProviderAndModel).mockReturnValue({
