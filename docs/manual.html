@@ -2595,7 +2595,17 @@
 <span class="accent">$</span> bernard facts ./src/deploy.ts
 
 <span class="comment"># Delete ALL facts (requires exact confirmation phrase)</span>
-<span class="accent">$</span> bernard clear-facts</code></pre>
+<span class="accent">$</span> bernard clear-facts
+
+<span class="comment"># A specialist keeps its own facts, in its own store</span>
+<span class="accent">$</span> bernard facts --specialist coder
+<span class="accent">$</span> bernard clear-facts --specialist coder</code></pre>
+        <p>
+          Each specialist has its own fact store, so its cap, its de-duplication and its pruning are
+          its own — nothing it learns can evict one of your facts, and nothing of yours can evict
+          one of its. Without <code>--specialist</code> these commands address your own store, and
+          the listing names any specialist stores that exist.
+        </p>
         <p>
           Both commands show facts grouped by domain and offer an interactive prompt to select and
           delete facts by number (e.g., <code>1,3,5-8</code>).
