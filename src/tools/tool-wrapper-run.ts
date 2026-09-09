@@ -358,7 +358,15 @@ export async function dispatchToolWrapper(
               // the kind whose hardcoded `'full'` justifies the precedence.
               // Both readers go through `declaredToolSurface`, so they cannot
               // disagree about what a valid value is.
-              { surface: declaredToolSurface(specialist) ?? toolWrapperDefinition.toolSurface },
+              {
+                surface: declaredToolSurface(specialist) ?? toolWrapperDefinition.toolSurface,
+                // Already fenced: `ctx` here is the scoped one from line ~296,
+                // so what arrives is what this record's `corpusScope` allows.
+                // Omitted entirely before, so the `knowledge` tool was never
+                // built on this path even at `'full'` — a fence with nothing
+                // behind it.
+                ...(ctx.knowledge ? { knowledge: ctx.knowledge } : {}),
+              },
             );
             // `applet` is deliberately ABSENT here, and that absence is a
             // guard rather than an oversight. `main.ts` builds this same
@@ -369,12 +377,15 @@ export async function dispatchToolWrapper(
             // by exactly one key is the whole guard — extracting a shared
             // `buildCtxTools(ctx)` from them recreates the recursion. See
             // `tools/applet-styling.ts`.
-            const fullRegistry: Record<string, Tool> = {
-              ...baseTools,
+            const dispatchOverlay: Record<string, Tool> = {
               agent: createSubAgentTool(ctx),
               task: toolToAISDK(createTaskTool(ctx)),
-              specialist_run: createSpecialistRunTool(ctx),
+              specialist_run: createSpecialistRunTool(ctx, () => dispatchOverlay),
               tool_wrapper_run: createToolWrapperRunTool(ctx),
+            };
+            const fullRegistry: Record<string, Tool> = {
+              ...baseTools,
+              ...dispatchOverlay,
             };
             const childTools = buildChildTools(specialist, fullRegistry, ctx.mcp.resolveAlias);
             const wantStructured = wantsStructuredOutput({ ...specialist, kind });

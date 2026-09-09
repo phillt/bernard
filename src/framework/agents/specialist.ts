@@ -13,7 +13,7 @@ import type { AgentContext } from '../context.js';
 import { outputHook } from '../hooks/output.js';
 import { buildStrategy } from '../strategies/build-strategy.js';
 import { retrievalQueryFor } from './retrieval.js';
-import { buildChildTools } from './tool-wrapper.js';
+import { buildChildTools, formatExamples } from './tool-wrapper.js';
 import type { AgentDefinition, ResolvedModel } from './types.js';
 import { makeLastStepTextOnly } from './task.js';
 
@@ -45,6 +45,21 @@ export interface SpecialistInput extends DispatchInput {
   specialistId: string;
   slotId: number;
   planStore: PlanStore;
+  /**
+   * The four dispatch tools, offered to this record's `targetTools` filter so a
+   * persona can delegate to narrower specialists — and only if it names one.
+   *
+   * Supplied by the caller rather than imported here, because importing them
+   * would be an import cycle (see `tools()`), and because the caller is the only
+   * place that knows how deep the chain already is. **Optional, and omission is
+   * the safe answer**: a caller that supplies nothing gets a leaf, which is what
+   * every persona was before this.
+   *
+   * `applet` is deliberately not among them, exactly as it is absent from
+   * `dispatchToolWrapper`'s list — the three overlays differing by that one key
+   * is what stops `applet-styler` re-entering its own dispatch.
+   */
+  dispatchTools?: Record<string, Tool>;
 }
 
 /**
@@ -88,6 +103,16 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
     if (specialist.guidelines.length > 0) {
       systemPrompt += '\n\nGuidelines:\n' + specialist.guidelines.map((g) => `- ${g}`).join('\n');
     }
+    // Learned examples, which this path rendered for nobody until now.
+    //
+    // `formatExamples` was called on the wrapper path ONLY, so a persona's
+    // `goodExamples` / `badExamples` were stored on the record, shown in
+    // `/specialists`, editable through the `specialist` tool — and never seen by
+    // the model. `appendExamples` has no `kind` check, so the fields were always
+    // writable; only the two ends were wired to the other kind. Structurally the
+    // same defect #507 fixed for `targetTools`: a field every surface displays
+    // and no code reads.
+    systemPrompt += formatExamples(specialist);
     systemPrompt += SPECIALIST_EXECUTION_RULES;
     return systemPrompt;
   },
@@ -104,11 +129,25 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
       ctx.provenance,
       surface,
     );
+    // The dispatch tools reach this definition through `input`, assembled by
+    // `createSpecialistRunTool` — the same shape `dispatchToolWrapper` uses to
+    // hand `childTools` to the wrapper definition, and for the same reason:
+    // this module is re-exported by `specialist-run.ts` and reached from
+    // `tool-wrapper-run.ts` via `framework/agents/index.js`, so importing them
+    // here is an import CYCLE. Deferring it does not help — that converts a
+    // load-time cycle into a call-time one, which is #452's deadlock, and it
+    // hung this file's own suite. The cycle has to be broken, not moved.
+    //
+    // They are offered to the `targetTools` filter rather than added after it,
+    // so a persona delegates only if its own record names one.
     const specialistTools: Record<string, Tool> = {
       // Scoped BEFORE the reasoning tools below are added, so those three sit
       // outside `targetTools` by construction rather than by every record
       // remembering to name them. See `scopeToTargetTools`.
-      ...scopeToTargetTools(ctx, input.specialistId, baseTools),
+      ...scopeToTargetTools(ctx, input.specialistId, {
+        ...baseTools,
+        ...(input.dispatchTools ?? {}),
+      }),
       plan: createPlanTool(input.planStore),
       think: createThinkTool(),
       ...(ctx.config.coordinatorMode === 'on'
@@ -165,9 +204,27 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
   },
 
   formatResult(result, _input, _ctx, meta) {
-    return capSubagentResult(
+    const body = capSubagentResult(
       appendActivitySummary(result.text, result.steps as unknown[], 'specialist', meta),
     );
+    // A step-limited run that produced NOTHING is a failure, and it was reaching
+    // the parent as an ordinary success string.
+    //
+    // `appendActivitySummary` already writes a prose preamble for this case, but
+    // prose is not a verdict: `detectResultFailure` reads the `Error:` prefix
+    // (#364), so without it the dispatch registered as citable evidence, bumped
+    // this tool's success count, and minted no `step_limit` — leaving all three
+    // of that category's consumers silent (the user-facing print, the
+    // `[failure: …]` hint the model sees next turn, and cron alert severity).
+    //
+    // Only the empty case, which is exactly where `relabelStepLimit` draws the
+    // line on the wrapper path: a run that hit the limit and still returned real
+    // content may simply have wrapped up on its last step, and calling that a
+    // failure would throw the work away.
+    if (meta?.stepLimitHit && !result.text.trim()) {
+      return `Error: step_limit — specialist ran out of steps (${meta.steps}) before producing an answer.\n\n${body}`;
+    }
+    return body;
   },
 };
 

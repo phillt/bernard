@@ -278,6 +278,17 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
     // exactly the class #452 removed. The main path pays nothing: `createTools`
     // above has already loaded `applet.js`.
     const { createMainAppletTool } = await import('../../tools/applet-ctx-tools.js');
+    // The four dispatch tools, named once so the same set can be handed to a
+    // persona dispatch (see `createSpecialistRunTool`). **`applet` is not in
+    // here**, and that is the recursion guard: main's overlay carries a
+    // styling-capable `applet` and no dispatched registry may, so it stays a
+    // sibling key rather than joining this object.
+    const dispatchOverlay: Record<string, Tool> = {
+      agent: createSubAgentTool(ctx),
+      task: toolToAISDK(createTaskTool(ctx)),
+      specialist_run: createSpecialistRunTool(ctx, () => dispatchOverlay),
+      tool_wrapper_run: createToolWrapperRunTool(ctx),
+    };
     const tools: Record<string, Tool> = {
       // `...baseTools` MUST stay first. `applet` below is the only key here that
       // SHADOWS a tool `createTools` already built rather than adding a new one,
@@ -287,10 +298,7 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
       // built here.
       ...baseTools,
       applet: createMainAppletTool(ctx),
-      agent: createSubAgentTool(ctx),
-      task: toolToAISDK(createTaskTool(ctx)),
-      specialist_run: createSpecialistRunTool(ctx),
-      tool_wrapper_run: createToolWrapperRunTool(ctx),
+      ...dispatchOverlay,
       think: createThinkTool(),
       ask_user: createAskUserTool(ctx.toolOptions.askUser),
       plan: createPlanTool(input.planStore, () => {

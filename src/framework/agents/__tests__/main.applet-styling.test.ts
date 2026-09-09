@@ -84,3 +84,53 @@ describe('the main agent wires the applet design pass', () => {
     );
   });
 });
+
+/**
+ * The overlay `main` hands DOWN to a persona dispatch must not carry `applet`.
+ *
+ * This is the recursion guard, and it needs its own test because the sibling
+ * one above uses a stand-in overlay built by the test — it can prove the filter
+ * drops `applet`, and cannot see whether main put one in. Mutation-checked:
+ * moving `applet` into `dispatchOverlay` in `main.ts` passes every other test
+ * in the tree, including the two in this file, and fails only this one.
+ */
+describe("main's handed-down dispatch overlay", () => {
+  useTempHome('bernard-main-dispatch-overlay');
+
+  it('carries the four dispatch tools and never `applet`', async () => {
+    vi.resetModules();
+    // Capture the thunk `main.ts` passes to `createSpecialistRunTool` — that
+    // object is exactly what a dispatched persona is offered.
+    let handedDown: (() => Record<string, unknown>) | undefined;
+    vi.doMock('../../../tools/specialist-run.js', () => ({
+      createSpecialistRunTool: (_ctx: unknown, thunk?: () => Record<string, unknown>) => {
+        handedDown = thunk;
+        return {};
+      },
+    }));
+    vi.doMock('../../../config.js', () => ({
+      loadConfig: () => ({ autoStyleApplets: false, autoOpenApplets: false }),
+    }));
+
+    const { mainAgentDefinition } = await import('../main.js');
+    const { makeCtx, toolsOf } = await import('./_mcp-delegation-fixture.js');
+    const base = makeCtx(false);
+    const ctx = {
+      ...base,
+      stores: { ...base.stores, memory: { clearScratch: () => {}, list: () => [] } },
+    } as unknown as AgentContext;
+
+    const tools = await toolsOf(mainAgentDefinition, ctx, {
+      planStore: {},
+      systemPrompt: '',
+    } as never);
+
+    // The positive half: main itself still has a styling-capable `applet`.
+    expect(tools).toHaveProperty('applet');
+
+    expect(handedDown, 'main did not hand an overlay down at all').toBeDefined();
+    const overlay = Object.keys(handedDown!()).sort();
+    expect(overlay).toEqual(['agent', 'specialist_run', 'task', 'tool_wrapper_run']);
+    expect(overlay).not.toContain('applet');
+  });
+});
