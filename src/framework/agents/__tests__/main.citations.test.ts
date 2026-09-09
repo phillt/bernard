@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { buildMainSystemPrompt } from '../main.js';
-import type { BernardConfig } from '../../../config.js';
 import type { AgentContext } from '../../context.js';
+import { makeTestContext } from '../../../__tests__/agent-context.js';
+import { makePolicyInput } from '../../../policy/test-helpers.js';
 import type { PolicyDecision } from '../../../policy/types.js';
 
 /**
@@ -10,46 +11,14 @@ import type { PolicyDecision } from '../../../policy/types.js';
  * not a policy-tunable one. The only carve-out is reasoning-family models
  * whose systemSuffix forbids narrating inline markers.
  */
+// Config through `makePolicyInput`, the repo's one cast-free `BernardConfig`
+// builder — this file hand-wrote a thirty-line literal that bypassed it, so a
+// new config field defaulted here silently instead of failing to compile (#318).
 function makeCtx(policyDecision: PolicyDecision | undefined): AgentContext {
-  const config: BernardConfig = {
-    provider: 'anthropic',
-    model: 'claude-test',
-    maxTokens: 4096,
-    shellTimeout: 30000,
-    tokenWindow: 0,
-    maxSteps: 25,
-    ragEnabled: false,
-    cacheEnabled: true,
-    promptCache: true,
-    semanticCache: false,
-    theme: 'bernard',
-    coordinatorMode: 'off',
-    modelMode: 'balanced',
-    subagentPac: false,
-    toolDetails: false,
-    autoCreateSpecialists: false,
-    autoCreateThreshold: 0.8,
-    correctionEnabled: false,
-    promptRewriter: false,
-    confirmMode: 'auto',
-    toolMode: 'write',
-    maxConcurrentAgents: 4,
-    responseStyle: 'default',
-    referenceLookup: false,
-    referenceLookupTools: [],
-    scratchSubjectThreshold: 0.15,
-    conciseMode: false,
-    customProviders: {},
-  } as unknown as BernardConfig;
-  const stores = { toolProfiles: { list: () => [] } } as unknown as AgentContext['stores'];
-  return {
-    config,
-    stores,
-    mcp: { tools: {}, serverNames: [] },
-    toolOptions: {},
+  return makeTestContext({
+    config: { ...makePolicyInput().config, model: 'claude-test', ragEnabled: false },
     policyDecision,
-    provenance: undefined,
-  } as unknown as AgentContext;
+  });
 }
 
 const baseInput = {

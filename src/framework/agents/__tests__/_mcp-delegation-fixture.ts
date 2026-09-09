@@ -8,6 +8,7 @@ import { taskDefinition } from '../task.js';
 import { specialistDefinition } from '../specialist.js';
 import { pacActorDefinition } from '../pac-actor.js';
 import { flattenServerTools, mcpServerSegment, mcpToolName } from '../../../mcp-names.js';
+import { makeTestContext } from '../../../__tests__/agent-context.js';
 
 /**
  * Shared fixture for the per-server MCP delegation assertions (#296, #305).
@@ -52,21 +53,26 @@ export const FIXTURE_SERVER_TOOLS: Record<string, Record<string, any>> = {
   slack: { [mcpToolName('slack', 'post_message')]: { description: 'post to slack' } },
 };
 
+/**
+ * The MCP-shaped context these suites need, over the shared base (#318).
+ *
+ * Only the MCP half is local now: the stores, the config builder and the
+ * deep-merge live in `src/__tests__/agent-context.ts`, because they are not
+ * about MCP and the copies of them had already broken twice on disjoint file
+ * sets. What stays here is the part that IS about MCP — a `tools` bag derived
+ * from `serverTools` rather than written twice (#413).
+ *
+ * The `noopStore` Proxy this used to build is gone with them, and that is a
+ * behaviour change worth stating: `new Proxy({}, { get: () => () => [] })`
+ * answered `specialists.get(anyId)` with a truthy empty array, so every
+ * `if (record)` guard took the "found" branch for ids nothing had seeded.
+ */
 export function makeCtx(
   mcpDelegation: boolean,
   overrides: Partial<AgentContext> = {},
 ): AgentContext {
-  const noopStore = new Proxy({}, { get: () => () => [] });
-  const baseStores = {
-    memory: { clearScratch: () => {} },
-    routines: noopStore,
-    specialists: noopStore,
-    candidates: noopStore,
-    toolProfiles: { list: () => [] },
-  };
-  return {
+  return makeTestContext({
     config: baseConfig(mcpDelegation),
-    toolOptions: {},
     mcp: {
       // `tools` is DERIVED here exactly as `MCPManager.snapshot()` derives it,
       // so this fixture cannot encode a state the real assembler could never
@@ -75,22 +81,8 @@ export function makeCtx(
       serverNames: ['google', 'slack'],
       serverTools: FIXTURE_SERVER_TOOLS,
     },
-    stores: baseStores,
-    provenance: undefined,
-    verification: { record: () => {} },
-    policyDecision: undefined,
     ...overrides,
-    // `stores` is merged one level deeper than the rest, because the shallow
-    // spread was a trap: a caller overriding ONE store silently dropped
-    // routines/candidates/toolProfiles and so changed what `createTools` builds.
-    // Two test files had independently discovered that and hand-rolled the
-    // merge — the per-file copy this fixture exists to prevent. Every other
-    // field stays a wholesale replace, which is what
-    // `child.mcp-delegation.test.ts`'s dropped-`serverTools` case needs.
-    ...(overrides.stores
-      ? { stores: { ...(baseStores as object), ...(overrides.stores as object) } }
-      : {}),
-  } as unknown as AgentContext;
+  } as unknown as Partial<AgentContext>);
 }
 
 /**

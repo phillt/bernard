@@ -20,6 +20,7 @@ import { RAGStore } from '../../../rag.js';
 import { declaredScope, resolveDispatchProfile } from '../dispatch-profile.js';
 import { scopeContext, withUsageRecorder } from '../../context.js';
 import { runDefinition } from '../run.js';
+import { makeTestContext } from '../../../__tests__/agent-context.js';
 import { NormalStrategy } from '../../strategies/normal.js';
 import { createMemoryTool, createScratchTool } from '../../../tools/memory.js';
 import { definitions, registerBuiltinDefinitions } from '../index.js';
@@ -213,7 +214,7 @@ describe('runDefinition fences the dispatch it runs', () => {
   });
 
   function scopedCtx(memory: MemoryStore): AgentContext {
-    return {
+    return makeTestContext({
       config: makeConfig(),
       stores: {
         memory,
@@ -226,10 +227,8 @@ describe('runDefinition fences the dispatch it runs', () => {
             memoryScope: ['proj-*'],
           }),
         },
-      },
-      mcp: { tools: {}, serverNames: [], serverTools: {} },
-      toolOptions: {},
-    } as unknown as AgentContext;
+      } as never,
+    });
   }
 
   function fenced(): AgentDefinition<{ specialistId: string }, string> {
@@ -495,14 +494,16 @@ describe('runDefinition hands a record-backed dispatch its own identity', () => 
       listMemory: vi.fn(() => []),
     });
     const ragForOwner = vi.fn(() => ({ search: vi.fn(async () => []) }));
-    const ctx = {
+    // The memory double stays LOCAL and spy-bearing: this suite asserts that
+    // `asOwner` and `scoped` are called, which is the one thing the shared
+    // double (plain functions, so no counts leak between suites) cannot do.
+    // Only the surrounding context comes from the shared builder (#318).
+    const ctx = makeTestContext({
       config: makeConfig(),
-      stores: { memory, specialists: { get: () => ({ id: 'spec', name: 'S' }) } },
-      mcp: { tools: {}, serverNames: [], serverTools: {} },
-      rag: { search: vi.fn(async () => []) },
+      stores: { memory, specialists: { get: () => ({ id: 'spec', name: 'S' }) } } as never,
+      rag: { search: vi.fn(async () => []) } as never,
       ragForOwner,
-      toolOptions: {},
-    } as unknown as AgentContext;
+    } as never);
     const def = {
       id: 'fake',
       historyMode: 'ephemeral',
