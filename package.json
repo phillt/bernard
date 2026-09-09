@@ -12,6 +12,7 @@
     "dev": "BERNARD_DEBUG=1 tsx src/index.ts",
     "start": "node dist/index.js",
     "test": "vitest run",
+  "test:shuffle": "vitest run --sequence.shuffle",
     "test:watch": "vitest",
     "lint": "eslint src/ scripts/",
     "typecheck:scripts": "tsc -p tsconfig.scripts.json",

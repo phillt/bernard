@@ -96,3 +96,41 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+
+  # **Seeds sample; they do not prove.** What generalises is the three
+  # mechanisms #457 fixed — a shared spy rebound by a sibling, a module-load
+  # singleton, and `paths.ts` frozen against a deleted `BERNARD_HOME`. This job
+  # is the regression gate that stops them coming back, not the argument that
+  # they are gone.
+  #
+  # The three seeds are chosen by measurement, not taste. With the fixes
+  # reverted, each of the ten affected files fails under at least one of them
+  # and every seed contributes something no other covers: 777 is the only one
+  # of the six measured that catches `framework/agents/run.test.ts`, 5 the only
+  # one that catches `tools/applet.test.ts` (the `paths.ts` case), and 42 the
+  # only one of the three that catches `cron/runner.test.ts` — 16 of the 32
+  # tests on its own. Any one seed alone would have reported success with most
+  # of the suite still fragile: 1234 catches 9 of 32, 5 catches 4.
+  #
+  # `--sequence.shuffle` shuffles tests WITHIN a file as well as file order,
+  # and every one of the 32 failures reproduces with its file run alone — so
+  # this gate is about intra-file state, not cross-file leakage, which
+  # `isolate: true` plus a per-file `BERNARD_HOME` already make impossible.
+  #
+  # Free: a shuffled run's median wall clock equals the baseline's (~17 s), and
+  # the 17-28 s spread is worker packing rather than shuffle overhead.
+  test-shuffled:
+    name: Tests (shuffled, seed ${{ matrix.seed }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [42, 777, 5]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:shuffle -- --sequence.seed=${{ matrix.seed }}

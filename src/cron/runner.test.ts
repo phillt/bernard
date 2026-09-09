@@ -48,14 +48,29 @@ let capturedTools: Record<string, any> = {};
 let capturedSystem: string = '';
 let capturedMessages: any[] = [];
 
-const mockGenerateText = vi.hoisted(() =>
-  vi.fn().mockImplementation(async (opts: any) => {
-    capturedTools = opts.tools || {};
-    capturedSystem = opts.system || '';
-    capturedMessages = opts.messages || [];
-    return { text: 'done', response: { messages: [] } };
-  }),
-);
+/**
+ * This file's default `generateText`: record what the dispatch was handed, then
+ * return a trivial success.
+ *
+ * A named declaration rather than an inline arrow, because it has to be
+ * RE-ESTABLISHED and not merely set once. `vi.clearAllMocks()` clears call
+ * records and nothing else — not the implementation — so a sibling `describe`
+ * that rebinds this mock rebinds it permanently. `describe('cron job wall
+ * clock (#326)')` did exactly that, and every `runJob` assertion afterwards
+ * read the empty initial values: sixteen failures under a shuffled order, from
+ * one line.
+ *
+ * A `function` declaration specifically, so it is hoisted above the `vi.hoisted`
+ * block that references it.
+ */
+async function captureDispatch(opts: any) {
+  capturedTools = opts.tools || {};
+  capturedSystem = opts.system || '';
+  capturedMessages = opts.messages || [];
+  return { text: 'done', response: { messages: [] } };
+}
+
+const mockGenerateText = vi.hoisted(() => vi.fn());
 
 function capturedContextText(): string {
   return capturedMessages
@@ -206,6 +221,10 @@ describe('runJob', () => {
     capturedTools = {};
     capturedSystem = '';
     capturedMessages = [];
+    // The implementation, not just the variables. Resetting the capture targets
+    // while leaving a sibling's replacement implementation in place is what
+    // made these sixteen tests order-dependent.
+    mockGenerateText.mockImplementation(captureDispatch);
     mockRagSearch.mockResolvedValue([]);
     mockMemoryStore.getAllMemoryContents.mockReturnValue(new Map());
     mockMemoryStore.getAllScratchContents.mockReturnValue(new Map());

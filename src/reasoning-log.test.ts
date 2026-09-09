@@ -29,7 +29,16 @@ function makeEntry(overrides: Partial<ReasoningLogEntry> = {}): ReasoningLogEntr
 
 describe('appendReasoningLog', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    // `resetAllMocks`, not `clearAllMocks`: the latter clears call RECORDS and
+    // leaves the implementation, so the two tests below that make
+    // `appendFileSync` and `mkdirSync` throw were making them throw for every
+    // test that ran afterwards. The module under test swallows both, so the
+    // symptom downstream was zero recorded calls rather than an error.
+    //
+    // Reset nulls the `vi.fn(impl)` defaults from the mock factory too (vitest
+    // 1.6.1 restores those only from v2), so every default this file relies on
+    // is re-established here rather than left to the factory.
+    vi.resetAllMocks();
     vi.mocked(fs.existsSync).mockReturnValue(false);
     vi.resetModules();
   });

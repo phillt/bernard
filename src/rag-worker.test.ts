@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { MEMORY_CONSOLIDATED_MARKER } from './paths.js';
 
 // Mock dependencies before importing anything that uses them
 const mockExtractDomainFacts = vi.fn();
@@ -110,6 +111,19 @@ describe('rag-worker (runWorkerForFile)', () => {
       { domain: 'general', facts: ['Project uses TypeScript'] },
     ]);
     mockAddFacts.mockResolvedValue(1);
+    // Re-seeded, not merely cleared: `clearAllMocks` leaves the implementation,
+    // so a sibling test's `mockReturnValue`/`mockResolvedValue` on these two is
+    // what the next test sees. Under a shuffled order that decided whether the
+    // consolidation arm had any input to propose on.
+    mockConsolidationInputs.mockReset().mockReturnValue([]);
+    mockProposeConsolidation.mockReset().mockResolvedValue([]);
+    // On-disk state, not a mock: a successful consolidation pass WRITES this
+    // marker, so a sibling test that ran the arm leaves a cutoff of `now`
+    // behind and every later test's records are withheld as "nothing changed".
+    // Owned here rather than by the two tests that seed it deliberately — a
+    // trailing `rmSync` does not run when the assertion above it fails, which
+    // is exactly when the leak matters.
+    fs.rmSync(MEMORY_CONSOLIDATED_MARKER, { force: true });
   });
 
   afterEach(() => {
@@ -162,7 +176,6 @@ describe('rag-worker (runWorkerForFile)', () => {
     it('withholds records written since the last pass, rather than skipping the run', async () => {
       // "Too fresh to judge" — proposing to retire something written this
       // session is the fastest way to make a user turn this off.
-      const { MEMORY_CONSOLIDATED_MARKER } = await import('./paths.js');
       fs.mkdirSync(path.dirname(MEMORY_CONSOLIDATED_MARKER), { recursive: true });
       fs.writeFileSync(MEMORY_CONSOLIDATED_MARKER, '2024-01-01T00:00:00.000Z\n');
       mockConsolidationInputs.mockReturnValue([
@@ -175,11 +188,9 @@ describe('rag-worker (runWorkerForFile)', () => {
 
       const entries = mockProposeConsolidation.mock.calls[0][0] as Array<{ key: string }>;
       expect(entries.map((e) => e.key)).toEqual(['old']);
-      fs.rmSync(MEMORY_CONSOLIDATED_MARKER, { force: true });
     });
 
     it('calls no model when nothing changed since the last pass', async () => {
-      const { MEMORY_CONSOLIDATED_MARKER } = await import('./paths.js');
       fs.mkdirSync(path.dirname(MEMORY_CONSOLIDATED_MARKER), { recursive: true });
       fs.writeFileSync(MEMORY_CONSOLIDATED_MARKER, new Date().toISOString() + '\n');
       mockConsolidationInputs.mockReturnValue([
@@ -190,7 +201,6 @@ describe('rag-worker (runWorkerForFile)', () => {
       await runWorkerForFile(tempFile);
 
       expect(mockProposeConsolidation).not.toHaveBeenCalled();
-      fs.rmSync(MEMORY_CONSOLIDATED_MARKER, { force: true });
     });
 
     it('examines a record on the run AFTER the one that withheld it as too fresh', async () => {
@@ -202,9 +212,7 @@ describe('rag-worker (runWorkerForFile)', () => {
       // true and was then withheld as too fresh, the marker advanced past it,
       // and the next quiet session found `changed` false and returned before
       // looking. A user's most recent memory was never examined at all.
-      const { MEMORY_CONSOLIDATED_MARKER } = await import('./paths.js');
       fs.mkdirSync(path.dirname(MEMORY_CONSOLIDATED_MARKER), { recursive: true });
-      fs.rmSync(MEMORY_CONSOLIDATED_MARKER, { force: true });
 
       const HOUR = 60 * 60 * 1000;
       const justWritten = new Date(Date.now() - HOUR).toISOString();
@@ -227,7 +235,6 @@ describe('rag-worker (runWorkerForFile)', () => {
         expect(seen.map((e) => e.key)).toEqual(['recent']);
       } finally {
         vi.mocked(Date.now).mockRestore();
-        fs.rmSync(MEMORY_CONSOLIDATED_MARKER, { force: true });
       }
     });
 
