@@ -43,7 +43,11 @@ import {
   isSuppressed as isMemorySuppressed,
 } from './memory-candidates.js';
 import { consolidationInputs, proposeConsolidation } from './memory-consolidation.js';
-import { MEMORY_CONSOLIDATED_MARKER } from './paths.js';
+import { MEMORY_CONSOLIDATED_MARKER, SPECIALIST_RECALL_MARKER, TOOL_WRAPPER_LOG } from './paths.js';
+import { readJsonlTail } from './jsonl.js';
+import { debugLog } from './logger.js';
+import { extractSpecialistNotes } from './specialist-recall.js';
+import type { ReasoningLogEntry } from './reasoning-log.js';
 import { atomicWriteFileSync } from './fs-utils.js';
 import { SpecialistStore } from './specialists.js';
 import { detectSpecialistCandidate } from './specialist-detector.js';
@@ -84,6 +88,117 @@ export interface TempPayload {
    * that has nothing to do with their memory files.
    */
   consolidateMemory?: boolean;
+  /**
+   * Ask for the specialist-recall pass (#501).
+   *
+   * A third independent gate, for the reason `consolidateMemory` is a second
+   * one: this arm reads the REASONING LOG, not the payload, so it needs neither
+   * a transcript here nor RAG to be enabled. Hanging it off either would make it
+   * silently never run for settings that have nothing to do with what a
+   * specialist should remember.
+   */
+  specialistRecall?: boolean;
+}
+
+/**
+ * Gives each specialist that ran a memory of its own work (#501).
+ *
+ * The main agent has had this since the exit worker existed: its transcript is
+ * extracted into facts. A specialist got nothing, so the one agent that most
+ * needs to remember its own mistakes could not.
+ *
+ * **Reads the reasoning log rather than a new buffer.** Every dispatch now
+ * writes one entry there, so the transcripts are already durable and already
+ * survive the process that produced them — a per-session in-memory buffer would
+ * be a second mechanism holding the same bytes, and would lose them on a crash.
+ *
+ * The gate is the marker's INCLUSION CUTOFF, the shape #529 had to correct
+ * once: storing the run time makes the trigger set and the input set exact
+ * complements, so the most recent work is never examined.
+ */
+async function runSpecialistRecall(config: BernardConfig): Promise<void> {
+  const lastCutoff = lastRecallAt();
+  const cutoff = Date.now();
+  const entries = readJsonlTail<ReasoningLogEntry>(TOOL_WRAPPER_LOG, RECALL_LOG_SCAN)
+    .filter((e) => {
+      const t = Date.parse(e.ts);
+      return Number.isFinite(t) && (lastCutoff === null || t > lastCutoff) && t <= cutoff;
+    })
+    .filter((e) => e.specialistId);
+  if (entries.length === 0) {
+    // Still stamped: otherwise a quiet session re-scans the same tail forever.
+    stampRecall(cutoff);
+    return;
+  }
+
+  // Grouped so one specialist that ran five times gets ONE extraction over all
+  // five, not five extractions that cannot see each other. That is also what
+  // keeps the call count at one per specialist rather than one per dispatch.
+  const byOwner = new Map<string, ReasoningLogEntry[]>();
+  for (const e of entries) {
+    const list = byOwner.get(e.specialistId);
+    if (list) list.push(e);
+    else byOwner.set(e.specialistId, [e]);
+  }
+
+  const store = new SpecialistStore({ seed: false });
+  const memory = new MemoryStore();
+  for (const [specialistId, runs] of byOwner) {
+    // A deleted specialist's notes would be written under an owner nothing can
+    // resolve — unreadable the moment they land, and swept by nothing because
+    // the sweep already ran.
+    if (!store.get(specialistId)) continue;
+    const transcript = runs.map(renderRun).join('\n\n').slice(0, RECALL_TRANSCRIPT_MAX);
+    const notes = await extractSpecialistNotes(specialistId, transcript, config, {
+      abortSignal: AbortSignal.timeout(WORKER_RECALL_TIMEOUT_MS),
+    });
+    const owned = memory.asOwner(specialistId);
+    for (const note of notes) {
+      try {
+        owned.writeMemory(note.key, note.content);
+      } catch (err) {
+        // A key collision with another owner, or an unwritable key. One bad
+        // note must not cost the specialist the rest of them.
+        debugLog('specialist-recall:write-failed', {
+          specialistId,
+          key: note.key,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    debugLog('specialist-recall:wrote', { specialistId, runs: runs.length, notes: notes.length });
+  }
+  stampRecall(cutoff);
+}
+
+/** One logged run, as the extractor sees it. */
+function renderRun(e: ReasoningLogEntry): string {
+  const calls = e.toolCalls
+    .map((c) => `  - ${c.tool}(${JSON.stringify(c.args)}) -> ${c.resultPreview}`)
+    .join('\n');
+  return [
+    `Task: ${e.input}`,
+    calls ? `Tools used:\n${calls}` : '  (no tool calls)',
+    `Outcome (${e.status}): ${String(e.finalOutput ?? '').slice(0, 600)}`,
+  ].join('\n');
+}
+
+function lastRecallAt(): number | null {
+  try {
+    const t = Date.parse(fs.readFileSync(SPECIALIST_RECALL_MARKER, 'utf-8').trim());
+    return Number.isFinite(t) ? t : null;
+  } catch {
+    return null;
+  }
+}
+
+function stampRecall(cutoff: number): void {
+  try {
+    fs.mkdirSync(path.dirname(SPECIALIST_RECALL_MARKER), { recursive: true });
+    atomicWriteFileSync(SPECIALIST_RECALL_MARKER, new Date(cutoff).toISOString() + '\n');
+  } catch {
+    // A marker that cannot be written costs a repeated scan, not correctness.
+  }
 }
 
 /**
@@ -96,6 +211,21 @@ export interface TempPayload {
  */
 /** Consolidation shares fact extraction's deadline shape; a stuck provider must not outlive the run. */
 const WORKER_CONSOLIDATE_TIMEOUT_MS = 60_000;
+
+/** Same deadline shape; a stuck provider must not outlive this detached run. */
+const WORKER_RECALL_TIMEOUT_MS = 60_000;
+
+/**
+ * How far back to scan the reasoning log.
+ *
+ * The marker normally makes this a short read, but the log is append-only and
+ * rotated by count, so a first run — or one after a long gap — would otherwise
+ * parse the whole file. 500 entries is far more than any session produces.
+ */
+const RECALL_LOG_SCAN = 500;
+
+/** Per-specialist transcript budget, so one busy specialist cannot dominate. */
+const RECALL_TRANSCRIPT_MAX = 12_000;
 
 /**
  * How recently written is "too fresh to judge".
@@ -229,7 +359,7 @@ export async function runWorkerForFile(filePath: string): Promise<void> {
     tryUnlink(filePath);
     return;
   }
-  if (!payload.serialized && !payload.consolidateMemory) {
+  if (!payload.serialized && !payload.consolidateMemory && !payload.specialistRecall) {
     tryUnlink(filePath);
     return;
   }
@@ -328,6 +458,16 @@ export async function runWorkerForFile(filePath: string): Promise<void> {
   // run unattended at all.
   if (payload.consolidateMemory) {
     arms.push(runMemoryConsolidation(config));
+  }
+
+  // Specialist recall (#501). Unlike every arm above it WRITES, and the
+  // asymmetry is deliberate: consolidation proposes because its records are the
+  // user's own and shared, so a wrong retirement changes behaviour everywhere
+  // and silently. These are private to one specialist and are deleted with it —
+  // and reviewing N specialists' proposals at every startup is a queue nobody
+  // drains.
+  if (payload.specialistRecall) {
+    arms.push(runSpecialistRecall(config));
   }
 
   await Promise.allSettled(arms);

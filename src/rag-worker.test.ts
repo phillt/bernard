@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { MEMORY_CONSOLIDATED_MARKER } from './paths.js';
+import { MEMORY_CONSOLIDATED_MARKER, SPECIALIST_RECALL_MARKER } from './paths.js';
 
 // Mock dependencies before importing anything that uses them
 const mockExtractDomainFacts = vi.fn();
@@ -51,6 +51,7 @@ vi.mock('./specialists.js', () => ({
   SpecialistStore: vi.fn().mockImplementation(() => ({
     // The real worker calls .list() — not .getSummaries() (which was an old drift).
     list: mockSpecialistList,
+    get: (id: string) => mockSpecialistGet(id),
   })),
 }));
 
@@ -65,7 +66,23 @@ const mockMemoryCandidateListPending = vi.fn(() => [] as unknown[]);
 const mockMemoryCandidateCreate = vi.fn();
 
 vi.mock('./memory.js', () => ({
-  MemoryStore: vi.fn().mockImplementation(() => ({})),
+  MemoryStore: vi.fn().mockImplementation(() => ({ asOwner: mockAsOwner })),
+}));
+
+const mockExtractNotes = vi.fn(async () => [] as Array<{ key: string; content: string }>);
+const mockWriteMemory = vi.fn();
+const mockAsOwner = vi.fn(() => ({ writeMemory: mockWriteMemory }));
+const mockReadJsonlTail = vi.fn(() => [] as unknown[]);
+const mockSpecialistGet = vi.fn((id: string) => ({ id }) as unknown);
+
+vi.mock('./specialist-recall.js', () => ({
+  extractSpecialistNotes: (...a: any[]) => mockExtractNotes(...(a as [])),
+  MIN_TRANSCRIPT_CHARS: 400,
+}));
+
+vi.mock('./jsonl.js', async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  readJsonlTail: (...a: any[]) => mockReadJsonlTail(...(a as [])),
 }));
 
 vi.mock('./memory-consolidation.js', () => ({
@@ -461,4 +478,123 @@ describe('rag-worker (runWorkerForFile)', () => {
       );
     });
   });
+  describe('specialist recall arm (#501)', () => {
+    const write = (payload: Record<string, unknown>) =>
+      fs.writeFileSync(tempFile, JSON.stringify(payload));
+
+    beforeEach(() => {
+      // Re-seeded, not merely cleared: `clearAllMocks` leaves implementations
+      // and `*Once` queues, so a sibling's `mockReturnValue` on these is what
+      // the next test sees — the #457 class, and this block hit it immediately.
+      mockReadJsonlTail.mockReset().mockReturnValue([]);
+      mockExtractNotes.mockReset().mockResolvedValue([]);
+      mockSpecialistGet.mockReset().mockImplementation((id: string) => ({ id }) as unknown);
+      mockAsOwner.mockReset().mockReturnValue({ writeMemory: mockWriteMemory });
+      mockWriteMemory.mockReset();
+      // On-disk state, not a mock: a successful pass WRITES this marker, so a
+      // sibling test leaves a cutoff of `now` behind and every later test's log
+      // entries are filtered out as already-seen. Owned here rather than by the
+      // one test that seeds it deliberately — a trailing `rmSync` does not run
+      // when the assertion above it fails, which is exactly when it matters.
+      fs.rmSync(SPECIALIST_RECALL_MARKER, { force: true });
+    });
+
+    const run = (specialistId: string, ts = new Date().toISOString()) => ({
+      ts,
+      specialistId,
+      input: 'do the thing',
+      toolCalls: [{ tool: 'shell', args: { command: 'ls' }, resultPreview: 'ok' }],
+      finalOutput: 'x'.repeat(500),
+      status: 'ok',
+    });
+
+    it('runs without a transcript and without RAG — its gate is the log', async () => {
+      // The whole reason it is a third independent gate. Hanging it off
+      // `serialized` or `ragEnabled` would make it silently never run for
+      // settings that have nothing to do with what a specialist remembers.
+      mockReadJsonlTail.mockReturnValue([run('coder')]);
+      mockExtractNotes.mockResolvedValue([{ key: 'build-uses-pnpm', content: 'Use pnpm.' }]);
+      write({ provider: 'anthropic', model: 'm', specialistRecall: true });
+
+      await runWorkerForFile(tempFile);
+
+      expect(mockExtractDomainFacts).not.toHaveBeenCalled();
+      expect(mockExtractNotes).toHaveBeenCalledTimes(1);
+    });
+
+    it('writes the note as that specialist, not as the user', async () => {
+      // The fence is the point: a note written unowned would land in the shared
+      // pool the main agent reads, which is exactly what ownership prevents.
+      mockReadJsonlTail.mockReturnValue([run('coder')]);
+      mockExtractNotes.mockResolvedValue([{ key: 'build-uses-pnpm', content: 'Use pnpm.' }]);
+      write({ provider: 'anthropic', model: 'm', specialistRecall: true });
+
+      await runWorkerForFile(tempFile);
+
+      expect(mockAsOwner).toHaveBeenCalledWith('coder');
+      expect(mockWriteMemory).toHaveBeenCalledWith('build-uses-pnpm', 'Use pnpm.');
+    });
+
+    it('extracts ONCE per specialist, not once per dispatch', async () => {
+      // The cost decision: `extractDomainFacts` fans out four calls per
+      // transcript, and four specialists in a session would be sixteen. Grouping
+      // also means a specialist that ran five times gets one extraction that can
+      // see all five rather than five that cannot see each other.
+      mockReadJsonlTail.mockReturnValue([run('coder'), run('coder'), run('designer')]);
+      mockExtractNotes.mockResolvedValue([]);
+      write({ provider: 'anthropic', model: 'm', specialistRecall: true });
+
+      await runWorkerForFile(tempFile);
+
+      expect(mockExtractNotes).toHaveBeenCalledTimes(2);
+      expect(mockExtractNotes.mock.calls.map((c: any[]) => c[0]).sort()).toEqual([
+        'coder',
+        'designer',
+      ]);
+    });
+
+    it('skips a specialist that no longer exists', async () => {
+      // Its notes would be owned by an id nothing resolves — unreadable the
+      // moment they land, and swept by nothing, because the sweep already ran.
+      mockReadJsonlTail.mockReturnValue([run('deleted-one')]);
+      mockSpecialistGet.mockReturnValue(undefined as never);
+      write({ provider: 'anthropic', model: 'm', specialistRecall: true });
+
+      await runWorkerForFile(tempFile);
+
+      expect(mockExtractNotes).not.toHaveBeenCalled();
+      expect(mockWriteMemory).not.toHaveBeenCalled();
+    });
+
+    it('does not run when the payload does not ask for it', async () => {
+      mockReadJsonlTail.mockReturnValue([run('coder')]);
+      write({ serialized: 'x', provider: 'anthropic', model: 'm' });
+      await runWorkerForFile(tempFile);
+      expect(mockExtractNotes).not.toHaveBeenCalled();
+    });
+
+    it('examines only what happened since the last pass', async () => {
+      // The marker stores the inclusion CUTOFF, not the run time — the shape #529
+      // had to correct once, because storing the run time makes the trigger set
+      // and the input set exact complements.
+      fs.mkdirSync(path.dirname(SPECIALIST_RECALL_MARKER), { recursive: true });
+      fs.writeFileSync(SPECIALIST_RECALL_MARKER, new Date(Date.now() - 1000).toISOString() + '\n');
+      mockReadJsonlTail.mockReturnValue([run('old', '2020-01-01T00:00:00.000Z')]);
+      write({ provider: 'anthropic', model: 'm', specialistRecall: true });
+
+      await runWorkerForFile(tempFile);
+
+      expect(mockExtractNotes).not.toHaveBeenCalled();
+      fs.rmSync(SPECIALIST_RECALL_MARKER, { force: true });
+    });
+  });
 });
+
+/**
+ * Specialist recall (#501) — the arm that WRITES.
+ *
+ * The main agent has had a closing pass since this worker existed; a specialist
+ * got nothing, because its dispatch transcript was discarded. This reads the
+ * reasoning log — which every dispatch now writes — so it needs neither a
+ * transcript in the payload nor RAG enabled.
+ */

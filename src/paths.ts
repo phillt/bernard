@@ -187,6 +187,16 @@ export const APPLET_HOST_LOG_FILE = path.join(STATE_DIR, 'applet-host.log');
  * hash was the alternative and is not needed — #513 already stamps every write.
  */
 export const MEMORY_CONSOLIDATED_MARKER = path.join(STATE_DIR, '.memory-consolidated');
+
+/**
+ * Timestamp of the last specialist-recall pass.
+ *
+ * The same shape as {@link MEMORY_CONSOLIDATED_MARKER}, and for the same
+ * reason: it stores the INCLUSION CUTOFF rather than the run time, so a
+ * dispatch that happened during the pass is examined by the next one instead of
+ * being skipped forever. That distinction is what #529 had to fix once already.
+ */
+export const SPECIALIST_RECALL_MARKER = path.join(STATE_DIR, '.specialist-recall');
 /**
  * Per-applet port and session token (#421).
  *

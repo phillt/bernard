@@ -58,6 +58,7 @@ export function makePolicyInput(overrides?: {
     voiceBackend: 'auto',
     voiceWarmupMs: 0,
     voiceNormalizer: true,
+    specialistRecall: true,
     memoryConsolidation: true,
     fullScreen: false,
     mouse: true,

@@ -598,7 +598,12 @@ async function runInkRepl(args: {
       // does not need a transcript: memory can have changed in a session with
       // nothing worth extracting.
       const wantsConsolidation = config.memoryConsolidation;
-      if (wantsFacts || wantsConsolidation) {
+      // A third gate, independent for the reason the second one is: this pass
+      // reads the REASONING LOG, so it needs neither a transcript here nor RAG.
+      // Hanging it off either would make it silently never run for settings that
+      // have nothing to do with what a specialist should remember.
+      const wantsRecall = config.specialistRecall;
+      if (wantsFacts || wantsConsolidation || wantsRecall) {
         const serialized = wantsFacts ? serializeMessages(history).trim() || undefined : undefined;
         {
           fs.mkdirSync(RAG_DIR, { recursive: true });
@@ -615,6 +620,7 @@ async function runInkRepl(args: {
               provider: config.provider,
               model: config.model,
               ...(wantsConsolidation ? { consolidateMemory: true } : {}),
+              ...(wantsRecall ? { specialistRecall: true } : {}),
             }),
           );
           const __dirname = path.dirname(fileURLToPath(import.meta.url));
