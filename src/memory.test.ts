@@ -29,8 +29,10 @@ const fs = await import('node:fs');
  *
  * Written out rather than reached with `vi.resetAllMocks()`, because in vitest
  * 1.6.1 `mockReset` sets an implementation to `() => undefined` and does NOT
- * restore the function passed to `vi.fn(impl)` — that arrived in v2 — so a
- * blanket reset would null every default in the factory above.
+ * restore the function passed to `vi.fn(impl)` — so a blanket reset would null
+ * every default in the factory above. Measured across majors: that restore
+ * landed in vitest **3**, not 2, and even there it covers only the `vi.fn(impl)`
+ * form — `vi.fn().mockReturnValue(x)` still resets to `undefined` (#553).
  */
 function seedFsMocks(): void {
   vi.resetAllMocks();

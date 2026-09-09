@@ -70,19 +70,30 @@ vi.mock('../os-info.js', () => ({
   osPromptBlock: vi.fn(() => '## Host OS\n- Platform: linux'),
 }));
 
+/**
+ * The `wrapWrapperResult` default, in ONE place.
+ *
+ * Referenced by the mock factory below and re-established in `beforeEach`,
+ * rather than written out twice — two copies of a fake drift, and here the
+ * second copy is the thing the first is being "restored" to, so a drift makes
+ * the reset restore a stale default. A `function` declaration specifically, so
+ * it is hoisted above the `vi.mock` factory that references it.
+ */
+function defaultWrapWrapperResult(text: string): any {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { status: 'ok', result: text };
+  }
+}
+
 vi.mock('../structured-output.js', async () => ({
   // Spread the real module: this is a transitive dependency of
   // `framework/agents/task.ts`, so a hand-written factory had to be extended
   // every time an unrelated export appeared (it broke on `nullableOptional`).
   ...(await vi.importActual<typeof import('../structured-output.js')>('../structured-output.js')),
   STRUCTURED_OUTPUT_RULES: '\n\n## Output Format (STRICT)\n...',
-  wrapWrapperResult: vi.fn((text: string) => {
-    try {
-      return JSON.parse(text);
-    } catch {
-      return { status: 'ok', result: text };
-    }
-  }),
+  wrapWrapperResult: vi.fn(defaultWrapWrapperResult),
 }));
 
 vi.mock('../reasoning-log.js', () => ({
@@ -635,15 +646,8 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     // read `status: 'error'` whenever one of them ran first. Re-seeded to the
     // factory's own default rather than left nulled, because `mockReset` in
     // vitest 1.6.1 replaces a `vi.fn(impl)` with `() => undefined` instead of
-    // restoring it.
-    vi.mocked(wrapWrapperResult).mockReset();
-    vi.mocked(wrapWrapperResult).mockImplementation((text: string) => {
-      try {
-        return JSON.parse(text);
-      } catch {
-        return { status: 'ok', result: text };
-      }
-    });
+    // restoring it — measured; that landed in vitest 3, not 2 (#553).
+    vi.mocked(wrapWrapperResult).mockReset().mockImplementation(defaultWrapWrapperResult);
 
     // Restore sensible defaults after clearAllMocks.
     vi.mocked(withSlot).mockImplementation((fn) => fn({ id: 1 }));

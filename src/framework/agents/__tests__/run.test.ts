@@ -106,7 +106,7 @@ beforeEach(() => {
   // that queues two and consumes one hands the leftover to whichever test
   // runs next. The `toBeGreaterThanOrEqual(1)` assertion further down
   // explicitly tolerates consuming only one, so the leftover is by design.
-  (generateText as unknown as ReturnType<typeof vi.fn>).mockReset();
+  vi.mocked(generateText).mockReset();
   (generateText as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
     text: 'final answer',
     steps: [],

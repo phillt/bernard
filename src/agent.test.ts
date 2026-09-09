@@ -751,7 +751,7 @@ describe('Agent', () => {
     // that runs after it — which is what made the two `buildRAGQuery`
     // assertions order-dependent. Re-seeded to the factory defaults rather than
     // reset, because `mockReset` in vitest 1.6.1 nulls a `vi.fn(impl)` default
-    // instead of restoring it.
+    // instead of restoring it — measured; the restore landed in vitest 3 (#553).
     mockExtractRecentUserTexts.mockReset().mockReturnValue([]);
     mockExtractRecentToolContext.mockReset().mockReturnValue('');
     store = new MemoryStore();
