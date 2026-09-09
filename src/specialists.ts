@@ -265,7 +265,17 @@ export type SpecialistUpdates = Partial<
   toolSurface?: 'full' | 'worker' | '';
 };
 
-const MAX_SPECIALISTS = 50;
+/**
+ * Hard cap on stored specialist records.
+ *
+ * Raised from 50 once the `<specialists>` roster gained a character budget
+ * ({@link MAX_SPECIALIST_ROSTER_CHARS}). The two are a pair: the roster is
+ * re-billed on every step, so before the budget existed this constant was the
+ * only thing bounding a per-step context cost, and doubling it would have taken
+ * a 45-record install from ~2,498 tokens per turn to well over 5,000. With whole entries
+ * dropped by relevance, the record count and the context cost are independent.
+ */
+export const MAX_SPECIALISTS = 100;
 
 const ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/;
 
