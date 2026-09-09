@@ -19,6 +19,29 @@ vi.mock('node:fs', () => ({
 
 const fs = await import('node:fs');
 
+/**
+ * Put the mocked filesystem back to the factory's defaults.
+ *
+ * `vi.clearAllMocks()` clears call RECORDS and nothing else, so an
+ * implementation set inside one test — `readFileSync` throwing ENOENT, say —
+ * serves every test that runs after it. Under a shuffled order that decided
+ * whether `listMemory filters to .md files` saw any files at all.
+ *
+ * Written out rather than reached with `vi.resetAllMocks()`, because in vitest
+ * 1.6.1 `mockReset` sets an implementation to `() => undefined` and does NOT
+ * restore the function passed to `vi.fn(impl)` — so a blanket reset would null
+ * every default in the factory above. Measured across majors: that restore
+ * landed in vitest **3**, not 2, and even there it covers only the `vi.fn(impl)`
+ * form — `vi.fn().mockReturnValue(x)` still resets to `undefined` (#553).
+ */
+function seedFsMocks(): void {
+  vi.resetAllMocks();
+  vi.mocked(fs.readdirSync).mockReturnValue([] as never);
+  vi.mocked(fs.existsSync).mockReturnValue(false);
+  vi.mocked(fs.readFileSync).mockReturnValue('');
+  vi.mocked(fs.statSync).mockReturnValue({ mtimeMs: 1 } as never);
+}
+
 describe('sanitizeKey', () => {
   it('passes through alphanumeric characters', () => {
     expect(sanitizeKey('hello123')).toBe('hello123');
@@ -45,7 +68,7 @@ describe('MemoryStore', () => {
   let store: MemoryStore;
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    seedFsMocks();
     store = new MemoryStore();
   });
 
@@ -169,12 +192,17 @@ describe('rewriter hints', () => {
   let store: MemoryStore;
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    seedFsMocks();
     store = new MemoryStore();
   });
 
   it('loadRewriterHints returns empty map when no hints file exists', () => {
-    vi.mocked(fs.existsSync).mockReturnValue(false);
+    // Stubs `readdirSync`, not `existsSync`. `MemoryStore.load()` never calls
+    // `existsSync` — it uses `statSync` + `readFileSync` — so the previous
+    // version of this test stubbed a function the code path does not touch and
+    // asserted nothing on its own: its result was decided entirely by whichever
+    // neighbour had last set `readFileSync`.
+    vi.mocked(fs.readdirSync).mockReturnValue([] as never);
     expect(loadRewriterHints(store).size).toBe(0);
   });
 
