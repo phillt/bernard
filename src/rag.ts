@@ -9,7 +9,7 @@ import {
 import { LexicalIndex, namesASymbol, reciprocalRankFusion } from './lexical.js';
 import { debugLog } from './logger.js';
 import { DEFAULT_DOMAIN } from './domains.js';
-import { RAG_DIR, MEMORIES_FILE, LAST_SESSION_FILE } from './paths.js';
+import { RAG_DIR } from './paths.js';
 import { atomicWriteFileSyncUnique } from './fs-utils.js';
 
 /** Maximum results returned per domain before merging. */
@@ -227,6 +227,21 @@ export interface RAGStoreConfig {
   maxMemories?: number;
   /** Time-to-live in days for new memories (default: 90). */
   ragTtlDays?: number;
+  /**
+   * Directory this store lives in (default: the user's own {@link RAG_DIR}).
+   *
+   * The sixth knob on a config that already carried five, which is what makes a
+   * store per specialist cheap: `maxMemories`, the 0.92 dedup scan and
+   * `prune()` are all per-INSTANCE already, so separate directories make each
+   * of them per-owner with no further work — no `prune()` floor to design, no
+   * cross-namespace dedup, no unregistered `domain` values breaking the four
+   * registry-coupled surfaces.
+   *
+   * `getEmbeddingProvider()` is a module-level singleton, so N stores share one
+   * ~196 ms model load; a fresh per-specialist store is empty, so `load()` and
+   * `pruneExpired()` cost nothing.
+   */
+  dir?: string;
 }
 
 /**
@@ -358,14 +373,22 @@ export class RAGStore {
     index: LexicalIndex;
   } | null = null;
 
+  /** This store's directory, and the two files inside it. */
+  private readonly dir: string;
+  private readonly memoriesFile: string;
+  private readonly lastSessionFile: string;
+
   constructor(config?: RAGStoreConfig) {
+    this.dir = config?.dir ?? RAG_DIR;
+    this.memoriesFile = path.join(this.dir, 'memories.json');
+    this.lastSessionFile = path.join(this.dir, 'last-session.txt');
     this.topKPerDomain = config?.topKPerDomain ?? DEFAULT_TOP_K_PER_DOMAIN;
     this.maxResults = config?.maxResults ?? DEFAULT_MAX_RESULTS;
     this.similarityThreshold = config?.similarityThreshold ?? DEFAULT_SIMILARITY_THRESHOLD;
     this.maxMemories = config?.maxMemories ?? DEFAULT_MAX_MEMORIES;
     this.ragTtlDays = config?.ragTtlDays ?? DEFAULT_RAG_TTL_DAYS;
 
-    fs.mkdirSync(RAG_DIR, { recursive: true });
+    fs.mkdirSync(this.dir, { recursive: true });
     this.load();
     this.saveSessionDate();
     this.pruneExpired();
@@ -947,8 +970,8 @@ export class RAGStore {
   /** Load memories from disk. Backfills domain, expiresAt, and compensates for idle days. */
   private load(): void {
     try {
-      if (!fs.existsSync(MEMORIES_FILE)) return;
-      const data = fs.readFileSync(MEMORIES_FILE, 'utf-8');
+      if (!fs.existsSync(this.memoriesFile)) return;
+      const data = fs.readFileSync(this.memoriesFile, 'utf-8');
       const parsed = JSON.parse(data);
       // Two shapes, and the legacy one is not deprecated — it is what every
       // existing install has on disk (#520). A bare array is a store written
@@ -1089,8 +1112,8 @@ export class RAGStore {
    */
   private getIdleDays(): number {
     try {
-      if (!fs.existsSync(LAST_SESSION_FILE)) return 0;
-      const lastDateStr = fs.readFileSync(LAST_SESSION_FILE, 'utf-8').trim();
+      if (!fs.existsSync(this.lastSessionFile)) return 0;
+      const lastDateStr = fs.readFileSync(this.lastSessionFile, 'utf-8').trim();
       if (!/^\d{4}-\d{2}-\d{2}$/.test(lastDateStr)) return 0;
 
       const todayStr = new Date().toISOString().slice(0, 10);
@@ -1109,7 +1132,7 @@ export class RAGStore {
   private saveSessionDate(): void {
     try {
       const todayStr = new Date().toISOString().slice(0, 10);
-      fs.writeFileSync(LAST_SESSION_FILE, todayStr, 'utf-8');
+      fs.writeFileSync(this.lastSessionFile, todayStr, 'utf-8');
     } catch {
       // Non-critical — just log
       debugLog('rag:saveSessionDate', 'Failed to save session date');
@@ -1234,7 +1257,7 @@ export class RAGStore {
       dimensions: this.stamp?.dimensions ?? EMBEDDING_DIMENSIONS,
       memories: this.memories,
     };
-    const failure = atomicWriteFileSyncUnique(MEMORIES_FILE, JSON.stringify(payload));
+    const failure = atomicWriteFileSyncUnique(this.memoriesFile, JSON.stringify(payload));
     if (failure) debugLog('rag:persist', `Failed to persist memories: ${failure}`);
   }
 }

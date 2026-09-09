@@ -1,5 +1,7 @@
 import { MemoryStore } from './memory.js';
 import { SpecialistStore } from './specialists.js';
+import * as fs from 'node:fs';
+import { specialistRagDir } from './paths.js';
 import { debugLog } from './logger.js';
 
 /**
@@ -47,6 +49,8 @@ export interface DeleteSpecialistResult {
   deleted: boolean;
   /** Memories that went with it. */
   memories: number;
+  /** Whether it had its own RAG store, and it went too. */
+  rag: boolean;
 }
 
 export function deleteSpecialist(
@@ -61,7 +65,7 @@ export function deleteSpecialist(
   // specialist's memories before discovering it cannot be deleted would destroy
   // data for a record that then stays on disk.
   const deleted = specialists.delete(id);
-  if (!deleted) return { deleted: false, memories: 0 };
+  if (!deleted) return { deleted: false, memories: 0, rag: false };
 
   let memories = 0;
   try {
@@ -78,6 +82,24 @@ export function deleteSpecialist(
       error: err instanceof Error ? err.message : String(err),
     });
   }
-  debugLog('specialist:deleted', { specialistId: id, memories });
-  return { deleted: true, memories };
+  // Its own RAG store, which is a DIRECTORY rather than a set of rows — and
+  // that is the payoff of a store per specialist over a namespace column.
+  // `RAGStore` can only delete by id and has no owner axis to select on, so a
+  // namespaced sweep would have meant loading the whole 31 MB store, filtering,
+  // and re-serializing it.
+  let rag = false;
+  try {
+    const dir = specialistRagDir(id);
+    if (fs.existsSync(dir)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+      rag = true;
+    }
+  } catch (err) {
+    debugLog('specialist:rag-sweep-failed', {
+      specialistId: id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  debugLog('specialist:deleted', { specialistId: id, memories, rag });
+  return { deleted: true, memories, rag };
 }

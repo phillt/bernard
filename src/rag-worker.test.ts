@@ -23,7 +23,7 @@ vi.mock('./context.js', () => ({
 }));
 
 vi.mock('./rag.js', () => {
-  const RAGStore = vi.fn().mockImplementation(() => ({ addFacts: mockAddFacts }));
+  const RAGStore = vi.fn().mockImplementation(() => ({ addFacts: mockAddFacts, flush: vi.fn() }));
   // Static, and the worker calls it without constructing a store — that is the
   // whole point of the call (a RAG-off session never builds one).
   // Wrapped rather than assigned directly: `vi.mock` factories are hoisted and
@@ -564,6 +564,32 @@ describe('rag-worker (runWorkerForFile)', () => {
 
       expect(mockExtractNotes).not.toHaveBeenCalled();
       expect(mockWriteMemory).not.toHaveBeenCalled();
+    });
+
+    it("also seeds the specialist's own RAG store, which nothing else fills", async () => {
+      // The producer gap: a store per specialist is an EMPTY store until
+      // something writes into it, and the three existing RAG producers all read
+      // the MAIN transcript. This is the one that fills it.
+      mockReadJsonlTail.mockReturnValue([run('coder')]);
+      mockExtractNotes.mockResolvedValue([{ key: 'k', content: 'Use pnpm.' }]);
+      write({ provider: 'anthropic', model: 'm', specialistRecall: true });
+
+      await runWorkerForFile(tempFile);
+
+      expect(mockAddFacts).toHaveBeenCalledWith(['Use pnpm.'], 'exit');
+    });
+
+    it('writes no facts when there is nothing durable to remember', async () => {
+      // Guards the guard: the common case is no notes, and an unconditional
+      // write would construct a store — and a directory — for every specialist
+      // that ran, whether or not it learned anything.
+      mockReadJsonlTail.mockReturnValue([run('coder')]);
+      mockExtractNotes.mockResolvedValue([]);
+      write({ provider: 'anthropic', model: 'm', specialistRecall: true });
+
+      await runWorkerForFile(tempFile);
+
+      expect(mockAddFacts).not.toHaveBeenCalled();
     });
 
     it('does not run when the payload does not ask for it', async () => {

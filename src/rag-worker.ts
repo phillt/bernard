@@ -43,7 +43,12 @@ import {
   isSuppressed as isMemorySuppressed,
 } from './memory-candidates.js';
 import { consolidationInputs, proposeConsolidation } from './memory-consolidation.js';
-import { MEMORY_CONSOLIDATED_MARKER, SPECIALIST_RECALL_MARKER, TOOL_WRAPPER_LOG } from './paths.js';
+import {
+  MEMORY_CONSOLIDATED_MARKER,
+  SPECIALIST_RECALL_MARKER,
+  TOOL_WRAPPER_LOG,
+  specialistRagDir,
+} from './paths.js';
 import { readJsonlTail } from './jsonl.js';
 import { debugLog } from './logger.js';
 import { extractSpecialistNotes } from './specialist-recall.js';
@@ -162,6 +167,26 @@ async function runSpecialistRecall(config: BernardConfig): Promise<void> {
         debugLog('specialist-recall:write-failed', {
           specialistId,
           key: note.key,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    // The same notes into the specialist's OWN RAG store, which is what makes
+    // that store non-empty at all — the producer gap #501 left open. It is a
+    // separate directory, so its 5,000 cap, its 0.92 dedup scan and its
+    // `prune()` are all its own: nothing it writes can evict a fact of the
+    // user's, and nothing of the user's can evict one of its.
+    if (notes.length > 0) {
+      try {
+        const store = new RAGStore({ dir: specialistRagDir(specialistId) });
+        await store.addFacts(
+          notes.map((n) => n.content),
+          'exit',
+        );
+        store.flush();
+      } catch (err) {
+        debugLog('specialist-recall:rag-failed', {
+          specialistId,
           error: err instanceof Error ? err.message : String(err),
         });
       }
