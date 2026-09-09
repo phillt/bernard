@@ -13,7 +13,7 @@ vi.mock('./model-policy.js', () => ({
   }),
 }));
 
-const { verifyClaims, quoteAppearsIn } = await import('./claim-verifier.js');
+const { verifyClaims, quoteAppearsIn, locateQuote } = await import('./claim-verifier.js');
 const { verdictOf } = await import('./rubric.js');
 const { ProvenanceStore } = await import('./provenance.js');
 
@@ -287,5 +287,68 @@ describe('usage attribution', () => {
     );
 
     expect(onUsage).not.toHaveBeenCalled();
+  });
+});
+
+describe('locateQuote (#549)', () => {
+  const source = (id: string, body: string, full = true) =>
+    ({
+      id,
+      kind: 'web',
+      label: id,
+      contentPreview: body,
+      rawRef: `https://example.test/${id}`,
+      timestamp: 0,
+      ...(full ? { verifyText: body } : {}),
+    }) as never;
+
+  it('returns where the quote sits, not just that it does', () => {
+    // The location was already computed by `windowAroundQuote` and thrown away.
+    // `quoteMatcher` returns a regex precisely so "does it appear" and "where"
+    // cannot drift apart; this makes the answer the return value.
+    const hit = locateQuote('default timeout', [
+      source('S1', 'The default timeout is 30 seconds.'),
+    ])!;
+    expect(hit.sourceId).toBe('S1');
+    expect(hit.start).toBe(4);
+    expect(hit.end).toBe(19);
+    expect(hit.matchedText).toBe('default timeout');
+  });
+
+  it('reports the matched text as the SOURCE spells it', () => {
+    // Whitespace-flexible matching means the quote and the source can differ;
+    // a caller highlighting the span needs what is actually there.
+    const hit = locateQuote('default  timeout', [source('S1', 'The default\ntimeout is 30s.')])!;
+    expect(hit.matchedText).toBe('default\ntimeout');
+  });
+
+  it('names which source matched when several are cited', () => {
+    const hit = locateQuote('lighthouse', [
+      source('S1', 'nothing relevant here'),
+      source('S2', 'the lighthouse keeper'),
+    ])!;
+    expect(hit.sourceId).toBe('S2');
+  });
+
+  it('flags a match found only in the capped preview', () => {
+    // Only two of seven producers retain the full text, so for the rest "not
+    // found" can mean "not found in the first 2,000 characters" — the exact
+    // failure verifyText exists to fix. A caller has to be able to tell.
+    expect(locateQuote('needle', [source('S1', 'a needle', false)])!.fromPreview).toBe(true);
+    expect(locateQuote('needle', [source('S1', 'a needle', true)])!.fromPreview).toBe(false);
+  });
+
+  it('returns null rather than throwing for an absent quote', () => {
+    expect(locateQuote('absent', [source('S1', 'other text')])).toBeNull();
+    expect(locateQuote('   ', [source('S1', 'other text')])).toBeNull();
+    expect(locateQuote('anything', [])).toBeNull();
+  });
+
+  it('keeps quoteAppearsIn as a thin predicate over it', () => {
+    // The change is to what the search RETURNS, not to what it finds, which is
+    // what leaves every existing caller and test untouched.
+    const sources = [source('S1', 'The default timeout is 30 seconds.')];
+    expect(quoteAppearsIn('default timeout', sources)).toBe(true);
+    expect(quoteAppearsIn('nonexistent', sources)).toBe(false);
   });
 });

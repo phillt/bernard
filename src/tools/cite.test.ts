@@ -105,3 +105,76 @@ describe('cite does not leak verification text', () => {
     expect(store.get(id)!.verifyText).toBe('kept');
   });
 });
+
+describe('cite locate (#549)', () => {
+  const store = () => {
+    const p = new ProvenanceStore();
+    p.add({
+      kind: 'web',
+      label: 'Handbook',
+      contentPreview: 'The default timeout is 30 seconds.',
+      rawRef: 'https://example.test/handbook',
+      verifyText: `${'padding. '.repeat(300)}The default timeout is 30 seconds. Tail.`,
+    });
+    return p;
+  };
+
+  it('finds a span past the preview cap, in the retained text', async () => {
+    // The whole reason verifyText exists: a quote from character 3,000 of a
+    // long page reads as fabricated when only the 2,000-char preview is
+    // searched.
+    const out = JSON.parse(
+      await createCiteTool(store()).execute(
+        { action: 'locate', quote: 'default timeout is 30 seconds' },
+        {} as never,
+      ),
+    );
+    expect(out.found).toBe(true);
+    expect(out.sourceId).toBe('S1');
+    expect(out.start).toBeGreaterThan(2000);
+    expect(out.fromPreview).toBe(false);
+    expect(out.rawRef).toBe('https://example.test/handbook');
+  });
+
+  it('returns a bounded window, never the whole retained text', async () => {
+    // Withholding it is the entire point of the field — `get` strips it for the
+    // same reason. The model already saw this text when the tool ran.
+    const out = JSON.parse(
+      await createCiteTool(store()).execute(
+        { action: 'locate', quote: 'default timeout' },
+        {} as never,
+      ),
+    );
+    expect(out.context.length).toBeLessThan(1200);
+    expect(out.context).toContain('default timeout');
+  });
+
+  it('says which sources it searched when it finds nothing', async () => {
+    const out = JSON.parse(
+      await createCiteTool(store()).execute(
+        { action: 'locate', quote: 'never written anywhere' },
+        {} as never,
+      ),
+    );
+    expect(out.found).toBe(false);
+    expect(out.searched).toEqual(['S1']);
+  });
+
+  it('marks sources where only the preview could be searched', async () => {
+    // "Not found" and "not found in the first 2,000 characters" are different
+    // answers, and a caller has to be able to tell them apart.
+    const p = new ProvenanceStore();
+    p.add({ kind: 'memory', label: 'm', contentPreview: 'short', rawRef: 'memory:k' });
+    const out = JSON.parse(
+      await createCiteTool(p).execute({ action: 'locate', quote: 'absent' }, {} as never),
+    );
+    expect(out.partial).toEqual(['S1']);
+  });
+
+  it('requires a quote', async () => {
+    const out = JSON.parse(
+      await createCiteTool(store()).execute({ action: 'locate' }, {} as never),
+    );
+    expect(out.error).toMatch(/quote is required/);
+  });
+});

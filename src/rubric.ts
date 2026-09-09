@@ -17,6 +17,28 @@ export interface Check {
   label: string;
   status: CheckStatus;
   evidence?: string;
+  /**
+   * Provenance ids this check ran against (#549).
+   *
+   * Structured, because `evidence` names them in PROSE — `S1, S2: <reason>` —
+   * so anything wanting to go from a rubric row back to the source it names
+   * would have to re-parse English. Optional, so every existing producer and
+   * `renderRubricLine` are untouched: this adds an edge, it does not change
+   * what is rendered.
+   */
+  sources?: string[];
+  /** Where the quoted span was found, when a check located one (#549). */
+  location?: CheckLocation;
+}
+
+/** A located span behind a check, carried so a caller can descend to it. */
+export interface CheckLocation {
+  sourceId: string;
+  start: number;
+  end: number;
+  matchedText: string;
+  /** True when only the capped preview was searched, not the full retained text. */
+  fromPreview: boolean;
 }
 
 export interface Rubric {

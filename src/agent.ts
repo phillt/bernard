@@ -689,7 +689,13 @@ export class Agent {
               kind: 'rag',
               label: r.fact.slice(0, 80),
               contentPreview: r.fact,
-              rawRef: `rag:${r.domain}:${r.fact.slice(0, 60)}`,
+              // The RECORD ID, not a prefix of the content. `fact.slice(0, 60)`
+              // made two facts in a domain sharing sixty characters collide
+              // into one provenance entry, and made the ref un-lookup-able in
+              // the store it came from — a citation pointing at nothing
+              // resolvable. `id` is absent only on the legacy narrow path,
+              // where the old shape is kept rather than invented.
+              rawRef: r.id ? `rag:${r.id}` : `rag:${r.domain}:${r.fact.slice(0, 60)}`,
             });
           }
 

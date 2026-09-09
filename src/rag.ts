@@ -177,6 +177,17 @@ export interface RAGSearchResult {
   fact: string;
   similarity: number;
   domain: string;
+  /**
+   * The record id (#549).
+   *
+   * Optional so no existing consumer changes, but populated by `search()`,
+   * which has had it in hand all along and dropped it. Without it the main
+   * agent's provenance ref was `rag:<domain>:<first 60 chars of the fact>` — a
+   * lossy prefix of the CONTENT rather than an address, so two facts in a
+   * domain sharing sixty characters collided into one citable source and
+   * nothing could be looked back up in the store it came from.
+   */
+  id?: string;
 }
 
 /** Extended search result that includes the memory ID and lifecycle metadata. */
@@ -756,6 +767,7 @@ export class RAGStore {
     }
 
     const results = capped.map((s) => ({
+      id: s.memory.id,
       fact: s.memory.fact,
       similarity: s.similarity,
       domain: s.memory.domain,

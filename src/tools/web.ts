@@ -98,7 +98,13 @@ export function createWebReadTool(provenance?: ProvenanceStore) {
             kind: 'web',
             label: title || url,
             contentPreview: markdown,
-            rawRef: url,
+            // The SELECTOR is part of the ref, because it is part of the
+            // identity. The dedup key is `${kind}:${rawRef}`, so with a bare
+            // url `web_read(url, 'main')` and `web_read(url, 'article')`
+            // collided into one entry and the longer body silently won — two
+            // different extractions presented as one source, with a quote
+            // checkable against text the caller never saw.
+            rawRef: selector ? `${url}#selector=${selector}` : url,
             // The same text, retained in full for quote checking. The preview
             // is capped at 2,000 chars because it is re-sent to the model every
             // turn; this is not sent at all, so a quote from the middle of the
