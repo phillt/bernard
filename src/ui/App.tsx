@@ -89,7 +89,8 @@ import { noPromptCacheHint } from '../cost-guardrail.js';
 import { memoryCapNotice } from '../memory-notice.js';
 import { clearDispatchContextStore } from '../dispatch-context-history.js';
 import { makeUsageRecorder, makeOutOfTurnUsageRecorder } from '../framework/hooks/token-stats.js';
-import { truncate } from '../text.js';
+import { truncate, scopeList } from '../text.js';
+import { SCOPE_AXES } from '../framework/agents/dispatch-profile.js';
 import { WIZARD_CATEGORIES_DATA, type WizardFieldData } from '../profiles-wizard-data.js';
 import {
   loadImage,
@@ -2099,13 +2100,18 @@ export function App({
           entries.push({ type: 'section', title });
           for (const s of list) {
             const locked = builtinIds.has(s.id);
+            // A fence and a bad retrieval look identical from outside — the
+            // specialist keeps answering, just worse — so the one surface a
+            // user browses has to say a record carries one. The row says THAT
+            // it is fenced, not to what: the annotation is one line beside a
+            // name, and `read` prints the axes in full.
+            const fenced = SCOPE_AXES.some((axis) => s[axis.field] !== undefined);
+            const kind = s.kind ?? 'persona';
             entries.push({
               label: s.name,
-              annotation: locked
-                ? `🔒 ${s.kind ?? 'persona'}`
-                : s.disabled
-                  ? '(disabled)'
-                  : (s.kind ?? 'persona'),
+              annotation:
+                (locked ? `🔒 ${kind}` : s.disabled ? '(disabled)' : kind) +
+                (fenced ? ' · scoped' : ''),
               description: truncate(s.description, 100),
               value: s.id,
             });
@@ -5266,7 +5272,16 @@ function buildDebugReportLines(
  * menu's Edit action). The agent is given the current definition and told to ask
  * what to change, then persist via the `specialist` tool's `update` action.
  */
-function buildSpecialistEditSeed(s: Specialist): string {
+/**
+ * The current definition, handed to the agent that will edit it.
+ *
+ * Exported for its test rather than for a second caller: the seed tells the
+ * agent to change only the fields the user asked for, so a field this does not
+ * echo is one the agent may silently drop or contradict — and it echoed six of
+ * the twelve a record can declare. A fence is the worst of those to lose,
+ * because losing it does not error: the specialist keeps answering, just worse.
+ */
+export function buildSpecialistEditSeed(s: Specialist): string {
   const lines = [
     `The user wants to edit the "${s.name}" specialist (id: ${s.id}).`,
     '',
@@ -5278,6 +5293,19 @@ function buildSpecialistEditSeed(s: Specialist): string {
   if (s.targetTools?.length) lines.push(`- targetTools: ${s.targetTools.join(', ')}`);
   if (s.provider) lines.push(`- provider: ${s.provider}`);
   if (s.model) lines.push(`- model: ${s.model}`);
+  // Everything a record can declare, not the six fields this used to echo.
+  // The agent is told to change only what was asked — so a field it cannot see
+  // is one it may contradict, and a fence is the worst of them to lose: the
+  // specialist keeps answering, just worse, with nothing to trace it to.
+  if (s.role) lines.push(`- role: ${s.role}`);
+  if (s.stepRatio !== undefined) lines.push(`- stepRatio: ${s.stepRatio}`);
+  if (s.strategy) lines.push(`- strategy: ${s.strategy}`);
+  if (s.toolSurface) lines.push(`- toolSurface: ${s.toolSurface}`);
+  for (const axis of SCOPE_AXES) {
+    const value = s[axis.field];
+    if (value !== undefined) lines.push(`- ${axis.field}: ${scopeList(value)}`);
+  }
+  if (s.boundTo) lines.push(`- boundTo: ${s.boundTo.appId}/${s.boundTo.action}`);
   if (s.disabled) lines.push('- status: disabled');
   lines.push(
     '',

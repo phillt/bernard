@@ -24,6 +24,8 @@ import {
   DISPATCH_TOOL_SURFACES,
   MAX_STEP_RATIO,
   SCOPE_AXES,
+  declaredScope,
+  type ScopeField,
 } from '../framework/agents/dispatch-profile.js';
 import { scopeList, plural } from '../text.js';
 import { deleteSpecialist } from '../specialist-lifecycle.js';
@@ -89,6 +91,50 @@ function targetToolsScopeError(
   return (
     `Error: a "${effective}" specialist must declare targetTools. It fronts specific tools, ` +
     `and one that names none is handed no tools at all. Pass e.g. targetTools: ["shell"].`
+  );
+}
+
+/**
+ * A caller-supplied fence, split into what will be stored and what is wrong
+ * with it.
+ *
+ * **Refused here, silently dropped there**, and the division is the same one
+ * `targetToolsScopeError` makes against `buildChildTools`. `declaredScope` runs
+ * before every dispatch in the process including `main`, so it must never throw
+ * and falls back per entry by design; that is right for a resolver and useless
+ * as feedback. The creation boundary is the one moment a model can still be
+ * told, and a fence is exactly the field where a silent drop is worst — an
+ * entry that never matches is indistinguishable from a store with nothing to
+ * say.
+ *
+ * The predicates are `declaredScope`'s own, not a second copy: a boundary that
+ * accepted what the resolver rejects would be worse than no boundary at all.
+ *
+ * `''` is stripped before validation — it is the clear sentinel, not a fence —
+ * and passed through to the store, which turns it into a delete.
+ */
+function scopeDeclarationError(
+  declared: Partial<Record<ScopeField, string[] | ''>>,
+): string | null {
+  const rejected: Record<string, unknown> = {};
+  const toCheck: Partial<Record<ScopeField, unknown>> = {};
+  for (const axis of SCOPE_AXES) {
+    const value = declared[axis.field];
+    if (Array.isArray(value)) toCheck[axis.field] = value;
+  }
+  declaredScope(toCheck, rejected);
+  const bad = Object.entries(rejected);
+  if (bad.length === 0) return null;
+  const axisOf = (field: string) => SCOPE_AXES.find((a) => a.field === field);
+  return (
+    'Error: ' +
+    bad
+      .map(([field, entries]) => {
+        const list = Array.isArray(entries) ? entries.map((e) => JSON.stringify(e)).join(', ') : '';
+        return `${field} rejected ${list} — ${axisOf(field)?.hint ?? 'see the field description'}.`;
+      })
+      .join(' ') +
+    ' Nothing was saved; fix the entries and retry.'
   );
 }
 
@@ -300,6 +346,44 @@ export function createSpecialistTool(
               'Omit unless you need "full" — the default is already the narrow one. ' +
               'Pass "" to clear. Used with create/update.',
           ),
+        // The three fences (#511). Listed rather than generated from
+        // `SCOPE_AXES`, because zod keys built with `Object.fromEntries` widen
+        // to `Record<string, …>` and the destructuring below stops being typed.
+        // `scope-authoring.test.ts` walks the table to this schema instead, the
+        // record-to-surface direction the mistake is actually made in.
+        //
+        // The three states are spelled differently on purpose: omit to leave a
+        // fence alone, `[]` to deny everything, `""` to remove the fence. `[]`
+        // cannot double as the clear, which is what #511 recorded as the
+        // blocker — `""` is not an array, so it can.
+        memoryScope: z
+          .union([z.array(z.string()), z.literal('')])
+          .optional()
+          .describe(
+            'Which persistent-memory keys this specialist may read and WRITE. Each entry is an ' +
+              'exact key or a prefix ending in "*" (e.g. "proj-*"). Omit for the default — the ' +
+              'user\'s whole unowned set. Pass [] to deny all memory, "" to remove an existing ' +
+              'fence. Note a specialist already keeps its OWN memories privately; this narrows ' +
+              'what it sees of the shared set. Used with create/update.',
+          ),
+        knowledgeScope: z
+          .union([z.array(z.string()), z.literal('')])
+          .optional()
+          .describe(
+            'Which RAG domains this specialist may retrieve from — the existing `domain` axis, ' +
+              'so entries must be domains that exist (call action:"roles" is not this; see the ' +
+              'domain registry). Omit for all. Pass [] to deny all, "" to remove the fence. ' +
+              'Used with create/update.',
+          ),
+        corpusScope: z
+          .union([z.array(z.string()), z.literal('')])
+          .optional()
+          .describe(
+            'Which ingested knowledge libraries this specialist may search (`bernard knowledge ' +
+              'list`). Entries are library ids; one naming a library that does not exist yet is ' +
+              'kept and simply matches nothing. Omit for all. Pass [] to deny all, "" to remove ' +
+              'the fence. Used with create/update.',
+          ),
         goodExamples: z
           .array(goodExampleSchema)
           .optional()
@@ -336,6 +420,9 @@ export function createSpecialistTool(
         stepRatio,
         strategy,
         toolSurface,
+        memoryScope,
+        knowledgeScope,
+        corpusScope,
         goodExamples,
         badExamples,
         structuredOutput,
@@ -368,6 +455,16 @@ export function createSpecialistTool(
             }
             if (specialist.structuredOutput) {
               output += `\nStructured output: true`;
+            }
+            // Rendered here as well as in `inspect`, because this is what the
+            // `/specialists` edit hand-off and any agent reading a record before
+            // changing it actually calls — and a fence it cannot see is one it
+            // will drop or contradict. `scopeList` prints the whole list rather
+            // than `+N more`: the entries someone is reading the line to check
+            // are exactly the ones an elision would hide.
+            for (const axis of SCOPE_AXES) {
+              const value = specialist[axis.field];
+              if (value !== undefined) output += `\n${axis.field}: ${scopeList(value)}`;
             }
             if (specialist.provider || specialist.model) {
               output += `\n\n## Model Override\nProvider: ${specialist.provider ?? 'default'}\nModel: ${specialist.model ?? 'default'}`;
@@ -625,6 +722,9 @@ export function createSpecialistTool(
             }
             const createScopeError = targetToolsScopeError(kind, targetTools);
             if (createScopeError) return createScopeError;
+            const declaredFences = { memoryScope, knowledgeScope, corpusScope };
+            const fenceError = scopeDeclarationError(declaredFences);
+            if (fenceError) return fenceError;
             try {
               const specialist = store.createFull({
                 id,
@@ -642,6 +742,14 @@ export function createSpecialistTool(
                 ...(stepRatio !== undefined && stepRatio !== 0 ? { stepRatio } : {}),
                 ...(strategy ? { strategy } : {}),
                 ...(toolSurface ? { toolSurface } : {}),
+                // `''` is the CLEAR sentinel, and on a create there is nothing
+                // to clear — so it is dropped rather than stored, exactly as
+                // `strategy`/`toolSurface` above drop theirs.
+                ...Object.fromEntries(
+                  SCOPE_AXES.filter((axis) => Array.isArray(declaredFences[axis.field])).map(
+                    (axis) => [axis.field, declaredFences[axis.field]],
+                  ),
+                ),
                 goodExamples: goodExamples as SpecialistExample[] | undefined,
                 badExamples: badExamples as SpecialistBadExample[] | undefined,
                 structuredOutput,
@@ -731,6 +839,13 @@ export function createSpecialistTool(
             }
             const updateRatioError = stepRatioError(stepRatio);
             if (updateRatioError) return updateRatioError;
+            const updateFences = { memoryScope, knowledgeScope, corpusScope };
+            const updateFenceError = scopeDeclarationError(updateFences);
+            if (updateFenceError) return updateFenceError;
+            for (const axis of SCOPE_AXES) {
+              const value = updateFences[axis.field];
+              if (value !== undefined) updates[axis.field] = value;
+            }
             if (stepRatio !== undefined) updates.stepRatio = stepRatio;
             if (strategy !== undefined) updates.strategy = strategy;
             if (toolSurface !== undefined) updates.toolSurface = toolSurface;
@@ -742,7 +857,7 @@ export function createSpecialistTool(
             // Auto-clear model when provider is cleared and model not explicitly provided
             if (provider === '' && model === undefined) updates.model = '';
             if (Object.keys(updates).length === 0)
-              return 'Error: provide at least one field to update (name, description, systemPrompt, guidelines, provider, model, role, kind, targetTools, stepRatio, strategy, toolSurface, goodExamples, badExamples, or structuredOutput).';
+              return `Error: provide at least one field to update (name, description, systemPrompt, guidelines, provider, model, role, kind, targetTools, stepRatio, strategy, toolSurface, ${SCOPE_AXES.map((a) => a.field).join(', ')}, goodExamples, badExamples, or structuredOutput).`;
             try {
               const updated = store.update(id, updates);
               if (!updated) return `No specialist found with id "${id}".`;
