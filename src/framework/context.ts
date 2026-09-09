@@ -5,6 +5,7 @@ import { SpecialistStore } from '../specialists.js';
 import { CandidateStore, type CandidateStoreReader } from '../specialist-candidates.js';
 import { CorrectionCandidateStore } from '../correction-candidates.js';
 import { ToolProfileStore } from '../tool-profiles.js';
+import type { KnowledgeCorpus } from '../knowledge/corpus.js';
 import type { RAGStore } from '../rag.js';
 import type { PolicyDecision } from '../policy/types.js';
 import type { ToolOptions } from '../tools/types.js';
@@ -80,6 +81,16 @@ export interface AgentContext {
   stores: AgentContextStores;
   mcp: AgentContextMCP;
   rag?: RAGStore;
+  /**
+   * Ingested document libraries this dispatch may read (#516).
+   *
+   * Optional because a process with no corpus has none, and because
+   * constructing one opens no database — it is a scope array and a stamp, so it
+   * can sit here unconditionally without repeating the cost `headless.ts`
+   * documents for `new RAGStore()` (~190 ms and ~128 MB for callers that never
+   * retrieve).
+   */
+  knowledge?: KnowledgeCorpus;
   toolOptions: ToolOptions;
   /**
    * Per-turn decision resolved by {@link DefaultPolicyEngine}. Set by the
@@ -135,6 +146,7 @@ export interface AssembleContextInput {
   toolOptions: ToolOptions;
   mcp?: Partial<AgentContextMCP>;
   rag?: RAGStore;
+  knowledge?: KnowledgeCorpus;
   stores?: Partial<AgentContextStores>;
   provenance?: ProvenanceStore;
   verification?: VerificationStore;
@@ -164,6 +176,7 @@ export function assembleContext(input: AssembleContextInput): AgentContext {
       resolveAlias: input.mcp?.resolveAlias ?? (() => null),
     },
     rag: input.rag,
+    knowledge: input.knowledge,
     toolOptions: input.toolOptions,
     provenance: input.provenance ?? new ProvenanceStore(),
     verification: input.verification ?? new VerificationStore(),
@@ -195,8 +208,13 @@ export function assembleContext(input: AssembleContextInput): AgentContext {
  * what keeps its tool block byte-identical for the prompt cache (#269).
  */
 export function scopeContext(ctx: AgentContext, profile: DispatchProfile): AgentContext {
-  const { memoryScope, knowledgeScope } = profile;
-  if (memoryScope === undefined && knowledgeScope === undefined) return ctx;
+  const { memoryScope, knowledgeScope, corpusScope } = profile;
+  // **The third term is load-bearing and fails silently without a test.** Omit
+  // `corpusScope` here and a corpus-only fence returns the unscoped context —
+  // every such fence becomes a no-op, with every other test still green.
+  if (memoryScope === undefined && knowledgeScope === undefined && corpusScope === undefined) {
+    return ctx;
+  }
   // Narrowing is monotone and idempotent in both stores, so re-scoping an
   // already-scoped context can only ever narrow further. That is what lets
   // `tool-wrapper-run.ts` scope early for its pre-assembled child tools and
@@ -212,6 +230,7 @@ export function scopeContext(ctx: AgentContext, profile: DispatchProfile): Agent
         ? ctx.stores
         : { ...ctx.stores, memory: ctx.stores.memory.scoped(memoryScope) },
     rag: ctx.rag?.scoped(knowledgeScope),
+    knowledge: ctx.knowledge?.scoped(corpusScope),
   };
 }
 

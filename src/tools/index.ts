@@ -12,6 +12,7 @@ import type { ToolOptions } from './types.js';
 import type { MemoryStore } from '../memory.js';
 import type { RoutineStore } from '../routines.js';
 import type { SpecialistStore } from '../specialists.js';
+import type { KnowledgeCorpus } from '../knowledge/corpus.js';
 import type { CandidateStoreReader } from '../specialist-candidates.js';
 import type { BernardConfig } from '../config.js';
 import type { ProvenanceStore } from '../provenance.js';
@@ -78,6 +79,20 @@ export interface CreateToolsOptions {
    * each dispatch site; see `framework/agents/tool-surface.ts`.
    */
   surface?: 'full' | 'worker';
+  /**
+   * The knowledge libraries this dispatch may read (#516), already fenced.
+   *
+   * The tool is constructed only when this is present, which is the fail-closed
+   * shape and has a precedent in the same table — the `cite` group builds
+   * nothing without a provenance store. Because the fence lives ON the handle,
+   * a tool that exists at all is a tool that is already scoped, and there is no
+   * "fall back to an unscoped corpus" path a call site could reach for.
+   *
+   * It does not vary the tool BYTES — description and schema are constants — so
+   * the prompt-cache rule is untouched; only the group's presence changes, and
+   * that is session-stable exactly as `cite`'s is.
+   */
+  knowledge?: KnowledgeCorpus;
 }
 
 /**
@@ -191,6 +206,19 @@ export async function createTools(
     {
       audience: 'main',
       make: async () => ({ docs: (await import('./docs.js')).createDocsTool() }),
+    },
+    // Constructed only when a corpus handle was supplied, so the tool cannot
+    // exist without a fence. `'main'` follows `docs` — it still reaches a
+    // wrapper specialist, which declares `toolSurface: 'full'` — though the
+    // argument is weaker here than for `docs`, since a dispatched research
+    // worker is a plausible best consumer of a document corpus. `'any'` plus
+    // the fence is the live follow-up rather than a settled question.
+    {
+      audience: 'main',
+      make: async () =>
+        opts?.knowledge
+          ? { knowledge: (await import('./knowledge.js')).createKnowledgeTool(opts.knowledge) }
+          : {},
     },
     {
       audience: 'main',

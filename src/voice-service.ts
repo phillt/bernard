@@ -5,7 +5,7 @@ import { CACHE_DIR } from './paths.js';
 import { clampForSpeech } from './speech-text.js';
 
 /** Default PATH probe: true when `which <bin>` succeeds. */
-function defaultHasBin(bin: string): boolean {
+export function defaultHasBin(bin: string): boolean {
   try {
     execFileSync('which', [bin], { stdio: 'ignore' });
     return true;

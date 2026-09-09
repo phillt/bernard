@@ -118,7 +118,7 @@ export interface RunDefinitionOpts {
    * design telling you the runner should not interrogate a store to find out
    * what it was told.
    */
-  declaredScope?: Pick<DispatchProfile, 'memoryScope' | 'knowledgeScope'>;
+  declaredScope?: Pick<DispatchProfile, 'memoryScope' | 'knowledgeScope' | 'corpusScope'>;
 }
 
 export interface RunDefinitionResult<TFormatted> {
@@ -585,6 +585,7 @@ export async function runDefinition<TInput, TFormatted>(
         // `resolveDispatchProfile` cannot see it.
         ...(fence.memoryScope ? { memoryScope: fence.memoryScope } : {}),
         ...(fence.knowledgeScope ? { knowledgeScope: fence.knowledgeScope } : {}),
+        ...(fence.corpusScope ? { corpusScope: fence.corpusScope } : {}),
       });
     }
     const r = await runAgent({

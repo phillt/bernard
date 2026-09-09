@@ -87,6 +87,29 @@ export function appletAssetDir(appId: string): string {
 export function appletDataDir(appId: string): string {
   return path.join(DATA_DIR, 'applet-data', appId);
 }
+/**
+ * One knowledge library's ingested corpus (#516): one SQLite file per library
+ * at `knowledgeDir(id)/library.db`.
+ *
+ * The same three-way argument {@link appletDataDir} makes, and it lands the
+ * same way. Not a served directory — the database would be fetchable over
+ * HTTP. Not `runWorkspace(...)`, which is a write scope `file_write` can
+ * reach, so a tool call could corrupt the database out from under the store.
+ * And `DATA_DIR` rather than `STATE_DIR` because an ingested document is the
+ * user's own content, not Bernard's regenerable bookkeeping — the rule
+ * {@link APPLET_BRIEFS_DIR} states.
+ *
+ * **One file per library, rather than one database with a `library` column.**
+ * Deletion is an unlink rather than a cascade that can half-run, a corrupt
+ * library cannot take out the others, and one library can be re-embedded
+ * without touching the rest. The one that matters most: a global cap that
+ * prunes across owners — the mechanism that makes `RAGStore` unable to hold a
+ * corpus, since ingesting a book there evicts the user's own conversation
+ * history — becomes structurally unrepresentable rather than merely absent.
+ */
+export function knowledgeDir(libraryId: string): string {
+  return path.join(DATA_DIR, 'knowledge', libraryId);
+}
 export const SPECIALIST_CANDIDATES_DIR = path.join(DATA_DIR, 'specialist-candidates');
 export const CORRECTION_CANDIDATES_DIR = path.join(DATA_DIR, 'correction-candidates');
 export const APPLET_CANDIDATES_DIR = path.join(DATA_DIR, 'applet-candidates');

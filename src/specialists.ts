@@ -159,6 +159,14 @@ export interface Specialist {
    * Validated against the domain registry. Absent means unscoped.
    */
   knowledgeScope?: string[];
+  /**
+   * Knowledge libraries this specialist may read (#516). Unset is unscoped.
+   *
+   * Deliberately NOT on `CreateSpecialistInput`, for `memoryScope`'s reason: an
+   * array has no clearing sentinel that is not already meaningful, since `[]`
+   * must mean deny-all.
+   */
+  corpusScope?: string[];
   /** Correct usage patterns used for few-shot priming. */
   goodExamples?: SpecialistExample[];
   /** Failed usage patterns with their corrected form. */

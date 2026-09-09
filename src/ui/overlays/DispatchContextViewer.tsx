@@ -172,10 +172,16 @@ function detailBody(r: DispatchContextRecord): string {
   // Above the memory listing on purpose: the fence is what explains the
   // listing, and a reader who meets the short list first has already formed
   // the wrong conclusion (#511).
-  if (r.memoryScope || r.knowledgeScope) {
+  // Every axis, not two of three. A corpus-only fence rendered NO "Scoped to:"
+  // header at all — not a missing line inside an otherwise-correct block, but
+  // the whole section silently absent on exactly the dispatch the record exists
+  // to explain. A fence and a bad retrieval look identical from outside, and
+  // this is the surface that tells them apart.
+  if (r.memoryScope || r.knowledgeScope || r.corpusScope) {
     parts.push('', 'Scoped to:');
     if (r.memoryScope) parts.push(`  memory: ${scopeList(r.memoryScope)}`);
     if (r.knowledgeScope) parts.push(`  knowledge: ${scopeList(r.knowledgeScope)}`);
+    if (r.corpusScope) parts.push(`  corpus: ${scopeList(r.corpusScope)}`);
   }
   if (r.retrievalQuery) {
     parts.push('', 'Retrieved for:', `  ${r.retrievalQuery}`);

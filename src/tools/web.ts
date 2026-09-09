@@ -1,24 +1,8 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { parse } from 'node-html-parser';
-import TurndownService from 'turndown';
+import { htmlToMarkdown } from '../html-text.js';
 import { attachMeta } from '../framework/tools/adapter.js';
 import type { ProvenanceStore } from '../provenance.js';
-
-/** CSS selectors for elements stripped before HTML-to-markdown conversion. */
-const STRIP_SELECTORS = [
-  'script',
-  'style',
-  'nav',
-  'footer',
-  'header',
-  'iframe',
-  'noscript',
-  'svg',
-  '[role="navigation"]',
-  '[role="banner"]',
-  '[aria-hidden="true"]',
-];
 
 /** Maximum raw HTML size accepted before truncation (1 MB). */
 const MAX_HTML_BYTES = 1_000_000;
@@ -96,38 +80,11 @@ export function createWebReadTool(provenance?: ProvenanceStore) {
           return `Error: Failed to read response body — ${message}`;
         }
 
-        const root = parse(html);
-
-        // Strip junk elements
-        for (const sel of STRIP_SELECTORS) {
-          root.querySelectorAll(sel).forEach((el) => el.remove());
-        }
-
-        // Get page title
-        const title = root.querySelector('title')?.text.trim() ?? '';
-
-        // Select content
-        let content: string;
-        if (selector) {
-          const selected = root.querySelector(selector);
-          content = selected ? selected.innerHTML : root.innerHTML;
-        } else {
-          // Try common content containers, fall back to root
-          const body = root.querySelector('body');
-          content = body ? body.innerHTML : root.innerHTML;
-        }
-
-        // Convert to markdown
-        const turndown = new TurndownService({
-          headingStyle: 'atx',
-          codeBlockStyle: 'fenced',
-        });
-        let markdown = turndown.turndown(content);
-
-        // Prepend title
-        if (title) {
-          markdown = `# ${title}\n\n${markdown}`;
-        }
+        // HTML → markdown lives in `html-text.ts` so corpus ingestion shares
+        // the strip list rather than growing a second copy that drifts.
+        const extracted = htmlToMarkdown(html, selector);
+        const title = extracted.title;
+        let markdown = extracted.markdown;
 
         // Truncate
         if (markdown.length > MAX_OUTPUT_CHARS) {

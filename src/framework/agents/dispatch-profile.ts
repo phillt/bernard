@@ -1,6 +1,7 @@
 import type { AgentContext } from '../context.js';
 import { debugLog } from '../../logger.js';
 import type { AgentDefinition } from './types.js';
+import { isValidLibraryId } from '../../knowledge/ids.js';
 import { isValidScopePattern } from '../../memory.js';
 import { getDomainIds } from '../../domains.js';
 
@@ -81,6 +82,24 @@ export interface DispatchProfile {
   memoryScope?: string[];
   /** RAG domains this dispatch may retrieve from (#511). Absent means unscoped. */
   knowledgeScope?: string[];
+  /**
+   * Knowledge libraries this dispatch may read (#516). Absent means unscoped.
+   *
+   * **A separate field from `knowledgeScope`, not a reuse of it**, and the
+   * reasons are specific rather than tidiness. That field's predicate is an
+   * existence check against the frozen domain registry, so a library name in it
+   * resolves to `[]` — silent deny-all. `declaredScope` runs before every
+   * dispatch including `main`, from a call site outside the only `try`, so its
+   * predicate must not reach disk. And `headless.ts` applies the knowledge
+   * fence ctx-free by calling `.scoped()` on the RAG store directly, so one
+   * array holding two namespaces would need a partition rule correct in two
+   * places or a cron run would fence differently from an interactive one — and
+   * a fence that is wrong is indistinguishable from a bad retrieval.
+   *
+   * Memory and knowledge were already two fields for two stores. A third store
+   * gets a third; that is the existing shape, not a new mechanism.
+   */
+  corpusScope?: string[];
 }
 
 /** Empty profile, shared so the common path allocates nothing. */
@@ -132,9 +151,9 @@ export function declaredToolSurface(record: {
  * while "verify against the task and nothing else" is a coherent posture.
  */
 export function declaredScope(
-  record: { memoryScope?: unknown; knowledgeScope?: unknown },
+  record: { memoryScope?: unknown; knowledgeScope?: unknown; corpusScope?: unknown },
   rejected?: Record<string, unknown>,
-): Pick<DispatchProfile, 'memoryScope' | 'knowledgeScope'> {
+): Pick<DispatchProfile, 'memoryScope' | 'knowledgeScope' | 'corpusScope'> {
   const scopeOf = (
     raw: unknown,
     valid: (v: unknown) => boolean,
@@ -156,9 +175,17 @@ export function declaredScope(
     (v) => typeof v === 'string' && knownDomains.has(v),
     'knowledgeScope',
   );
+  // Shape, never existence. `isValidLibraryId` is a zero-import leaf precisely
+  // so this predicate cannot touch disk or throw — and a well-formed id naming
+  // a library that does not exist yet is KEPT, because dropping it is what
+  // makes `knowledgeScope` unusable for libraries today: it would resolve to
+  // `[]`, i.e. deny-all. A scope naming a missing library already fails closed
+  // by matching nothing.
+  const corpusScope = scopeOf(record.corpusScope, isValidLibraryId, 'corpusScope');
   return {
     ...(memoryScope !== undefined ? { memoryScope } : {}),
     ...(knowledgeScope !== undefined ? { knowledgeScope } : {}),
+    ...(corpusScope !== undefined ? { corpusScope } : {}),
   };
 }
 
