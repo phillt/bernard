@@ -8,6 +8,7 @@ import { knowledgeDir } from '../../paths.js';
 import { createTools } from '../../tools/index.js';
 import type { AgentContext } from '../../framework/context.js';
 import type { ToolOptions } from '../../tools/types.js';
+import type { DispatchContextRecord } from '../../dispatch-context-history.js';
 
 /**
  * The corpus fence, at the two places it can fail SILENTLY (#516).
@@ -172,15 +173,17 @@ describe('the registry', () => {
 });
 
 describe('the record and its renderer', () => {
-  const record = (scope: Partial<Record<string, string[]>>) =>
-    ({
-      dispatchId: 'ab12',
-      definitionId: 'specialist',
-      telemetrySite: 'specialist:s',
-      timestamp: 0,
-      sections: { persistent_memory: 10 },
-      ...scope,
-    }) as never;
+  // Typed against the real record rather than cast with `as never`: this is
+  // the file whose whole point is that a fence axis went unrendered, so a
+  // renamed field must fail here rather than be laundered through a cast.
+  const record = (scope: Partial<DispatchContextRecord> = {}): DispatchContextRecord => ({
+    dispatchId: 'ab12',
+    definitionId: 'specialist',
+    telemetrySite: 'specialist:s',
+    timestamp: 0,
+    sections: { persistent_memory: 10 },
+    ...scope,
+  });
 
   it('renders a corpus-only fence, which had no header at all', async () => {
     // The guard was `memoryScope || knowledgeScope`, so a corpus-only fence

@@ -51,6 +51,21 @@ function writeApp(appsDir: string, toolAllowlist: string[]): void {
   );
 }
 
+/**
+ * Edits a saved record on disk, past the tool's own validation.
+ *
+ * Three tests need this — a binding the gate refuses, a `stepRatio` the schema
+ * rejects, and a fence the create schema does not expose at all — and it is
+ * the same four lines each time. All three are modelling the same state: a
+ * record hand-edited after the fact, which is exactly what the resolver has to
+ * survive.
+ */
+function patchRecord(specialistsDir: string, id: string, patch: Record<string, unknown>): void {
+  const file = path.join(specialistsDir, `${id}.json`);
+  const record = JSON.parse(fs.readFileSync(file, 'utf-8'));
+  fs.writeFileSync(file, JSON.stringify({ ...record, ...patch }));
+}
+
 describe('binding a specialist to an applet action', () => {
   it('refuses a binding the specialist could never fulfil', async () => {
     const { createSpecialistTool, paths } = await load();
@@ -186,10 +201,9 @@ describe('binding a specialist to an applet action', () => {
     );
     // Bind past the gate by writing the record directly — the state a manifest
     // edited after the fact leaves behind.
-    const file = path.join(paths.SPECIALISTS_DIR, 'note-agent.json');
-    const record = JSON.parse(fs.readFileSync(file, 'utf-8'));
-    record.boundTo = { appId: 'notes', action: 'summarize' };
-    fs.writeFileSync(file, JSON.stringify(record));
+    patchRecord(paths.SPECIALISTS_DIR, 'note-agent', {
+      boundTo: { appId: 'notes', action: 'summarize' },
+    });
 
     const out = await tool.execute({ action: 'inspect', id: 'note-agent' } as never, {} as never);
     expect(out).toContain('bound to: notes/summarize');
@@ -273,11 +287,10 @@ describe('inspect shows declared against resolved', () => {
     );
     // Hand-edited, because the create schema deliberately does not expose the
     // fences — an array has no clearing sentinel that is not already meaningful.
-    const file = path.join(paths.SPECIALISTS_DIR, 'fenced.json');
-    const record = JSON.parse(fs.readFileSync(file, 'utf-8'));
-    record.memoryScope = ['deploy-*'];
-    record.corpusScope = ['handbook'];
-    fs.writeFileSync(file, JSON.stringify(record));
+    patchRecord(paths.SPECIALISTS_DIR, 'fenced', {
+      memoryScope: ['deploy-*'],
+      corpusScope: ['handbook'],
+    });
 
     const out = await tool.execute({ action: 'inspect', id: 'fenced' } as never, {} as never);
     expect(out).toContain('memoryScope: deploy-*');
@@ -305,11 +318,7 @@ describe('inspect shows declared against resolved', () => {
     );
     // Written past the tool's own refusal, which is the state a hand-edited
     // record arrives in.
-    const file = path.join(paths.SPECIALISTS_DIR, 'broken.json');
-    const record = JSON.parse(fs.readFileSync(file, 'utf-8'));
-    record.stepRatio = 50;
-    record.strategy = 'coordinator';
-    fs.writeFileSync(file, JSON.stringify(record));
+    patchRecord(paths.SPECIALISTS_DIR, 'broken', { stepRatio: 50, strategy: 'coordinator' });
 
     const out = await tool.execute({ action: 'inspect', id: 'broken' } as never, {} as never);
     expect(out).toContain('declared stepRatio 50 is invalid and is ignored');
