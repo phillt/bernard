@@ -62,7 +62,7 @@ vi.mock('ai', async (importOriginal) => {
 
 import { createSpecialistRunTool } from './specialist-run.js';
 import { detectResultFailure } from '../tool-result-shape.js';
-import { _resetPool, getActiveCount } from './agent-pool.js';
+import { _resetPool, getActiveCount, withSlot, MAX_DISPATCH_DEPTH } from './agent-pool.js';
 import { MemoryStore } from '../memory.js';
 import { SpecialistStore } from '../specialists.js';
 import { assembleContext } from '../framework/context.js';
@@ -869,5 +869,85 @@ describe('specialist-run tool', () => {
       expect(mockGenerateText).toHaveBeenCalledTimes(1);
       expect(mockPrintWarning).not.toHaveBeenCalled();
     });
+  });
+});
+
+/**
+ * The delegation depth bound.
+ *
+ * Tested HERE rather than at the definition, because that is where the decision
+ * lives: the definition only filters whatever overlay it is handed, so a
+ * definition-level test could not tell "the gate refused" from "the caller
+ * passed nothing". This drives the real tool and reads what reached the model.
+ */
+describe('a persona delegates only while the chain is short enough', () => {
+  let memoryStore: MemoryStore;
+  let specialistStore: SpecialistStore;
+  const toolOptions: ToolOptions = { shellTimeout: 30000, confirmDangerous: vi.fn() };
+
+  /** Names the tools the dispatch actually put in front of the model. */
+  async function toolNamesAtDepth(depth: number): Promise<string[]> {
+    vi.spyOn(specialistStore, 'get').mockReturnValue({
+      ...mockSpecialist,
+      targetTools: ['agent'],
+    } as never);
+    mockGenerateText.mockReset();
+    mockGenerateText.mockResolvedValue({ text: 'done', response: { messages: [] } });
+    const overlay = { agent: {}, task: {}, specialist_run: {}, tool_wrapper_run: {} } as never;
+    const tool = createSpecialistRunTool(
+      makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore),
+      () => overlay,
+    );
+    const run = () =>
+      tool.execute!(
+        { specialistId: 'email-triage', task: 'Delegate this' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as never },
+      );
+    // `withSlot` nests for free, so each wrapper is one more level of depth —
+    // the same way a real chain of dispatches accumulates it.
+    let call = run;
+    for (let i = 0; i < depth; i++) {
+      const inner = call;
+      call = () =>
+        withSlot(
+          () => inner(),
+          () => {
+            throw new Error('pool exhausted while nesting — nesting is supposed to be free');
+          },
+        ) as never;
+    }
+    await call();
+    return Object.keys(mockGenerateText.mock.calls[0][0].tools ?? {}).sort();
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetPool();
+    vi.mocked(fs.readdirSync).mockReturnValue([] as never);
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    vi.mocked(fs.readFileSync).mockReturnValue('');
+    memoryStore = new MemoryStore();
+    specialistStore = new SpecialistStore();
+  });
+
+  it('offers the tool it named while inside the limit', async () => {
+    // The dispatch itself takes a slot, so a top-level call already runs at
+    // depth 1 — this is the shallowest a persona can ever be.
+    expect(await toolNamesAtDepth(0)).toContain('agent');
+  });
+
+  it('stops offering it once the chain reaches the limit', async () => {
+    // Construction-time filtering: at the limit the tool is never built, so
+    // there is no refusal to word across the four dispatch tools' four
+    // different return contracts.
+    const deep = await toolNamesAtDepth(MAX_DISPATCH_DEPTH);
+    expect(deep).not.toContain('agent');
+    expect(deep).toEqual(['plan', 'think']);
+  });
+
+  it('counts the enclosing chain, not this one dispatch', async () => {
+    // Guards the guard: a limit read from anything local to this call would be
+    // constant, and would bound nothing.
+    expect(await toolNamesAtDepth(MAX_DISPATCH_DEPTH + 2)).not.toContain('agent');
   });
 });

@@ -265,7 +265,7 @@ export function createSpecialistTool(
           .array(z.string())
           .optional()
           .describe(
-            'The tool names exposed to the child agent (e.g. ["shell"] or ["specialist", "tool_wrapper_run"]). Enforced for every kind: the specialist holds exactly these plus its reasoning tools, and nothing else. Required on tool-wrapper and meta; optional on persona, where omitting it means every tool the dispatch surface allows.',
+            'The tool names exposed to the child agent (e.g. ["shell"] or ["specialist", "tool_wrapper_run"]). Enforced for every kind: the specialist holds exactly these and nothing else. A persona additionally gets plan/think; a tool-wrapper or meta gets no reasoning tools at all. Required on tool-wrapper and meta; optional on persona, where omitting it means every tool the dispatch surface allows.',
           ),
         stepRatio: z
           .number()

@@ -13,7 +13,14 @@ import {
   type SpecialistInput,
 } from '../framework/agents/index.js';
 import { runDefinition } from '../framework/agents/run.js';
-import { withSlot, getMaxConcurrentAgents, slotStatusLine } from './agent-pool.js';
+import {
+  withSlot,
+  getMaxConcurrentAgents,
+  slotStatusLine,
+  dispatchDepth,
+  MAX_DISPATCH_DEPTH,
+} from './agent-pool.js';
+import { debugLog } from '../logger.js';
 import { runDispatchOrFail } from './dispatch-failure.js';
 
 /**
@@ -35,7 +42,31 @@ import { runDispatchOrFail } from './dispatch-failure.js';
  *
  * @param ctx - Assembled AgentContext (config, stores, mcp, toolOptions, optional RAG).
  */
-export function createSpecialistRunTool(ctx: AgentContext): Tool {
+/**
+ * @param dispatchTools A thunk returning the four dispatch tools, so a persona
+ * can delegate to narrower specialists. Supplied by the caller rather than built
+ * here, and that is forced rather than chosen: `specialist_run` must be able to
+ * contain `specialist_run`, so *something* has to be lazy, and today
+ * `tool-wrapper-run.ts` imports this module while this module imports nothing
+ * back — which is the only reason that cycle does not exist. Building the four
+ * here would create it, and deferring the import merely converts a load-time
+ * cycle into a call-time one, which is #452's deadlock (it hung
+ * `specialist.target-tools.test.ts` when tried).
+ *
+ * So the overlay comes from the two places that already construct all four
+ * without a cycle: `main.ts` and `tool-wrapper-run.ts`. A **thunk**, because
+ * `main.ts` builds its overlay in the same object literal that calls this.
+ *
+ * **Omission is the safe answer** — a caller that passes nothing dispatches a
+ * leaf, which is what every persona was before this. Deliberately NOT extracted
+ * into a shared `buildCtxTools(ctx)`: `main.ts`'s overlay carries a
+ * styling-capable `applet` and the others must not, and CLAUDE.md records that
+ * a shared builder is exactly what recreates that recursion.
+ */
+export function createSpecialistRunTool(
+  ctx: AgentContext,
+  dispatchTools?: () => Record<string, Tool>,
+): Tool {
   registerBuiltinDefinitions();
   const { config } = ctx;
   const specialistStore = ctx.stores.specialists;
@@ -106,6 +137,25 @@ export function createSpecialistRunTool(ctx: AgentContext): Tool {
             async () => {
               try {
                 const def = definitions.get<SpecialistInput, string>('specialist');
+                // Built HERE, inside the slot, so `dispatchDepth()` reports this
+                // dispatch's own depth — at construction time it would report
+                // the parent's, once, and bound nothing.
+                //
+                // Construction-time filtering rather than a refusal at call
+                // time: a tool that was never built needs no error worded across
+                // the four dispatch tools' four different return contracts, and
+                // there is no gate a fifth caller can forget to consult. The
+                // pool does NOT bound this — an acquire from inside a slot
+                // holder is free, so nesting passes straight through the cap.
+                const depth = dispatchDepth();
+                const canDelegate = depth < MAX_DISPATCH_DEPTH;
+                if (!canDelegate) {
+                  debugLog('specialist:delegation-depth-reached', {
+                    specialistId,
+                    depth,
+                    max: MAX_DISPATCH_DEPTH,
+                  });
+                }
                 const input: SpecialistInput = {
                   specialistId,
                   task,
@@ -113,6 +163,7 @@ export function createSpecialistRunTool(ctx: AgentContext): Tool {
                   attachments: loaded.read(),
                   slotId: id,
                   planStore,
+                  ...(canDelegate && dispatchTools ? { dispatchTools: dispatchTools() } : {}),
                 };
                 const { formatted } = await runDefinition(ctx, def, input, {
                   abortSignal: execOptions.abortSignal,

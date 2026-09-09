@@ -208,13 +208,16 @@ export async function createTools(
       make: async () => ({ docs: (await import('./docs.js')).createDocsTool() }),
     },
     // Constructed only when a corpus handle was supplied, so the tool cannot
-    // exist without a fence. `'main'` follows `docs` — it still reaches a
-    // wrapper specialist, which declares `toolSurface: 'full'` — though the
-    // argument is weaker here than for `docs`, since a dispatched research
-    // worker is a plausible best consumer of a document corpus. `'any'` plus
-    // the fence is the live follow-up rather than a settled question.
+    // exist without a fence — which is what makes `'any'` safe. It was `'main'`,
+    // and that answered the wrong question: the audience field is about who
+    // OWNS a decision, and a corpus is not Bernard's to own the way `mcp_config`
+    // or `lineup_edit` are. The practical effect was that no specialist could
+    // read an ingested library at all — dropped on the worker surface every
+    // persona runs at, and unbuilt on the wrapper path, which passes no handle.
+    // This side's own comment already conceded the point: "a dispatched research
+    // worker is a plausible best consumer of a document corpus."
     {
-      audience: 'main',
+      audience: 'any',
       make: async () =>
         opts?.knowledge
           ? { knowledge: (await import('./knowledge.js')).createKnowledgeTool(opts.knowledge) }

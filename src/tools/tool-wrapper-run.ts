@@ -10,7 +10,13 @@ import { redactArgs, REDACTED } from '../framework/tools/redact.js';
 import { createSpecialistRunTool } from './specialist-run.js';
 import { printSpecialistStart, printSpecialistEnd } from '../output.js';
 import { debugLog } from '../logger.js';
-import { withSlot, getMaxConcurrentAgents, slotStatusLine } from './agent-pool.js';
+import {
+  withSlot,
+  getMaxConcurrentAgents,
+  slotStatusLine,
+  dispatchDepth,
+  MAX_DISPATCH_DEPTH,
+} from './agent-pool.js';
 import { runDispatchOrFail } from './dispatch-failure.js';
 import { declaredScope, declaredToolSurface } from '../framework/agents/dispatch-profile.js';
 import { scopeContext } from '../framework/context.js';
@@ -226,11 +232,53 @@ export interface DispatchToolWrapperArgs {
   runLabel?: string;
   /**
    * When true, errors from this dispatch are NOT enqueued onto the
-   * correction-candidate queue. Used by the orchestrator's re-validation pass
-   * in `correction.ts` so a failed re-run doesn't recursively spawn a new
-   * candidate — the original candidate is already being handled.
+   * correction-candidate queue.
+   *
+   * **`correction.ts` does not set it**, despite what this comment used to say:
+   * that file calls the `tool_wrapper_run` TOOL, which never passes the flag, so
+   * the re-validation pass it was declared for has always run without it. The
+   * real production callers are `applet-styling.ts` and `applet-planning.ts`,
+   * and their reason is sharper than the original one — both dispatch a BUNDLED
+   * `tool-wrapper` whose `targetTools[0]` is exactly the shape
+   * `dispatchToolWrapper` enqueues for, and `permissionsFor` grants bundled
+   * records `canAppendExamples: true`. So a pass that failed because the pool
+   * was full would teach a shipped specialist a lesson about a call that was
+   * never made.
    */
   skipCorrectionEnqueue?: boolean;
+}
+
+/**
+ * The four tools a dispatch needs to delegate further.
+ *
+ * One builder, shared by `main.ts` and the wrapper path, and handed to the
+ * persona path through `SpecialistInput.dispatchTools`.
+ *
+ * **`applet` is not here, and that is the recursion guard.** CLAUDE.md warns
+ * that extracting a shared `buildCtxTools(ctx)` recreates it — but that warning
+ * was about two lists that "differ by exactly one key", where the guard was the
+ * difference being maintained by hand in two places. Lifting `applet` out into a
+ * sibling key in `main.ts` removes the premise: the guard is now that this
+ * function does not construct one, which is a property of a single definition
+ * rather than an invariant three literals have to keep agreeing on. Pinned by
+ * `main.applet-styling.test.ts`, which asserts on the object main actually hands
+ * down and is mutation-checked.
+ *
+ * Lives here because `createToolWrapperRunTool` is defined in this module, so a
+ * standalone leaf would be the one placement that cycles.
+ *
+ * The `specialist_run` self-reference is why this returns a fresh object rather
+ * than a constant: the thunk lets the tool hand the same overlay to the persona
+ * it dispatches, so delegation does not silently truncate at depth 1.
+ */
+export function buildDispatchOverlay(ctx: AgentContext): Record<string, Tool> {
+  const overlay: Record<string, Tool> = {
+    agent: createSubAgentTool(ctx),
+    task: toolToAISDK(createTaskTool(ctx)),
+    specialist_run: createSpecialistRunTool(ctx, () => overlay),
+    tool_wrapper_run: createToolWrapperRunTool(ctx),
+  };
+  return overlay;
 }
 
 /**
@@ -358,7 +406,15 @@ export async function dispatchToolWrapper(
               // the kind whose hardcoded `'full'` justifies the precedence.
               // Both readers go through `declaredToolSurface`, so they cannot
               // disagree about what a valid value is.
-              { surface: declaredToolSurface(specialist) ?? toolWrapperDefinition.toolSurface },
+              {
+                surface: declaredToolSurface(specialist) ?? toolWrapperDefinition.toolSurface,
+                // Already fenced: `ctx` here is the scoped one from line ~296,
+                // so what arrives is what this record's `corpusScope` allows.
+                // Omitted entirely before, so the `knowledge` tool was never
+                // built on this path even at `'full'` — a fence with nothing
+                // behind it.
+                ...(ctx.knowledge ? { knowledge: ctx.knowledge } : {}),
+              },
             );
             // `applet` is deliberately ABSENT here, and that absence is a
             // guard rather than an oversight. `main.ts` builds this same
@@ -369,12 +425,23 @@ export async function dispatchToolWrapper(
             // by exactly one key is the whole guard — extracting a shared
             // `buildCtxTools(ctx)` from them recreates the recursion. See
             // `tools/applet-styling.ts`.
+            // Gated on depth for the same reason the persona path is, and this
+            // is the site that was missed: assembly happens inside `withSlot`,
+            // so `dispatchDepth()` already reports this dispatch's own depth,
+            // and without the gate `main → tool_wrapper_run → W1 →
+            // tool_wrapper_run → W2 → …` is unbounded. The pool does not stop
+            // it — a nested acquire is free.
+            const depth = dispatchDepth();
+            if (depth >= MAX_DISPATCH_DEPTH) {
+              debugLog('tool-wrapper:delegation-depth-reached', {
+                specialistId,
+                depth,
+                max: MAX_DISPATCH_DEPTH,
+              });
+            }
             const fullRegistry: Record<string, Tool> = {
               ...baseTools,
-              agent: createSubAgentTool(ctx),
-              task: toolToAISDK(createTaskTool(ctx)),
-              specialist_run: createSpecialistRunTool(ctx),
-              tool_wrapper_run: createToolWrapperRunTool(ctx),
+              ...(depth < MAX_DISPATCH_DEPTH ? buildDispatchOverlay(ctx) : {}),
             };
             const childTools = buildChildTools(specialist, fullRegistry, ctx.mcp.resolveAlias);
             const wantStructured = wantsStructuredOutput({ ...specialist, kind });

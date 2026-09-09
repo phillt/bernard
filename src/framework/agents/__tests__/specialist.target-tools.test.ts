@@ -204,3 +204,203 @@ describe('which definitions scope by a specialist record', () => {
     expect(narrowed, name).toBe(SCOPES_BY_RECORD[name]);
   });
 });
+
+describe('a persona can delegate, if its record says so', () => {
+  const DISPATCH = ['agent', 'task', 'specialist_run', 'tool_wrapper_run'];
+  /** Stand-ins — this level is about the FILTER, not about what they do. */
+  const overlay = Object.fromEntries(DISPATCH.map((k) => [k, {} as never]));
+
+  async function withOverlay(targetTools: string[]): Promise<string[]> {
+    const tools = await toolsOf(specialistDefinition, ctxWith({ targetTools }), {
+      specialistId: SPECIALIST_ID,
+      task: 'x',
+      slotId: 1,
+      planStore: {},
+      dispatchTools: overlay,
+    });
+    return Object.keys(tools).sort();
+  }
+
+  it('holds the dispatch tools it names', async () => {
+    // The gap this closes: a persona was structurally a leaf, because its
+    // registry comes only from `createTools`, which builds none of these.
+    expect(await withOverlay(['agent'])).toEqual(['agent', 'plan', 'think']);
+  });
+
+  it('holds none of them when its record names none', async () => {
+    // Delegation is an opt-in grant, not a new default. An EXACT set, so a leak
+    // fails rather than passing quietly.
+    expect(await withOverlay(['web_search'])).toEqual(['plan', 'think', 'web_search']);
+  });
+
+  it('grants nothing to a record that declares no targetTools at all', async () => {
+    // **The case that was wrong and had no test.** `scopeToTargetTools` treats
+    // an absent list as "unchanged", so merging the overlay into `baseTools`
+    // before that filter handed all four to any record declaring nothing — 28
+    // of this install's 30 personas. Every other assertion in this block
+    // supplies `targetTools`, so all of them were green while it leaked.
+    const tools = await toolsOf(specialistDefinition, ctxWith({} as never), {
+      specialistId: SPECIALIST_ID,
+      task: 'x',
+      slotId: 1,
+      planStore: {},
+      dispatchTools: overlay,
+    });
+    for (const name of DISPATCH) expect(Object.keys(tools)).not.toContain(name);
+  });
+
+  it('grants nothing to a record whose targetTools is empty', async () => {
+    // `[]` is honoured as unscoped for the BUILT-IN registry (#507 settled that
+    // from real records), and must still grant no delegation — the two defaults
+    // are deliberately opposite.
+    const keys = await withOverlay([]);
+    for (const name of DISPATCH) expect(keys).not.toContain(name);
+  });
+
+  it('is a leaf when the caller supplies no overlay', async () => {
+    // Omission is the safe answer, and it is the state every persona was in
+    // before this — so a caller that forgets cannot accidentally grant
+    // delegation. This is also what the depth gate uses to refuse.
+    expect(await registryFor({ targetTools: ['agent'] })).toEqual(['plan', 'think']);
+  });
+
+  it('never gains `applet`, however it is declared', async () => {
+    // The recursion guard. `main.ts`'s overlay carries a styling-capable
+    // `applet` and keeps it as a SIBLING key rather than putting it in the
+    // object handed down here, so no dispatched registry can hold one.
+    const keys = await withOverlay([...DISPATCH, 'applet']);
+    expect(keys).not.toContain('applet');
+    expect(keys).toEqual([...DISPATCH, 'plan', 'think'].sort());
+  });
+});
+
+describe("a persona's learned examples reach the model", () => {
+  /** The rendered system prompt for a record, through the real definition. */
+  function promptFor(record: Record<string, unknown>): string {
+    return specialistDefinition.systemPrompt(ctxWith(record as never), {
+      specialistId: SPECIALIST_ID,
+      task: 'x',
+      slotId: 1,
+      planStore: {},
+    } as never) as string;
+  }
+
+  const RECORD = {
+    systemPrompt: 'You are a coder.',
+    guidelines: [],
+    targetTools: ['web_search'],
+  };
+
+  it('renders bad examples, which this path showed to nobody', () => {
+    // `formatExamples` was called on the wrapper path ONLY, so these were
+    // stored on the record, listed in `/specialists`, writable through the
+    // `specialist` tool — and never seen by the model. The same shape as the
+    // #507 defect: a field every surface displays and no code reads.
+    const prompt = promptFor({
+      ...RECORD,
+      badExamples: [
+        {
+          input: 'rename the helper',
+          call: 'sed -i',
+          error: 'clobbered the file',
+          fix: 'read first',
+        },
+      ],
+    });
+    expect(prompt).toContain('clobbered the file');
+    expect(prompt).toContain('read first');
+  });
+
+  it('renders good examples too', () => {
+    const prompt = promptFor({
+      ...RECORD,
+      goodExamples: [{ input: 'find the caller', call: 'grep -rn' }],
+    });
+    expect(prompt).toContain('grep -rn');
+  });
+
+  it('adds nothing when the record carries no examples', () => {
+    // Guards the guard: an unconditional block would put empty headings into
+    // every persona prompt, which is a per-step cost for nothing.
+    const prompt = promptFor(RECORD);
+    expect(prompt).not.toContain('Good Examples');
+    expect(prompt).not.toContain('Bad Examples');
+  });
+
+  it('keeps the execution rules, which the wrapper path does not have', () => {
+    // The two paths compose different prompts on purpose; adding examples must
+    // not have replaced what was already there.
+    expect(promptFor(RECORD)).toContain('You are a coder.');
+  });
+});
+
+describe('a specialist can reach an ingested library', () => {
+  it('holds `knowledge` when it names it and a corpus is in scope', async () => {
+    // Three ways this was unreachable: the tool was tagged `audience: 'main'`
+    // so it was dropped on the worker surface every persona runs at; the
+    // wrapper path passed no corpus handle so it was never built there either;
+    // and `corpusScope` fenced something no dispatch could reach. The fence was
+    // real and had nothing behind it.
+    const corpus = { list: () => [], open: () => undefined, listIds: () => [] };
+    const base = makeCtx(false, {
+      stores: {
+        specialists: {
+          get: (id: string) => (id === SPECIALIST_ID ? { targetTools: ['knowledge'] } : undefined),
+        },
+      },
+    } as never);
+    const ctx = { ...base, knowledge: corpus } as unknown as AgentContext;
+    const tools = await toolsOf(specialistDefinition, ctx, {
+      specialistId: SPECIALIST_ID,
+      task: 'x',
+      slotId: 1,
+      planStore: {},
+    });
+    expect(Object.keys(tools).sort()).toEqual(['knowledge', 'plan', 'think']);
+  });
+
+  it('holds no `knowledge` tool when no corpus handle is in scope', async () => {
+    // Fail-closed by construction: the tool cannot exist unfenced, because it
+    // cannot exist without the handle that carries the fence. That is what makes
+    // widening the audience safe.
+    expect(await registryFor({ targetTools: ['knowledge'] })).toEqual(['plan', 'think']);
+  });
+});
+
+describe('a step-limited persona is a failure, not a quiet success', () => {
+  const fmt = (text: string, stepLimitHit: boolean) =>
+    specialistDefinition.formatResult(
+      { text, steps: [] } as never,
+      {} as never,
+      {} as never,
+      { stepLimitHit, steps: 12 } as never,
+    ) as string;
+
+  it('marks an empty step-limited run as an error', async () => {
+    // It reached the parent as an ordinary string, so `detectResultFailure` saw
+    // a success: the run registered as citable evidence, bumped this tool's
+    // success count, and minted no `step_limit` — leaving that category's three
+    // consumers silent.
+    const out = fmt('', true);
+    expect(out).toMatch(/^Error:/);
+    const { detectResultFailure } = await import('../../../tool-result-shape.js');
+    expect(detectResultFailure(out)).toBeTruthy();
+  });
+
+  it('leaves a step-limited run that produced real content alone', async () => {
+    // Where `relabelStepLimit` draws the line on the wrapper path: the model may
+    // have wrapped up on its last step, and calling that a failure throws the
+    // work away.
+    const out = fmt('Here is the refactor.', true);
+    expect(out).not.toMatch(/^Error:/);
+    expect(out).toContain('Here is the refactor.');
+    const { detectResultFailure } = await import('../../../tool-result-shape.js');
+    expect(detectResultFailure(out)).toBeFalsy();
+  });
+
+  it('leaves an ordinary empty run alone', async () => {
+    // Guards the guard: an unconditional error would fail every run that simply
+    // returned no text, which is not the same fact at all.
+    expect(fmt('', false)).not.toMatch(/^Error:/);
+  });
+});

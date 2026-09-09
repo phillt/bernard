@@ -15,6 +15,9 @@ async function mainApplet(dispatch: ReturnType<typeof vi.fn>) {
   vi.doMock('../../../tools/tool-wrapper-run.js', () => ({
     dispatchToolWrapper: dispatch,
     createToolWrapperRunTool: () => ({}),
+    // `main.ts` takes its overlay from here now; the guard on its CONTENTS is
+    // asserted separately, against the real builder.
+    buildDispatchOverlay: () => ({}),
   }));
   vi.doMock('../../../config.js', () => ({
     loadConfig: () => ({ autoStyleApplets: true, autoOpenApplets: false }),
@@ -82,5 +85,50 @@ describe('the main agent wires the applet design pass', () => {
     expect((dispatch.mock.calls[0] as [Record<string, unknown>])[0].specialistId).toBe(
       'applet-styler',
     );
+  });
+});
+
+/**
+ * The overlay `main` hands DOWN to a persona dispatch must not carry `applet`.
+ *
+ * This is the recursion guard, and it needs its own test because the sibling
+ * one above uses a stand-in overlay built by the test — it can prove the filter
+ * drops `applet`, and cannot see whether main put one in. Mutation-checked:
+ * moving `applet` into `dispatchOverlay` in `main.ts` passes every other test
+ * in the tree, including the two in this file, and fails only this one.
+ */
+describe('the overlay every delegating path hands down', () => {
+  useTempHome('bernard-main-dispatch-overlay');
+
+  it('carries the four dispatch tools and never `applet`', async () => {
+    // The recursion guard, asserted on `buildDispatchOverlay` itself rather than
+    // on main's copy of it — which is what the guard became when the builder was
+    // extracted. Before, the guard was "three object literals differ by exactly
+    // one key"; now it is "this one function does not construct an `applet`",
+    // and that is a property of a single definition. Mutation-checked: adding
+    // `applet` here fails only this test.
+    // `doUnmock` because a sibling test in this file mocks this module, and
+    // `vi.doMock` registrations outlive `resetModules()` — this test needs the
+    // real builder, which is the whole point of it.
+    vi.doUnmock('../../../tools/tool-wrapper-run.js');
+    vi.resetModules();
+    const { buildDispatchOverlay } = await import('../../../tools/tool-wrapper-run.js');
+    const { makeCtx } = await import('./_mcp-delegation-fixture.js');
+    const overlay = buildDispatchOverlay(makeCtx(false));
+    expect(Object.keys(overlay).sort()).toEqual([
+      'agent',
+      'specialist_run',
+      'task',
+      'tool_wrapper_run',
+    ]);
+    expect(overlay).not.toHaveProperty('applet');
+  });
+
+  it('still leaves main itself a styling-capable `applet`', async () => {
+    // The positive half — the sibling key main adds on top. Without it the
+    // assertion above would pass just as well if applets lost their design pass
+    // entirely, which is the failure this file exists to catch.
+    const applet = await mainApplet(vi.fn(async () => ({ status: 'ok', result: 'ok' })));
+    expect(applet).toBeDefined();
   });
 });

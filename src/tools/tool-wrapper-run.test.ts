@@ -123,7 +123,7 @@ import {
 } from './tool-wrapper-run.js';
 import { relabelStepLimit } from '../framework/agents/tool-wrapper.js';
 import { WRAPPER_PARSE_FAILURE_RESULT } from '../structured-output.js';
-import { _resetPool, getActiveCount } from './agent-pool.js';
+import { _resetPool, getActiveCount, withSlot, MAX_DISPATCH_DEPTH } from './agent-pool.js';
 import { classifyError } from '../error-taxonomy.js';
 import { DEFAULT_SUBAGENT_RESULT_MAX_CHARS } from './result-cap.js';
 import type { AgentContext } from '../framework/context.js';
@@ -1146,5 +1146,73 @@ describe('a scoped wrapper record fences its pre-assembled child tools', () => {
     const { rootMemory, handed } = await dispatchWith(makeToolWrapperSpecialist());
     expect(rootMemory.scoped).not.toHaveBeenCalled();
     expect(handed).toBe(rootMemory);
+  });
+});
+
+/**
+ * The wrapper path's delegation depth bound.
+ *
+ * `main → tool_wrapper_run → W1 → tool_wrapper_run → W2 → …` was unbounded
+ * before this — the persona path was the one bounded structurally (its registry
+ * comes from `createTools`, which builds no dispatch tools), and the wrapper
+ * path was not bounded at all. Both use the same gate now.
+ *
+ * Nested with `withUncappedSlot`, which this file's mock spreads through
+ * untouched: it goes through the same `runHoldingSlot` and so establishes real
+ * ALS depth, where the mocked `withSlot` deliberately does not nest.
+ */
+describe('a wrapper stops delegating once the chain is deep enough', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetPool();
+    vi.mocked(withSlot).mockImplementation((fn) => fn({ id: 1 }));
+    vi.mocked(resolveProviderAndModel).mockReturnValue({
+      ok: true,
+      provider: 'anthropic',
+      model: 'claude-test',
+    });
+    vi.mocked(generateText).mockResolvedValue({
+      text: '{"status":"ok","result":"done"}',
+      steps: [],
+      response: { messages: [] },
+      finishReason: 'stop',
+    } as never);
+  });
+
+  async function toolNamesAtDepth(depth: number): Promise<string[]> {
+    const specialistStore = createMockSpecialistStore();
+    specialistStore.get.mockReturnValue({
+      id: 'w',
+      name: 'W',
+      kind: 'tool-wrapper',
+      systemPrompt: 'x',
+      guidelines: [],
+      targetTools: ['agent'],
+    });
+    const toolDef = createToolWrapperRunTool(
+      makeCtx(
+        createMockConfig(),
+        createMockOptions(),
+        createMockMemoryStore() as never,
+        specialistStore,
+        createMockCorrectionStore(),
+      ),
+    );
+    const { withUncappedSlot } = await import('./agent-pool.js');
+    let call = () => toolDef.execute({ specialistId: 'w', input: 'go' }, DEFAULT_EXEC_OPTIONS);
+    for (let i = 0; i < depth; i++) {
+      const inner = call;
+      call = () => withUncappedSlot(() => inner()) as never;
+    }
+    await call();
+    return Object.keys(vi.mocked(generateText).mock.calls[0][0].tools ?? {}).sort();
+  }
+
+  it('offers a named dispatch tool while inside the limit', async () => {
+    expect(await toolNamesAtDepth(0)).toContain('agent');
+  });
+
+  it('offers none once the chain reaches the limit', async () => {
+    expect(await toolNamesAtDepth(MAX_DISPATCH_DEPTH)).not.toContain('agent');
   });
 });

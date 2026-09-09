@@ -41,14 +41,61 @@ export function setMaxConcurrentAgents(n: number): number {
  * Holding a slot is a different fact from being inside a dispatch, and it needs
  * its own store.
  */
-const slotHeld = new AsyncLocalStorage<true>();
+const slotHeld = new AsyncLocalStorage<number>();
+
+/**
+ * How many dispatches deep a chain may go before the dispatch tools stop being
+ * offered.
+ *
+ * **The pool bounds nothing about depth**, which is easy to miss because it
+ * looks like a concurrency guard: an acquire from inside a slot-holder is free,
+ * so a chain of nested dispatches passes straight through the cap.
+ *
+ * Nothing else counted it either. A persona was bounded *structurally* —
+ * `createTools` is ctx-free and builds none of the four dispatch tools, so it
+ * was a leaf and could not begin a chain — but a **tool-wrapper was already
+ * unbounded**: `main → tool_wrapper_run → W1 → tool_wrapper_run → W2 → …` has
+ * always been possible. Giving personas delegation removed the structural half,
+ * so this is applied at both use sites rather than only the new one.
+ *
+ * 3 allows main → specialist → narrower specialist → one more, which covers the
+ * shape this exists for (a coder agent reaching backend/frontend/design
+ * workers) with a level spare. Env-overridable because the right depth is a
+ * property of how a user has structured their specialists, not of Bernard.
+ */
+export const MAX_DISPATCH_DEPTH = (() => {
+  const raw = Number(process.env.BERNARD_MAX_DISPATCH_DEPTH);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 3;
+})();
+
+/**
+ * How many pool slots are held above the current async path — 0 on the main
+ * agent, 1 inside a dispatch it started, and so on.
+ *
+ * Read at registry-assembly time — inside the slot, so it reports the dispatch's
+ * own depth — so one already at the limit is simply not handed the tools to go
+ * deeper. **Construction-time filtering, not
+ * post-hoc masking**, which is the same choice the tool broker makes
+ * everywhere else: a tool that was never built cannot be called, so there is no
+ * refusal to word, no new error shape across the four dispatch tools' four
+ * different contracts, and no gate anyone can forget to consult.
+ */
+export function dispatchDepth(): number {
+  return slotHeld.getStore() ?? 0;
+}
 
 /** Runs `fn` holding a slot; the shared body of the two public entry points. */
 async function runHoldingSlot<T>(fn: (slot: { id: number }) => Promise<T>): Promise<T> {
   activeAgentCount++;
   const slot = { id: nextAgentId++ };
+  // The store carries the DEPTH rather than a bare `true`. Nesting still reads
+  // as "is there a store", so `withSlot`'s exemption is unchanged; the number is
+  // what {@link dispatchDepth} needs, and deriving it from the same store keeps
+  // "holds a slot" and "is N deep" from drifting into two mechanisms that can
+  // disagree.
+  const depth = dispatchDepth() + 1;
   try {
-    return await slotHeld.run(true, () => fn(slot));
+    return await slotHeld.run(depth, () => fn(slot));
   } finally {
     if (activeAgentCount > 0) activeAgentCount--;
   }
@@ -82,14 +129,17 @@ async function runHoldingSlot<T>(fn: (slot: { id: number }) => Promise<T>): Prom
  *   active count as `<= cap` is wrong. The overshoot is no longer bounded at
  *   +1: the exempt set grew from one declared path to every dispatch below a
  *   slot-holder, at any depth.
- * - The cap bounds nesting DEPTH, not WIDTH: k parallel delegate calls from
- *   each of N capped parents put `N + N*k` dispatches in flight.
+ * - The cap bounds neither. It does not bound WIDTH — k parallel delegate calls
+ *   from each of N capped parents put `N + N*k` dispatches in flight — and it
+ *   does not bound DEPTH either, because a nested acquire is exempt by the line
+ *   above. Depth is counted separately; see {@link MAX_DISPATCH_DEPTH}, which
+ *   exists precisely because this sentence used to claim otherwise.
  */
 export async function withSlot<T>(
   fn: (slot: { id: number }) => Promise<T>,
   onExhausted: () => T,
 ): Promise<T> {
-  const nested = slotHeld.getStore() === true;
+  const nested = slotHeld.getStore() !== undefined;
   if (!nested && activeAgentCount >= maxConcurrentAgents) return onExhausted();
   return runHoldingSlot(fn);
 }
