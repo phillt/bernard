@@ -1,6 +1,11 @@
 import { z } from 'zod';
 import type { MemoryStore } from '../memory.js';
-import { MemoryKeyCollisionError, MemoryScopeError, MemorySupersedeError } from '../memory.js';
+import {
+  MemoryKeyCollisionError,
+  MemoryOwnerCollisionError,
+  MemoryScopeError,
+  MemorySupersedeError,
+} from '../memory.js';
 import { MemoryCandidateStore } from '../memory-candidates.js';
 import { describeProposal } from '../memory-proposal.js';
 import { MEMORY_DIR } from '../paths.js';
@@ -228,7 +233,15 @@ function storeErrorGuard<A, R>(t: BernardTool<A, R>): BernardTool<A, R> {
         // A collision is a call-shape mistake the model can fix by picking a
         // distinct key, so it comes back named rather than as a throw.
         // `invalid_args` is what `error-taxonomy` classifies as correctable.
-        if (e instanceof MemoryKeyCollisionError || e instanceof MemorySupersedeError)
+        // `MemoryOwnerCollisionError` belongs here and was missing: it is the
+        // one refusal a model can act on by picking a different key, and
+        // without it the throw escaped as an AI-SDK `ToolExecutionError` —
+        // exactly what this guard exists to prevent.
+        if (
+          e instanceof MemoryKeyCollisionError ||
+          e instanceof MemorySupersedeError ||
+          e instanceof MemoryOwnerCollisionError
+        )
           return err({ type: 'invalid_args', message: e.message });
         throw e;
       }

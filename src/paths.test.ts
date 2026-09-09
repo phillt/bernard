@@ -145,7 +145,6 @@ describe('paths', () => {
         paths.MEMORY_DIR,
         paths.RAG_DIR,
         paths.MEMORIES_FILE,
-        paths.LAST_SESSION_FILE,
         paths.CRON_DIR,
         paths.CRON_JOBS_FILE,
         paths.CRON_ALERTS_DIR,

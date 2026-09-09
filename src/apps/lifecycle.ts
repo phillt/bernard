@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import { appletDataDir, runWorkspace } from '../paths.js';
 import { SpecialistStore } from '../specialists.js';
+import { deleteSpecialist } from '../specialist-lifecycle.js';
 import { AppletBriefStore } from './brief-store.js';
 import { closeAppletStore } from './store.js';
 import { saveAppGrants } from './app-grants.js';
@@ -81,7 +82,9 @@ export function deleteApplet(appId: string): DeleteResult {
   const boundSpecialists: string[] = [];
   for (const bound of specialists.listBoundTo(appId)) {
     try {
-      specialists.delete(bound.id);
+      // The full sweep, so a bound specialist's owned memories go with it —
+      // the same reason the direct delete path uses it.
+      deleteSpecialist(bound.id, specialists);
       boundSpecialists.push(bound.id);
     } catch {
       // A bundled specialist cannot be bound (nothing binds them) and cannot

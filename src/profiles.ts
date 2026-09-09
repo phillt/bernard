@@ -134,6 +134,7 @@ export interface ProfileSettings {
    */
   voiceNormalizer?: boolean;
   memoryConsolidation?: boolean;
+  specialistRecall?: boolean;
 }
 
 /** A single named profile entry. */

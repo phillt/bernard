@@ -167,7 +167,7 @@ describe('resolveDispatchProfile carries the scope', () => {
   >;
 
   it('reads both axes off the record', () => {
-    const profile = resolveDispatchProfile(
+    const { profile } = resolveDispatchProfile(
       ctxWithRecord({ memoryScope: ['proj-*'], knowledgeScope: ['general'] }),
       def,
       {},
@@ -177,7 +177,7 @@ describe('resolveDispatchProfile carries the scope', () => {
   });
 
   it('leaves a record that declares nothing unscoped', () => {
-    const profile = resolveDispatchProfile(ctxWithRecord({}), def, {});
+    const { profile } = resolveDispatchProfile(ctxWithRecord({}), def, {});
     expect(profile.memoryScope).toBeUndefined();
     expect(profile.knowledgeScope).toBeUndefined();
   });
@@ -461,5 +461,78 @@ describe('withUsageRecorder', () => {
       ctxWith({ statsTarget: {} as never, toolOptions: { onUsage } as never }),
     );
     expect(ctx.toolOptions.onUsage).toBe(onUsage);
+  });
+});
+
+/**
+ * The dispatch's own identity reaches both stores that are keyed on it (#501).
+ *
+ * `resolveDispatchProfile` returns the record id and `runDefinition` hands it to
+ * `scopeContext` (which owns the memory view) and to `resolveRetrieval` (which
+ * opens that specialist's own RAG store). Neither wiring had a test: dropping
+ * the argument at either call site left the whole 5,800-test suite green while
+ * a specialist silently wrote into the shared memory pool and retrieved from a
+ * store it no longer had.
+ */
+describe('runDefinition hands a record-backed dispatch its own identity', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (generateText as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      text: 'done',
+      steps: [],
+      response: { messages: [] },
+      finishReason: 'stop',
+    });
+  });
+
+  function harness(recordId?: () => string) {
+    const memory: Record<string, ReturnType<typeof vi.fn>> = {};
+    Object.assign(memory, {
+      asOwner: vi.fn(() => memory),
+      scoped: vi.fn(() => memory),
+      getAllMemoryContents: vi.fn(() => new Map()),
+      getAllScratchContents: vi.fn(() => new Map()),
+      listMemory: vi.fn(() => []),
+    });
+    const ragForOwner = vi.fn(() => ({ search: vi.fn(async () => []) }));
+    const ctx = {
+      config: makeConfig(),
+      stores: { memory, specialists: { get: () => ({ id: 'spec', name: 'S' }) } },
+      mcp: { tools: {}, serverNames: [], serverTools: {} },
+      rag: { search: vi.fn(async () => []) },
+      ragForOwner,
+      toolOptions: {},
+    } as unknown as AgentContext;
+    const def = {
+      id: 'fake',
+      historyMode: 'ephemeral',
+      site: 'main',
+      ...(recordId ? { recordId } : {}),
+      retrievalQuery: (i: { task: string }) => i.task,
+      systemPrompt: () => 'SYS',
+      tools: () => ({}),
+      strategy: () => new NormalStrategy(),
+      stepBudget: () => 5,
+      buildUserMessage: () => ({ role: 'user', content: 'go' }),
+      hooks: () => [],
+      repairLabel: 'main',
+    } as unknown as AgentDefinition<{ task: string }, string>;
+    return { ctx, def, memory, ragForOwner };
+  }
+
+  it('owns the memory view and opens the matching RAG store', async () => {
+    const { ctx, def, memory, ragForOwner } = harness(() => 'spec');
+    await runDefinition(ctx, def, { task: 'do it' });
+    expect(memory.asOwner).toHaveBeenCalledWith('spec');
+    expect(ragForOwner).toHaveBeenCalledWith('spec');
+  });
+
+  it('does neither for a definition that names no record', async () => {
+    // Guards the guard: `main`, `sub`, `task`, `cron` and the PAC phases all
+    // run as the user, and must keep the shared stores by identity.
+    const { ctx, def, memory, ragForOwner } = harness();
+    await runDefinition(ctx, def, { task: 'do it' });
+    expect(memory.asOwner).not.toHaveBeenCalled();
+    expect(ragForOwner).not.toHaveBeenCalled();
   });
 });

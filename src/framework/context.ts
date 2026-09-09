@@ -82,6 +82,20 @@ export interface AgentContext {
   mcp: AgentContextMCP;
   rag?: RAGStore;
   /**
+   * This specialist's own RAG store, by id (#501).
+   *
+   * Supplied by whichever composition root already imports `rag.ts`, the way
+   * `rag` itself is, so the framework keeps a type-only edge to that graph.
+   * Absent means no per-specialist retrieval — which is every process that has
+   * RAG turned off, and every caller written before this.
+   *
+   * A factory rather than a resolved store because the owner is not known until
+   * `runDefinition` reads the dispatch's `recordId`, and because opening one
+   * reads a file: a resolved handle on every context would pay for a store that
+   * an unowned dispatch never touches.
+   */
+  ragForOwner?: (specialistId: string) => RAGStore;
+  /**
    * Ingested document libraries this dispatch may read (#516).
    *
    * Optional because a process with no corpus has none, and because
@@ -146,6 +160,8 @@ export interface AssembleContextInput {
   toolOptions: ToolOptions;
   mcp?: Partial<AgentContextMCP>;
   rag?: RAGStore;
+  /** See {@link AgentContext.ragForOwner}. */
+  ragForOwner?: (specialistId: string) => RAGStore;
   knowledge?: KnowledgeCorpus;
   stores?: Partial<AgentContextStores>;
   provenance?: ProvenanceStore;
@@ -176,6 +192,7 @@ export function assembleContext(input: AssembleContextInput): AgentContext {
       resolveAlias: input.mcp?.resolveAlias ?? (() => null),
     },
     rag: input.rag,
+    ragForOwner: input.ragForOwner,
     knowledge: input.knowledge,
     toolOptions: input.toolOptions,
     provenance: input.provenance ?? new ProvenanceStore(),
@@ -207,7 +224,24 @@ export function assembleContext(input: AssembleContextInput): AgentContext {
  * common path allocates nothing and `main` keeps object identity — which is
  * what keeps its tool block byte-identical for the prompt cache (#269).
  */
-export function scopeContext(ctx: AgentContext, profile: DispatchProfile): AgentContext {
+export function scopeContext(
+  ctx: AgentContext,
+  profile: DispatchProfile,
+  owner?: string,
+): AgentContext {
+  // Ownership, applied before the fences and independently of them. A
+  // specialist's memories are private to it — the main agent does not read them
+  // and asks the specialist a question instead — while the UNOWNED set, the
+  // user's own standing instructions, stays shared unless a record fences it
+  // further with `memoryScope`. Absent `owner` means the user's own view, which
+  // is every dispatch that names no record and every memory written before this.
+  const base = owner
+    ? { ...ctx, stores: { ...ctx.stores, memory: ctx.stores.memory.asOwner(owner) } }
+    : ctx;
+  return scopeFences(base, profile);
+}
+
+function scopeFences(ctx: AgentContext, profile: DispatchProfile): AgentContext {
   // **There is no early return, and that is the fix.** The guard here was the
   // silent-failure site (#550): it named the axes by hand, the third term was
   // forgotten, and a corpus-only fence returned the unscoped context — every

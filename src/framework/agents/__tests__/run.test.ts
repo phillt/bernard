@@ -67,10 +67,23 @@ function makeConfig(): BernardConfig {
   } as BernardConfig;
 }
 
+// `asOwner` is reached for every dispatch that names a record (the
+// memory-ownership fence), so the double has to answer it. Returning itself
+// keeps these tests about what they are about — the profile — while still
+// exercising the real call.
+const memoryDouble: { fake: boolean; asOwner: () => unknown } = {
+  fake: true,
+  asOwner: () => memoryDouble,
+};
+
 function makeCtx(): AgentContext {
   return {
     config: makeConfig(),
-    stores: { memory: { fake: true } } as any,
+    // `asOwner` is reached for every dispatch that names a record (#500's
+    // memory-ownership fence), so the double has to answer it. Returning itself
+    // keeps these tests about what they are about — the profile — while still
+    // exercising the real call.
+    stores: { memory: memoryDouble } as any,
     mcp: { tools: {}, serverNames: [] },
     toolOptions: {} as any,
   };

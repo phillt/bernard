@@ -38,7 +38,25 @@ export const PROFILES_MIGRATED_MARKER = path.join(CONFIG_DIR, '.migrated-to-prof
 export const MEMORY_DIR = path.join(DATA_DIR, 'memory');
 export const RAG_DIR = path.join(DATA_DIR, 'rag');
 export const MEMORIES_FILE = path.join(RAG_DIR, 'memories.json');
-export const LAST_SESSION_FILE = path.join(RAG_DIR, 'last-session.txt');
+
+/**
+ * A specialist's own RAG directory.
+ *
+ * A store per owner, not a namespace column in the shared one — the
+ * `knowledgeDir` shape, and it is chosen for the same reason #516 rejected
+ * `RAGStore` as a corpus substrate: the cap, the dedup scan and `prune()` are
+ * all global, so a namespace would compete with the user's own history in one
+ * score sort and lose. Separate stores make each of those per-owner for free,
+ * with no `prune()` floor to design and no cross-namespace dedup to reason
+ * about.
+ *
+ * Sweeping on delete is then removing a directory rather than selecting rows —
+ * which matters, because `RAGStore` can only delete by id and has no owner axis
+ * to select on.
+ */
+export function specialistRagDir(specialistId: string): string {
+  return path.join(RAG_DIR, 'specialists', specialistId);
+}
 export const CRON_DIR = path.join(DATA_DIR, 'cron');
 export const CRON_JOBS_FILE = path.join(CRON_DIR, 'jobs.json');
 export const CRON_ALERTS_DIR = path.join(CRON_DIR, 'alerts');
@@ -187,6 +205,16 @@ export const APPLET_HOST_LOG_FILE = path.join(STATE_DIR, 'applet-host.log');
  * hash was the alternative and is not needed — #513 already stamps every write.
  */
 export const MEMORY_CONSOLIDATED_MARKER = path.join(STATE_DIR, '.memory-consolidated');
+
+/**
+ * Timestamp of the last specialist-recall pass.
+ *
+ * The same shape as {@link MEMORY_CONSOLIDATED_MARKER}, and for the same
+ * reason: it stores the INCLUSION CUTOFF rather than the run time, so a
+ * dispatch that happened during the pass is examined by the next one instead of
+ * being skipped forever. That distinction is what #529 had to fix once already.
+ */
+export const SPECIALIST_RECALL_MARKER = path.join(STATE_DIR, '.specialist-recall');
 /**
  * Per-applet port and session token (#421).
  *

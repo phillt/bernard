@@ -208,3 +208,66 @@ describe('resolveRetrieval', () => {
     expect(search).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * A specialist's own RAG store is READ, not merely written (#501).
+ *
+ * The gap this closes: `rag-worker` wrote into `specialistRagDir(id)` and
+ * `deleteSpecialist` removed it, and **nothing anywhere constructed one to
+ * search** — so the pass paid a ~196 ms model load and ~13 ms per fact to embed
+ * facts no dispatch could ever retrieve. A write-only store is worse than none,
+ * because it looks done.
+ */
+describe('the per-specialist store', () => {
+  const def = { id: 'specialist', retrievalQuery: retrievalQueryFor } as Pick<
+    AgentDefinition<any, unknown>,
+    'id' | 'retrievalQuery'
+  >;
+  const hit = (fact: string, similarity: number) => ({ fact, similarity, domain: 'general' });
+
+  function ctxWith(shared: unknown[], own: unknown[]) {
+    return {
+      rag: { search: vi.fn(async () => shared) },
+      ragForOwner: vi.fn(() => ({ search: vi.fn(async () => own) })),
+    } as unknown as AgentContext;
+  }
+
+  it('is searched for an owned dispatch, alongside the shared one', async () => {
+    const ctx = ctxWith([hit('shared', 0.9)], [hit('mine', 0.95)]);
+    const out = await resolveRetrieval(ctx, def, { task: 'x' }, 'coder');
+    expect(ctx.ragForOwner).toHaveBeenCalledWith('coder');
+    expect(out.results?.map((r) => r.fact)).toContain('mine');
+  });
+
+  it('still returns the user’s own facts, which is the point of merging', async () => {
+    // The store exists so `maxMemories`, the dedup scan and `prune()` become
+    // per-owner — NOT so a specialist stops seeing the user's conversational
+    // facts. Replacing `ctx.rag` outright would have been a silent behaviour
+    // change for every specialist that already exists.
+    const out = await resolveRetrieval(
+      ctxWith([hit('shared', 0.9)], [hit('mine', 0.95)]),
+      def,
+      {
+        task: 'x',
+      },
+      'coder',
+    );
+    expect(out.results?.map((r) => r.fact)).toEqual(['mine', 'shared']);
+  });
+
+  it('is not consulted for an unowned dispatch', async () => {
+    const ctx = ctxWith([hit('shared', 0.9)], [hit('mine', 0.95)]);
+    const out = await resolveRetrieval(ctx, def, { task: 'x' });
+    expect(ctx.ragForOwner).not.toHaveBeenCalled();
+    expect(out.results?.map((r) => r.fact)).toEqual(['shared']);
+  });
+
+  it('is skipped when the process supplies no factory', async () => {
+    // Fail-closed by omission: a process with RAG off supplies none, and every
+    // caller written before this supplies none either.
+    const ctx = {
+      rag: { search: vi.fn(async () => [hit('shared', 0.9)]) },
+    } as unknown as AgentContext;
+    expect((await resolveRetrieval(ctx, def, { task: 'x' }, 'coder')).results).toHaveLength(1);
+  });
+});

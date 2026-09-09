@@ -430,3 +430,109 @@ describe('the read cache', () => {
     expect(store.readMemory('note')).toBeNull();
   });
 });
+
+/**
+ * Ownership: a specialist's memories are private to it.
+ *
+ * The main agent does not read them — it asks the specialist a question
+ * instead, which is what `specialist_run` is for. Asserted in all three
+ * directions, because a fence that only works one way is not a fence: the owner
+ * can read its own, main cannot, and a second specialist cannot either.
+ */
+describe('memory ownership', () => {
+  it('lets an owner read back what it wrote', async () => {
+    const coder = new MemoryStore().asOwner('coder');
+    coder.writeMemory('style-rules', 'Two-space indent.');
+    expect(coder.readMemory('style-rules')).toBe('Two-space indent.');
+    expect(coder.listMemory()).toContain('style-rules');
+  });
+
+  it('hides an owned memory from the main agent', async () => {
+    new MemoryStore().asOwner('coder').writeMemory('style-rules', 'Two-space indent.');
+    const main = new MemoryStore();
+    expect(main.readMemory('style-rules')).toBeNull();
+    expect(main.listMemory()).not.toContain('style-rules');
+    expect(main.getAllMemoryContents().has('style-rules')).toBe(false);
+  });
+
+  it('hides it from a different specialist too', async () => {
+    new MemoryStore().asOwner('coder').writeMemory('style-rules', 'Two-space indent.');
+    const designer = new MemoryStore().asOwner('designer');
+    expect(designer.readMemory('style-rules')).toBeNull();
+    expect(designer.listMemory()).not.toContain('style-rules');
+  });
+
+  it('keeps the UNOWNED set shared, which is the deliberate half', async () => {
+    // The user's own standing instructions stay visible to everyone unless a
+    // record narrows itself with `memoryScope`. Defaulting specialists to "see
+    // nothing unowned" would silently change every existing specialist.
+    new MemoryStore().writeMemory('deploy-process', 'Tag, then push.');
+    expect(new MemoryStore().asOwner('coder').readMemory('deploy-process')).toBe('Tag, then push.');
+  });
+
+  it('stamps the owner on disk, and leaves an unowned write unstamped', async () => {
+    new MemoryStore().asOwner('coder').writeMemory('owned', 'x');
+    new MemoryStore().writeMemory('plain', 'y');
+    expect(raw('owned')).toContain('owner: coder');
+    expect(raw('plain')).not.toContain('owner:');
+  });
+
+  it('refuses a cross-owner overwrite instead of clobbering the file', async () => {
+    // The one way ownership could LOSE data rather than hide it: the write path
+    // uses `loadRaw`, so a collision is visible even though the record is not
+    // readable from here.
+    new MemoryStore().asOwner('coder').writeMemory('deploy', 'coder version');
+    expect(() => new MemoryStore().writeMemory('deploy', 'main version')).toThrow(/belongs to/);
+    expect(new MemoryStore().asOwner('coder').readMemory('deploy')).toBe('coder version');
+  });
+
+  it('leaves every record written before ownership readable by main', async () => {
+    // The back-compat story, and the reason there is no migration: absent means
+    // unowned, so nothing that exists today moves.
+    seed('legacy.md', 'Some older note.');
+    expect(new MemoryStore().readMemory('legacy')).toBe('Some older note.');
+  });
+
+  it('refuses to let a specialist ANNEX one of the user’s keys', async () => {
+    // The direction the first cut got wrong, and the worst of the two.
+    // `ownsOrShared` is true when the record is unowned — right for a read,
+    // catastrophic for a write: the specialist overwrote the user's memory AND
+    // stamped its own name on it, so the note became invisible to main, to
+    // `/memory` and to consolidation forever. The keys are model-invented and
+    // written unattended at session close, which is the worst place available
+    // for a silent overwrite.
+    new MemoryStore().writeMemory('deploy', 'the user’s own note');
+    expect(() => new MemoryStore().asOwner('coder').writeMemory('deploy', 'stolen')).toThrow(
+      /belongs to the user/,
+    );
+    expect(new MemoryStore().readMemory('deploy')).toBe('the user’s own note');
+  });
+
+  it.each(['retire', 'delete'] as const)(
+    'refuses %s across owners, not just write',
+    async (action) => {
+      // The gate is one predicate at one chokepoint (`assertOwns`) precisely so
+      // a fourth mutating path cannot be admitted by default — which is what
+      // `writeMemory`'s own inline check allowed, since `retire`, `supersede`
+      // and `deleteMemory` each checked the key fence and nothing else.
+      new MemoryStore().asOwner('coder').writeMemory('note', 'coder version');
+      const main = new MemoryStore();
+      expect(() => (action === 'retire' ? main.retire('note') : main.deleteMemory('note'))).toThrow(
+        /belongs to "coder"/,
+      );
+      expect(new MemoryStore().asOwner('coder').readMemory('note')).toBe('coder version');
+    },
+  );
+
+  it('lets each agent keep its own record under one key', async () => {
+    // Guards the guard above: the refusals must not be "nobody may write a key
+    // that exists", which would break every ordinary overwrite.
+    const coder = new MemoryStore().asOwner('coder');
+    coder.writeMemory('note', 'first');
+    coder.writeMemory('note', 'second');
+    expect(coder.readMemory('note')).toBe('second');
+    new MemoryStore().writeMemory('plain', 'a');
+    new MemoryStore().writeMemory('plain', 'b');
+    expect(new MemoryStore().readMemory('plain')).toBe('b');
+  });
+});

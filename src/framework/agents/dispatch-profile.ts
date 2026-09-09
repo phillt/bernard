@@ -393,31 +393,48 @@ export function declaredScope(
   return out;
 }
 
+/** What one dispatch's record says about how it runs, and whose it is. */
+export interface ResolvedDispatchProfile {
+  profile: DispatchProfile;
+  /**
+   * The record id this dispatch names, or `undefined` when it names none.
+   *
+   * Returned rather than re-derived by the caller, the shape `resolveRetrieval`
+   * already uses: `def.recordId` is a definition-supplied thunk, and calling it
+   * a second time per dispatch also meant a second copy of the emptiness guard
+   * that could drift from this one. Set even when the record does not RESOLVE —
+   * a dispatch owns its memory under the id it names, whether or not a record
+   * with that id is still on disk.
+   */
+  recordId?: string;
+}
+
 /**
  * Reads the record a dispatch names, if it names one, and returns the execution
  * fields it validly declares.
  *
- * Never throws and never returns `undefined`: a missing store, a missing
- * record, a corrupt field or a store that throws on read all yield the empty
- * profile, which is byte-for-byte today's behaviour. That matters more than it
- * looks — this runs before every dispatch in the process, `main` included.
+ * Never throws: a missing store, a missing record, a corrupt field or a store
+ * that throws on read all yield the empty profile, which is byte-for-byte
+ * today's behaviour. That matters more than it looks — this runs before every
+ * dispatch in the process, `main` included.
  */
 export function resolveDispatchProfile<TInput>(
   ctx: AgentContext,
   def: Pick<AgentDefinition<TInput, unknown>, 'id' | 'recordId'>,
   input: TInput,
-): DispatchProfile {
-  if (!def.recordId) return NONE;
-  const id = def.recordId(input);
-  if (!id) return NONE;
+): ResolvedDispatchProfile {
+  const id = def.recordId?.(input);
+  // An empty id is not a record id. `??` elsewhere would keep `''` and stamp
+  // every memory with a blank owner that nothing can ever match.
+  if (!id) return { profile: NONE };
 
   let record;
   try {
     record = ctx.stores.specialists?.get(id);
   } catch {
-    return NONE;
+    return { profile: NONE, recordId: id };
   }
-  if (!record) return NONE;
+  if (!record) return { profile: NONE, recordId: id };
 
   const profile: DispatchProfile = {};
   const rejected: Record<string, unknown> = {};
@@ -457,7 +474,7 @@ export function resolveDispatchProfile<TInput>(
   }
   if (Object.keys(profile).length > 0) {
     debugLog('dispatch-profile:resolved', { definition: def.id, specialistId: id, ...profile });
-    return profile;
+    return { profile, recordId: id };
   }
-  return NONE;
+  return { profile: NONE, recordId: id };
 }

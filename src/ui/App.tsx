@@ -203,6 +203,7 @@ import { buildAppletRequest } from '../applet-detector.js';
 import { notAskedLine, type PendingPermission } from '../apps/permission-consent.js';
 import { isWildcardSource, type GrantableDirective } from '../host/csp-grant.js';
 import type { PermissionConsentRequest } from '../tools/types.js';
+import { deleteSpecialist } from '../specialist-lifecycle.js';
 
 /**
  * Slash commands and overlays need direct access to the same stores the
@@ -2155,8 +2156,13 @@ export function App({
         }
         // Delete path — confirm with the standard two-item menu (house style).
         if (!(await confirmDeletion(requestMenu, s.name))) continue; // back to list
-        stores.specialists.delete(s.id);
-        flashToast(`Deleted ${s.name}.`, 'success');
+        const swept = deleteSpecialist(s.id, stores.specialists);
+        flashToast(
+          swept.memories > 0
+            ? `Deleted ${s.name} and ${swept.memories} of its memories.`
+            : `Deleted ${s.name}.`,
+          'success',
+        );
         continue;
       }
     }

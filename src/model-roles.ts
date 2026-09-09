@@ -225,6 +225,9 @@ export const SITE_ROLE: Record<ModelSite, RoleId> = {
   // pass never rewrites a memory, it only groups and labels. The `merge` kind
   // does draft text, but it is a PROPOSAL a user accepts, not a write.
   'memory-consolidator': 'classifier',
+  // What a specialist should remember from its own work: a short extraction
+  // over one transcript, the same shape as the consolidator's judgement call.
+  'specialist-recall': 'classifier',
   // Same role and tier as consolidation, deliberately a SEPARATE site (#373):
   // one runs once per session in a detached worker, the other once per write
   // inside a turn, and collapsing them makes `bernard usage` unable to say

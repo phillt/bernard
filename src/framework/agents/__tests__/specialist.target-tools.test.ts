@@ -208,7 +208,7 @@ describe('which definitions scope by a specialist record', () => {
 describe('a persona can delegate, if its record says so', () => {
   const DISPATCH = ['agent', 'task', 'specialist_run', 'tool_wrapper_run'];
   /** Stand-ins — this level is about the FILTER, not about what they do. */
-  const overlay = Object.fromEntries(DISPATCH.map((k) => [k, {} as never]));
+  const overlay = () => Object.fromEntries(DISPATCH.map((k) => [k, {} as never]));
 
   async function withOverlay(targetTools: string[]): Promise<string[]> {
     const tools = await toolsOf(specialistDefinition, ctxWith({ targetTools }), {
@@ -247,6 +247,29 @@ describe('a persona can delegate, if its record says so', () => {
       dispatchTools: overlay,
     });
     for (const name of DISPATCH) expect(Object.keys(tools)).not.toContain(name);
+  });
+
+  it('builds the overlay from this dispatch’s context, not the caller’s', async () => {
+    // The fence would otherwise be a publishing channel. Every dispatch tool
+    // closes over the ctx it was built from, and `runDefinition` scopes a ctx
+    // only for the dispatch it starts — so a pre-built overlay hands the
+    // persona's own sub-agents the PARENT's unowned, unfenced stores. Passing a
+    // BUILDER is what lets `tools()` construct them from the scoped ctx, and
+    // this asserts the builder is handed exactly that object.
+    const seen: unknown[] = [];
+    const ctx = ctxWith({ targetTools: ['agent'] });
+    await toolsOf(specialistDefinition, ctx, {
+      specialistId: SPECIALIST_ID,
+      task: 'x',
+      slotId: 1,
+      planStore: {},
+      dispatchTools: (given: unknown) => {
+        seen.push(given);
+        return overlay();
+      },
+    });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toBe(ctx);
   });
 
   it('grants nothing to a record whose targetTools is empty', async () => {

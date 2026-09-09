@@ -306,6 +306,15 @@ export interface BernardConfig {
    */
   memoryConsolidation: boolean;
   /**
+   * Let each specialist remember what it learned from its own work (#501).
+   *
+   * Default on, like its `autoOpen`/`autoStyle` neighbours and for the same
+   * reason: the defect is that the one agent most needing to remember its own
+   * mistakes could not. Safe to default on because what it writes is private to
+   * that specialist and is deleted with it.
+   */
+  specialistRecall: boolean;
+  /**
    * Render the REPL in the terminal's alternate screen buffer (full-screen,
    * vim/htop style). On by default; set `BERNARD_FULLSCREEN=false` to fall back
    * to the legacy inline-scrollback rendering (e.g. dumb terminals / CI).
@@ -528,6 +537,7 @@ export function savePreferences(prefs: {
   voiceWarmupMs?: number;
   voiceNormalizer?: boolean;
   memoryConsolidation?: boolean;
+  specialistRecall?: boolean;
 }): void {
   // Patch shape matches ProfileSettings exactly — keys present in `prefs`
   // (including explicit `undefined`s from resetOption / resetAllOptions) are
@@ -587,6 +597,7 @@ export function loadPreferences(): {
   voiceWarmupMs?: number;
   voiceNormalizer?: boolean;
   memoryConsolidation?: boolean;
+  specialistRecall?: boolean;
 } {
   // Routes through the active profile in profiles.json (#207). Each field is
   // type-checked here so a malformed stored value falls through to undefined
@@ -654,6 +665,8 @@ export function loadPreferences(): {
       typeof parsed.voiceNormalizer === 'boolean' ? parsed.voiceNormalizer : undefined,
     memoryConsolidation:
       typeof parsed.memoryConsolidation === 'boolean' ? parsed.memoryConsolidation : undefined,
+    specialistRecall:
+      typeof parsed.specialistRecall === 'boolean' ? parsed.specialistRecall : undefined,
   };
 }
 
@@ -1068,6 +1081,7 @@ export function loadConfig(overrides?: {
   voiceWarmupMs?: number;
   voiceNormalizer?: boolean;
   memoryConsolidation?: boolean;
+  specialistRecall?: boolean;
 }): BernardConfig {
   // Load .env from cwd first, then XDG config dir, then legacy ~/.bernard/
   const cwdEnv = path.join(process.cwd(), '.env');
@@ -1383,6 +1397,14 @@ export function loadConfig(overrides?: {
       ? true
       : !(rawMemoryConsolidation === 'false' || rawMemoryConsolidation === '0'));
 
+  const rawSpecialistRecall = process.env.BERNARD_SPECIALIST_RECALL;
+  const specialistRecall =
+    overrides?.specialistRecall ??
+    prefs.specialistRecall ??
+    (rawSpecialistRecall === undefined
+      ? true
+      : !(rawSpecialistRecall === 'false' || rawSpecialistRecall === '0'));
+
   const voiceNormalizer =
     overrides?.voiceNormalizer ??
     prefs.voiceNormalizer ??
@@ -1444,6 +1466,7 @@ export function loadConfig(overrides?: {
     voiceWarmupMs,
     voiceNormalizer,
     memoryConsolidation,
+    specialistRecall,
     fullScreen,
     mouse,
   };
@@ -1532,6 +1555,7 @@ const PROFILE_SCOPED_KEYS: ReadonlyArray<keyof BernardConfig> = [
   'voiceWarmupMs',
   'voiceNormalizer',
   'memoryConsolidation',
+  'specialistRecall',
 ];
 
 /**
