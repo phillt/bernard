@@ -56,6 +56,25 @@ export interface MemoryRecord {
    * way: delete one front-matter line.
    */
   retiredAt?: string;
+  /**
+   * The specialist that wrote this, or absent for the user's own.
+   *
+   * **Ownership is a fence, not a label.** A specialist's notes are private to
+   * it: the main agent does not read them, and cannot — it asks the specialist a
+   * question instead, which is what `specialist_run` is for. Two specialists
+   * cannot read each other's either. What everyone still shares is the
+   * UNOWNED set: the user's own standing instructions, which a specialist needs
+   * unless its record fences it further with `memoryScope`.
+   *
+   * Absent is the whole back-compat story — every record written before this is
+   * unowned, so nothing moves and there is no migration. The partition only
+   * appears as specialists start writing.
+   *
+   * Deliberately NOT a discriminator: `owner:` is an ordinary line in prose, and
+   * an owned record always carries `writtenAt` anyway (both are written by
+   * `serializeMemory` and by nothing else), so it never needs to be one.
+   */
+  owner?: string;
 }
 
 /**
@@ -81,7 +100,7 @@ type ParsedMemoryFile = Partial<MemoryRecord> & { content: string };
  * `serializeMemory` and by nothing else, so no hand-authored fence carries one
  * by accident.
  */
-const KNOWN_FIELDS = ['key', 'writtenAt', 'supersededBy', 'retiredAt'] as const;
+const KNOWN_FIELDS = ['key', 'writtenAt', 'supersededBy', 'retiredAt', 'owner'] as const;
 const DISCRIMINATORS: ReadonlyArray<(typeof KNOWN_FIELDS)[number]> = [
   'writtenAt',
   'supersededBy',
@@ -129,6 +148,19 @@ export class MemorySupersedeError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'MemorySupersedeError';
+  }
+}
+
+export class MemoryOwnerCollisionError extends Error {
+  constructor(
+    readonly key: string,
+    readonly owner: string,
+  ) {
+    super(
+      `Memory key "${key}" already belongs to "${owner}" and cannot be overwritten from here. ` +
+        `Choose a different key, or ask that specialist directly.`,
+    );
+    this.name = 'MemoryOwnerCollisionError';
   }
 }
 
@@ -221,6 +253,7 @@ function serializeMemory(rec: MemoryRecord): string {
   if (rec.writtenAt) lines.push(`writtenAt: ${rec.writtenAt}`);
   if (rec.supersededBy) lines.push(`supersededBy: ${toSingleLine(rec.supersededBy)}`);
   if (rec.retiredAt) lines.push(`retiredAt: ${toSingleLine(rec.retiredAt)}`);
+  if (rec.owner) lines.push(`owner: ${toSingleLine(rec.owner)}`);
   lines.push('---');
   return lines.join('\n') + '\n' + rec.content;
 }
@@ -304,8 +337,38 @@ export class MemoryStore {
    */
   private scope: readonly string[] | null = null;
 
+  /**
+   * Whose view this is — a specialist id, or `null` for the user's own.
+   *
+   * Set by `scopeContext` from the definition's `recordId`, so it is a property
+   * of the dispatch rather than something a caller can spoof. Orthogonal to
+   * {@link scope}: that one narrows WHICH keys, this one narrows WHOSE.
+   */
+  private owner: string | null = null;
+
   constructor() {
     fs.mkdirSync(MEMORY_DIR, { recursive: true });
+  }
+
+  /**
+   * A view that reads and writes as `owner` — a specialist id, or `null` for the
+   * user's own.
+   *
+   * Shares `scratch` and `cache` by reference for {@link scoped}'s reason, and
+   * composes with it: a coder agent can be both owned and key-fenced, and the
+   * two narrow independently.
+   *
+   * Unlike `scoped`, this is NOT monotone — a view can be re-owned, because the
+   * owner is set once by the runner from the dispatch's own `recordId` and is
+   * never taken from anything a model can influence. Making it monotone would
+   * mean the main agent could never be reached again from inside a dispatch,
+   * which is not a property anything wants.
+   */
+  asOwner(owner: string | null): MemoryStore {
+    if (owner === this.owner) return this;
+    const view = Object.create(MemoryStore.prototype) as MemoryStore;
+    Object.assign(view, this, { owner });
+    return view;
   }
 
   /**
@@ -365,6 +428,22 @@ export class MemoryStore {
    * permissions problem is not an empty memory.
    */
   private load(key: string): { parsed: ParsedMemoryFile; mtimeMs: number } | null {
+    const loaded = this.loadRaw(key);
+    // The ownership gate, applied HERE for the reason the scope fence is:
+    // `readMemory`, `readRecord`, `liveEntries` and both `getAll*` all funnel
+    // through this one method, so a view cannot reach another owner's record by
+    // any route. `loadRaw` is what the WRITE path uses instead — a collision has
+    // to be visible even when the colliding record is not readable, or two
+    // agents silently overwrite one file.
+    return loaded && this.ownsOrShared(loaded.parsed) ? loaded : null;
+  }
+
+  /** Whether this view may read a record with this owner. */
+  private ownsOrShared(parsed: ParsedMemoryFile): boolean {
+    return parsed.owner === undefined || parsed.owner === this.owner;
+  }
+
+  private loadRaw(key: string): { parsed: ParsedMemoryFile; mtimeMs: number } | null {
     // One of the two places the fence is applied (#511). `readMemory`,
     // `readRecord`, `liveEntries` and both `getAll*` funnel through this and
     // {@link listAllMemory}, so a scoped view cannot see an out-of-scope record
@@ -463,6 +542,7 @@ export class MemoryStore {
       writtenAt: parsed.writtenAt ?? new Date(mtimeMs).toISOString(),
       ...(parsed.supersededBy ? { supersededBy: parsed.supersededBy } : {}),
       ...(parsed.retiredAt ? { retiredAt: parsed.retiredAt } : {}),
+      ...(parsed.owner ? { owner: parsed.owner } : {}),
     };
   }
 
@@ -489,10 +569,17 @@ export class MemoryStore {
     // unscoped write from a fenced worker turns the fence into a PUBLISHING
     // channel: the worker writes, and `main` renders it next turn.
     this.assertWritable(key);
-    const existing = this.load(key)?.parsed;
+    // `loadRaw`, not `load`: a record owned by someone else is invisible to
+    // reads by design, and a write must still see it. Otherwise main and a
+    // specialist that both chose the key `deploy` would silently overwrite one
+    // file, which is the one way ownership could lose data rather than hide it.
+    const existing = this.loadRaw(key)?.parsed;
     const incoming = toSingleLine(key);
     if (existing?.key && existing.key !== incoming) {
       throw new MemoryKeyCollisionError(incoming, existing.key);
+    }
+    if (existing && !this.ownsOrShared(existing)) {
+      throw new MemoryOwnerCollisionError(incoming, existing.owner ?? 'another agent');
     }
     const filePath = this.filePath(key);
     atomicWriteFileSync(
@@ -506,6 +593,11 @@ export class MemoryStore {
         // front-matter line.
         ...(existing?.supersededBy ? { supersededBy: existing.supersededBy } : {}),
         ...(existing?.retiredAt ? { retiredAt: existing.retiredAt } : {}),
+        // Stamped from the VIEW, never from an argument: the owner is a
+        // property of which dispatch is running, so a model cannot write a
+        // memory into someone else's name. Absent for the user's own, which is
+        // what keeps every existing record unowned and shared.
+        ...(this.owner ? { owner: this.owner } : {}),
       }),
     );
     this.cache.delete(filePath);

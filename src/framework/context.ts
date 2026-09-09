@@ -207,7 +207,24 @@ export function assembleContext(input: AssembleContextInput): AgentContext {
  * common path allocates nothing and `main` keeps object identity — which is
  * what keeps its tool block byte-identical for the prompt cache (#269).
  */
-export function scopeContext(ctx: AgentContext, profile: DispatchProfile): AgentContext {
+export function scopeContext(
+  ctx: AgentContext,
+  profile: DispatchProfile,
+  owner?: string,
+): AgentContext {
+  // Ownership, applied before the fences and independently of them. A
+  // specialist's memories are private to it — the main agent does not read them
+  // and asks the specialist a question instead — while the UNOWNED set, the
+  // user's own standing instructions, stays shared unless a record fences it
+  // further with `memoryScope`. Absent `owner` means the user's own view, which
+  // is every dispatch that names no record and every memory written before this.
+  const base = owner
+    ? { ...ctx, stores: { ...ctx.stores, memory: ctx.stores.memory.asOwner(owner) } }
+    : ctx;
+  return scopeFences(base, profile);
+}
+
+function scopeFences(ctx: AgentContext, profile: DispatchProfile): AgentContext {
   // **There is no early return, and that is the fix.** The guard here was the
   // silent-failure site (#550): it named the axes by hand, the third term was
   // forgotten, and a corpus-only fence returned the unscoped context — every

@@ -196,7 +196,15 @@ export async function runDefinition<TInput, TFormatted>(
   // unrepresentable rather than merely discouraged, and `scopeContext` returns
   // `rootCtx` unchanged when nothing is declared, so `main` keeps object
   // identity and the prompt-cache prefix is untouched.
-  const ctx = withUsageRecorder(scopeContext(rootCtx, profile));
+  // The owner comes from the definition's own `recordId` — the declared way to
+  // find the record a dispatch names — so it cannot be supplied by a caller or
+  // influenced by a model. A definition that names no record runs as the user.
+  // An empty id is not an owner. `??` would keep `''` and stamp every memory
+  // with a blank owner that nothing can ever match, so the check is explicit
+  // rather than leaning on falsiness.
+  const recordId = def.recordId?.(input);
+  const owner = recordId && recordId.length > 0 ? recordId : undefined;
+  const ctx = withUsageRecorder(scopeContext(rootCtx, profile, owner));
   // What this dispatch is fenced to, for the record only. The two terms cannot
   // both be set today — a caller supplies one exactly when there is no record
   // to declare it — and if they ever could, the applied fence is their

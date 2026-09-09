@@ -181,10 +181,15 @@ function createMockCorrectionStore() {
 }
 
 function createMockMemoryStore() {
-  return {
+  const store: any = {
     getAllMemoryContents: vi.fn(() => new Map()),
     getAllScratchContents: vi.fn(() => new Map()),
-  } as any;
+    // `scopeContext` calls this for every dispatch that names a record, so a
+    // double that cannot answer it fails the dispatch rather than the fence.
+    // Returns itself: these tests are about the wrapper, not about ownership.
+    asOwner: vi.fn(() => store),
+  };
+  return store;
 }
 
 function createMockOptions() {
@@ -1110,9 +1115,11 @@ describe('a scoped wrapper record fences its pre-assembled child tools', () => {
 
   async function dispatchWith(specialist: Record<string, unknown>) {
     const scopedSentinel = { scoped: true } as never;
+    const base = createMockMemoryStore();
     const rootMemory = {
-      ...createMockMemoryStore(),
+      ...base,
       scoped: vi.fn(() => scopedSentinel),
+      asOwner: vi.fn(() => rootMemory),
     } as never;
     const specialistStore = createMockSpecialistStore();
     specialistStore.get.mockReturnValue(specialist);
