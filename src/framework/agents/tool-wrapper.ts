@@ -231,6 +231,19 @@ export const toolWrapperDefinition: AgentDefinition<ToolWrapperInput, WrapperRes
 };
 
 /**
+ * What every surface says when a dispatch ran out of steps with nothing to show.
+ *
+ * One spelling, because there were four: this function's own inline template,
+ * `activity-summary.ts`'s prose preamble, `task.ts`'s, and — until it called
+ * this — the persona path's. The recovery advice is read from the taxonomy
+ * playbook rather than written a second time, which is the property the caller
+ * below already documented and the reason the string is worth sharing at all.
+ */
+export function stepLimitText(steps: number | undefined, label = 'Specialist'): string {
+  return `${label} ran out of steps (${steps}) before producing a final answer. ${classifyError({ message: 'step_limit' }).playbook.model}`;
+}
+
+/**
  * Re-labels a wrapper result whose real failure was **running out of steps**.
  *
  * A dispatch that exhausts `maxSteps` is cut off mid-work, so the model never
@@ -298,7 +311,7 @@ export function relabelStepLimit(wrapped: WrapperResult, meta?: FormatMeta): Wra
     // known pattern"). The recovery text is read from that playbook rather
     // than hand-written a second time, so every surface rendering `step_limit`
     // agrees.
-    result: `Specialist ran out of steps (${meta.steps}) before producing a final answer. ${classifyError({ message: 'step_limit' }).playbook.model}`,
+    result: stepLimitText(meta.steps),
     error: 'step_limit',
   };
 }

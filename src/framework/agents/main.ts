@@ -4,16 +4,12 @@ import type { TokenStatsTarget } from '../hooks/token-stats.js';
 import { outputHook } from '../hooks/output.js';
 import { createTools } from '../../tools/index.js';
 import { formatCurrentDateTime } from '../../tools/datetime.js';
-import { createSubAgentTool } from '../../tools/subagent.js';
-import { createTaskTool } from '../../tools/task.js';
-import { createSpecialistRunTool } from '../../tools/specialist-run.js';
-import { createToolWrapperRunTool } from '../../tools/tool-wrapper-run.js';
+import { buildDispatchOverlay } from '../../tools/tool-wrapper-run.js';
 import { createPlanTool } from '../../tools/plan.js';
 import { createThinkTool } from '../../tools/think.js';
 import { createAskUserTool } from '../../tools/ask-user.js';
 import { createEvaluateTool } from '../../tools/evaluate.js';
 import { applyShimRouting } from '../../tools/wrap-with-specialist.js';
-import { toolToAISDK } from '../tools/adapter.js';
 import { buildToolProfilesPrompt } from '../../tool-profiles.js';
 import { getModelProfile } from '../../providers/index.js';
 import { isReactPossible } from '../../policy/effective.js';
@@ -278,17 +274,11 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
     // exactly the class #452 removed. The main path pays nothing: `createTools`
     // above has already loaded `applet.js`.
     const { createMainAppletTool } = await import('../../tools/applet-ctx-tools.js');
-    // The four dispatch tools, named once so the same set can be handed to a
-    // persona dispatch (see `createSpecialistRunTool`). **`applet` is not in
-    // here**, and that is the recursion guard: main's overlay carries a
-    // styling-capable `applet` and no dispatched registry may, so it stays a
-    // sibling key rather than joining this object.
-    const dispatchOverlay: Record<string, Tool> = {
-      agent: createSubAgentTool(ctx),
-      task: toolToAISDK(createTaskTool(ctx)),
-      specialist_run: createSpecialistRunTool(ctx, () => dispatchOverlay),
-      tool_wrapper_run: createToolWrapperRunTool(ctx),
-    };
+    // The four dispatch tools, from the one builder that owns them. **`applet`
+    // stays a sibling key below and never enters this object** — that is the
+    // recursion guard, and it is now a property of `buildDispatchOverlay` not
+    // constructing one rather than of three literals differing by one key.
+    const dispatchOverlay = buildDispatchOverlay(ctx);
     const tools: Record<string, Tool> = {
       // `...baseTools` MUST stay first. `applet` below is the only key here that
       // SHADOWS a tool `createTools` already built rather than adding a new one,

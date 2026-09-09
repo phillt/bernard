@@ -15,6 +15,9 @@ async function mainApplet(dispatch: ReturnType<typeof vi.fn>) {
   vi.doMock('../../../tools/tool-wrapper-run.js', () => ({
     dispatchToolWrapper: dispatch,
     createToolWrapperRunTool: () => ({}),
+    // `main.ts` takes its overlay from here now; the guard on its CONTENTS is
+    // asserted separately, against the real builder.
+    buildDispatchOverlay: () => ({}),
   }));
   vi.doMock('../../../config.js', () => ({
     loadConfig: () => ({ autoStyleApplets: true, autoOpenApplets: false }),
@@ -94,43 +97,38 @@ describe('the main agent wires the applet design pass', () => {
  * moving `applet` into `dispatchOverlay` in `main.ts` passes every other test
  * in the tree, including the two in this file, and fails only this one.
  */
-describe("main's handed-down dispatch overlay", () => {
+describe('the overlay every delegating path hands down', () => {
   useTempHome('bernard-main-dispatch-overlay');
 
   it('carries the four dispatch tools and never `applet`', async () => {
+    // The recursion guard, asserted on `buildDispatchOverlay` itself rather than
+    // on main's copy of it — which is what the guard became when the builder was
+    // extracted. Before, the guard was "three object literals differ by exactly
+    // one key"; now it is "this one function does not construct an `applet`",
+    // and that is a property of a single definition. Mutation-checked: adding
+    // `applet` here fails only this test.
+    // `doUnmock` because a sibling test in this file mocks this module, and
+    // `vi.doMock` registrations outlive `resetModules()` — this test needs the
+    // real builder, which is the whole point of it.
+    vi.doUnmock('../../../tools/tool-wrapper-run.js');
     vi.resetModules();
-    // Capture the thunk `main.ts` passes to `createSpecialistRunTool` — that
-    // object is exactly what a dispatched persona is offered.
-    let handedDown: (() => Record<string, unknown>) | undefined;
-    vi.doMock('../../../tools/specialist-run.js', () => ({
-      createSpecialistRunTool: (_ctx: unknown, thunk?: () => Record<string, unknown>) => {
-        handedDown = thunk;
-        return {};
-      },
-    }));
-    vi.doMock('../../../config.js', () => ({
-      loadConfig: () => ({ autoStyleApplets: false, autoOpenApplets: false }),
-    }));
+    const { buildDispatchOverlay } = await import('../../../tools/tool-wrapper-run.js');
+    const { makeCtx } = await import('./_mcp-delegation-fixture.js');
+    const overlay = buildDispatchOverlay(makeCtx(false));
+    expect(Object.keys(overlay).sort()).toEqual([
+      'agent',
+      'specialist_run',
+      'task',
+      'tool_wrapper_run',
+    ]);
+    expect(overlay).not.toHaveProperty('applet');
+  });
 
-    const { mainAgentDefinition } = await import('../main.js');
-    const { makeCtx, toolsOf } = await import('./_mcp-delegation-fixture.js');
-    const base = makeCtx(false);
-    const ctx = {
-      ...base,
-      stores: { ...base.stores, memory: { clearScratch: () => {}, list: () => [] } },
-    } as unknown as AgentContext;
-
-    const tools = await toolsOf(mainAgentDefinition, ctx, {
-      planStore: {},
-      systemPrompt: '',
-    } as never);
-
-    // The positive half: main itself still has a styling-capable `applet`.
-    expect(tools).toHaveProperty('applet');
-
-    expect(handedDown, 'main did not hand an overlay down at all').toBeDefined();
-    const overlay = Object.keys(handedDown!()).sort();
-    expect(overlay).toEqual(['agent', 'specialist_run', 'task', 'tool_wrapper_run']);
-    expect(overlay).not.toContain('applet');
+  it('still leaves main itself a styling-capable `applet`', async () => {
+    // The positive half — the sibling key main adds on top. Without it the
+    // assertion above would pass just as well if applets lost their design pass
+    // entirely, which is the failure this file exists to catch.
+    const applet = await mainApplet(vi.fn(async () => ({ status: 'ok', result: 'ok' })));
+    expect(applet).toBeDefined();
   });
 });

@@ -49,11 +49,14 @@ const slotHeld = new AsyncLocalStorage<number>();
  *
  * **The pool bounds nothing about depth**, which is easy to miss because it
  * looks like a concurrency guard: an acquire from inside a slot-holder is free,
- * so a chain of nested dispatches passes straight through the cap. Until
- * personas could delegate, depth was bounded *structurally* — `createTools` is
- * ctx-free and builds none of the four dispatch tools, so a persona was a leaf
- * and could not begin a chain. Giving it delegation removes that, and nothing
- * else in the tree counts depth.
+ * so a chain of nested dispatches passes straight through the cap.
+ *
+ * Nothing else counted it either. A persona was bounded *structurally* —
+ * `createTools` is ctx-free and builds none of the four dispatch tools, so it
+ * was a leaf and could not begin a chain — but a **tool-wrapper was already
+ * unbounded**: `main → tool_wrapper_run → W1 → tool_wrapper_run → W2 → …` has
+ * always been possible. Giving personas delegation removed the structural half,
+ * so this is applied at both use sites rather than only the new one.
  *
  * 3 allows main → specialist → narrower specialist → one more, which covers the
  * shape this exists for (a coder agent reaching backend/frontend/design
@@ -69,8 +72,9 @@ export const MAX_DISPATCH_DEPTH = (() => {
  * How many pool slots are held above the current async path — 0 on the main
  * agent, 1 inside a dispatch it started, and so on.
  *
- * Read at registry-assembly time so a dispatch already at the limit is simply
- * not handed the tools to go deeper. **Construction-time filtering, not
+ * Read at registry-assembly time — inside the slot, so it reports the dispatch's
+ * own depth — so one already at the limit is simply not handed the tools to go
+ * deeper. **Construction-time filtering, not
  * post-hoc masking**, which is the same choice the tool broker makes
  * everywhere else: a tool that was never built cannot be called, so there is no
  * refusal to word, no new error shape across the four dispatch tools' four
@@ -125,8 +129,11 @@ async function runHoldingSlot<T>(fn: (slot: { id: number }) => Promise<T>): Prom
  *   active count as `<= cap` is wrong. The overshoot is no longer bounded at
  *   +1: the exempt set grew from one declared path to every dispatch below a
  *   slot-holder, at any depth.
- * - The cap bounds nesting DEPTH, not WIDTH: k parallel delegate calls from
- *   each of N capped parents put `N + N*k` dispatches in flight.
+ * - The cap bounds neither. It does not bound WIDTH — k parallel delegate calls
+ *   from each of N capped parents put `N + N*k` dispatches in flight — and it
+ *   does not bound DEPTH either, because a nested acquire is exempt by the line
+ *   above. Depth is counted separately; see {@link MAX_DISPATCH_DEPTH}, which
+ *   exists precisely because this sentence used to claim otherwise.
  */
 export async function withSlot<T>(
   fn: (slot: { id: number }) => Promise<T>,

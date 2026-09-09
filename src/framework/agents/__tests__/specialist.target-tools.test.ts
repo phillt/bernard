@@ -233,6 +233,30 @@ describe('a persona can delegate, if its record says so', () => {
     expect(await withOverlay(['web_search'])).toEqual(['plan', 'think', 'web_search']);
   });
 
+  it('grants nothing to a record that declares no targetTools at all', async () => {
+    // **The case that was wrong and had no test.** `scopeToTargetTools` treats
+    // an absent list as "unchanged", so merging the overlay into `baseTools`
+    // before that filter handed all four to any record declaring nothing — 28
+    // of this install's 30 personas. Every other assertion in this block
+    // supplies `targetTools`, so all of them were green while it leaked.
+    const tools = await toolsOf(specialistDefinition, ctxWith({} as never), {
+      specialistId: SPECIALIST_ID,
+      task: 'x',
+      slotId: 1,
+      planStore: {},
+      dispatchTools: overlay,
+    });
+    for (const name of DISPATCH) expect(Object.keys(tools)).not.toContain(name);
+  });
+
+  it('grants nothing to a record whose targetTools is empty', async () => {
+    // `[]` is honoured as unscoped for the BUILT-IN registry (#507 settled that
+    // from real records), and must still grant no delegation — the two defaults
+    // are deliberately opposite.
+    const keys = await withOverlay([]);
+    for (const name of DISPATCH) expect(keys).not.toContain(name);
+  });
+
   it('is a leaf when the caller supplies no overlay', async () => {
     // Omission is the safe answer, and it is the state every persona was in
     // before this — so a caller that forgets cannot accidentally grant

@@ -13,7 +13,7 @@ import type { AgentContext } from '../context.js';
 import { outputHook } from '../hooks/output.js';
 import { buildStrategy } from '../strategies/build-strategy.js';
 import { retrievalQueryFor } from './retrieval.js';
-import { buildChildTools, formatExamples } from './tool-wrapper.js';
+import { buildChildTools, formatExamples, stepLimitText } from './tool-wrapper.js';
 import type { AgentDefinition, ResolvedModel } from './types.js';
 import { makeLastStepTextOnly } from './task.js';
 
@@ -144,10 +144,18 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
       // Scoped BEFORE the reasoning tools below are added, so those three sit
       // outside `targetTools` by construction rather than by every record
       // remembering to name them. See `scopeToTargetTools`.
-      ...scopeToTargetTools(ctx, input.specialistId, {
-        ...baseTools,
-        ...(input.dispatchTools ?? {}),
-      }),
+      ...scopeToTargetTools(ctx, input.specialistId, baseTools),
+      // The overlay is filtered SEPARATELY, and that is the whole difference
+      // between an opt-in grant and a silent default. Merging it into
+      // `baseTools` before `scopeToTargetTools` looked equivalent and was not:
+      // an absent `targetTools` means "unchanged" there, so a merged overlay
+      // passes straight through — and 28 of this install's 30 personas declare
+      // nothing, so nearly every one would have gained all four dispatch tools
+      // without naming any. `buildChildTools` has the OPPOSITE default (absent
+      // and `[]` both mean no tools, #331), which is exactly the rule a grant
+      // needs, so each default is used where it is right rather than one being
+      // bent to cover both.
+      ...grantedDispatchTools(ctx, input),
       plan: createPlanTool(input.planStore),
       think: createThinkTool(),
       ...(ctx.config.coordinatorMode === 'on'
@@ -222,11 +230,33 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
     // content may simply have wrapped up on its last step, and calling that a
     // failure would throw the work away.
     if (meta?.stepLimitHit && !result.text.trim()) {
-      return `Error: step_limit — specialist ran out of steps (${meta.steps}) before producing an answer.\n\n${body}`;
+      // `body` already carries `appendActivitySummary`'s prose preamble for this
+      // exact case, so the prefix states the VERDICT and the recovery rather than
+      // the fact a second time — and takes both from the shared `stepLimitText`,
+      // which is what stops this becoming a fourth wording of one event.
+      return `Error: step_limit — ${stepLimitText(meta.steps)}\n\n${body}`;
     }
     return body;
   },
 };
+
+/**
+ * The dispatch tools this record actually named, out of the overlay its caller
+ * offered.
+ *
+ * Separate from {@link scopeToTargetTools} because the two need OPPOSITE
+ * defaults. An absent `targetTools` means "every tool the surface allows" for
+ * the built-in registry — the back-compat rule #507 settled — and must mean
+ * "none" for delegation, or the grant is not a grant. `buildChildTools` already
+ * implements the second rule, so this reuses it rather than adding a third
+ * filter with a fourth opinion about what an empty list means.
+ */
+function grantedDispatchTools(ctx: AgentContext, input: SpecialistInput): Record<string, Tool> {
+  const overlay = input.dispatchTools;
+  if (!overlay) return {};
+  const record = ctx.stores.specialists.get(input.specialistId);
+  return buildChildTools({ targetTools: record?.targetTools }, overlay, ctx.mcp?.resolveAlias);
+}
 
 /**
  * Applies a specialist's own `targetTools` to the registry it will run with.
