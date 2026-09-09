@@ -35,6 +35,7 @@ export type ModelSite =
   | 'speech-normalizer'
   | 'memory-consolidator'
   | 'specialist-recall'
+  | 'specialist-consolidator'
   | 'memory-contradiction';
 
 /**
@@ -418,6 +419,7 @@ const TEMPERATURE_ZERO_SITES: ReadonlySet<ModelSite> = new Set([
   // startup notice becomes noise the user learns to dismiss.
   'memory-consolidator',
   'specialist-recall',
+  'specialist-consolidator',
   // A user's own note being retired must not depend on which way a sample
   // fell — the same argument the line above makes, at write time (#373).
   'memory-contradiction',

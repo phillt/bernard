@@ -71,7 +71,13 @@ vi.mock('./memory.js', () => ({
 
 const mockExtractNotes = vi.fn(async () => [] as Array<{ key: string; content: string }>);
 const mockWriteMemory = vi.fn();
-const mockAsOwner = vi.fn(() => ({ writeMemory: mockWriteMemory }));
+const mockRetire = vi.fn(() => true);
+const mockSupersede = vi.fn(() => true);
+const mockAsOwner = vi.fn(() => ({
+  writeMemory: mockWriteMemory,
+  retire: mockRetire,
+  supersede: mockSupersede,
+}));
 const mockReadJsonlTail = vi.fn(() => [] as unknown[]);
 const mockSpecialistGet = vi.fn((id: string) => ({ id }) as unknown);
 
@@ -500,8 +506,14 @@ describe('rag-worker (runWorkerForFile)', () => {
       mockReadJsonlTail.mockReset().mockReturnValue([]);
       mockExtractNotes.mockReset().mockResolvedValue([]);
       mockSpecialistGet.mockReset().mockImplementation((id: string) => ({ id }) as unknown);
-      mockAsOwner.mockReset().mockReturnValue({ writeMemory: mockWriteMemory });
+      mockAsOwner.mockReset().mockReturnValue({
+        writeMemory: mockWriteMemory,
+        retire: mockRetire,
+        supersede: mockSupersede,
+      });
       mockWriteMemory.mockReset();
+      mockRetire.mockReset().mockReturnValue(true);
+      mockSupersede.mockReset().mockReturnValue(true);
       // On-disk state, not a mock: a successful pass WRITES this marker, so a
       // sibling test leaves a cutoff of `now` behind and every later test's log
       // entries are filtered out as already-seen. Owned here rather than by the
@@ -693,6 +705,83 @@ describe('rag-worker (runWorkerForFile)', () => {
       await runWorkerForFile(tempFile);
 
       expect(peak).toBe(3);
+    });
+
+    it('consolidates its OWN notes once it has enough of them', async () => {
+      // `runMemoryConsolidation` is handed an unowned store, so owned records
+      // are excluded from it permanently — and this arm writes them every
+      // session. Without a counterpart, "memory only ever grows" is recreated
+      // one fence down.
+      mockReadJsonlTail.mockReturnValue([run('coder')]);
+      mockConsolidationInputs.mockReturnValue(
+        Array.from({ length: 9 }, (_, i) => ({ key: `k${i}` })),
+      );
+      mockProposeConsolidation.mockResolvedValue([{ kind: 'stale', keys: ['k1'], reason: 'r' }]);
+      write({ provider: 'anthropic', model: 'm', specialistRecall: true });
+
+      await runWorkerForFile(tempFile);
+
+      // On the OWNED view, which is the only one `assertOwns` lets through —
+      // `main` cannot retire another agent's key, which is why this cannot live
+      // in the user's own pass.
+      expect(mockAsOwner).toHaveBeenCalledWith('coder');
+      expect(mockRetire).toHaveBeenCalledWith('k1');
+      // Its own site, or `bernard usage` cannot tell the two passes apart.
+      expect(mockProposeConsolidation.mock.calls.at(-1)?.[2]).toMatchObject({
+        site: 'specialist-consolidator',
+      });
+    });
+
+    it('buys no model call for a specialist that learned little', async () => {
+      // A floor rather than a rate: a specialist with two notes has nothing to
+      // consolidate, and paying for the judgement would make this cost
+      // something every session for nothing.
+      mockReadJsonlTail.mockReturnValue([run('coder')]);
+      mockConsolidationInputs.mockReturnValue([{ key: 'a' }, { key: 'b' }]);
+      write({ provider: 'anthropic', model: 'm', specialistRecall: true });
+
+      await runWorkerForFile(tempFile);
+
+      expect(mockProposeConsolidation).not.toHaveBeenCalled();
+      expect(mockRetire).not.toHaveBeenCalled();
+    });
+
+    it('supersedes toward the keeper for a duplicate, rather than retiring', async () => {
+      // The distinction `MemoryRecord` draws between "X replaced this" and "this
+      // was never worth keeping", kept rather than collapsed — and the keeper
+      // itself must survive.
+      mockReadJsonlTail.mockReturnValue([run('coder')]);
+      mockConsolidationInputs.mockReturnValue(
+        Array.from({ length: 9 }, (_, i) => ({ key: `k${i}` })),
+      );
+      mockProposeConsolidation.mockResolvedValue([
+        { kind: 'duplicate', keys: ['k1', 'k2'], keeper: 'k1', reason: 'r' },
+      ]);
+      write({ provider: 'anthropic', model: 'm', specialistRecall: true });
+
+      await runWorkerForFile(tempFile);
+
+      expect(mockSupersede).toHaveBeenCalledWith('k2', 'k1');
+      expect(mockSupersede).toHaveBeenCalledTimes(1);
+      expect(mockRetire).not.toHaveBeenCalled();
+    });
+
+    it('never applies a merge, which would write text nobody wrote', async () => {
+      // The one disposition where a wrong call INVENTS a note. The user's pass
+      // gets a human to look at that before it lands; this one has nobody.
+      mockReadJsonlTail.mockReturnValue([run('coder')]);
+      mockConsolidationInputs.mockReturnValue(
+        Array.from({ length: 9 }, (_, i) => ({ key: `k${i}` })),
+      );
+      mockProposeConsolidation.mockResolvedValue([
+        { kind: 'merge', keys: ['k1', 'k2'], proposedKey: 'k9', proposedText: 'new', reason: 'r' },
+      ]);
+      write({ provider: 'anthropic', model: 'm', specialistRecall: true });
+
+      await runWorkerForFile(tempFile);
+
+      expect(mockRetire).not.toHaveBeenCalled();
+      expect(mockSupersede).not.toHaveBeenCalled();
     });
 
     it('one specialist failing does not cost the others their notes', async () => {

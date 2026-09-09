@@ -187,6 +187,7 @@ async function runSpecialistRecall(config: BernardConfig): Promise<void> {
       writeOwnedNotes(memory, specialistId, notes);
       await seedSpecialistRag(specialistId, notes);
       debugLog('specialist-recall:wrote', { specialistId, runs: runs.length, notes: notes.length });
+      await consolidateOwnedNotes(memory, specialistId, config);
     }),
   );
   // Stamped unconditionally, including when nothing matched: otherwise a quiet
@@ -213,6 +214,86 @@ function writeOwnedNotes(
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+}
+
+/**
+ * A specialist reviews its own notes, and RETIRES rather than proposing.
+ *
+ * ## Why this exists at all
+ *
+ * `runMemoryConsolidation` is handed a bare `new MemoryStore()` — owner `null` —
+ * so owned records are excluded from it **permanently**, and not merely per run:
+ * the `changed` predicate is computed over the same list, so an owned note
+ * cannot even trigger a pass. Meanwhile this arm writes owned notes every
+ * session. That recreates the exact condition #529 exists to fix, one fence
+ * down, with a model-authored writer and nothing to prune it.
+ *
+ * ## Why it is here rather than in the user's pass
+ *
+ * `main` **cannot** apply a retirement to an owned key — `assertOwns` refuses,
+ * correctly — so routing this through `MemoryCandidateStore` would need the
+ * proposal to carry the note's CONTENT past the fence for the user to review.
+ * This arm already runs per owner with an `asOwner` view that passes that gate.
+ *
+ * ## Why it writes where the user's pass proposes
+ *
+ * The same asymmetry `writeOwnedNotes` already rests on: these records are
+ * private to one specialist and are deleted with it, so a wrong retirement
+ * changes one agent's behaviour rather than everything, and reviewing N
+ * specialists' proposal queues at every startup is a queue nobody drains. It
+ * also stays reversible on exactly the same terms as the user's — `retire`
+ * archives in place, and one deleted front-matter line undoes it.
+ *
+ * ## Cost
+ *
+ * Gated on note count, so a specialist that ran but learned little buys nothing.
+ * Only `stale` and `duplicate` are applied: `merge` writes NEW text, which is
+ * the one disposition where a wrong call invents a note nobody wrote, and the
+ * user's pass gets a human to look at that before it lands.
+ */
+async function consolidateOwnedNotes(
+  memory: MemoryStore,
+  specialistId: string,
+  config: BernardConfig,
+): Promise<void> {
+  const owned = memory.asOwner(specialistId);
+  let entries;
+  try {
+    entries = consolidationInputs(owned);
+  } catch {
+    return;
+  }
+  if (entries.length < MIN_OWNED_NOTES_TO_CONSOLIDATE) return;
+  const proposals = await proposeConsolidation(entries, config, {
+    abortSignal: AbortSignal.timeout(WORKER_RECALL_TIMEOUT_MS),
+    site: 'specialist-consolidator',
+  });
+  let retired = 0;
+  for (const p of proposals) {
+    // `merge` is deliberately not applied — see above.
+    if (p.kind === 'merge') continue;
+    const doomed = p.kind === 'duplicate' ? p.keys.filter((k) => k !== p.keeper) : p.keys;
+    for (const key of doomed) {
+      try {
+        // Superseded where there is a keeper to point at, retired where there is
+        // not — the distinction `MemoryRecord` draws between "X replaced this"
+        // and "this was never worth keeping", kept rather than collapsed.
+        const ok = p.kind === 'duplicate' ? owned.supersede(key, p.keeper) : owned.retire(key);
+        if (ok) retired++;
+      } catch (err) {
+        // One bad key must not cost the rest, in a detached process nobody is
+        // watching.
+        debugLog('specialist-consolidate:failed', {
+          specialistId,
+          key,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+  if (retired > 0) {
+    debugLog('specialist-consolidate:retired', { specialistId, retired, entries: entries.length });
   }
 }
 
@@ -344,6 +425,17 @@ const RECALL_LOG_SCAN = 500;
 
 /** Per-specialist transcript budget, so one busy specialist cannot dominate. */
 const RECALL_TRANSCRIPT_MAX = 12_000;
+
+/**
+ * How many owned notes a specialist needs before its own consolidation pass is
+ * worth a model call.
+ *
+ * A floor rather than a rate: a specialist that ran once and learned two things
+ * has nothing to consolidate, and paying for the judgement would make the
+ * feature cost something on every session for nothing. Above it, the pass runs
+ * once per session per specialist — the same cadence the user's own has.
+ */
+const MIN_OWNED_NOTES_TO_CONSOLIDATE = 8;
 
 /**
  * How recently written is "too fresh to judge".

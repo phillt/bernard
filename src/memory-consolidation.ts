@@ -244,11 +244,26 @@ export function consolidationInputs(store: MemoryStore): ConsolidationInput[] {
 export async function proposeConsolidation(
   entries: ConsolidationInput[],
   config: BernardConfig,
-  opts: { abortSignal?: AbortSignal; onUsage?: UsageRecorder } = {},
+  opts: {
+    abortSignal?: AbortSignal;
+    onUsage?: UsageRecorder;
+    /**
+     * Which site pays for this call.
+     *
+     * A specialist reviewing its OWN notes is the same judgement over a
+     * different corpus, so it reuses this prompt and this parser rather than
+     * growing a near-copy — but it runs at a completely different rate (once
+     * per session per specialist that learned enough, against once per session
+     * over the user's whole store), and folded into one site `bernard usage`
+     * cannot say which is costing you. Defaults to the user's own.
+     */
+    site?: 'memory-consolidator' | 'specialist-consolidator';
+  } = {},
 ): Promise<MemoryProposal[]> {
   if (entries.length < MIN_MEMORIES_TO_CONSIDER) return [];
 
-  const site = resolveSiteModel(config, 'memory-consolidator');
+  const siteName = opts.site ?? 'memory-consolidator';
+  const site = resolveSiteModel(config, siteName);
   const { content: corpus, included } = renderMemoryCorpus(entries);
   // The count names what was actually SENT, not what was on disk — and it is
   // composed here rather than passed as `head` for that reason: `head` is
@@ -258,7 +273,7 @@ export async function proposeConsolidation(
 
   try {
     const t0 = Date.now();
-    const result = await traceLlm('memory-consolidator', site.model.modelId, () =>
+    const result = await traceLlm(siteName, site.model.modelId, () =>
       generateText({
         model: site.model,
         providerOptions: site.providerOptions,
@@ -272,7 +287,7 @@ export async function proposeConsolidation(
       }),
     );
     opts.onUsage?.(
-      usageRecordFromSite(site, 'memory-consolidator', result.usage, result.providerMetadata, {
+      usageRecordFromSite(site, siteName, result.usage, result.providerMetadata, {
         latencyMs: Date.now() - t0,
       }),
     );
