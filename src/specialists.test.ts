@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { SpecialistStore } from './specialists.js';
+import { SpecialistStore, MAX_SPECIALISTS } from './specialists.js';
 import { _resetBuiltinSpecialistCache, ProtectedSpecialistError } from './specialist-authority.js';
 
 vi.mock('node:fs', () => ({
@@ -263,9 +263,29 @@ describe('SpecialistStore', () => {
       );
     });
 
-    it('throws at MAX_SPECIALISTS', () => {
+    it('throws at MAX_SPECIALISTS, and not one below it', () => {
+      // Both directions, and the count is derived from the constant rather than
+      // written out: the property is that the cap is ENFORCED, not that it is
+      // any particular number, and a hand-written 50 made this a test of the
+      // value that failed the moment the value moved. The below-cap case is
+      // what stops the import making the assertion self-consistent — a cap that
+      // never fires and a cap that is off by one both fail here.
       mockDirExists();
-      const files = Array.from({ length: 50 }, (_, i) => `s${i}.json`);
+      const under = Array.from({ length: MAX_SPECIALISTS - 1 }, (_, i) => `s${i}.json`);
+      vi.mocked(fs.readdirSync).mockReturnValue(under as any);
+      const underData = {
+        id: 'x',
+        name: 'X',
+        description: 'd',
+        systemPrompt: 'p',
+        guidelines: [],
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(underData));
+      expect(() => store.create('one-under', 'Under', 'desc', 'prompt')).not.toThrow();
+
+      const files = Array.from({ length: MAX_SPECIALISTS }, (_, i) => `s${i}.json`);
       vi.mocked(fs.readdirSync).mockReturnValue(files as any);
       const specData = {
         id: 'x',

@@ -113,7 +113,10 @@ export function buildContextMessage(inputs: ContextMessageInputs): CoreMessage |
     { tag: 'connected_mcp_servers', render: () => renderMcpServers(inputs.mcpServerNames) },
     { tag: 'routines', render: () => renderRoutines(inputs.routineSummaries) },
     { tag: 'tasks', render: () => renderTasks(inputs.routineSummaries) },
-    { tag: 'specialists', render: () => renderSpecialists(inputs.specialistSummaries) },
+    {
+      tag: 'specialists',
+      render: () => renderSpecialists(inputs.specialistSummaries, inputs.specialistMatches),
+    },
     {
       tag: 'specialist_match_advisory',
       render: () => renderSpecialistMatches(inputs.specialistMatches),
@@ -206,18 +209,124 @@ function renderTasks(summaries?: RoutineSummary[]): string | null {
     .join('\n');
 }
 
-function renderSpecialists(summaries?: SpecialistSummary[]): string | null {
-  if (!summaries || summaries.length === 0) return null;
-  return summaries
+/**
+ * Character budget for the whole `<specialists>` roster.
+ *
+ * The roster is generated, not curated, and it sits in the volatile context
+ * message — AFTER the prompt-cache breakpoint, so it is re-billed on every
+ * STEP, not once per turn. Measured through this renderer on a real 45-record
+ * install it was 9,993 chars (~2,498 tokens) with no cap of any kind, and
+ * raising `MAX_SPECIALISTS` to 100 would have taken it past 22,000 with nothing
+ * to stop it.
+ *
+ * 12,000 is chosen so a 45-record install drops nothing today and a full
+ * 100-record one is bounded at ~11,900 chars (~2,977 tokens, keeping 63) rather
+ * than growing with the record count.
+ * Env-overridable for the reason {@link MAX_PERSISTENT_MEMORY_CHARS} is, and
+ * read from `process.env` for the same reason: this module is a pure function
+ * of its inputs.
+ */
+export const MAX_SPECIALIST_ROSTER_CHARS = (() => {
+  const raw = Number(process.env.BERNARD_MAX_SPECIALIST_ROSTER_CHARS);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 12_000;
+})();
+
+/** One rendered roster line, and the only place its shape is decided. */
+function specialistLine(s: SpecialistSummary): string {
+  const modelTag =
+    s.provider || s.model
+      ? ` [${escapeXml(s.provider ?? 'default')}/${escapeXml(s.model ?? 'default')}]`
+      : '';
+  const kindTag = s.kind && s.kind !== 'persona' ? ` [${escapeXml(s.kind)}]` : '';
+  return `- ${escapeXml(s.id)} — ${escapeXml(s.name)}: ${escapeXml(s.description)}${kindTag}${modelTag}`;
+}
+
+/** What {@link packSpecialists} decided, in render order. */
+export interface SpecialistPack {
+  keptLines: string[];
+  /**
+   * How many entries did not fit — a COUNT, not the ids.
+   *
+   * `packMemory`'s `dropped` is a `string[]` because three consumers read the
+   * keys by name (the once-per-session notice, the debug line, the
+   * dispatch-context record). Nothing reads these: the note deliberately does
+   * not name them — they are the least relevant by construction, and listing
+   * them would spend the budget the drop just reclaimed — so an array would be
+   * a shape with no reader, which this repo already records as its own defect.
+   */
+  dropped: number;
+}
+
+/**
+ * Fits the roster into {@link MAX_SPECIALIST_ROSTER_CHARS}, dropping whole
+ * entries.
+ *
+ * `packMemory`'s shape, and deliberately so — rank first, then smallest-first
+ * among equals, first-fit. The ranking here is the match score the matcher
+ * already computed for this turn, so the entries that survive are the ones the
+ * turn could plausibly use. `matchSpecialists` only returns scores >= 0.4, so on
+ * most turns nothing is ranked and the order falls through to size, exactly as
+ * it does for memory when no `memoryPriority` was requested.
+ *
+ * **Dropping is safe here in a way it is not for memory**, which is why this
+ * budget can be tighter than that one: a dropped memory is invisible to the
+ * agent, while a dropped roster entry is still reachable through
+ * `specialist { action: 'list' }`. The note below says so, because an agent
+ * that does not know the list was cut has no reason to go looking.
+ */
+export function packSpecialists(
+  summaries: SpecialistSummary[],
+  matches?: SpecialistMatch[],
+): SpecialistPack {
+  const rank = new Map((matches ?? []).map((m, i) => [m.id, i]));
+  const unranked = rank.size;
+  const sized = summaries
     .map((s) => {
-      const modelTag =
-        s.provider || s.model
-          ? ` [${escapeXml(s.provider ?? 'default')}/${escapeXml(s.model ?? 'default')}]`
-          : '';
-      const kindTag = s.kind && s.kind !== 'persona' ? ` [${escapeXml(s.kind)}]` : '';
-      return `- ${escapeXml(s.id)} — ${escapeXml(s.name)}: ${escapeXml(s.description)}${kindTag}${modelTag}`;
+      const line = specialistLine(s);
+      return { id: s.id, line, rank: rank.get(s.id) ?? unranked };
     })
-    .join('\n');
+    .sort((a, b) => a.rank - b.rank || a.line.length - b.line.length);
+
+  const keptLines: string[] = [];
+  let dropped = 0;
+  let used = 0;
+  for (const entry of sized) {
+    if (used + entry.line.length + 1 > MAX_SPECIALIST_ROSTER_CHARS) {
+      dropped++;
+      continue;
+    }
+    keptLines.push(entry.line);
+    used += entry.line.length + 1;
+  }
+  return { keptLines, dropped };
+}
+
+function renderSpecialists(
+  summaries?: SpecialistSummary[],
+  matches?: SpecialistMatch[],
+): string | null {
+  // Packed here rather than hoisted into `buildContextMessage` beside
+  // `packMemory`. That hoist is justified there by `onReport` carrying the
+  // decision to an observer — `ContextReport` has a `memory` slot and three
+  // consumers read the dropped keys by name. There is no such slot for this
+  // one, so hoisting bought a second existence guard and a rationale that was
+  // not true. If the drop should become observable, the fix is a
+  // `specialists?: SpecialistPack` field on `ContextReport`, not a local here.
+  if (!summaries?.length) return null;
+  const pack = packSpecialists(summaries, matches);
+  if (pack.dropped === 0) return pack.keptLines.join('\n');
+  // Named as a count rather than a key list, unlike `<persistent_memory>`'s
+  // truncation note: the dropped entries are the LEAST relevant to this turn by
+  // construction, and listing them would spend the budget the drop just
+  // reclaimed. The remedy is what matters, so the remedy is what is stated.
+  // `keptLines` can be empty if a single entry exceeds the whole budget. The
+  // note still has to render: a section that silently vanishes is
+  // indistinguishable from having no specialists at all, which is the one
+  // reading that would stop the agent looking.
+  return [
+    ...pack.keptLines,
+    `- (${pack.dropped} less relevant ${plural(pack.dropped, 'specialist', 'specialists')} omitted to fit the context budget — use \`specialist\` with action "list" to see all of them)`,
+  ].join('\n');
 }
 
 function renderSpecialistMatches(matches?: SpecialistMatch[]): string | null {
