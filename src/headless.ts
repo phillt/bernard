@@ -1,4 +1,5 @@
 import * as crypto from 'node:crypto';
+import { openCorpus } from './knowledge/corpus.js';
 import * as fs from 'node:fs';
 import { loadConfig } from './config.js';
 import { assembleContext, scopeContext } from './framework/context.js';
@@ -91,7 +92,7 @@ export interface RunHeadlessOpts<TInput, TFormatted> {
    * `runDefinition` re-derives from the dispatched record and narrowing is
    * idempotent, so a scope that arrives both ways is applied once in effect.
    */
-  scope?: Pick<DispatchProfile, 'memoryScope' | 'knowledgeScope'>;
+  scope?: Pick<DispatchProfile, 'memoryScope' | 'knowledgeScope' | 'corpusScope'>;
   /** Wall clock in ms. `null` disables it. */
   timeoutMs: number | null;
   /** The caller's own signal, composed with the wall clock. */
@@ -298,6 +299,16 @@ export async function runHeadless<TInput, TFormatted>(
         toolOptions: headlessToolOptions(posture, config.shellTimeout),
         mcp: mcpSnapshot,
         rag: ragStore,
+        // Constructed UNSCOPED and fenced once, by `scopeContext` below.
+        //
+        // **Do not add a pre-assembly corpus search here.** The RAG fence has
+        // two application points because the pre-connect search at the top of
+        // this function runs before `assembleContext`, deliberately, to overlap
+        // the MCP connect. Nothing pre-searches the corpus, so this fence has
+        // exactly ONE application point — and adding a second search would mean
+        // adding a second fence, or a headless run would fence differently from
+        // an interactive one, invisibly.
+        knowledge: openCorpus(),
         stores: opts.stores,
       }),
       scope,

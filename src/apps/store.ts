@@ -1,8 +1,6 @@
-import { createRequire } from 'node:module';
 import type { DatabaseSync } from 'node:sqlite';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 import { appletDataDir } from '../paths.js';
+import { openSqliteFile, SqliteConnectionCache } from '../sqlite.js';
 import { APP_ID_RE } from './manifest.js';
 
 /**
@@ -29,37 +27,6 @@ import { APP_ID_RE } from './manifest.js';
  * hide a true statement about an API's stability is the wrong trade.
  */
 
-/**
- * `node:sqlite` is loaded through `createRequire`, not a static import.
- *
- * Node excludes experimental modules from `module.builtinModules`, so bundlers
- * do not recognise the specifier as a builtin: Vite strips the `node:` prefix
- * and tries to resolve `sqlite` from disk, which is a hard load error at
- * import time rather than a missing export — a test that merely imports this
- * module could not be collected. The type import above is erased, so the types
- * are still real.
- *
- * The same idiom `src/permissions/shell-ast.ts` uses, for the same reason.
- *
- * **Loaded on first use, not at module load.** Requiring it eagerly meant that
- * merely importing this module printed Node's one-per-process
- * `ExperimentalWarning: SQLite is an experimental feature` — and `app-cli.ts`
- * imports `lifecycle.ts`, which imports this, so **every** `bernard app`
- * command emitted it, `list` and `--help`-shaped errors included. That is
- * noise on commands that never open a database, and it made a true statement
- * about SQLite look like a warning about listing applets.
- *
- * Deferring is the fix rather than suppressing the warning: the warning is
- * correct whenever we actually use SQLite, and this repo has no suppression
- * convention worth starting here. Now it fires when an applet's store is
- * opened, which is when it is true.
- */
-let sqlite: typeof import('node:sqlite') | undefined;
-
-function sqliteModule(): typeof import('node:sqlite') {
-  return (sqlite ??= createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite'));
-}
-
 /** Values are stored as JSON text, so anything structured-cloneable round-trips. */
 export interface StoreEntry {
   key: string;
@@ -84,31 +51,11 @@ export class AppletStore {
       // repaired id addresses a different store than the caller named.
       throw new Error(`Not a valid app id: ${appId}`);
     }
-    const dir = appletDataDir(appId);
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const file = path.join(dir, 'data.db');
+    // Directory mode, the chmod window, WAL and the busy timeout live in
+    // `openSqliteFile`. They were duplicated line for line by the knowledge
+    // store (#516), which is what prompted the extraction.
+    this.db = openSqliteFile(appletDataDir(appId), 'data.db').db;
 
-    // `atomicWriteFileSync`'s temp-and-rename cannot apply to a file SQLite
-    // holds open, so the 0600 story here is a `chmod` after create — which
-    // does leave the window `src/host/registry.ts` argues against. Named
-    // rather than glossed: the containing directory is created 0700 first, so
-    // the window is inside a directory nothing else can traverse.
-    const existed = fs.existsSync(file);
-    this.db = new (sqliteModule().DatabaseSync)(file, { timeout: 5_000 });
-    if (!existed) {
-      try {
-        fs.chmodSync(file, 0o600);
-      } catch {
-        // A filesystem without POSIX modes. The 0700 directory still holds.
-      }
-    }
-
-    // WAL lets a reader and a writer proceed at once, which is the two-process
-    // shape this store lives in. NORMAL trades an fsync per commit for the
-    // possibility of losing the last transaction on power loss — the right
-    // trade for a page's UI state.
-    this.db.exec('PRAGMA journal_mode = WAL');
-    this.db.exec('PRAGMA synchronous = NORMAL');
     this.db.exec(
       'CREATE TABLE IF NOT EXISTS kv (' +
         'key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)',
@@ -251,36 +198,23 @@ export function applyStoreOp(store: AppletStore, op: StoreOp): StoreOpResult {
  *
  * Bounded by the number of installed applets, so it does not grow with traffic.
  */
-const connections = new Map<string, AppletStore>();
+const connections = new SqliteConnectionCache((appId: string) => new AppletStore(appId));
 
 export function appletStoreFor(appId: string): AppletStore {
-  let store = connections.get(appId);
-  if (!store) {
-    store = new AppletStore(appId);
-    connections.set(appId, store);
-  }
-  return store;
+  return connections.get(appId);
 }
 
 /** Drops one app's connection — the host calls this when it stops serving it. */
 export function closeAppletStore(appId: string): void {
-  const store = connections.get(appId);
-  if (!store) return;
-  connections.delete(appId);
-  try {
-    store.close();
-  } catch {
-    // Already closed, or the file went away. Nothing left to do.
-  }
+  connections.close(appId);
 }
 
 /**
  * Closes every cached connection.
  *
  * Called on host shutdown so WAL checkpoints rather than being left to
- * `process.exit`, and so an in-process embedder (the tests) does not leak a
- * handle per app per run.
+ * `process.exit`.
  */
 export function closeAllAppletStores(): void {
-  for (const appId of [...connections.keys()]) closeAppletStore(appId);
+  connections.closeAll();
 }

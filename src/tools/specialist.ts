@@ -516,6 +516,7 @@ export function createSpecialistTool(
             for (const [label, declared, resolved] of [
               ['memoryScope', record.memoryScope, profile.memoryScope],
               ['knowledgeScope', record.knowledgeScope, profile.knowledgeScope],
+              ['corpusScope', record.corpusScope, profile.corpusScope],
             ] as const) {
               if (resolved === undefined) continue;
               lines.push(`${label}: ${scopeList(resolved)}`);

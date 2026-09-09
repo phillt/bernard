@@ -47,5 +47,11 @@ export function resolveToolSurface(
       def.toolSurface ??
       (def.historyMode === 'ephemeral' ? 'worker' : 'full'),
     mcpTools: mcpToolSurface(ctx),
+    // The corpus handle, ALREADY FENCED — `runDefinition` shadows `ctx` with
+    // the scoped one before calling `def.tools`, so what arrives here is what
+    // the dispatch is entitled to. Resolved centrally for the reason the
+    // surface itself is: a cross-cutting entitlement re-decided per definition
+    // defaults to the permissive answer and fails silently.
+    ...(ctx.knowledge ? { knowledge: ctx.knowledge } : {}),
   };
 }

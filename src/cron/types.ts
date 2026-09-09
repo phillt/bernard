@@ -67,6 +67,8 @@ export interface CronJob {
    * fence and was never claimed to be; the two multiply.
    */
   knowledgeScope?: string[];
+  /** Knowledge libraries this job may read (#516). Unset is unscoped. */
+  corpusScope?: string[];
   /**
    * Per-job wall clock in milliseconds (#326). Falls back to
    * `BERNARD_CRON_JOB_TIMEOUT_MS`, then to a 30-minute default; `0` disables

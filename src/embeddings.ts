@@ -19,17 +19,41 @@ export interface EmbeddingProvider {
    * question "which model produced this store?" is unanswerable from the disk.
    */
   modelId(): string;
+  /**
+   * Exact word-piece counts, for callers that must not be truncated (#517).
+   *
+   * **Optional, and the optionality is the point.** Every existing test double
+   * in the tree implements three methods; a required fourth would break all of
+   * them for a capability only corpus ingestion needs. A caller that gets
+   * `undefined` falls back to the character estimate and says so.
+   *
+   * Why it exists: {@link MAX_EMBED_CHARS} divides by four, which is an
+   * English-prose average. Measured against this tokenizer, code runs at 2.47
+   * chars per piece and Japanese at 1.00 — so a chunk sized on the estimate is
+   * silently truncated on exactly the corpora a document store exists to hold.
+   * Tokenizing is microseconds against ~12.9 ms of inference per chunk, so the
+   * exact answer is affordable wherever it matters.
+   */
+  countWordPieces?(texts: string[]): Promise<number[]>;
 }
 
 let cachedProvider: EmbeddingProvider | null | undefined;
 
-/** Embedding vector dimensionality for all-MiniLM-L6-v2. */
-const DIMENSIONS = 384;
+/**
+ * Embedding vector dimensionality for all-MiniLM-L6-v2.
+ *
+ * Exported since #516 so a store can stamp itself without awaiting the provider
+ * — `rag.ts` keeps a private copy for exactly that reason (its `persist` is
+ * synchronous and `getEmbeddingProvider` is not), and a third copy would be one
+ * too many. That copy could now import this; changing it is not this PR's
+ * business and is noted rather than smuggled in.
+ */
+export const EMBEDDING_DIMENSIONS = 384;
 
 /**
  * The model id, exported so a persisted store can be stamped with it (#520).
  *
- * Hardcoded, like `DIMENSIONS` — `EmbeddingProvider` is an interface built to
+ * Hardcoded, like `EMBEDDING_DIMENSIONS` — `EmbeddingProvider` is an interface built to
  * allow a swap, but nothing configures which model is loaded, and deciding
  * whether to swap is #520's other half and stays open.
  */
@@ -115,15 +139,39 @@ export async function getEmbeddingProvider(): Promise<EmbeddingProvider | null> 
         const data = output.data as Float32Array;
         const results: number[][] = [];
         for (let i = 0; i < texts.length; i++) {
-          results.push(Array.from(data.slice(i * DIMENSIONS, (i + 1) * DIMENSIONS)));
+          results.push(
+            Array.from(data.slice(i * EMBEDDING_DIMENSIONS, (i + 1) * EMBEDDING_DIMENSIONS)),
+          );
         }
         return results;
       },
       dimensions(): number {
-        return DIMENSIONS;
+        return EMBEDDING_DIMENSIONS;
       },
       modelId(): string {
         return EMBEDDING_MODEL_ID;
+      },
+      async countWordPieces(texts: string[]): Promise<number[]> {
+        // The pipeline exposes its own tokenizer, so this needs no second model
+        // load and no second download.
+        //
+        // **One string at a time, not a batch.** `truncation: false` is what
+        // makes the answer useful at all — with truncation on it reports the
+        // ceiling for anything over it, which is exactly the case being
+        // detected — but the tokenizer then refuses a batch of differing
+        // lengths outright ("you should probably activate truncation and/or
+        // padding"), because it cannot build one tensor from ragged rows. And
+        // padding would report the longest row's length for every row, which is
+        // the same wrong answer in the other direction. Measured in
+        // microseconds against ~12.9 ms of inference per chunk, so the loop
+        // costs nothing where it is used.
+        const out: number[] = [];
+        for (const text of texts) {
+          const enc = extractor.tokenizer(text, { truncation: false, padding: false });
+          const dims = (enc.input_ids as { dims?: number[] }).dims;
+          out.push(dims ? dims[dims.length - 1] : 0);
+        }
+        return out;
       },
     };
 
@@ -139,7 +187,7 @@ export async function getEmbeddingProvider(): Promise<EmbeddingProvider | null> 
 }
 
 /** Cosine similarity between two vectors. Returns 0 for zero-length vectors. */
-export function cosineSimilarity(a: number[], b: number[]): number {
+export function cosineSimilarity(a: ArrayLike<number>, b: ArrayLike<number>): number {
   if (a.length !== b.length || a.length === 0) return 0;
 
   let dot = 0;
