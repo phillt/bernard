@@ -253,12 +253,11 @@ export async function runHeadless<TInput, TFormatted>(
     // Named through the CAPABILITY rather than the axis: `applyStandaloneScopes`
     // applies every fence that declares a ctx-free application point, so a
     // fourth one is a table edit rather than a tenth touch point here.
-    ragSearch = (ragStore ? applyStandaloneScopes(ragStore, scope) : undefined)
-      ?.search(ragQuery)
-      .catch((err: unknown) => {
-        debugLog(`${debugLabel}:rag:error`, err instanceof Error ? err.message : String(err));
-        return undefined;
-      });
+    const scopedStore = ragStore && applyStandaloneScopes(ragStore, 'rag', scope);
+    ragSearch = scopedStore?.search(ragQuery).catch((err: unknown) => {
+      debugLog(`${debugLabel}:rag:error`, err instanceof Error ? err.message : String(err));
+      return undefined;
+    });
   }
 
   const mcpManager = new MCPManager();

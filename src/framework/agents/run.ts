@@ -27,7 +27,7 @@ import type { StepFinishPayload } from '../hooks/types.js';
 import { runAgent, newDispatchId, type AgentResult, type AgentSpec } from '../runner.js';
 import type { IterateFn, IterateOpts, StrategyContext } from '../strategies/types.js';
 import { resolveToolSurface } from './tool-surface.js';
-import { resolveDispatchProfile, SCOPE_AXES, type ScopeSelection } from './dispatch-profile.js';
+import { resolveDispatchProfile, pickScopes, type ScopeSelection } from './dispatch-profile.js';
 import { scopeContext, withUsageRecorder } from '../context.js';
 import { recordDispatchContext } from '../../dispatch-context-history.js';
 import { resolveRetrieval } from './retrieval.js';
@@ -203,15 +203,14 @@ export async function runDefinition<TInput, TFormatted>(
   // intersection, since `scopeContext` narrows monotonically at each site.
   const fence = { ...profile, ...(opts.declaredScope ?? {}) };
   // Flattened over the table rather than three conditional spreads at the
-  // record, so an axis added to `DispatchProfile` is recorded without anyone
-  // remembering — and an unrecorded fence is the one shape that makes a fence
-  // and a bad retrieval indistinguishable, which is the whole reason the record
-  // carries them.
-  const declaredFence: ScopeSelection = {};
-  for (const axis of SCOPE_AXES) {
-    const value = fence[axis.field];
-    if (value) declaredFence[axis.field] = value;
-  }
+  // record site, so an axis added to the profile is recorded without anyone
+  // remembering — an unrecorded fence is the one shape that makes a fence and a
+  // bad retrieval indistinguishable, which is the whole reason the record
+  // carries them. Derived once per DISPATCH rather than inside the record site,
+  // which runs per LLM call: `report` is set on every context assembly, not
+  // only when a reader enabled recording, so the record site is the hotter of
+  // the two by the number of steps.
+  const declaredFence = pickScopes(fence);
   const { config } = ctx;
   const surface = resolveToolSurface(ctx, def, profile);
   // Retrieval, resolved once per dispatch for the same reason and in the same

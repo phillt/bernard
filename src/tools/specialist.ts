@@ -519,14 +519,18 @@ export function createSpecialistTool(
             // both user-visible — which is why the table carries both rather
             // than unifying them (#552).
             for (const axis of SCOPE_AXES) {
-              const label = axis.field;
+              // Named `field`, not `label`: the table also carries a `label`
+              // (`memory` / `knowledge` / `corpus`) for the viewer, and binding
+              // a local called `label` inside the one loop that must NOT use it
+              // is an invitation to "fix" this back.
+              const field = axis.field;
               const declared = record[axis.field];
               const resolved = profile[axis.field];
               if (resolved === undefined) continue;
-              lines.push(`${label}: ${scopeList(resolved)}`);
+              lines.push(`${field}: ${scopeList(resolved)}`);
               const dropped = Array.isArray(declared) ? declared.length - resolved.length : null;
               if (dropped === null) {
-                lines.push(`  ⚠ declared ${label} is not a list, so this dispatch reads nothing`);
+                lines.push(`  ⚠ declared ${field} is not a list, so this dispatch reads nothing`);
               } else if (dropped > 0) {
                 lines.push(
                   `  ⚠ ${dropped} declared entr${dropped === 1 ? 'y is' : 'ies are'} invalid and dropped`,

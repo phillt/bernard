@@ -7,6 +7,8 @@ import {
   MAX_STEP_RATIO,
   SCOPE_AXES,
   applyStandaloneScopes,
+  declaredScope,
+  pickScopes,
 } from '../dispatch-profile.js';
 import { resolveToolSurface } from '../tool-surface.js';
 import { specialistDefinition } from '../specialist.js';
@@ -259,15 +261,16 @@ describe('SCOPE_AXES (#552)', () => {
    * `satisfies Record<ScopeField, ScopeAxis>` in the module itself is the real
    * check: deleting an entry and adding a stray one both fail `npm run build`.
    */
-  it('covers exactly the string-array fields of a DispatchProfile', () => {
-    // Not a re-listing of the same three names: this reads the fields off a
-    // profile the RESOLVER produced, so a fourth axis added to the interface
-    // and forgotten in the table is caught here as well as by `tsc`.
-    expect(SCOPE_AXES.map((a) => a.field).sort()).toEqual([
-      'corpusScope',
-      'knowledgeScope',
-      'memoryScope',
-    ]);
+  it('is honoured by declaredScope for every axis it declares', () => {
+    // What the type cannot state. `ScopeField` is `keyof typeof AXES`, so a
+    // missing axis is unrepresentable rather than merely rejected — but nothing
+    // in the type stops `declaredScope` from skipping one. Built from the table
+    // rather than from three literal names, so it is not a re-listing of what
+    // the table already says.
+    const declared = Object.fromEntries(SCOPE_AXES.map((a) => [a.field, []]));
+    expect(Object.keys(declaredScope(declared)).sort()).toEqual(
+      SCOPE_AXES.map((a) => a.field).sort(),
+    );
   });
 
   it('gives each axis a distinct field and a distinct label', () => {
@@ -294,7 +297,7 @@ describe('SCOPE_AXES (#552)', () => {
     expect(SCOPE_AXES.filter((a) => a.standalone).map((a) => a.field)).toEqual(['knowledgeScope']);
   });
 
-  it('applies only the standalone axes to a bare narrowing store', () => {
+  it('applies only the axes marked for the store it was handed', () => {
     const calls: (readonly string[] | null | undefined)[] = [];
     const store = {
       scoped(scope: readonly string[] | null | undefined) {
@@ -302,9 +305,37 @@ describe('SCOPE_AXES (#552)', () => {
         return store;
       },
     };
-    applyStandaloneScopes(store, { memoryScope: ['k'], knowledgeScope: ['general'] });
+    applyStandaloneScopes(store, 'rag', { memoryScope: ['k'], knowledgeScope: ['general'] });
     // Once, with the RAG fence — never with the memory one, which would fence
     // the wrong store with the wrong vocabulary and silently match nothing.
+    // The store kind is a PARAMETER for exactly this reason: the marked set has
+    // one member today, and what matters is what happens when it does not.
     expect(calls).toEqual([['general']]);
+  });
+
+  it('drops every axis when no axis is marked for that store', () => {
+    // Guards the guard: the assertion above passes if the filter is dropped and
+    // `knowledgeScope` merely happens to be the last axis applied.
+    const calls: unknown[] = [];
+    const store = {
+      scoped(scope: readonly string[] | null | undefined) {
+        calls.push(scope);
+        return store;
+      },
+    };
+    applyStandaloneScopes(store, 'memory' as never, { knowledgeScope: ['general'] });
+    expect(calls).toEqual([]);
+  });
+
+  it('pickScopes keeps a deny-all fence and drops only an absent one', () => {
+    // `[]` is a real posture and must reach the record: dropping it would make
+    // "fenced to nothing" and "not fenced" render identically on the one
+    // surface that exists to tell a fence apart from a bad retrieval. This is
+    // also what the conditional spreads it replaces did, since `[]` is truthy.
+    expect(pickScopes({ memoryScope: ['k*'], knowledgeScope: [] })).toEqual({
+      memoryScope: ['k*'],
+      knowledgeScope: [],
+    });
+    expect(pickScopes({})).toEqual({});
   });
 });

@@ -208,12 +208,15 @@ export function assembleContext(input: AssembleContextInput): AgentContext {
  * what keeps its tool block byte-identical for the prompt cache (#269).
  */
 export function scopeContext(ctx: AgentContext, profile: DispatchProfile): AgentContext {
-  // **This early return was the silent-failure site (#550).** It used to name
-  // the axes by hand, and the third term was forgotten — so a corpus-only fence
-  // returned the unscoped context, every such fence became a no-op, and every
-  // other test stayed green. Written over the table it cannot go stale: a
-  // fourth axis is covered the moment it is declared.
-  if (SCOPE_AXES.every((axis) => profile[axis.field] === undefined)) return ctx;
+  // **There is no early return, and that is the fix.** The guard here was the
+  // silent-failure site (#550): it named the axes by hand, the third term was
+  // forgotten, and a corpus-only fence returned the unscoped context — every
+  // such fence a no-op with every other test green. The loop below already
+  // returns `ctx` BY IDENTITY when no axis is declared (no arm fires), so the
+  // guard was a second scan restating what the loop guarantees, and a second
+  // place to forget an axis. Identity is what keeps `main`'s tool block
+  // byte-identical for the prompt cache (#269), and it is now structural.
+  //
   // Narrowing is monotone and idempotent in all three stores, so re-scoping an
   // already-scoped context can only ever narrow further. That is what lets
   // `tool-wrapper-run.ts` scope early for its pre-assembled child tools and
