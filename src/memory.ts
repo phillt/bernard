@@ -693,6 +693,65 @@ export class MemoryStore {
     return true;
   }
 
+  /**
+   * Deletes every memory owned by `owner`, returning how many went.
+   *
+   * The bulk sibling of {@link deleteMemory}, and it exists for exactly one
+   * caller: deleting a specialist. Once memories are owned, a deleted
+   * specialist's notes are owned by an id that no longer resolves — so
+   * `ownsOrShared` is false for every view and **nobody can ever read them
+   * again, or clean them up**. Orphaned AND invisible is strictly worse than the
+   * shared pool we had before ownership, which is why the sweep ships with it
+   * rather than after it.
+   *
+   * Reads through `loadRaw`, deliberately: this deletes records the caller
+   * cannot see, which is the whole point. Never deletes an unowned record —
+   * `owner` must match exactly, so the user's own notes are untouchable here.
+   *
+   * **Deletes rather than archives**, which inverts the house rule that
+   * `supersede` and `retire` follow. Archiving exists so a record stays
+   * recoverable and one deleted front-matter line undoes it; that argument needs
+   * somebody who could later read the record, and by construction there is
+   * nobody — the owner is gone. An archived orphan is the same unreachable file
+   * with a longer name.
+   */
+  deleteByOwner(owner: string): number {
+    let deleted = 0;
+    for (const key of this.listAllKeysUnfiltered()) {
+      const parsed = this.loadRaw(key)?.parsed;
+      if (parsed?.owner !== owner) continue;
+      const filePath = this.filePath(key);
+      try {
+        fs.unlinkSync(filePath);
+        this.cache.delete(filePath);
+        deleted++;
+      } catch (err) {
+        // Best-effort per file: a sweep the caller cannot resume must not stop
+        // half-way, which is `deleteApplet`'s rule for its bound-specialist row.
+        if (!isMissingFile(err)) throw err;
+      }
+    }
+    return deleted;
+  }
+
+  /**
+   * Every key on disk, ignoring BOTH fences.
+   *
+   * `listAllMemory` applies the key scope; `load` applies ownership. A sweep has
+   * to see past both — it is deleting precisely what this view cannot read.
+   */
+  private listAllKeysUnfiltered(): string[] {
+    try {
+      return fs
+        .readdirSync(MEMORY_DIR)
+        .filter((f) => f.endsWith('.md'))
+        .map((f) => f.replace(/\.md$/, ''));
+    } catch (err) {
+      if (isMissingFile(err)) return [];
+      throw err;
+    }
+  }
+
   /** Deletes a persistent memory entry. Returns `true` if the entry existed and was removed. */
   deleteMemory(key: string): boolean {
     this.assertWritable(key);

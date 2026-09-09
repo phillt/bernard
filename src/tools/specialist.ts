@@ -25,7 +25,8 @@ import {
   MAX_STEP_RATIO,
   SCOPE_AXES,
 } from '../framework/agents/dispatch-profile.js';
-import { scopeList } from '../text.js';
+import { scopeList, plural } from '../text.js';
+import { deleteSpecialist } from '../specialist-lifecycle.js';
 
 const goodExampleSchema = z.object({
   input: z.string(),
@@ -754,9 +755,14 @@ export function createSpecialistTool(
           case 'delete': {
             if (!id) return 'Error: id is required for delete action.';
             try {
-              const deleted = store.delete(id);
+              // The sweep, not the bare record delete: a specialist's memories
+              // are owned by its id, and once that id stops resolving nothing
+              // can read them or clean them up.
+              const { deleted, memories } = deleteSpecialist(id, { specialists: store });
               if (!deleted) return `No specialist found with id "${id}".`;
-              return `Specialist "${id}" deleted.`;
+              return memories > 0
+                ? `Specialist "${id}" deleted, along with ${memories} ${plural(memories, 'memory', 'memories')} it owned.`
+                : `Specialist "${id}" deleted.`;
             } catch (err: unknown) {
               return protectedOrThrow(err);
             }
