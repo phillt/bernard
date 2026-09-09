@@ -60,7 +60,10 @@ vi.mock('ai', async (importOriginal) => {
   };
 });
 
+vi.mock('../reasoning-log.js', () => ({ appendReasoningLog: vi.fn() }));
+
 import { createSpecialistRunTool } from './specialist-run.js';
+import { appendReasoningLog } from '../reasoning-log.js';
 import { detectResultFailure } from '../tool-result-shape.js';
 import { _resetPool, getActiveCount, withSlot, MAX_DISPATCH_DEPTH } from './agent-pool.js';
 import { MemoryStore } from '../memory.js';
@@ -949,5 +952,76 @@ describe('a persona delegates only while the chain is short enough', () => {
     // Guards the guard: a limit read from anything local to this call would be
     // constant, and would bound nothing.
     expect(await toolNamesAtDepth(MAX_DISPATCH_DEPTH + 2)).not.toContain('agent');
+  });
+});
+
+/**
+ * A persona dispatch leaves a durable trace.
+ *
+ * It left none: this path destructured `{ formatted }` and discarded `result`,
+ * so the transcript that `tool_wrapper_run` has always logged was thrown away
+ * one line from where it arrives. The reasoning log is documented as existing
+ * "so failed runs can be inspected, replayed, or converted into correction
+ * candidates" — a persona could be none of those.
+ */
+describe('a persona dispatch writes a reasoning-log entry', () => {
+  let memoryStore: MemoryStore;
+  let specialistStore: SpecialistStore;
+  const toolOptions: ToolOptions = { shellTimeout: 30000, confirmDangerous: vi.fn() };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetPool();
+    vi.mocked(fs.readdirSync).mockReturnValue([] as never);
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    vi.mocked(fs.readFileSync).mockReturnValue('');
+    memoryStore = new MemoryStore();
+    specialistStore = new SpecialistStore();
+    vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist as never);
+  });
+
+  async function run(text: string) {
+    mockGenerateText.mockResolvedValue({
+      text,
+      steps: [
+        {
+          toolCalls: [{ toolName: 'shell', args: { command: 'ls' } }],
+          toolResults: [{ result: 'ok' }],
+        },
+      ],
+      response: { messages: [] },
+    });
+    const tool = createSpecialistRunTool(
+      makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore),
+    );
+    await tool.execute!(
+      { specialistId: 'email-triage', task: 'Triage my inbox' },
+      { toolCallId: '1', messages: [], abortSignal: undefined as never },
+    );
+    return vi.mocked(appendReasoningLog).mock.calls.at(-1)?.[0];
+  }
+
+  it('records the specialist, the task and the tool calls it made', async () => {
+    const entry = await run('Done.');
+    expect(entry?.specialistId).toBe('email-triage');
+    expect(entry?.input).toBe('Triage my inbox');
+    expect(entry?.toolCalls.map((c) => c.tool)).toEqual(['shell']);
+    expect(entry?.status).toBe('ok');
+  });
+
+  it('marks a failed run as an error, from the `Error:` prefix', async () => {
+    // A persona returns a string, not a `WrapperResult`, so the verdict comes
+    // from the same prefix `detectResultFailure` reads — there is no envelope.
+    vi.spyOn(specialistStore, 'get').mockReturnValue(undefined as never);
+    const tool = createSpecialistRunTool(
+      makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore),
+    );
+    await tool.execute!(
+      { specialistId: 'gone', task: 'x' },
+      { toolCallId: '1', messages: [], abortSignal: undefined as never },
+    );
+    // A refusal never reaches the dispatch, so nothing is logged for it — the
+    // log records runs, not rejections.
+    expect(vi.mocked(appendReasoningLog)).not.toHaveBeenCalled();
   });
 });

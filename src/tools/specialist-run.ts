@@ -22,6 +22,8 @@ import {
 } from './agent-pool.js';
 import { debugLog } from '../logger.js';
 import { runDispatchOrFail } from './dispatch-failure.js';
+import { appendReasoningLog } from '../reasoning-log.js';
+import { captureToolCalls } from './capture-tool-calls.js';
 
 /**
  * Creates the specialist execution tool for running tasks through a saved
@@ -165,7 +167,7 @@ export function createSpecialistRunTool(
                   planStore,
                   ...(canDelegate && dispatchTools ? { dispatchTools: dispatchTools() } : {}),
                 };
-                const { formatted } = await runDefinition(ctx, def, input, {
+                const { result, formatted } = await runDefinition(ctx, def, input, {
                   abortSignal: execOptions.abortSignal,
                   overrides: { provider, model },
                   planStore,
@@ -176,6 +178,26 @@ export function createSpecialistRunTool(
                   // `bernard usage`, so the one number that could tell you a
                   // persona was expensive said "the main agent is expensive".
                   telemetrySite: `specialist:${specialistId}`,
+                });
+                // A persona dispatch left NO durable trace of what it did.
+                // `tool_wrapper_run` has written one since the reasoning log existed;
+                // this path destructured `{ formatted }` and threw `result` away — so
+                // the transcript was never unavailable, it was discarded one line from
+                // where it arrives.
+                //
+                // It is the substrate everything downstream needs: the log is documented
+                // as existing "so failed runs can be inspected, replayed, or converted
+                // into correction candidates", and a persona could be none of those.
+                appendReasoningLog({
+                  ts: new Date().toISOString(),
+                  specialistId,
+                  input: task,
+                  toolCalls: captureToolCalls(result.steps as never[]),
+                  finalOutput: formatted,
+                  // A persona returns a string, not a `WrapperResult`, so the verdict
+                  // comes from the same `Error:` prefix `detectResultFailure` reads
+                  // (#364) rather than from an envelope this path does not have.
+                  status: formatted.startsWith('Error:') ? 'error' : 'ok',
                 });
                 return formatted;
               } finally {

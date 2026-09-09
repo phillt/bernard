@@ -113,11 +113,10 @@ vi.mock('node:fs', () => ({
 
 // ── Deferred imports (after vi.mock hoisting) ─────────────────────────────────
 
+import { captureLastToolCall, captureToolCalls } from './capture-tool-calls.js';
 import {
   formatExamples,
   buildChildTools,
-  captureLastToolCall,
-  captureToolCalls,
   createToolWrapperRunTool,
   renderWrapperParentView,
 } from './tool-wrapper-run.js';
