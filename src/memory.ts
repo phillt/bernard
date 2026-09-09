@@ -548,6 +548,37 @@ export class MemoryStore {
     return out;
   }
 
+  /**
+   * Every live key on disk grouped by owner, for a surface the USER is looking
+   * at. `null` keys the user's own unowned set.
+   *
+   * **The one reader that crosses the owner fence on purpose**, and the reason
+   * is what the fence is for: it exists so an AGENT cannot read another agent's
+   * notes. A person reading `/memory` on their own machine is not an agent, and
+   * a listing that cannot show what is on their disk is not a listing — it
+   * reported "3 memories" while nine sat beside it, with no way to find out.
+   *
+   * Keys only, never content. That is the whole concession: the count and the
+   * names are what a user needs to understand their store, and nothing here
+   * renders a note's body, so this cannot become a route into one.
+   *
+   * Retired and superseded records are excluded, as everywhere else — they cost
+   * no context and showing them would make the listing disagree with what the
+   * model sees.
+   */
+  listAllByOwner(): Map<string | null, string[]> {
+    const out = new Map<string | null, string[]>();
+    for (const key of this.allKeysOnDisk()) {
+      const parsed = this.loadRaw(key)?.parsed;
+      if (!parsed || isRetired(parsed)) continue;
+      const owner = parsed.owner ?? null;
+      const list = out.get(owner);
+      if (list) list.push(key);
+      else out.set(owner, [key]);
+    }
+    return out;
+  }
+
   /** Every key on disk, including superseded ones. Applies the key fence. */
   listAllMemory(): string[] {
     const keys = this.allKeysOnDisk();

@@ -220,6 +220,9 @@ function makeStores(overrides: Partial<AppStores> = {}): AppStores {
   return {
     memory: {
       listMemory: () => [],
+      // The owner-aware reader `/memory` and the debug report use: `listMemory`
+      // is fenced to this view, so neither could see a specialist's notes.
+      listAllByOwner: () => new Map(),
       listScratch: () => [],
       writeMemory: vi.fn(),
       readMemory: () => '',

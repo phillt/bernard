@@ -89,7 +89,8 @@ import { noPromptCacheHint } from '../cost-guardrail.js';
 import { memoryCapNotice } from '../memory-notice.js';
 import { clearDispatchContextStore } from '../dispatch-context-history.js';
 import { makeUsageRecorder, makeOutOfTurnUsageRecorder } from '../framework/hooks/token-stats.js';
-import { truncate, scopeList } from '../text.js';
+import { truncate, scopeList, plural } from '../text.js';
+import { listSpecialistRagIds } from '../specialist-rag.js';
 import { SCOPE_AXES } from '../framework/agents/dispatch-profile.js';
 import { WIZARD_CATEGORIES_DATA, type WizardFieldData } from '../profiles-wizard-data.js';
 import {
@@ -1270,6 +1271,12 @@ export function App({
                 recordSaveUsage,
               ).catch(() => null),
             ]);
+            // **The user's own store, always — there is no per-specialist variant
+            // of this and there cannot be.** It extracts by DOMAIN from the
+            // user's REPL transcript, and a specialist's facts come from its own
+            // dispatches, which this transcript does not contain. A
+            // `--specialist` flag here would have nothing to read. A specialist's
+            // store is filled by the recall arm at session close instead.
             if (stores.rag && domainFacts.length > 0) {
               const results = await Promise.allSettled(
                 domainFacts.map((df) => stores.rag!.addFacts(df.facts, 'clear-save', df.domain)),
@@ -1376,12 +1383,43 @@ export function App({
       return;
     }
     if (is(text, '/memory')) {
-      const keys = stores.memory.listMemory();
-      flashToast(
-        keys.length === 0
-          ? 'No persistent memories stored.'
-          : `Persistent memories (${keys.length}): ${keys.join(', ')}`,
-      );
+      // Grouped by owner, through the one reader that crosses the owner fence on
+      // purpose. `listMemory()` is fenced to the caller's view, and this store is
+      // the unowned one — so a specialist's notes were invisible here, and the
+      // count said "3 memories" while nine sat beside it on disk with no way to
+      // find out. The fence exists so an AGENT cannot read another agent's
+      // notes; a person reading their own machine is not an agent.
+      const byOwner = stores.memory.listAllByOwner();
+      const total = [...byOwner.values()].reduce((n, keys) => n + keys.length, 0);
+      if (total === 0) {
+        flashToast('No persistent memories stored.');
+        return;
+      }
+      const own = byOwner.get(null) ?? [];
+      // A toast when there is nothing to group — byte-identical to what this
+      // printed before, which is every install until a specialist learns
+      // something.
+      if (byOwner.size <= 1) {
+        flashToast(`Persistent memories (${own.length}): ${own.join(', ')}`);
+        return;
+      }
+      const lines: PendingInfo['lines'] = [
+        { text: `Yours (${own.length})`, bold: true },
+        ...(own.length > 0
+          ? own.map((k) => ({ text: `  ${k}`, dim: true }))
+          : [{ text: '  (none)', dim: true }]),
+      ];
+      for (const [owner, keys] of [...byOwner].filter(([o]) => o !== null)) {
+        lines.push({ text: '' });
+        lines.push({ text: `${owner} (${keys.length})`, bold: true });
+        for (const k of keys) lines.push({ text: `  ${k}`, dim: true });
+      }
+      lines.push({ text: '' });
+      lines.push({
+        text: "A specialist's own notes are private to it — ask it rather than reading them here.",
+        dim: true,
+      });
+      showInfo(`Persistent memories (${total})`, lines);
       return;
     }
     if (is(text, '/scratch')) {
@@ -1623,6 +1661,19 @@ export function App({
         lines.push({ text: '' });
         lines.push({ text: 'Most recent (up to 10):', bold: true });
         for (const f of recent) lines.push({ text: `  ${f}`, dim: true });
+      }
+      // The other stores exist and this panel could not see them. Suppressed
+      // when there are none, so today's output is unchanged on every install
+      // where no specialist has learned anything.
+      const specialistStores = listSpecialistRagIds();
+      if (specialistStores.length > 0) {
+        lines.push({ text: '' });
+        lines.push({
+          text: `${specialistStores.length} specialist ${plural(specialistStores.length, 'store', 'stores')} also hold facts:`,
+          bold: true,
+        });
+        lines.push({ text: `  ${specialistStores.join(', ')}`, dim: true });
+        lines.push({ text: '  bernard facts --specialist <id>', dim: true });
       }
       showInfo('RAG memories', lines);
       return;
@@ -5224,8 +5275,17 @@ function buildDebugReportLines(
 
   lines.push({ text: '' });
   lines.push({ text: 'Memory:', bold: true });
+  // Past the owner fence, for `/memory`'s reason: a diagnostic that counts only
+  // what this view can see reports a smaller store than the one on disk, on the
+  // surface whose whole job is to say what is there.
+  const memoryByOwner = stores.memory.listAllByOwner();
+  const ownMemories = memoryByOwner.get(null)?.length ?? 0;
+  const ownedMemories = [...memoryByOwner].reduce(
+    (n, [owner, keys]) => (owner === null ? n : n + keys.length),
+    0,
+  );
   lines.push({
-    text: `  Persistent memories: ${stores.memory.listMemory().length}`,
+    text: `  Persistent memories: ${ownMemories}${ownedMemories > 0 ? ` (+${ownedMemories} owned by specialists)` : ''}`,
     dim: true,
   });
 

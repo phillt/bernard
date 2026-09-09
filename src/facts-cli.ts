@@ -1,13 +1,56 @@
 import * as fs from 'node:fs';
 import * as readline from 'node:readline';
+import * as path from 'node:path';
 import { RAGStore } from './rag.js';
 import type { RAGSearchResultWithId } from './rag.js';
 import { getDomain } from './domains.js';
 import { loadConfig } from './config.js';
 import { printInfo, printError } from './output.js';
-import { MEMORIES_FILE } from './paths.js';
+import { specialistRagDir, MEMORIES_FILE } from './paths.js';
+import { listSpecialistRagIds } from './specialist-rag.js';
+import { plural } from './text.js';
 
 const MAX_FILE_QUERY_LENGTH = 10000;
+
+/**
+ * Which store a command addresses, and where it lives.
+ *
+ * Every command here constructed a bare `new RAGStore()` and had no flags at
+ * all — which was right when there was one store and silently wrong the moment
+ * a specialist got its own (#501). The `dir` is the entire difference; `RAGStore`
+ * has taken one since that change.
+ *
+ * Returns an error STRING rather than throwing, because an unknown id is a
+ * user typo and deserves the ids that do exist, not a stack trace.
+ */
+function resolveStore(specialist?: string): { store: RAGStore; file: string } | string {
+  if (specialist === undefined) return { store: new RAGStore(), file: MEMORIES_FILE };
+  const known = listSpecialistRagIds();
+  if (!known.includes(specialist)) {
+    return known.length === 0
+      ? `No specialist has its own facts yet. They are written at session close, ` +
+          `for specialists that ran.`
+      : `No facts for specialist "${specialist}". Known: ${known.join(', ')}.`;
+  }
+  const dir = specialistRagDir(specialist);
+  return { store: new RAGStore({ dir }), file: path.join(dir, 'memories.json') };
+}
+
+/**
+ * The line that tells a user the other stores exist.
+ *
+ * Suppressed when there are none, so today's output is byte-identical on an
+ * install where no specialist has learned anything — which is every install
+ * until one runs.
+ */
+function specialistFooter(): string | null {
+  const ids = listSpecialistRagIds();
+  if (ids.length === 0) return null;
+  return (
+    `\n${ids.length} specialist ${plural(ids.length, 'store', 'stores')} also hold facts ` +
+    `(${ids.join(', ')}) — bernard facts --specialist <id>`
+  );
+}
 
 function confirm(prompt: string): Promise<boolean> {
   return new Promise((resolve) => {
@@ -131,37 +174,51 @@ async function promptDelete(results: RAGSearchResultWithId[], ragStore: RAGStore
  * List all stored RAG facts grouped by domain and optionally delete selected entries.
  * Used by the `bernard facts` CLI command (no query argument).
  */
-export async function factsList(): Promise<void> {
+export async function factsList(specialist?: string): Promise<void> {
   const config = loadConfig();
   if (!config.ragEnabled) {
     printInfo('RAG is disabled. Set BERNARD_RAG_ENABLED=true to enable.');
     return;
   }
 
-  const ragStore = new RAGStore();
-  const results = ragStore.listMemories();
+  const resolved = resolveStore(specialist);
+  if (typeof resolved === 'string') {
+    printError(resolved);
+    return;
+  }
+  const results = resolved.store.listMemories();
+  // Only on the user's own listing: a specialist's store does not have siblings
+  // to point at, and the reader is already there on purpose.
+  const footer = specialist === undefined ? specialistFooter() : null;
 
   if (results.length === 0) {
-    printInfo('No facts stored.');
+    printInfo(specialist ? `No facts stored for "${specialist}".` : 'No facts stored.');
+    if (footer) printInfo(footer);
     return;
   }
 
   displayResults(results, false);
-  await promptDelete(results, ragStore);
+  if (footer) printInfo(footer);
+  await promptDelete(results, resolved.store);
 }
 
 /**
  * Permanently delete all RAG facts after interactive confirmation.
  * Requires the user to type an exact confirmation phrase.
  */
-export async function clearFacts(): Promise<void> {
+export async function clearFacts(specialist?: string): Promise<void> {
   const config = loadConfig();
   if (!config.ragEnabled) {
     printInfo('RAG is disabled. Set BERNARD_RAG_ENABLED=true to enable.');
     return;
   }
 
-  const ragStore = new RAGStore();
+  const resolved = resolveStore(specialist);
+  if (typeof resolved === 'string') {
+    printError(resolved);
+    return;
+  }
+  const ragStore = resolved.store;
   const total = ragStore.count();
 
   if (total === 0) {
@@ -183,7 +240,11 @@ export async function clearFacts(): Promise<void> {
   }
   printInfo(`    ${'Total:'.padEnd(maxLen)}  ${String(total).padStart(6)} facts`);
   printInfo('');
-  printInfo(`  Storage: ${MEMORIES_FILE}`);
+  // The store's own file, not the main-store constant this used to print
+  // unconditionally — which named the wrong path the moment a `--specialist`
+  // flag existed, on the one screen whose whole job is to say what is about to
+  // be destroyed.
+  printInfo(`  Storage: ${resolved.file}`);
   printInfo('');
 
   const answer = await promptLine('  Type "yes, delete all facts" to confirm: ');
@@ -203,7 +264,7 @@ export async function clearFacts(): Promise<void> {
  * If `query` is a path to an existing file, its contents are used as the search text.
  * @param query - Free-text search string or path to a file whose contents serve as the query.
  */
-export async function factsSearch(query: string): Promise<void> {
+export async function factsSearch(query: string, specialist?: string): Promise<void> {
   const config = loadConfig();
   if (!config.ragEnabled) {
     printInfo('RAG is disabled. Set BERNARD_RAG_ENABLED=true to enable.');
@@ -225,11 +286,18 @@ export async function factsSearch(query: string): Promise<void> {
     }
   }
 
-  const ragStore = new RAGStore();
+  const resolved = resolveStore(specialist);
+  if (typeof resolved === 'string') {
+    printError(resolved);
+    return;
+  }
+  const ragStore = resolved.store;
   const results = await ragStore.searchWithIds(searchQuery);
 
   if (results.length === 0) {
     printInfo('No matching facts found.');
+    const footer = specialist === undefined ? specialistFooter() : null;
+    if (footer) printInfo(footer);
     return;
   }
 

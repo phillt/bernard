@@ -1,5 +1,7 @@
 import { RAGStore } from './rag.js';
-import { specialistRagDir } from './paths.js';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { RAG_DIR, specialistRagDir } from './paths.js';
 
 /**
  * The per-specialist RAG stores this process has opened (#501).
@@ -31,6 +33,30 @@ export function specialistRagFor(specialistId: string): RAGStore {
   const store = new RAGStore({ dir: specialistRagDir(specialistId) });
   stores.set(specialistId, store);
   return store;
+}
+
+/**
+ * Which specialists actually have a store on disk.
+ *
+ * A `readdir`, deliberately NOT a loop over {@link specialistRagFor}: the
+ * `RAGStore` constructor `mkdirSync`s its directory, so enumerating through the
+ * accessor would materialise an empty store for every id it touched — turning a
+ * listing into a writer. Nothing else in the tree can answer this; `paths.ts`
+ * maps id → path with no inverse.
+ *
+ * Directories only, and `[]` when the parent does not exist — which is every
+ * install where no specialist has yet learned anything.
+ */
+export function listSpecialistRagIds(): string[] {
+  try {
+    return fs
+      .readdirSync(path.join(RAG_DIR, 'specialists'), { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort();
+  } catch {
+    return [];
+  }
 }
 
 /**
