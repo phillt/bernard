@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   buildContextMessage,
   packMemory,
+  packSpecialists,
   MAX_PERSISTENT_MEMORY_CHARS,
+  MAX_SPECIALIST_ROSTER_CHARS,
   type MemoryPack,
 } from './context-message.js';
 import { ProvenanceStore } from './provenance.js';
@@ -319,5 +321,62 @@ describe('buildContextMessage — curator reconciliation + memory packing (#371)
     const raw = MAX_PERSISTENT_MEMORY_CHARS - key.length; // fits the naive sum exactly
     const pack = packMemory(new Map([[key, '<'.repeat(raw)]]));
     expect(pack.dropped).toEqual([key]);
+  });
+});
+
+describe('the <specialists> roster is bounded', () => {
+  /** A summary whose rendered line is a predictable size. */
+  const spec = (id: string, descLen = 60) => ({
+    id,
+    name: id.toUpperCase(),
+    description: 'd'.repeat(descLen),
+  });
+
+  it('keeps everything when the roster fits', () => {
+    const pack = packSpecialists([spec('a'), spec('b')]);
+    expect(pack.keptLines).toHaveLength(2);
+    expect(pack.dropped).toEqual([]);
+  });
+
+  it('drops whole entries past the budget and never exceeds it', () => {
+    // Whole lines only — a roster entry cut mid-description still reads as a
+    // complete, dispatchable specialist.
+    const many = Array.from({ length: 400 }, (_, i) => spec(`s${i}`, 200));
+    const pack = packSpecialists(many);
+    expect(pack.dropped.length).toBeGreaterThan(0);
+    expect(pack.keptLines.length + pack.dropped.length).toBe(400);
+    expect(pack.keptLines.join('\n').length).toBeLessThanOrEqual(MAX_SPECIALIST_ROSTER_CHARS);
+  });
+
+  it('keeps the turn-relevant specialists when it has to drop', () => {
+    // The whole reason the pack takes the matcher's output: under budget the
+    // ranking is unused, and over budget it decides what survives. Without it
+    // the drop order is size alone, which is arbitrary with respect to the turn.
+    const many = Array.from({ length: 400 }, (_, i) => spec(`s${i}`, 200));
+    const pack = packSpecialists(many, [{ id: 's399', name: 'S399', score: 0.9 }]);
+    expect(pack.keptLines[0]).toContain('s399');
+    expect(pack.dropped).not.toContain('s399');
+  });
+
+  it('says it truncated, and names the way back', () => {
+    // An agent that does not know the list was cut has no reason to go looking,
+    // and `specialist list` is what makes dropping safe here at all.
+    const many = Array.from({ length: 400 }, (_, i) => spec(`s${i}`, 200));
+    const body = buildContextMessage({ specialistSummaries: many })!.content as string;
+    expect(body).toContain('omitted to fit the context budget');
+    expect(body).toContain('list');
+  });
+
+  it('says nothing about truncation when nothing was dropped', () => {
+    // Guards the guard: the assertion above passes if the note is unconditional,
+    // which would tell every turn its roster was cut when it was not.
+    const body = buildContextMessage({ specialistSummaries: [spec('a'), spec('b')] })!
+      .content as string;
+    expect(body).toContain('- a — A:');
+    expect(body).not.toContain('omitted to fit');
+  });
+
+  it('renders no section at all for an empty roster', () => {
+    expect(buildContextMessage({ specialistSummaries: [] })).toBeNull();
   });
 });

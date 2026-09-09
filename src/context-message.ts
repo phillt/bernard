@@ -107,13 +107,19 @@ export function buildContextMessage(inputs: ContextMessageInputs): CoreMessage |
   // away. Same number of store reads as before: one.
   const memoryEntries = inputs.memoryStore?.getAllMemoryContents();
   const pack = memoryEntries ? packMemory(memoryEntries, inputs.memoryPriority) : undefined;
+  // Packed here for the reason memory is: the DECISION — which entries were
+  // dropped — is a fact the observer should be able to report, and the renderer
+  // would otherwise be the only thing that knew it.
+  const specialistPack = inputs.specialistSummaries?.length
+    ? packSpecialists(inputs.specialistSummaries, inputs.specialistMatches)
+    : undefined;
 
   const renderers: { tag: string; render: SectionRenderer }[] = [
     { tag: 'current_datetime', render: () => renderCurrentDateTime(inputs.currentDateTime) },
     { tag: 'connected_mcp_servers', render: () => renderMcpServers(inputs.mcpServerNames) },
     { tag: 'routines', render: () => renderRoutines(inputs.routineSummaries) },
     { tag: 'tasks', render: () => renderTasks(inputs.routineSummaries) },
-    { tag: 'specialists', render: () => renderSpecialists(inputs.specialistSummaries) },
+    { tag: 'specialists', render: () => renderSpecialists(specialistPack) },
     {
       tag: 'specialist_match_advisory',
       render: () => renderSpecialistMatches(inputs.specialistMatches),
@@ -206,18 +212,97 @@ function renderTasks(summaries?: RoutineSummary[]): string | null {
     .join('\n');
 }
 
-function renderSpecialists(summaries?: SpecialistSummary[]): string | null {
-  if (!summaries || summaries.length === 0) return null;
-  return summaries
+/**
+ * Character budget for the whole `<specialists>` roster.
+ *
+ * The roster is generated, not curated, and it sits in the volatile context
+ * message — AFTER the prompt-cache breakpoint, so it is re-billed on every
+ * STEP, not once per turn. Measured on a 45-record install it was 8,257 chars
+ * (~2,064 tokens) with no cap of any kind, and raising `MAX_SPECIALISTS` to 100
+ * would have taken it to ~18,349 (~4,587) with nothing to stop it.
+ *
+ * 12,000 is chosen so a 45-record install drops nothing today and a full
+ * 100-record one is bounded at roughly 1.5x today's cost rather than 2.2x.
+ * Env-overridable for the reason {@link MAX_PERSISTENT_MEMORY_CHARS} is, and
+ * read from `process.env` for the same reason: this module is a pure function
+ * of its inputs.
+ */
+export const MAX_SPECIALIST_ROSTER_CHARS = (() => {
+  const raw = Number(process.env.BERNARD_MAX_SPECIALIST_ROSTER_CHARS);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 12_000;
+})();
+
+/** One rendered roster line, and the only place its shape is decided. */
+function specialistLine(s: SpecialistSummary): string {
+  const modelTag =
+    s.provider || s.model
+      ? ` [${escapeXml(s.provider ?? 'default')}/${escapeXml(s.model ?? 'default')}]`
+      : '';
+  const kindTag = s.kind && s.kind !== 'persona' ? ` [${escapeXml(s.kind)}]` : '';
+  return `- ${escapeXml(s.id)} — ${escapeXml(s.name)}: ${escapeXml(s.description)}${kindTag}${modelTag}`;
+}
+
+/** What {@link packSpecialists} decided, in render order. */
+export interface SpecialistPack {
+  keptLines: string[];
+  dropped: string[];
+}
+
+/**
+ * Fits the roster into {@link MAX_SPECIALIST_ROSTER_CHARS}, dropping whole
+ * entries.
+ *
+ * `packMemory`'s shape, and deliberately so — rank first, then smallest-first
+ * among equals, first-fit. The ranking here is the match score the matcher
+ * already computed for this turn, so the entries that survive are the ones the
+ * turn could plausibly use. `matchSpecialists` only returns scores >= 0.4, so on
+ * most turns nothing is ranked and the order falls through to size, exactly as
+ * it does for memory when no `memoryPriority` was requested.
+ *
+ * **Dropping is safe here in a way it is not for memory**, which is why this
+ * budget can be tighter than that one: a dropped memory is invisible to the
+ * agent, while a dropped roster entry is still reachable through
+ * `specialist { action: 'list' }`. The note below says so, because an agent
+ * that does not know the list was cut has no reason to go looking.
+ */
+export function packSpecialists(
+  summaries: SpecialistSummary[],
+  matches?: SpecialistMatch[],
+): SpecialistPack {
+  const rank = new Map((matches ?? []).map((m, i) => [m.id, i]));
+  const unranked = rank.size;
+  const sized = summaries
     .map((s) => {
-      const modelTag =
-        s.provider || s.model
-          ? ` [${escapeXml(s.provider ?? 'default')}/${escapeXml(s.model ?? 'default')}]`
-          : '';
-      const kindTag = s.kind && s.kind !== 'persona' ? ` [${escapeXml(s.kind)}]` : '';
-      return `- ${escapeXml(s.id)} — ${escapeXml(s.name)}: ${escapeXml(s.description)}${kindTag}${modelTag}`;
+      const line = specialistLine(s);
+      return { id: s.id, line, rank: rank.get(s.id) ?? unranked };
     })
-    .join('\n');
+    .sort((a, b) => a.rank - b.rank || a.line.length - b.line.length);
+
+  const keptLines: string[] = [];
+  const dropped: string[] = [];
+  let used = 0;
+  for (const entry of sized) {
+    if (used + entry.line.length + 1 > MAX_SPECIALIST_ROSTER_CHARS) {
+      dropped.push(entry.id);
+      continue;
+    }
+    keptLines.push(entry.line);
+    used += entry.line.length + 1;
+  }
+  return { keptLines, dropped };
+}
+
+function renderSpecialists(pack?: SpecialistPack): string | null {
+  if (!pack || pack.keptLines.length === 0) return null;
+  if (pack.dropped.length === 0) return pack.keptLines.join('\n');
+  // Named as a count rather than a key list, unlike `<persistent_memory>`'s
+  // truncation note: the dropped entries are the LEAST relevant to this turn by
+  // construction, and listing them would spend the budget the drop just
+  // reclaimed. The remedy is what matters, so the remedy is what is stated.
+  return [
+    ...pack.keptLines,
+    `- (${pack.dropped.length} less relevant specialist${pack.dropped.length === 1 ? '' : 's'} omitted to fit the context budget — use \`specialist\` with action "list" to see all of them)`,
+  ].join('\n');
 }
 
 function renderSpecialistMatches(matches?: SpecialistMatch[]): string | null {
