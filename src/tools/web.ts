@@ -1,6 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { htmlToMarkdown } from '../html-text.js';
+import { normalizeToolText } from '../text.js';
 import { attachMeta } from '../framework/tools/adapter.js';
 import type { ProvenanceStore } from '../provenance.js';
 
@@ -70,11 +71,18 @@ export function createWebReadTool(provenance?: ProvenanceStore) {
         let html: string;
         try {
           const buffer = await response.arrayBuffer();
-          if (buffer.byteLength > MAX_HTML_BYTES) {
-            html = new TextDecoder().decode(buffer.slice(0, MAX_HTML_BYTES));
-          } else {
-            html = new TextDecoder().decode(buffer);
-          }
+          // `normalizeToolText` on the way in, which this path was missing. A page
+          // whose bytes are already mojibake — very common on older sites, and on
+          // anything that mangled its own content the way the motivating Gmail bug
+          // did — otherwise entered context verbatim, and the model reproduced it
+          // faithfully in whatever it wrote next. That is the real reason corrupt
+          // characters have shown up in GitHub issue bodies: not the model
+          // inventing them, the model quoting them.
+          const raw =
+            buffer.byteLength > MAX_HTML_BYTES
+              ? new TextDecoder().decode(buffer.slice(0, MAX_HTML_BYTES))
+              : new TextDecoder().decode(buffer);
+          html = normalizeToolText(raw);
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
           return `Error: Failed to read response body — ${message}`;

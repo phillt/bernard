@@ -51,96 +51,347 @@ export function scopeList(patterns: readonly string[]): string {
 }
 
 /**
- * Conservative range of C1 control characters (U+0080–U+009F).
- * These are invisible bytes that appear in strings incorrectly decoded as
- * Latin-1 (ISO-8859-1) when the content was actually UTF-8.  They never
- * appear legitimately in natural-language text, so their presence is a
- * reliable signal that the string is mis-decoded mojibake.
+ * Mojibake repair: UTF-8 bytes that were decoded as a single-byte code page.
  *
- * Common mojibake patterns seen in practice:
- *   – (U+2013 EN DASH)     → "â€"" (0xE2 0x80 0x93 decoded as Latin-1 → Ã¢â‚¬â€œ)
- *   — (U+2014 EM DASH)     → "â€"" (0xE2 0x80 0x94)
- *   ' (U+2018 LEFT QUOTE)  → "â€˜"
- *   ' (U+2019 RIGHT QUOTE) → "â€™"
- *   " (U+201C LEFT DQUOTE) → "â€œ"
- *   " (U+201D RIGHT DQUOTE)→ "â€"
+ * ## What actually happens, measured
  *
- * The gate strategy:
- *   1. Only attempt repair when C1 bytes are present (0x80–0x9F as code
- *      points when the string has already been JS-decoded from Latin-1).
- *   2. Only ACCEPT the repair when it introduces zero U+FFFD replacement
- *      characters AND the repaired string is shorter (multi-byte sequences
- *      collapse, shrinking character count).
- *   3. Apply NFC normalization unconditionally so combining characters and
- *      equivalent code-point sequences are in canonical form.
+ * An em dash `—` (U+2014) is the bytes `E2 80 94`. A consumer that decodes them
+ * as a single-byte code page and re-encodes as UTF-8 produces three characters
+ * where there was one. Do it twice and you get six. The observed data has cases
+ * stacked FOUR deep, from a subject line that went out and came back repeatedly.
  *
- * This avoids false-positives on printable Latin Extended characters that
- * are legitimately in the data (©, ®, ½, etc.) because re-interpreting
- * those as UTF-8 always produces U+FFFD — the "only accept when no FFFD"
- * gate catches them.
+ * The predecessor of this code assumed the wrong code page and therefore **never
+ * once fired on real input**. It gated on a C1 code point (U+0080–U+009F), the
+ * Latin-1 signature. Real-world mojibake is almost always **CP1252**, which maps
+ * those byte positions to printable characters instead — `0x80` is `€` (U+20AC),
+ * `0x94` is `”` (U+201D), `0x92` is `’`. Measured across this install's session
+ * logs, the real sequences contain zero C1 code points:
  *
- * Literal escape un-escaping (\n, \uXXXX) is intentionally omitted: the
- * risk of breaking legitimate backslash content (code, regex, Windows paths)
- * outweighs the benefit.  Callers that know their input is JSON-escaped may
- * apply JSON.parse to a quoted string before passing here.
+ *     single-encoded em dash:  U+00E2 U+20AC U+201D
+ *     double-encoded em dash:  U+00C3 U+00A2 U+00C2 U+20AC U+00C2 U+201D
+ *
+ * so `classifyString` answered `'unicode'`, the repair block was skipped, and a
+ * bare `.normalize('NFC')` ran. The tests were green because they synthesized the
+ * Latin-1 form with `Buffer.from(s,'utf8').toString('latin1')` — including the one
+ * named "the exact observed mojibake example", which did not reproduce the
+ * observed bytes. Do not reintroduce a Latin-1-only helper into the tests.
+ *
+ * `Buffer.from(s, 'latin1')` cannot express the fix either: it truncates each code
+ * point to its low byte, so U+20AC becomes `0xAC` rather than `0x80`. Hence
+ * {@link CP1252_TO_BYTE}.
+ *
+ * ## Why detection matches SEQUENCES, not characters
+ *
+ * This is the load-bearing decision. Widening the gate to "contains a character
+ * CP1252 maps" would fire on almost all prose — `€`, `—`, `’` and `…` are ordinary
+ * (this install's own data holds 952 em dashes and 1045 curly quotes in perfectly
+ * correct strings), and the old C1 gate was self-limiting only because C1 code
+ * points never appear in real text.
+ *
+ * So a candidate is a UTF-8 **lead** character followed by the right number of
+ * **continuation** characters — the shape mojibake has and prose does not.
+ * `café €5` contains both `é` and `€` and matches nothing, because no lead is
+ * followed by a continuation. `â€”` matches. That, plus the two acceptance gates
+ * below, is what makes this safe to run on every tool result.
+ *
+ * ## Acceptance, unchanged from the predecessor and still doing real work
+ *
+ * A repair is kept only when it introduces no U+FFFD **and** the string got
+ * shorter. Both are needed: reassembly always shrinks, and anything that was not
+ * really mojibake fails to form valid UTF-8.
+ *
+ * Literal escape un-escaping (`\n`, `\uXXXX`) remains deliberately out of scope —
+ * the risk to code, regexes and Windows paths outweighs it.
  */
 
 /**
- * Classify `s` in a single pass:
- *   - returns `'ascii'` when every code point is ≤ 0x7F (pure ASCII — already
- *     in NFC by definition, no mojibake possible);
- *   - returns `'c1'` when at least one code point is in the C1 range
- *     (U+0080–U+009F) — a reliable mojibake signal;
- *   - returns `'unicode'` for any other non-ASCII content (valid multibyte
- *     chars like é, ™, etc.) that only needs NFC normalization.
+ * The 27 printable characters CP1252 assigns to byte positions 0x80–0x9F.
+ *
+ * Written as a code-point → byte map because that is the direction repair needs
+ * and no Node encoding provides it. The five unassigned positions (0x81, 0x8D,
+ * 0x8F, 0x90, 0x9D) are absent, which is correct: nothing decodes to them.
  */
-function classifyString(s: string): 'ascii' | 'c1' | 'unicode' {
-  let hasNonAscii = false;
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i);
-    if (c >= 0x80) {
-      hasNonAscii = true;
-      if (c <= 0x9f) return 'c1';
-    }
-  }
-  return hasNonAscii ? 'unicode' : 'ascii';
+const CP1252_TO_BYTE = new Map<number, number>([
+  [0x20ac, 0x80],
+  [0x201a, 0x82],
+  [0x0192, 0x83],
+  [0x201e, 0x84],
+  [0x2026, 0x85],
+  [0x2020, 0x86],
+  [0x2021, 0x87],
+  [0x02c6, 0x88],
+  [0x2030, 0x89],
+  [0x0160, 0x8a],
+  [0x2039, 0x8b],
+  [0x0152, 0x8c],
+  [0x017d, 0x8e],
+  [0x2018, 0x91],
+  [0x2019, 0x92],
+  [0x201c, 0x93],
+  [0x201d, 0x94],
+  [0x2022, 0x95],
+  [0x2013, 0x96],
+  [0x2014, 0x97],
+  [0x02dc, 0x98],
+  [0x2122, 0x99],
+  [0x0161, 0x9a],
+  [0x203a, 0x9b],
+  [0x0153, 0x9c],
+  [0x017e, 0x9e],
+  [0x0178, 0x9f],
+]);
+
+/**
+ * The byte a character would have been, or `-1` if it could not have been one.
+ *
+ * U+0080–U+00FF map to themselves, which is what keeps the older Latin-1 form
+ * working through the same machinery rather than a second branch.
+ */
+function byteFor(codePoint: number): number {
+  const cp1252 = CP1252_TO_BYTE.get(codePoint);
+  if (cp1252 !== undefined) return cp1252;
+  return codePoint <= 0xff ? codePoint : -1;
 }
+
+/** A UTF-8 lead byte, and how many continuations it claims. 0 when it is not one. */
+function sequenceLength(b: number): number {
+  if (b >= 0xc2 && b <= 0xdf) return 1;
+  if (b >= 0xe0 && b <= 0xef) return 2;
+  if (b >= 0xf0 && b <= 0xf4) return 3;
+  return 0;
+}
+
+const isContinuation = (b: number): boolean => b >= 0x80 && b <= 0xbf;
+
+/** Rejects a decode that is structurally valid but cannot be real text. */
+const IMPLAUSIBLE = /\p{Cn}|\p{Co}|\p{Cs}/u;
+
+/** Adjacent two-character matches before a run counts as evidence. See {@link hasStrongMojibake}. */
+const STRONG_RUN = 3;
+
+/** One candidate: `[start, end)` and the character it would decode to. */
+interface Candidate {
+  start: number;
+  end: number;
+  decoded: string;
+}
+
+/** Every position in `s` shaped like a UTF-8 character a single-byte decoder mangled. */
+function findCandidates(s: string): Candidate[] {
+  const out: Candidate[] = [];
+  for (let i = 0; i < s.length; i++) {
+    const lead = byteFor(s.charCodeAt(i));
+    const want = lead < 0 ? 0 : sequenceLength(lead);
+    if (want === 0 || i + want >= s.length) continue;
+
+    const run = [lead];
+    for (let k = 1; k <= want; k++) {
+      const cont = byteFor(s.charCodeAt(i + k));
+      if (cont < 0 || !isContinuation(cont)) break;
+      run.push(cont);
+    }
+    if (run.length !== want + 1) continue;
+
+    let decoded: string;
+    try {
+      decoded = new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(run));
+    } catch {
+      continue; // overlong, surrogate or truncated — not a repair
+    }
+    // Structurally valid but unassigned / private-use is not real text.
+    if (IMPLAUSIBLE.test(decoded)) continue;
+
+    out.push({ start: i, end: i + want + 1, decoded });
+    i += want;
+  }
+  return out;
+}
+
+/**
+ * Whether the string carries EVIDENCE that it is mojibake, rather than merely
+ * containing something shaped like it.
+ *
+ * **This gate is why the repair is safe, and it was learned the hard way.** The
+ * sequence match alone is not enough: a two-character match is indistinguishable
+ * from two adjacent legitimate characters. Measured against a first cut that had
+ * only the sequence match plus the acceptance gates below:
+ *
+ *     "JOSÉ’s car"   ->  "JOSɒs car"     É is a UTF-8 lead, ’ is a continuation
+ *     "Use 2×½ cup"  ->  "Use 2׽ cup"    × is a lead, ½ is a continuation
+ *     "«ÉTÉ»"        ->  "«ÉTɻ"
+ *
+ * Every one of those decodes cleanly, SHRINKS the string and introduces no
+ * U+FFFD — so the acceptance gates cannot catch them. Six of eight legitimate
+ * adversarial strings were corrupted. A missed repair costs legibility; a false
+ * repair costs data, and that asymmetry decides the design.
+ *
+ * A match is STRONG when one of these holds, and one strong match vouches for
+ * the whole string:
+ *
+ *  1. its continuation is a raw C1 code point (U+0080–U+009F) — these never occur
+ *     in real text, which is why the predecessor's gate was safe by accident;
+ *  2. its lead is `Â` or `Ã`, which between them cover all of Latin-1 Supplement
+ *     and most of Latin Extended-A — most real mojibake — and neither precedes a
+ *     symbol in legitimate text (`AÇÃO` has `Ã` before an ASCII `O`);
+ *  3. it is three or four characters long: an accented letter followed by two or
+ *     three symbols does not occur naturally;
+ *  4. three or more matches sit adjacent, which recovers Cyrillic and Greek
+ *     mojibake — those produce neither C1 characters nor `Â`/`Ã`. Two is not
+ *     enough: `Ø¼Ø½ sizes` is two adjacent matches of perfectly good text.
+ */
+function hasStrongMojibake(s: string, candidates: readonly Candidate[]): boolean {
+  let run = 0;
+  let prevEnd = -1;
+  for (const c of candidates) {
+    if (c.end - c.start >= 3) return true;
+    const cont = s.charCodeAt(c.start + 1);
+    if (cont >= 0x80 && cont <= 0x9f) return true;
+    const lead = s.charCodeAt(c.start);
+    if (lead === 0x00c2 || lead === 0x00c3) return true;
+    run = c.start === prevEnd ? run + 1 : 1;
+    prevEnd = c.end;
+    if (run >= STRONG_RUN) return true;
+  }
+  return false;
+}
+
+/**
+ * One repair pass: replaces each candidate in place, leaving every other
+ * character byte-identical.
+ *
+ * Per match rather than rebuilding the whole string as one byte stream, which
+ * the first cut did and which fails on exactly the data this exists for — any
+ * emoji, CJK character or unrelated symbol makes the whole stream invalid, so one
+ * unrelated character abandons the entire repair.
+ */
+function repairOnce(s: string): string {
+  const candidates = findCandidates(s);
+  if (candidates.length === 0 || !hasStrongMojibake(s, candidates)) return s;
+
+  let out = '';
+  let at = 0;
+  for (const c of candidates) {
+    out += s.slice(at, c.start) + c.decoded;
+    at = c.end;
+  }
+  out += s.slice(at);
+  // No "did it shrink?" acceptance check: per-match replacement always shrinks by
+  // construction — the shortest candidate is two characters and the longest decode
+  // is one (two for an astral pair, from a four-character match). The predecessor
+  // rebuilt the whole string as one byte stream, where that check was doing real
+  // work; here it is unreachable, and a mutation proved it.
+  return out;
+}
+
+/**
+ * How many times a repair pass may run.
+ *
+ * The observed worst case is quadruple-stacked, from a mail thread sent and read
+ * back several times. Termination does not depend on this — every accepted pass
+ * strictly shrinks the string — but a fixed bound means a pathological input
+ * cannot spin.
+ */
+const MAX_REPAIR_PASSES = 6;
 
 /**
  * Normalize a single tool output string.
  *
- * - Empty strings and pure-ASCII strings are returned as-is (no NFC needed,
- *   no mojibake possible — avoids any allocation on the common case).
- * - Always applies Unicode NFC normalization when non-ASCII chars are present.
- * - Attempts UTF-8-decoded-as-Latin-1 mojibake repair when C1 control bytes
- *   (U+0080–U+009F) are detected; only accepts the repair when it introduces
- *   no U+FFFD replacement characters and shrinks the string (sign of successful
- *   multi-byte reassembly).
+ * Repairs mojibake (see the block above) and applies NFC. Pure ASCII returns
+ * immediately — the overwhelmingly common case, and no allocation.
  *
- * This function is intentionally conservative: clean ASCII, valid UTF-8,
- * and printable Latin Extended characters (©, ®, …) pass through unchanged.
+ * Conservative by construction: valid UTF-8, accented text, CJK, emoji and
+ * printable Latin-1 (`©`, `®`, `½`) all pass through untouched, pinned by tests.
  */
 export function normalizeToolText(s: string): string {
-  // Fast-paths: empty string and pure ASCII are already in NFC.
   if (s.length === 0) return s;
-  const kind = classifyString(s);
-  if (kind === 'ascii') return s;
-
-  if (kind === 'c1') {
-    try {
-      // Re-interpret the string's raw code points as UTF-8 bytes.
-      const repaired = Buffer.from(s, 'latin1').toString('utf8');
-      // Accept only when no replacement chars were introduced AND the string
-      // shrank (multi-byte reassembly always reduces char count).
-      if (!repaired.includes('�') && repaired.length < s.length) {
-        return repaired.normalize('NFC');
-      }
-    } catch {
-      // Buffer conversion failure is unexpected but should never crash the
-      // caller — fall through to NFC normalization of the original string.
+  let hasNonAscii = false;
+  for (let i = 0; i < s.length; i++) {
+    if (s.charCodeAt(i) >= 0x80) {
+      hasNonAscii = true;
+      break;
     }
   }
-  return s.normalize('NFC');
+  if (!hasNonAscii) return s;
+
+  let out = s;
+  try {
+    for (let pass = 0; pass < MAX_REPAIR_PASSES; pass++) {
+      const next = repairOnce(out);
+      if (next === out) break;
+      out = next;
+    }
+  } catch {
+    // A Buffer conversion failure must never reach the caller; the NFC below
+    // still runs on whatever we have.
+  }
+  return out.normalize('NFC');
+}
+
+/**
+ * Replaces typographic characters with their exact ASCII equivalents (#mojibake).
+ *
+ * **Why this exists when {@link normalizeToolText} already repairs mojibake.**
+ * Repair cleans up after a consumer that mangled our bytes; it cannot stop the
+ * next one. The motivating case was a Gmail MCP server writing raw UTF-8 into a
+ * `Subject:` header, where RFC 5322 requires US-ASCII — so a perfectly ordinary
+ * em dash came back as `Ã¢Â€Â”`. That server is fixable, and was fixed. The next
+ * third-party server is not, so the only deterministic defence is to hand it
+ * nothing that can break.
+ *
+ * **Typographic only, and the boundary is not arbitrary.** Every entry here has an
+ * exact ASCII equivalent that a reader would accept without noticing — these are
+ * flourishes a model adds, not content. Accented letters, CJK, emoji and currency
+ * signs are deliberately ABSENT: they would break in a naive consumer exactly the
+ * same way, and folding them destroys meaning rather than preserving it. `é`
+ * cannot become `e` and `€` cannot become `EUR` on Bernard's initiative. A test
+ * pins their absence, because the tempting "while we're here" edit is to add them.
+ *
+ * Idempotent, and a no-op on pure ASCII with no allocation.
+ */
+const TYPOGRAPHY: ReadonlyArray<readonly [RegExp, string]> = [
+  [/[\u2013\u2014\u2015]/g, '-'], // en dash, em dash, horizontal bar
+  [/[\u2018\u2019\u201a\u201b]/g, "'"], // single curly quotes
+  [/[\u201c\u201d\u201e\u201f]/g, '"'], // double curly quotes
+  [/\u2026/g, '...'], // ellipsis
+  [/[\u00a0\u202f\u2009\u2007]/g, ' '], // no-break, narrow no-break, thin, figure space
+  [/[\u2022\u2023\u25cf\u25aa]/g, '*'], // bullets
+  [/\u2039/g, '<'],
+  [/\u203a/g, '>'],
+  [/\u2032/g, "'"], // prime
+  [/\u2033/g, '"'], // double prime
+  [/\u2212/g, '-'], // minus sign
+];
+
+export function foldTypography(s: string): string {
+  if (s.length === 0) return s;
+  let hasNonAscii = false;
+  for (let i = 0; i < s.length; i++) {
+    if (s.charCodeAt(i) >= 0x80) {
+      hasNonAscii = true;
+      break;
+    }
+  }
+  if (!hasNonAscii) return s;
+  let out = s;
+  for (const [pattern, replacement] of TYPOGRAPHY) out = out.replace(pattern, replacement);
+  return out;
+}
+
+/**
+ * {@link foldTypography} over every string in a value, for a tool's ARGUMENTS.
+ *
+ * Mirrors {@link normalizeToolResult}'s walk — same plain-object check, so a class
+ * instance passes through rather than being rebuilt as a bare object.
+ */
+export function foldTypographyDeep(value: unknown): unknown {
+  if (typeof value === 'string') return foldTypography(value);
+  if (Array.isArray(value)) return value.map(foldTypographyDeep);
+  if (value && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) out[k] = foldTypographyDeep(v);
+    return out;
+  }
+  return value;
 }
 
 /**

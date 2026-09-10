@@ -39,6 +39,21 @@ describe('createWebReadTool', () => {
     expect(result).toContain('Hello world');
   });
 
+  it('repairs mojibake in the page before it reaches the model (#mojibake)', async () => {
+    // This path was never normalized, so a page whose bytes are already mojibake —
+    // very common on older sites — entered context verbatim and the model
+    // reproduced it faithfully in whatever it wrote next. That is the real reason
+    // corrupt characters have turned up in GitHub issue bodies: not the model
+    // inventing them, the model quoting them.
+    const mojibake = String.fromCodePoint(0x00c3, 0x00a2, 0x00c2, 0x20ac, 0x00c2, 0x201d);
+    mockFetch.mockResolvedValue(
+      makeResponse(`<html><body><p>Daily Blaze ${mojibake} Wed</p></body></html>`),
+    );
+    const result = await webTool.execute({ url: 'https://example.com' }, {} as any);
+    expect(result).toContain('Daily Blaze — Wed');
+    expect(result).not.toContain(mojibake);
+  });
+
   it('includes page title in output', async () => {
     mockFetch.mockResolvedValue(
       makeResponse('<html><head><title>My Page</title></head><body><p>Content</p></body></html>'),

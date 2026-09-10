@@ -1,4 +1,5 @@
 import { tool } from 'ai';
+import { normalizeToolText } from '../text.js';
 import { z } from 'zod';
 import { MAX_VERIFY_TEXT } from '../provenance.js';
 import { atomicWriteFileSyncUnique } from '../fs-utils.js';
@@ -288,7 +289,11 @@ export function createFileTools(provenance?: ProvenanceStore) {
             if (isBinaryContent(rawBuffer)) {
               return { error: `File appears to be binary: ${absPath}` };
             }
-            const content = rawBuffer.toString('utf-8');
+            // Normalized on the way in (#mojibake). A file whose bytes are already
+            // mojibake otherwise reaches the model verbatim and gets quoted onward;
+            // `web_read` had the same gap. Repair is a no-op on clean UTF-8 and on
+            // pure ASCII, which is nearly every file read.
+            const content = normalizeToolText(rawBuffer.toString('utf-8'));
             const allLines = splitLines(content);
             const totalLines = allLines.length;
 
@@ -523,6 +528,12 @@ export function createFileTools(provenance?: ProvenanceStore) {
             if (isBinaryContent(rawBuffer)) {
               return { error: `File appears to be binary: ${absPath}` };
             }
+            // NOT normalized, deliberately — unlike the read above. This is the
+            // edit path: it splits the file, splices the model's lines in, and
+            // writes the whole thing back. Repairing here would rewrite bytes the
+            // user never asked to touch, turning a three-line edit into a
+            // whole-file re-encode. A read shows; a write must only change what was
+            // asked for.
             const rawContent = rawBuffer.toString('utf-8');
             const lineEnding = detectLineEnding(rawContent);
             const hadTrailingNewline =
