@@ -24,7 +24,7 @@ import { attachmentsArg, resolveAttachments } from './attachment-args.js';
 import type { DispatchAttachment } from '../framework/agents/user-message.js';
 import type { AgentContext } from '../framework/context.js';
 import { type WrapperResult, wantsStructuredOutput } from '../structured-output.js';
-import { appendReasoningLog } from '../reasoning-log.js';
+import { recordDispatch } from '../reasoning-log.js';
 import { capSubagentResult, SUBAGENT_RESULT_MAX_CHARS } from './result-cap.js';
 import { classifyError } from '../error-taxonomy.js';
 import { verifyClaims, ClaimSchema } from '../claim-verifier.js';
@@ -386,7 +386,7 @@ export async function dispatchToolWrapper(
             // does not produce one is unaffected and pays nothing.
             const verified = await verifyWrapperClaims(wrapped, ctx, abortSignal);
 
-            appendReasoningLog({
+            recordDispatch({
               ts: new Date().toISOString(),
               specialistId,
               input,
@@ -436,7 +436,7 @@ export async function dispatchToolWrapper(
           } finally {
             // Every exit path, cancellation included — which is what the
             // success/catch pair it replaces already did, by duplication. It
-            // now trails `appendReasoningLog` rather than leading it; both are
+            // now trails `recordDispatch` rather than leading it; both are
             // bookkeeping and `printSpecialistEnd` is a no-op under Ink.
             printSpecialistEnd(id);
           }
@@ -445,7 +445,7 @@ export async function dispatchToolWrapper(
         // `{status, result, error}` envelope the parent agent parses, which is
         // why the shaper is a callback rather than a shared return type.
         (message): WrapperResult => {
-          appendReasoningLog({
+          recordDispatch({
             ts: new Date().toISOString(),
             specialistId,
             input,

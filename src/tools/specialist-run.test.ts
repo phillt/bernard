@@ -60,10 +60,10 @@ vi.mock('ai', async (importOriginal) => {
   };
 });
 
-vi.mock('../reasoning-log.js', () => ({ appendReasoningLog: vi.fn() }));
+vi.mock('../reasoning-log.js', () => ({ recordDispatch: vi.fn() }));
 
 import { createSpecialistRunTool } from './specialist-run.js';
-import { appendReasoningLog } from '../reasoning-log.js';
+import { recordDispatch } from '../reasoning-log.js';
 import { detectResultFailure } from '../tool-result-shape.js';
 import { _resetPool, getActiveCount, withSlot, MAX_DISPATCH_DEPTH } from './agent-pool.js';
 import { MemoryStore } from '../memory.js';
@@ -998,7 +998,7 @@ describe('a persona dispatch writes a reasoning-log entry', () => {
       { specialistId: 'email-triage', task: 'Triage my inbox' },
       { toolCallId: '1', messages: [], abortSignal: undefined as never },
     );
-    return vi.mocked(appendReasoningLog).mock.calls.at(-1)?.[0];
+    return vi.mocked(recordDispatch).mock.calls.at(-1)?.[0];
   }
 
   it('records the specialist, the task and the tool calls it made', async () => {
@@ -1050,7 +1050,7 @@ describe('a persona dispatch writes a reasoning-log entry', () => {
       { specialistId: 'email-triage', task: 'read the vault' },
       { toolCallId: '1', messages: [], abortSignal: undefined as never },
     );
-    const entry = vi.mocked(appendReasoningLog).mock.calls.at(-1)?.[0];
+    const entry = vi.mocked(recordDispatch).mock.calls.at(-1)?.[0];
     const call = entry?.toolCalls[0];
     expect(JSON.stringify(call?.args)).not.toContain('hunter2');
     expect(call?.resultPreview).not.toContain('the secret body');
@@ -1072,6 +1072,6 @@ describe('a persona dispatch writes a reasoning-log entry', () => {
     );
     // A refusal never reaches the dispatch, so nothing is logged for it — the
     // log records runs, not rejections.
-    expect(vi.mocked(appendReasoningLog)).not.toHaveBeenCalled();
+    expect(vi.mocked(recordDispatch)).not.toHaveBeenCalled();
   });
 });

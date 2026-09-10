@@ -15,14 +15,20 @@ import type { MemoryProposal } from './memory-proposal.js';
  * `acknowledge`) and this file did not copy that store. It copied the applet
  * one, whose methods are a near-clone of these.
  *
- * Extraction is still not worth it, for a different reason: of the four stores
- * with this shape, only these two are close. `CorrectionCandidateStore` has a
- * different status enum, an in-memory counter and no cooldown;
- * `CandidateStore` has `enhancement`/`reconcileSaved`/`acknowledged` and no
- * cooldown. Two near-clones do not carry a base class either — and if a fifth
- * arrives, the piece to lift is `isSuppressed` + `MAX_AGE_MS` + `pruneOld` as
- * free functions over a `{detectedAt, status, decidedAt}` structural type, not
- * a class.
+ * Extraction is still not worth it, for a different reason: of the three stores
+ * left with this shape, only these two are close. `CandidateStore` has
+ * `enhancement`/`reconcileSaved`/`acknowledged` and no cooldown. Two near-clones
+ * do not carry a base class either — and if a fourth arrives, the piece to lift is
+ * `isSuppressed` + `MAX_AGE_MS` + `pruneOld` as free functions over a
+ * `{detectedAt, status, decidedAt}` structural type, not a class.
+ *
+ * There WERE four. `CorrectionCandidateStore` was the fourth and is gone (#564):
+ * its consumer needed retry, retention and oldest-first, which is a work queue
+ * rather than a proposal store, so it moved to `work-queue.ts` instead of being
+ * generalised together with these. Worth knowing, because that module is the
+ * nearest thing in the tree to the base class this comment declines to write and
+ * it is deliberately NOT one — a proposal waits for a person and has a cooldown
+ * on being declined; an item of work waits for a pass and has an attempt count.
  *
  * What it does copy deliberately is `decidedAt` + {@link isSuppressed} + a
  * cooldown, which the specialist store lacks. A declined proposal has to

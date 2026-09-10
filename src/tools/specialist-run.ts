@@ -22,7 +22,7 @@ import {
 } from './agent-pool.js';
 import { debugLog } from '../logger.js';
 import { runDispatchOrFail } from './dispatch-failure.js';
-import { appendReasoningLog } from '../reasoning-log.js';
+import { recordDispatch } from '../reasoning-log.js';
 import { captureToolCalls } from './capture-tool-calls.js';
 
 /**
@@ -195,7 +195,7 @@ export function createSpecialistRunTool(
                 // It is the substrate everything downstream needs: the log is documented
                 // as existing "so failed runs can be inspected, replayed, or converted
                 // into correction candidates", and a persona could be none of those.
-                appendReasoningLog({
+                recordDispatch({
                   ts: new Date().toISOString(),
                   specialistId,
                   input: task,

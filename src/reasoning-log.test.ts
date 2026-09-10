@@ -10,6 +10,20 @@ vi.mock('node:fs', () => ({
   renameSync: vi.fn(),
 }));
 
+/**
+ * Stubbed so the drop path is reachable: with `node:fs` mocked, a real queue's
+ * `enqueue` always succeeds here, and the one thing worth asserting about the
+ * producer is what it does when the queue refuses.
+ */
+const mockEnqueue = vi.fn<[unknown], string | null>(() => 'id');
+vi.mock('./recall-queue.js', () => ({ recallQueue: () => ({ enqueue: mockEnqueue }) }));
+
+const mockDebugLog = vi.fn();
+vi.mock('./logger.js', () => ({
+  debugLog: (...a: unknown[]) => mockDebugLog(...a),
+  isDebugEnabled: () => false,
+}));
+
 const fs = await import('node:fs');
 
 // Re-import the module after mocks are in place so logsDirReady is reset each suite.
@@ -27,7 +41,7 @@ function makeEntry(overrides: Partial<ReasoningLogEntry> = {}): ReasoningLogEntr
   };
 }
 
-describe('appendReasoningLog', () => {
+describe('recordDispatch', () => {
   beforeEach(() => {
     // `resetAllMocks`, not `clearAllMocks`: the latter clears call RECORDS and
     // leaves the implementation, so the two tests below that make
@@ -40,27 +54,61 @@ describe('appendReasoningLog', () => {
     // is re-established here rather than left to the factory.
     vi.resetAllMocks();
     vi.mocked(fs.existsSync).mockReturnValue(false);
+    mockEnqueue.mockReturnValue('id');
     vi.resetModules();
   });
 
+  it('says so when the queue refuses the dispatch', async () => {
+    // The producer half is at-most-once: `enqueue` returns `null` at the cap or on
+    // a write failure, and there is nothing actionable to do here — but dropping
+    // it silently makes "the set of work is exactly the files present" quietly
+    // mean "except the ones we declined to write", with the NEWEST dispatches
+    // lost, since `enqueue` refuses rather than evicts. The predecessor had a
+    // signal for exactly this and the rewrite replaced it with an ignored return.
+    mockEnqueue.mockReturnValue(null);
+    const { recordDispatch } = await import('./reasoning-log.js');
+    recordDispatch(makeEntry());
+    expect(mockDebugLog).toHaveBeenCalledWith('specialist-recall:enqueue-dropped', {
+      specialistId: 'shell-wrapper',
+    });
+  });
+
+  it('stays quiet when the queue took it', async () => {
+    const { recordDispatch } = await import('./reasoning-log.js');
+    recordDispatch(makeEntry());
+    expect(mockDebugLog).not.toHaveBeenCalledWith(
+      'specialist-recall:enqueue-dropped',
+      expect.anything(),
+    );
+  });
+
   it('creates LOGS_DIR on first call', async () => {
-    const { appendReasoningLog } = await import('./reasoning-log.js');
-    appendReasoningLog(makeEntry());
+    const { recordDispatch } = await import('./reasoning-log.js');
+    recordDispatch(makeEntry());
     expect(fs.mkdirSync).toHaveBeenCalledWith(expect.stringContaining('logs'), { recursive: true });
   });
 
   it('does not create LOGS_DIR on subsequent calls within the same module instance', async () => {
-    const { appendReasoningLog } = await import('./reasoning-log.js');
-    appendReasoningLog(makeEntry());
-    appendReasoningLog(makeEntry());
-    // mkdirSync should be called exactly once (guarded by logsDirReady flag)
-    expect(fs.mkdirSync).toHaveBeenCalledTimes(1);
+    const { recordDispatch } = await import('./reasoning-log.js');
+    recordDispatch(makeEntry());
+    recordDispatch(makeEntry());
+    // Counted against the LOG directory specifically, not `mkdirSync` as a
+    // whole. `recordDispatch` also enqueues, and `WorkQueue.enqueue` re-`mkdir`s
+    // its own directory on EVERY call deliberately — a "created this process"
+    // latch there is a correctness hazard, since a drain empties the directory
+    // and a cached `true` would make every later enqueue fail silently. A bare
+    // call count conflates the two latches and would fail for the queue doing
+    // exactly what it is documented to do.
+    const logsDirCalls = vi
+      .mocked(fs.mkdirSync)
+      .mock.calls.filter(([dir]) => String(dir).endsWith('logs'));
+    expect(logsDirCalls).toHaveLength(1);
   });
 
   it('appends a JSONL line to TOOL_WRAPPER_LOG', async () => {
-    const { appendReasoningLog } = await import('./reasoning-log.js');
+    const { recordDispatch } = await import('./reasoning-log.js');
     const entry = makeEntry({ specialistId: 'web-wrapper' });
-    appendReasoningLog(entry);
+    recordDispatch(entry);
     expect(fs.appendFileSync).toHaveBeenCalledWith(
       expect.stringContaining('tool-wrappers.jsonl'),
       expect.stringContaining('"specialistId":"web-wrapper"'),
@@ -69,8 +117,8 @@ describe('appendReasoningLog', () => {
   });
 
   it('appended line ends with newline', async () => {
-    const { appendReasoningLog } = await import('./reasoning-log.js');
-    appendReasoningLog(makeEntry());
+    const { recordDispatch } = await import('./reasoning-log.js');
+    recordDispatch(makeEntry());
     const [, data] = vi.mocked(fs.appendFileSync).mock.calls[0] as [string, string, string];
     expect(data.endsWith('\n')).toBe(true);
   });
@@ -79,16 +127,16 @@ describe('appendReasoningLog', () => {
     vi.mocked(fs.appendFileSync).mockImplementation(() => {
       throw new Error('disk full');
     });
-    const { appendReasoningLog } = await import('./reasoning-log.js');
-    expect(() => appendReasoningLog(makeEntry())).not.toThrow();
+    const { recordDispatch } = await import('./reasoning-log.js');
+    expect(() => recordDispatch(makeEntry())).not.toThrow();
   });
 
   it('never throws on mkdirSync error', async () => {
     vi.mocked(fs.mkdirSync).mockImplementation(() => {
       throw new Error('permission denied');
     });
-    const { appendReasoningLog } = await import('./reasoning-log.js');
-    expect(() => appendReasoningLog(makeEntry())).not.toThrow();
+    const { recordDispatch } = await import('./reasoning-log.js');
+    expect(() => recordDispatch(makeEntry())).not.toThrow();
   });
 });
 

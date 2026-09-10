@@ -97,7 +97,7 @@ vi.mock('../structured-output.js', async () => ({
 }));
 
 vi.mock('../reasoning-log.js', () => ({
-  appendReasoningLog: vi.fn(),
+  recordDispatch: vi.fn(),
 }));
 
 // Node fs mock needed because SpecialistStore / MemoryStore read from disk.
@@ -158,7 +158,7 @@ function makeCtx(
 const { generateText } = await import('ai');
 const { withSlot } = await import('./agent-pool.js');
 const { resolveProviderAndModel } = await import('../config.js');
-const { appendReasoningLog } = await import('../reasoning-log.js');
+const { recordDispatch } = await import('../reasoning-log.js');
 const { wrapWrapperResult } = await import('../structured-output.js');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -467,7 +467,7 @@ describe('captureToolCalls', () => {
   });
 
   it('falls back to String() rather than throwing on an unserializable result', () => {
-    // `appendReasoningLog` is documented as never throwing, and AI SDK results
+    // `recordDispatch` is documented as never throwing, and AI SDK results
     // are `any` — a cyclic object must not take the dispatch down with it.
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;
@@ -765,7 +765,7 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
 
   // ── Happy path ───────────────────────────────────────────────────────────────
 
-  it('returns parsed result and calls appendReasoningLog on successful run', async () => {
+  it('returns parsed result and records the dispatch on a successful run', async () => {
     specialistStore.get.mockReturnValue(makeToolWrapperSpecialist());
     vi.mocked(generateText).mockResolvedValue({
       text: '{"status":"ok","result":"done"}',
@@ -783,9 +783,9 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     const parsed = JSON.parse(result);
     expect(parsed.status).toBe('ok');
     expect(parsed.result).toBe('done');
-    expect(vi.mocked(appendReasoningLog)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(recordDispatch)).toHaveBeenCalledTimes(1);
 
-    const logEntry = vi.mocked(appendReasoningLog).mock.calls[0][0];
+    const logEntry = vi.mocked(recordDispatch).mock.calls[0][0];
     expect(logEntry.specialistId).toBe('shell-wrapper');
     expect(logEntry.input).toBe('list files');
     expect(logEntry.status).toBe('ok');
@@ -911,7 +911,7 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
       ),
     ).rejects.toMatchObject({ name: 'AbortError' });
 
-    expect(vi.mocked(appendReasoningLog)).not.toHaveBeenCalled();
+    expect(vi.mocked(recordDispatch)).not.toHaveBeenCalled();
     expect(getActiveCount()).toBe(0);
   });
 
@@ -944,8 +944,8 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
       DEFAULT_EXEC_OPTIONS,
     );
 
-    expect(vi.mocked(appendReasoningLog)).toHaveBeenCalledTimes(1);
-    const logEntry = vi.mocked(appendReasoningLog).mock.calls[0][0];
+    expect(vi.mocked(recordDispatch)).toHaveBeenCalledTimes(1);
+    const logEntry = vi.mocked(recordDispatch).mock.calls[0][0];
     expect(logEntry.status).toBe('error');
     expect(logEntry.error).toBe('runtime_error');
   });

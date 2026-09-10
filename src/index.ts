@@ -532,6 +532,20 @@ async function runInkRepl(args: {
     }
   }
 
+  // Queue retention is NOT here, deliberately. It used to be, and that is
+  // exactly how the correction queue — whose 54 measured rows are half the
+  // reason `work-queue.ts` exists — ended up never swept at all: one line was
+  // written for the recall queue and the second adopter silently got none.
+  // `WorkQueue.ensureSwept` applies it on the queue's own first use instead, so a
+  // third adopter cannot miss it and ~3 ms of synchronous `readdir` leaves the
+  // path to first paint.
+  //
+  // The predecessor store's directory is not cleaned up here either, for the same
+  // reason: `migrateLegacyCorrectionCandidates` runs from `correctionQueue()`, so
+  // a cron-only or `bernard script` install migrates its pending rows and drops
+  // the rest on its own first correction instead of keeping the directory forever
+  // because nobody opened a REPL.
+
   // Memory housekeeping (#529). A NOTICE plus a context block, never a change:
   // these are the user's own notes, and the pass that produced these proposals
   // runs in a detached worker that cannot print, so the announcement can only
@@ -657,16 +671,15 @@ async function runInkRepl(args: {
 
     if (config.correctionEnabled) {
       try {
-        const correctionStore = agent.getCorrectionStore();
-        const pending = correctionStore.listPending();
-        if (pending.length > 0) {
-          printInfo(`Reviewing ${pending.length} tool-wrapper failure(s) for learning...`);
-          const result = await runCorrectionAgent({ ctx: agent.getContext() }, pending);
-          if (result.applied > 0) {
-            printInfo(
-              `  Learned from ${result.applied}/${result.processed} failure(s); examples updated.`,
-            );
-          }
+        // No prefetch and no count either: `runCorrectionAgent` reads the queue
+        // once for both, returns zeroes when it is empty, and prints what it is
+        // about to do. Counting here as well was a second full `readdir` to
+        // decide whether to ask the drain to do its own.
+        const result = await runCorrectionAgent({ ctx: agent.getContext() });
+        if (result.applied > 0) {
+          printInfo(
+            `  Learned from ${result.applied}/${result.processed} failure(s); examples updated.`,
+          );
         }
       } catch (err) {
         debugLog('correction:error', err instanceof Error ? err.message : String(err));

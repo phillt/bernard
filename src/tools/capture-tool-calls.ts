@@ -55,7 +55,7 @@ const RESULT_PREVIEW_MAX_CHARS = 300;
  * at 0 ms on the same input and renders identically at this preview length.
  *
  * The `try`/`catch` is load-bearing rather than defensive: `JSON.stringify`
- * throws on cycles and BigInt, `appendReasoningLog` is documented as never
+ * throws on cycles and BigInt, `recordDispatch` is documented as never
  * throwing, and AI SDK results are `any`. Same idiom as `mcp-result-shaper.ts`.
  */
 function previewOfResult(value: unknown): string {

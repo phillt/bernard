@@ -48,22 +48,22 @@ describe('the file stays bounded', () => {
     // The writer owns rotation — `apps/invocation-log.ts` states the rule, and
     // the two loggers beside it already follow it. This one had a rotate
     // function nothing called.
-    const { appendReasoningLog, TOOL_WRAPPER_LOG } = await load();
-    for (let i = 0; i < 3000; i++) appendReasoningLog(at(i));
+    const { recordDispatch, TOOL_WRAPPER_LOG } = await load();
+    for (let i = 0; i < 3000; i++) recordDispatch(at(i));
     expect(lineCount(TOOL_WRAPPER_LOG)).toBeLessThanOrEqual(CEILING);
   });
 
   it('stays bounded across many multiples of the budget', async () => {
     // Guards the guard: a one-shot trim would pass the case above and still grow
     // without limit. 6,000 appends is three budgets' worth.
-    const { appendReasoningLog, TOOL_WRAPPER_LOG } = await load();
-    for (let i = 0; i < 6000; i++) appendReasoningLog(at(i));
+    const { recordDispatch, TOOL_WRAPPER_LOG } = await load();
+    for (let i = 0; i < 6000; i++) recordDispatch(at(i));
     expect(lineCount(TOOL_WRAPPER_LOG)).toBeLessThanOrEqual(CEILING);
   });
 
   it('keeps the NEWEST entries when it trims', async () => {
-    const { appendReasoningLog, readReasoningLog, TOOL_WRAPPER_LOG } = await load();
-    for (let i = 0; i < 3000; i++) appendReasoningLog(at(i, { input: `run-${i}` }));
+    const { recordDispatch, readReasoningLog, TOOL_WRAPPER_LOG } = await load();
+    for (let i = 0; i < 3000; i++) recordDispatch(at(i, { input: `run-${i}` }));
     expect(lineCount(TOOL_WRAPPER_LOG)).toBeLessThanOrEqual(CEILING);
     expect(readReasoningLog(1).at(-1)?.input).toBe('run-2999');
   });
@@ -74,8 +74,8 @@ describe('the file stays bounded', () => {
     // the renderer bounds it, which is a PROMPT bound and not a disk one.
     // Measured, `args` is where the mass is: the largest real one is a 15.7 KB
     // `shell` invocation, and a `file_write` carries a whole file.
-    const { appendReasoningLog, readReasoningLog } = await load();
-    appendReasoningLog(
+    const { recordDispatch, readReasoningLog } = await load();
+    recordDispatch(
       at(1, {
         finalOutput: 'x'.repeat(50_000),
         error: 'y'.repeat(50_000),
@@ -93,8 +93,8 @@ describe('the file stays bounded', () => {
   it('leaves a small args object structured', async () => {
     // Guards the guard: the cap keeps structure when it fits, or the log stops
     // being replayable — which is what it exists for.
-    const { appendReasoningLog, readReasoningLog } = await load();
-    appendReasoningLog(
+    const { recordDispatch, readReasoningLog } = await load();
+    recordDispatch(
       at(1, { toolCalls: [{ tool: 'shell', args: { command: 'ls' }, resultPreview: 'ok' }] }),
     );
     expect(readReasoningLog(1)[0].toolCalls[0].args).toEqual({ command: 'ls' });
@@ -103,46 +103,65 @@ describe('the file stays bounded', () => {
   it('leaves a structured finalOutput structured', async () => {
     // Guards the guard: the cap is on TEXT. A JSON result must survive as JSON
     // or the log stops being replayable, which is what it exists for.
-    const { appendReasoningLog, readReasoningLog } = await load();
-    appendReasoningLog(at(1, { finalOutput: { status: 'ok', rows: 3 } }));
+    const { recordDispatch, readReasoningLog } = await load();
+    recordDispatch(at(1, { finalOutput: { status: 'ok', rows: 3 } }));
     expect(readReasoningLog(1)[0].finalOutput).toEqual({ status: 'ok', rows: 3 });
   });
 });
 
-describe('reading since a cursor', () => {
-  it('returns everything after it, however many entries precede it', async () => {
-    // The property a tail read cannot have. With a fixed window, entries
-    // between the cursor and the window's start are dropped silently — which is
-    // what `specialist-recall:window-truncated` was reporting without being
-    // able to recover.
-    const { appendReasoningLog, readReasoningLogSince } = await load();
-    const base = Date.parse('2026-01-01T00:00:00.000Z');
-    for (let i = 0; i < 1500; i++) appendReasoningLog(at(base + i * 1000, { input: `run-${i}` }));
-    const since = readReasoningLogSince(base + 1496 * 1000);
-    expect(since.entries.map((e) => e.input)).toEqual(['run-1497', 'run-1498', 'run-1499']);
-    // And it says it got all of them — the fact a caller cannot infer from the
-    // entries, since every one is newer than the cursor by construction.
-    expect(since.reachedCursor).toBe(true);
+describe('recording a dispatch', () => {
+  it('writes the log entry AND the queue item', async () => {
+    // One function rather than two calls at each producer, because the pair is
+    // what has to stay together: a dispatch in the log and not in the queue is
+    // one a specialist never learns from, silently — the class of bug the queue
+    // replaces.
+    const { recordDispatch, readReasoningLog } = await load();
+    const { recallQueue } = await import('./recall-queue.js');
+    recordDispatch(at(Date.now(), { input: 'do it' }));
+    expect(readReasoningLog(1)[0].input).toBe('do it');
+    expect(recallQueue().pending()).toBe(1);
   });
 
-  it('returns nothing when the cursor is at the end', async () => {
-    const { appendReasoningLog, readReasoningLogSince } = await load();
-    const base = Date.parse('2026-01-01T00:00:00.000Z');
-    appendReasoningLog(at(base));
-    expect(readReasoningLogSince(base).entries).toEqual([]);
+  it('bounds the entry once, for both consumers', async () => {
+    const { recordDispatch, readReasoningLog } = await load();
+    const { recallQueue } = await import('./recall-queue.js');
+    recordDispatch(at(Date.now(), { finalOutput: 'x'.repeat(50_000) }));
+    expect(String(readReasoningLog(1)[0].finalOutput).length).toBeLessThan(3000);
+    const [item] = recallQueue().claim();
+    expect(String(item.payload.finalOutput).length).toBeLessThan(3000);
+  });
+});
+
+describe('every field is bounded, count included', () => {
+  it('caps how many tool calls one entry keeps, and says how many it dropped', async () => {
+    // The field the file's own "a count budget is only honest if EVERY field is
+    // capped" rule had missed. `input`, `finalOutput` and each `args` were
+    // bounded; `toolCalls.length` was not, against a 150-step ceiling — which is
+    // what let one dispatch render past the 12,000-char recall budget and starve
+    // its own queue.
+    const { recordDispatch, readReasoningLog } = await load();
+    recordDispatch(
+      at(Date.now(), {
+        toolCalls: Array.from({ length: 40 }, (_, i) => ({
+          tool: `t${i}`,
+          args: { i },
+          resultPreview: 'ok',
+        })),
+      }),
+    );
+    const [entry] = readReasoningLog(1);
+    expect(entry.toolCalls).toHaveLength(12);
+    expect(entry.droppedToolCalls).toBe(28);
+    // The TAIL is kept: this log exists so a failure can be inspected, and the
+    // call that failed is the last one.
+    expect(entry.toolCalls.at(-1)?.tool).toBe('t39');
   });
 
-  it('keeps an entry whose timestamp will not parse', async () => {
-    // On an append-only log the only thing worse than re-reading an entry is
-    // not reading it, so an unparseable `ts` must not read as "old".
-    const { appendReasoningLog, readReasoningLogSince } = await load();
-    const base = Date.parse('2026-01-01T00:00:00.000Z');
-    appendReasoningLog(at(base, { ts: 'not-a-date' }));
-    expect(readReasoningLogSince(base + 10_000).entries).toHaveLength(1);
-  });
-
-  it('returns [] rather than throwing when the log does not exist', async () => {
-    const { readReasoningLogSince } = await load();
-    expect(readReasoningLogSince(0)).toEqual({ entries: [], reachedCursor: true });
+  it('says nothing when nothing was dropped', async () => {
+    // An absent marker has to mean complete, or a reader cannot tell a short
+    // dispatch from a clipped one.
+    const { recordDispatch, readReasoningLog } = await load();
+    recordDispatch(at(Date.now()));
+    expect(readReasoningLog(1)[0].droppedToolCalls).toBeUndefined();
   });
 });
