@@ -674,11 +674,13 @@ async function runInkRepl(args: {
 
     if (config.correctionEnabled) {
       try {
-        const correctionStore = agent.getCorrectionStore();
-        const pending = correctionStore.listPending();
-        if (pending.length > 0) {
-          printInfo(`Reviewing ${pending.length} tool-wrapper failure(s) for learning...`);
-          const result = await runCorrectionAgent({ ctx: agent.getContext() }, pending);
+        // No prefetch: the drain claims its own batch, oldest-first. The
+        // prefetch existed to avoid a second full readdir-and-parse of every row
+        // ever written, which is a cost the queue does not have.
+        const waiting = agent.getCorrectionStore().pending();
+        if (waiting > 0) {
+          printInfo(`Reviewing ${waiting} tool-wrapper failure(s) for learning...`);
+          const result = await runCorrectionAgent({ ctx: agent.getContext() });
           if (result.applied > 0) {
             printInfo(
               `  Learned from ${result.applied}/${result.processed} failure(s); examples updated.`,

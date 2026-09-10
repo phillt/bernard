@@ -129,7 +129,16 @@ export function knowledgeDir(libraryId: string): string {
   return path.join(DATA_DIR, 'knowledge', libraryId);
 }
 export const SPECIALIST_CANDIDATES_DIR = path.join(DATA_DIR, 'specialist-candidates');
-export const CORRECTION_CANDIDATES_DIR = path.join(DATA_DIR, 'correction-candidates');
+/**
+ * Failed tool-wrapper invocations waiting for the correction agent — one file
+ * per item. See `src/correction-queue.ts`.
+ *
+ * Replaces `DATA_DIR/correction-candidates`, and the move from `DATA_DIR` to
+ * `STATE_DIR` is the point rather than tidying: these were never user data. They
+ * are in-flight work items whose terminal rows nothing read and nothing ever
+ * removed, so 54 of them sat on a real install being re-parsed on every listing.
+ */
+export const CORRECTION_QUEUE_DIR = path.join(STATE_DIR, 'queues', 'corrections');
 export const APPLET_CANDIDATES_DIR = path.join(DATA_DIR, 'applet-candidates');
 export const MEMORY_CANDIDATES_DIR = path.join(DATA_DIR, 'memory-candidates');
 

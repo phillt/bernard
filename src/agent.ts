@@ -35,7 +35,8 @@ import type { MemoryStore } from './memory.js';
 import type { RAGStore, RAGSearchResult } from './rag.js';
 import { RoutineStore } from './routines.js';
 import { SpecialistStore } from './specialists.js';
-import { CorrectionCandidateStore } from './correction-candidates.js';
+import type { CorrectionWork } from './correction-queue.js';
+import type { WorkQueue } from './work-queue.js';
 import { matchSpecialists } from './specialist-matcher.js';
 import {
   extractRecentUserTexts,
@@ -194,7 +195,7 @@ export class Agent {
   currentStrategy: 'react' | 'normal' | null = null;
   private routineStore: RoutineStore;
   private specialistStore: SpecialistStore;
-  private correctionStore: CorrectionCandidateStore;
+  private correctionStore: WorkQueue<CorrectionWork>;
   private stepLimitHitCount: number = 0;
   private lastStepLimitHit: boolean = false;
   private planStore: PlanStore = new PlanStore();
@@ -227,7 +228,7 @@ export class Agent {
   }
 
   /** Returns the store that queues tool-wrapper correction candidates for this session. */
-  getCorrectionStore(): CorrectionCandidateStore {
+  getCorrectionStore(): WorkQueue<CorrectionWork> {
     return this.correctionStore;
   }
 

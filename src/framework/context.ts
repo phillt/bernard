@@ -3,7 +3,9 @@ import { MemoryStore } from '../memory.js';
 import { RoutineStore } from '../routines.js';
 import { SpecialistStore } from '../specialists.js';
 import { CandidateStore, type CandidateStoreReader } from '../specialist-candidates.js';
-import { CorrectionCandidateStore } from '../correction-candidates.js';
+import { correctionQueue } from '../correction-queue.js';
+import type { CorrectionWork } from '../correction-queue.js';
+import type { WorkQueue } from '../work-queue.js';
 import { ToolProfileStore } from '../tool-profiles.js';
 import type { KnowledgeCorpus } from '../knowledge/corpus.js';
 import type { RAGStore } from '../rag.js';
@@ -22,7 +24,7 @@ export interface AgentContextStores {
   routines: RoutineStore;
   specialists: SpecialistStore;
   candidates: CandidateStoreReader;
-  correction: CorrectionCandidateStore;
+  correction: WorkQueue<CorrectionWork>;
   toolProfiles: ToolProfileStore;
 }
 
@@ -177,7 +179,7 @@ export function assembleContext(input: AssembleContextInput): AgentContext {
     routines: overrides.routines ?? new RoutineStore(),
     specialists: overrides.specialists ?? new SpecialistStore(),
     candidates: overrides.candidates ?? new CandidateStore(),
-    correction: overrides.correction ?? new CorrectionCandidateStore(),
+    correction: overrides.correction ?? correctionQueue(),
     toolProfiles: overrides.toolProfiles ?? new ToolProfileStore(),
   };
   return {

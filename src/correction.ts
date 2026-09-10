@@ -1,4 +1,4 @@
-import { type CorrectionCandidate } from './correction-candidates.js';
+import { MAX_CORRECTIONS_PER_RUN, type CorrectionWork } from './correction-queue.js';
 import { createToolWrapperRunTool } from './tools/tool-wrapper-run.js';
 import type { AgentContext } from './framework/context.js';
 import {
@@ -12,9 +12,6 @@ import { printInfo } from './output.js';
 
 /** ID of the bundled correction-agent specialist. */
 const CORRECTION_SPECIALIST_ID = 'correction-agent';
-
-/** Max candidates processed per session close. Keeps shutdown fast. */
-const MAX_CANDIDATES_PER_RUN = 5;
 
 const ProposedExampleSchema = z.object({
   input: z.string(),
@@ -94,37 +91,38 @@ export interface RunCorrectionDeps {
  * MCP writes). The shape-check trades one risk (orchestrator-verifiable
  * fabrication) for another (duplicate side-effects) and we pick the former.
  */
-export async function runCorrectionAgent(
-  deps: RunCorrectionDeps,
-  prefetchedPending?: CorrectionCandidate[],
-): Promise<{
+export async function runCorrectionAgent(deps: RunCorrectionDeps): Promise<{
   processed: number;
   applied: number;
   skipped: number;
 }> {
-  const correctionStore = deps.ctx.stores.correction;
-  const pending = prefetchedPending ?? correctionStore.listPending();
-  if (pending.length === 0) return { processed: 0, applied: 0, skipped: 0 };
+  const queue = deps.ctx.stores.correction;
+  const waiting = queue.pending();
+  if (waiting === 0) return { processed: 0, applied: 0, skipped: 0 };
 
   const correctionSpecialist = deps.ctx.stores.specialists.get(CORRECTION_SPECIALIST_ID);
   if (!correctionSpecialist) {
     debugLog('correction:skip', `No specialist named "${CORRECTION_SPECIALIST_ID}" — skipping.`);
-    return { processed: 0, applied: 0, skipped: pending.length };
+    return { processed: 0, applied: 0, skipped: waiting };
   }
 
-  const batch = pending.slice(0, MAX_CANDIDATES_PER_RUN);
+  // OLDEST first. The predecessor read every row, sorted descending by
+  // `createdAt` and took the first five — so with six pending the oldest never
+  // ran again, and it was re-read and re-parsed on every session forever.
+  const batch = queue.claim(MAX_CORRECTIONS_PER_RUN);
   const toolWrapperRun = deps.toolWrapperRun ?? createToolWrapperRunTool(deps.ctx);
 
   let applied = 0;
   let processed = 0;
-  const skipped = pending.length - batch.length;
+  const skipped = Math.max(0, waiting - batch.length);
 
   printInfo(
     `Running correction agent over ${batch.length} pending candidate${batch.length === 1 ? '' : 's'}...`,
   );
 
-  for (const candidate of batch) {
+  for (const item of batch) {
     processed++;
+    const candidate = { id: item.id, ...item.payload };
     const input = formatCandidatePrompt(candidate);
     try {
       const raw = await toolWrapperRun.execute(
@@ -138,11 +136,10 @@ export async function runCorrectionAgent(
       const outcome = extractOutcome(text);
 
       if (!outcome) {
-        correctionStore.update(candidate.id, {
-          status: 'invalid',
-          validated: false,
-          notes: 'Correction agent could not validate a fix.',
-        });
+        // RETRIED, where this used to be written off as `invalid`. An
+        // unparseable reply is the model having a bad turn, not a verdict on the
+        // candidate — and the queue parks it after a bounded number of those.
+        queue.retry(item.id, 'Correction agent returned nothing usable.');
         continue;
       }
 
@@ -155,43 +152,38 @@ export async function runCorrectionAgent(
         );
         if (committed) {
           applied++;
-          correctionStore.update(candidate.id, {
-            status: 'applied',
-            validated: true,
-            proposedGood: gate.good?.call,
-            proposedBad: gate.bad?.call,
-            notes: outcome.notes,
-          });
+          // Done. The examples on the specialist record ARE the durable outcome,
+          // which is why there is no `applied` row to keep — the predecessor's
+          // was an audit trail nothing read and nothing ever compacted.
+          queue.done(item.id);
+          debugLog('correction:applied', { candidate: candidate.id, notes: outcome.notes });
         } else {
-          correctionStore.update(candidate.id, {
-            status: 'invalid',
-            validated: false,
-            notes: `Target specialist "${candidate.specialistId}" not found at commit time.`,
-          });
+          // The target specialist is gone. Terminal, not transient — retrying
+          // would park it three passes later for no reason. Same call recall
+          // makes for a deleted owner.
+          queue.done(item.id);
+          debugLog('correction:target-missing', { specialistId: candidate.specialistId });
         }
       } else if (gate.rejected) {
-        correctionStore.update(candidate.id, {
-          status: 'rejected',
-          validated: true,
-          notes: outcome.notes ?? 'Validated but not applied (agent declined commit).',
-        });
+        // A DECISION, not a failure: the agent validated the fix and declined to
+        // commit it. Asking again would put the same question to the same model.
+        queue.done(item.id);
+        debugLog('correction:declined', { candidate: candidate.id, notes: outcome.notes });
       } else {
-        correctionStore.update(candidate.id, {
-          status: 'invalid',
-          validated: false,
-          notes: outcome.notes
+        queue.retry(
+          item.id,
+          outcome.notes
             ? `${outcome.notes} (${gate.reason})`
-            : `Correction agent could not validate a fix: ${gate.reason}.`,
-        });
+            : `Could not validate: ${gate.reason}.`,
+        );
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       debugLog('correction:error', { candidateId: candidate.id, message });
-      correctionStore.update(candidate.id, {
-        status: 'invalid',
-        validated: false,
-        notes: `Correction agent errored: ${message}`,
-      });
+      // The fix this is here for: a provider timeout, an exhausted pool or a
+      // cancelled dispatch used to be recorded as `invalid` — an environmental
+      // failure written down as a verdict on the candidate, never retried.
+      queue.retry(item.id, `Correction agent errored: ${message}`);
     }
   }
 
@@ -222,10 +214,11 @@ type GateResult =
  *   - `validatedResult` parses as `{status: 'ok', ...}`
  *   - At least one of `proposedGoodExample` / `proposedBadExample` is present
  *
- * `validated:true, applied:false` from the agent → `rejected` (no commit, but
- * candidate marked validated). Anything else → `invalid`.
+ * `validated:true, applied:false` from the agent → `rejected`, which the caller
+ * treats as a decision and acknowledges. Anything else is a failed look and goes
+ * back on the queue.
  */
-function gateCommit(outcome: CorrectionOutcome, candidate: CorrectionCandidate): GateResult {
+function gateCommit(outcome: CorrectionOutcome, candidate: CorrectionWork): GateResult {
   if (!outcome.proposedGoodCall) {
     if (outcome.validated && outcome.applied === false) {
       return { ok: false, rejected: true, reason: 'agent declined commit' };
@@ -291,7 +284,7 @@ function parseValidatedStatus(
   return parsed.status === 'ok' ? 'ok' : 'error';
 }
 
-function formatCandidatePrompt(candidate: CorrectionCandidate): string {
+function formatCandidatePrompt(candidate: { id: string } & CorrectionWork): string {
   return [
     `Candidate ID: ${candidate.id}`,
     `Target specialist: ${candidate.specialistId}`,
