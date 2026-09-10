@@ -89,3 +89,32 @@ export function boundedStringify(
   if (text.length > maxLen) bounded = true;
   return { text, bounded };
 }
+
+/** The marker that distinguishes a bounded value from a complete one. */
+export function markTruncated(text: string, total: number): string {
+  return `${text}... (truncated, ${total} chars total)`;
+}
+
+/**
+ * Bounds a persisted log field of unknown shape, keeping its structure when it
+ * fits.
+ *
+ * Lifted out of `framework/hooks/cron-step-recorder.ts`, which had the only copy
+ * and is no longer the only consumer: the reasoning log persists a whole
+ * dispatch's `finalOutput` and every tool call's `args`, both model-authored and
+ * both of unknown shape. A truncated object is not a valid instance of its own
+ * shape, so an over-budget value comes back as a MARKED string while one that
+ * fits keeps its structure and stays replayable.
+ *
+ * `bounded` rather than `text.length > maxLen`: once the budget starts dropping
+ * keys the serialized form can come back under the cap, and a length-only test
+ * would then hand back the original unbounded object.
+ */
+export function boundValue(value: unknown, maxLen: number): unknown {
+  if (typeof value === 'string') {
+    return value.length > maxLen ? markTruncated(value.slice(0, maxLen), value.length) : value;
+  }
+  const { text, bounded } = boundedStringify(value, maxLen);
+  if (!bounded) return value;
+  return markTruncated(text.slice(0, maxLen), text.length);
+}

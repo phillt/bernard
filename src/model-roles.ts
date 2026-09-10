@@ -228,6 +228,12 @@ export const SITE_ROLE: Record<ModelSite, RoleId> = {
   // What a specialist should remember from its own work: a short extraction
   // over one transcript, the same shape as the consolidator's judgement call.
   'specialist-recall': 'classifier',
+  // A specialist reviewing its OWN notes. Same role and tier as the user's
+  // consolidator and deliberately a separate site, for that site's own reason:
+  // the two run at completely different rates — once per session per specialist
+  // that learned enough, against once per session over the user's whole store —
+  // and folded into one site `bernard usage` cannot say which is costing you.
+  'specialist-consolidator': 'classifier',
   // Same role and tier as consolidation, deliberately a SEPARATE site (#373):
   // one runs once per session in a detached worker, the other once per write
   // inside a turn, and collapsing them makes `bernard usage` unable to say

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { makeTestContext } from '../__tests__/agent-context.js';
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
 
@@ -38,17 +39,10 @@ function makeBaseTool(executeImpl: (...args: any[]) => any) {
  * mocked `dispatchToolWrapper`, so an inert shape suffices.
  */
 function makeCtx(overrides: Record<string, any> = {}) {
-  return {
-    config: {} as any,
-    toolOptions: {} as any,
-    stores: {
-      memory: {} as any,
-      specialists: { get: vi.fn() },
-      correction: { enqueue: vi.fn() },
-    },
-    mcp: { tools: {}, serverNames: [], serverTools: {} },
+  return makeTestContext({
+    stores: { specialists: { get: vi.fn() }, correction: { enqueue: vi.fn() } } as never,
     ...overrides,
-  } as any;
+  }) as any;
 }
 
 // ── buildShimInput ────────────────────────────────────────────────────────────

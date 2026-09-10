@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { buildMainSystemPrompt } from '../main.js';
 import { RESPONSE_STYLE_PROMPTS, type ResponseStyle } from '../../../agent-prompt.js';
-import type { BernardConfig } from '../../../config.js';
 import type { AgentContext } from '../../context.js';
+import { makeTestContext } from '../../../__tests__/agent-context.js';
+import { makePolicyInput } from '../../../policy/test-helpers.js';
 
 /**
  * `buildMainSystemPrompt` reads `ctx.config.responseStyle` and (optionally)
@@ -11,48 +12,12 @@ import type { AgentContext } from '../../context.js';
  * without dragging in the full Agent class — we only care about the style
  * block being appended (or not).
  */
+// Config through `makePolicyInput`, the repo's one cast-free `BernardConfig`
+// builder — this file hand-wrote a thirty-line literal that bypassed it (#318).
 function makeCtx(style: ResponseStyle): AgentContext {
-  const config: BernardConfig = {
-    provider: 'anthropic',
-    model: 'claude-test',
-    maxTokens: 4096,
-    shellTimeout: 30000,
-    tokenWindow: 0,
-    maxSteps: 25,
-    ragEnabled: false,
-    cacheEnabled: true,
-    promptCache: true,
-    semanticCache: false,
-    theme: 'bernard',
-    coordinatorMode: 'off',
-    modelMode: 'balanced',
-    subagentPac: false,
-    toolDetails: false,
-    autoCreateSpecialists: false,
-    autoCreateThreshold: 0.8,
-    correctionEnabled: false,
-    promptRewriter: false,
-    confirmMode: 'auto',
-    toolMode: 'write',
-    maxConcurrentAgents: 4,
-    responseStyle: style,
-    referenceLookup: false,
-    referenceLookupTools: [],
-    scratchSubjectThreshold: 0.15,
-    conciseMode: false,
-    customProviders: {},
-  };
-  const stores = {
-    toolProfiles: { list: () => [] },
-  } as unknown as AgentContext['stores'];
-  return {
-    config,
-    stores,
-    mcp: { tools: {}, serverNames: [] },
-    toolOptions: {},
-    policyDecision: undefined,
-    provenance: undefined,
-  } as unknown as AgentContext;
+  return makeTestContext({
+    config: { ...makePolicyInput().config, model: 'claude-test', responseStyle: style },
+  });
 }
 
 const baseInput = {

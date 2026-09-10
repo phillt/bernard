@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import {
   appendJsonl,
+  readJsonlSince,
   readJsonlTail,
   rotateJsonlByCount,
   listFilesByMtime,
@@ -48,6 +49,110 @@ describe('readJsonlTail', () => {
     fs.writeFileSync(file, '\n{"i":0}\nnot json{{\n{"i":1}\n\n{"i":2}\n');
     expect(readJsonlTail<{ i: number }>(file).map((r) => r.i)).toEqual([0, 1, 2]);
     expect(readJsonlTail<{ i: number }>(file, 2).map((r) => r.i)).toEqual([1, 2]);
+  });
+});
+
+describe('readJsonlSince', () => {
+  const write = (n: number) =>
+    fs.writeFileSync(
+      path.join(dir, 'log.jsonl'),
+      Array.from({ length: n }, (_, i) => `{"i":${i}}`).join('\n') + '\n',
+    );
+  const file = () => path.join(dir, 'log.jsonl');
+  const since = (cutoff: number, max?: number) =>
+    readJsonlSince<{ i: number }>(file(), (e) => e.i <= cutoff, max).entries.map((r) => r.i);
+  const reached = (cutoff: number, max?: number) =>
+    readJsonlSince<{ i: number }>(file(), (e) => e.i <= cutoff, max).reachedCursor;
+
+  it('returns [] for a missing file, and claims to have reached the cursor', () => {
+    // Nothing before the cursor either, so nothing was lost — a first run must
+    // not report a gap.
+    expect(readJsonlSince(path.join(dir, 'nope.jsonl'), () => false)).toEqual({
+      entries: [],
+      reachedCursor: true,
+    });
+  });
+
+  it('returns everything after the cursor, oldest-first', () => {
+    write(10);
+    expect(since(6)).toEqual([7, 8, 9]);
+  });
+
+  it('is unaffected by how many records precede the cursor', () => {
+    // The property a tail read cannot have, and the reason this exists: a fixed
+    // window silently drops everything between the cursor and the window's
+    // start, which is how a cursor over an append-only log loses work.
+    write(5000);
+    expect(since(4996)).toEqual([4997, 4998, 4999]);
+  });
+
+  it('spans a chunk boundary without splitting a record', () => {
+    // The one thing a backwards chunked read gets wrong if the carry is
+    // mishandled: the first line of a chunk continues into the chunk BEFORE it.
+    // 64 KB of chunk against ~12-byte records puts thousands of boundaries in
+    // play, and a dropped carry corrupts exactly one record per chunk.
+    write(20_000);
+    expect(fs.statSync(file()).size).toBeGreaterThan(64 * 1024);
+    // An explicit ceiling: the default is 5,000, which this deliberately exceeds
+    // so the chunk loop runs many times.
+    expect(since(-1, 20_000)).toHaveLength(20_000);
+    expect(since(19_990)).toEqual([19_991, 19_992, 19_993, 19_994, 19_995, 19_996, 19_997, 19_998, 19_999]); // prettier-ignore
+  });
+
+  it('reads a single record that spans many chunks, intact', () => {
+    // Eleven 64 KB chunks for one record, which is the case the fragment list
+    // exists for: concatenating the carry per chunk copies every byte once per
+    // chunk it spans. Measured — 0.7 MB: 2.6 ms concat / 1.4 ms fragments;
+    // 4 MB: 63.4 / 8.1; 16 MB: 994.7 / 29.7. Deliberately NOT asserted on the
+    // clock: the separation only becomes reliable at a file size not worth
+    // writing per test run, and a flaky timing test across three shuffled CI
+    // seeds is worse than a recorded measurement. What IS asserted is the
+    // property a mishandled carry breaks — the record comes back whole.
+    //
+    // Reachable rather than theoretical: `captureToolCalls` stores a tool's
+    // `args` verbatim, so a `file_write` of an applet page is an ordinary
+    // megabyte-sized row.
+    const big = 'x'.repeat(700_000);
+    fs.writeFileSync(file(), `{"i":0}\n${JSON.stringify({ i: 1, big })}\n{"i":2}\n`);
+    const out = readJsonlSince<{ i: number; big?: string }>(file(), (e) => e.i <= 0);
+    expect(out.entries.map((r) => r.i)).toEqual([1, 2]);
+    expect(out.entries[0].big).toHaveLength(700_000);
+  });
+
+  it('returns everything when nothing is older than the cursor', () => {
+    write(3);
+    expect(since(-1)).toEqual([0, 1, 2]);
+  });
+
+  it('reports reaching the cursor, and not reaching it', () => {
+    // The half a caller using this as a queue needs, and the half it CANNOT
+    // infer: every entry returned is newer than the cursor by construction, so
+    // any test against the oldest one is a tautology.
+    write(10);
+    expect(reached(6)).toBe(true);
+    // The cursor is older than every record, so the scan runs out of file.
+    expect(reached(-5)).toBe(false);
+    // …and so does hitting the ceiling.
+    expect(reached(-1, 3)).toBe(false);
+  });
+
+  it('keeps a record the predicate cannot judge', () => {
+    // On an append-only log the only thing worse than re-reading a record is
+    // not reading it, so an unparseable cursor field must not read as "old".
+    fs.writeFileSync(file(), '{"i":0}\n{"ts":"garbage"}\n{"i":2}\n');
+    const out = readJsonlSince<{ i?: number }>(file(), (e) => typeof e.i === 'number' && e.i <= 0);
+    expect(out.entries).toHaveLength(2);
+  });
+
+  it('skips blank and malformed lines', () => {
+    fs.writeFileSync(file(), '\n{"i":0}\nnot json{{\n{"i":1}\n\n{"i":2}\n');
+    expect(since(0)).toEqual([1, 2]);
+  });
+
+  it('truncates at the OLDEST end when it hits its ceiling', () => {
+    // The newest records are the ones a caller cannot afford to lose.
+    write(100);
+    expect(since(-1, 3)).toEqual([97, 98, 99]);
   });
 });
 

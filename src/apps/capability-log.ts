@@ -1,5 +1,5 @@
 import { CAPABILITY_LOG_FILE } from '../paths.js';
-import { appendJsonl, rotateJsonlByCount } from '../jsonl.js';
+import { appendJsonlBounded } from '../jsonl.js';
 import type { CapabilityRecord } from './capabilities.js';
 
 /**
@@ -19,8 +19,11 @@ import type { CapabilityRecord } from './capabilities.js';
 const CAPABILITY_LOG_KEEP = 2000;
 
 export function recordCapabilityMint(record: CapabilityRecord): void {
-  try {
-    appendJsonl(CAPABILITY_LOG_FILE, {
+  // Through the shared bounder; see `recordInvocation` for why the hand-paired
+  // append + rotate this used to carry is no longer written out by hand.
+  appendJsonlBounded(
+    CAPABILITY_LOG_FILE,
+    {
       event: 'capability:mint',
       at: new Date().toISOString(),
       // The record's own non-secret id, never a slice of the handle: the
@@ -37,9 +40,7 @@ export function recordCapabilityMint(record: CapabilityRecord): void {
       // Keys only, never values, exactly as the invocation log does: a frozen
       // handle's values are the caller's data.
       frozenArgKeys: record.frozenArgs ? Object.keys(record.frozenArgs) : [],
-    });
-    rotateJsonlByCount(CAPABILITY_LOG_FILE, CAPABILITY_LOG_KEEP);
-  } catch {
-    // The audit trail must never take down the mint it is recording.
-  }
+    },
+    CAPABILITY_LOG_KEEP,
+  );
 }

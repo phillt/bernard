@@ -114,6 +114,13 @@ vi.mock('node:fs', () => ({
 // ── Deferred imports (after vi.mock hoisting) ─────────────────────────────────
 
 import { captureLastToolCall, captureToolCalls } from './capture-tool-calls.js';
+
+/**
+ * No tool declares redaction metadata in these cases, which is now said rather
+ * than implied: the registry used to be optional and omitting it meant an
+ * UNREDACTED capture, which is how the persona path shipped one.
+ */
+const NO_META = () => undefined;
 import {
   formatExamples,
   buildChildTools,
@@ -121,12 +128,15 @@ import {
   renderWrapperParentView,
 } from './tool-wrapper-run.js';
 import { relabelStepLimit } from '../framework/agents/tool-wrapper.js';
+import { makeTestContext, makeMemoryDouble } from '../__tests__/agent-context.js';
 import { WRAPPER_PARSE_FAILURE_RESULT } from '../structured-output.js';
 import { _resetPool, getActiveCount, withSlot, MAX_DISPATCH_DEPTH } from './agent-pool.js';
 import { classifyError } from '../error-taxonomy.js';
 import { DEFAULT_SUBAGENT_RESULT_MAX_CHARS } from './result-cap.js';
 import type { AgentContext } from '../framework/context.js';
 
+// Over the shared base (#318): the three `{} as any` stores and the two `mcp`
+// fields this omitted are both shapes a real dispatch can never be handed.
 function makeCtx(
   config: any,
   options: any,
@@ -134,19 +144,15 @@ function makeCtx(
   specialistStore: any,
   correctionStore: any,
 ): AgentContext {
-  return {
+  return makeTestContext({
     config,
     toolOptions: options,
     stores: {
       memory: memoryStore,
       specialists: specialistStore,
       correction: correctionStore,
-      routines: {} as any,
-      candidates: {} as any,
-      toolProfiles: {} as any,
-    },
-    mcp: { tools: {}, serverNames: [] },
-  };
+    } as never,
+  });
 }
 
 const { generateText } = await import('ai');
@@ -179,16 +185,11 @@ function createMockCorrectionStore() {
   } as any;
 }
 
+// The shared double, which answers the whole narrowing surface: `asOwner` for
+// the ownership fence and `scoped` for the three scope axes. This file's local
+// copy broke on the first and would have broken on the next one (#318).
 function createMockMemoryStore() {
-  const store: any = {
-    getAllMemoryContents: vi.fn(() => new Map()),
-    getAllScratchContents: vi.fn(() => new Map()),
-    // `scopeContext` calls this for every dispatch that names a record, so a
-    // double that cannot answer it fails the dispatch rather than the fence.
-    // Returns itself: these tests are about the wrapper, not about ownership.
-    asOwner: vi.fn(() => store),
-  };
-  return store;
+  return makeMemoryDouble() as any;
 }
 
 function createMockOptions() {
@@ -427,11 +428,11 @@ describe('captureLastToolCall', () => {
 
 describe('captureToolCalls', () => {
   it('returns empty array when steps is undefined', () => {
-    expect(captureToolCalls(undefined)).toEqual([]);
+    expect(captureToolCalls(undefined, NO_META)).toEqual([]);
   });
 
   it('returns empty array when steps is empty', () => {
-    expect(captureToolCalls([])).toEqual([]);
+    expect(captureToolCalls([], NO_META)).toEqual([]);
   });
 
   it('maps tool calls and their results correctly', () => {
@@ -441,7 +442,7 @@ describe('captureToolCalls', () => {
         toolResults: [{ result: 'file1.ts\nfile2.ts' }],
       },
     ];
-    const result = captureToolCalls(steps);
+    const result = captureToolCalls(steps, NO_META);
     expect(result).toHaveLength(1);
     expect(result[0].tool).toBe('shell');
     expect(result[0].args).toEqual({ command: 'ls' });
@@ -460,7 +461,7 @@ describe('captureToolCalls', () => {
         toolResults: [{ result: { output: 'file1.ts', is_error: false } }],
       },
     ];
-    const result = captureToolCalls(steps);
+    const result = captureToolCalls(steps, NO_META);
     expect(result[0].resultPreview).not.toContain('[object Object]');
     expect(result[0].resultPreview).toContain('file1.ts');
   });
@@ -476,8 +477,8 @@ describe('captureToolCalls', () => {
         toolResults: [{ result: cyclic }],
       },
     ];
-    expect(() => captureToolCalls(steps)).not.toThrow();
-    expect(captureToolCalls(steps)[0].resultPreview).toBe('[object Object]');
+    expect(() => captureToolCalls(steps, NO_META)).not.toThrow();
+    expect(captureToolCalls(steps, NO_META)[0].resultPreview).toBe('[object Object]');
   });
 
   it('truncates resultPreview to 300 chars', () => {
@@ -488,7 +489,7 @@ describe('captureToolCalls', () => {
         toolResults: [{ result: longOutput }],
       },
     ];
-    const result = captureToolCalls(steps);
+    const result = captureToolCalls(steps, NO_META);
     expect(result[0].resultPreview.length).toBe(300);
   });
 
@@ -503,7 +504,7 @@ describe('captureToolCalls', () => {
         // second result absent
       },
     ];
-    const result = captureToolCalls(steps);
+    const result = captureToolCalls(steps, NO_META);
     expect(result).toHaveLength(2);
     expect(result[0].resultPreview).toBe(JSON.stringify('/home/user'));
     expect(result[1].resultPreview).toBe('');
@@ -520,7 +521,7 @@ describe('captureToolCalls', () => {
         toolResults: [{ result: 'result_b' }],
       },
     ];
-    const result = captureToolCalls(steps);
+    const result = captureToolCalls(steps, NO_META);
     expect(result).toHaveLength(2);
     expect(result[0].tool).toBe('tool_a');
     expect(result[1].tool).toBe('tool_b');
@@ -534,7 +535,7 @@ describe('captureToolCalls', () => {
         toolResults: [{ result: 'ok' }],
       },
     ];
-    const result = captureToolCalls(steps);
+    const result = captureToolCalls(steps, NO_META);
     expect(result).toHaveLength(1);
     expect(result[0].tool).toBe('shell');
   });

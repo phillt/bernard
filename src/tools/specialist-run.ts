@@ -174,7 +174,7 @@ export function createSpecialistRunTool(
                   // exists.
                   ...(canDelegate && dispatchTools ? { dispatchTools } : {}),
                 };
-                const { result, formatted } = await runDefinition(ctx, def, input, {
+                const { result, formatted, toolMeta } = await runDefinition(ctx, def, input, {
                   abortSignal: execOptions.abortSignal,
                   overrides: { provider, model },
                   planStore,
@@ -199,7 +199,13 @@ export function createSpecialistRunTool(
                   ts: new Date().toISOString(),
                   specialistId,
                   input: task,
-                  toolCalls: captureToolCalls(result.steps as never[]),
+                  // WITH the redaction metadata, which this path shipped
+                  // without: a persona's `shell` command or an MCP tool's
+                  // credentials went verbatim into the log, and since #501 those
+                  // bytes are read back and fed to a model. The wrapper path
+                  // passed its `childTools` all along; this one had nothing to
+                  // pass until `runDefinition` published the lookup.
+                  toolCalls: captureToolCalls(result.steps as never[], toolMeta),
                   finalOutput: formatted,
                   // A persona returns a string, not a `WrapperResult`, so the verdict
                   // comes from the same `Error:` prefix `detectResultFailure` reads

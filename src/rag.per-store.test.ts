@@ -81,3 +81,55 @@ describe('a store per specialist', () => {
     expect(second.listFacts().join(' ')).toContain('Use pnpm to install.');
   });
 });
+
+/**
+ * Enumerating the stores, which nothing could do.
+ *
+ * `paths.ts` maps id → path with no inverse, and the one accessor that opens a
+ * store **creates its directory as a side effect** — so the obvious
+ * implementation, looping `specialistRagFor` over every known specialist, turns
+ * a listing into a writer.
+ */
+describe('listSpecialistRagIds', () => {
+  async function load() {
+    const { vi } = await import('vitest');
+    vi.resetModules();
+    return await import('./specialist-rag.js');
+  }
+
+  it('returns [] before any specialist has learned anything', async () => {
+    const { listSpecialistRagIds } = await load();
+    expect(listSpecialistRagIds()).toEqual([]);
+  });
+
+  it('names the stores that exist, sorted', async () => {
+    const { listSpecialistRagIds } = await load();
+    const fs = await import('node:fs');
+    fs.mkdirSync(specialistRagDir('designer'), { recursive: true });
+    fs.mkdirSync(specialistRagDir('coder'), { recursive: true });
+    expect(listSpecialistRagIds()).toEqual(['coder', 'designer']);
+  });
+
+  it('creates nothing — a listing must not be a writer', async () => {
+    // The trap this function exists to avoid: `RAGStore`'s constructor
+    // `mkdirSync`s its directory, so enumerating through `specialistRagFor`
+    // would materialise an empty store for every id it touched.
+    const { listSpecialistRagIds } = await load();
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const parent = path.dirname(specialistRagDir('x'));
+    listSpecialistRagIds();
+    expect(fs.existsSync(parent)).toBe(false);
+  });
+
+  it('ignores a stray file beside the directories', async () => {
+    const { listSpecialistRagIds } = await load();
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const parent = path.dirname(specialistRagDir('x'));
+    fs.mkdirSync(parent, { recursive: true });
+    fs.writeFileSync(path.join(parent, '.DS_Store'), '');
+    fs.mkdirSync(specialistRagDir('coder'), { recursive: true });
+    expect(listSpecialistRagIds()).toEqual(['coder']);
+  });
+});

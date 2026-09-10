@@ -6,7 +6,7 @@ import { resolveProviderAndModel } from '../config.js';
 import { createSubAgentTool } from './subagent.js';
 import { createTaskTool } from './task.js';
 import { toolToAISDK, attachMeta } from '../framework/tools/adapter.js';
-import { captureToolCalls, captureLastToolCall } from './capture-tool-calls.js';
+import { captureToolCalls, captureLastToolCall, metaLookup } from './capture-tool-calls.js';
 import { createSpecialistRunTool } from './specialist-run.js';
 import { printSpecialistStart, printSpecialistEnd } from '../output.js';
 import { debugLog } from '../logger.js';
@@ -390,7 +390,7 @@ export async function dispatchToolWrapper(
               ts: new Date().toISOString(),
               specialistId,
               input,
-              toolCalls: captureToolCalls(result.steps as any[], childTools),
+              toolCalls: captureToolCalls(result.steps as any[], metaLookup(childTools)),
               finalOutput: wrapped.result,
               // Mirrors `error` rather than re-deriving it per label — a ternary
               // per label is an edit here for every new one.

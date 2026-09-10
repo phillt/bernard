@@ -524,6 +524,51 @@ describe('memory ownership', () => {
     },
   );
 
+  it('groups every live record by owner for a USER-facing listing', async () => {
+    // The one reader that crosses the owner fence on purpose, and the reason is
+    // what the fence is for: it stops an AGENT reading another agent's notes. A
+    // person reading `/memory` on their own machine is not an agent, and a
+    // listing that cannot see what is on their disk reported "1 memory" with
+    // three beside it and no way to find out.
+    new MemoryStore().writeMemory('deploy', 'the user’s own');
+    new MemoryStore().asOwner('coder').writeMemory('style-rules', 'two spaces');
+    new MemoryStore().asOwner('coder').writeMemory('build', 'pnpm');
+    new MemoryStore().asOwner('designer').writeMemory('tokens', 'accent only');
+
+    const byOwner = new MemoryStore().listAllByOwner();
+    expect(byOwner.get(null)).toEqual(['deploy']);
+    expect(byOwner.get('coder')?.sort()).toEqual(['build', 'style-rules']);
+    expect(byOwner.get('designer')).toEqual(['tokens']);
+  });
+
+  it('excludes a retired record, as every other listing does', async () => {
+    // Or the listing would disagree with what the model is actually shown.
+    const coder = new MemoryStore().asOwner('coder');
+    coder.writeMemory('kept', 'a');
+    coder.writeMemory('gone', 'b');
+    coder.retire('gone');
+    expect(new MemoryStore().listAllByOwner().get('coder')).toEqual(['kept']);
+  });
+
+  it('refuses to enumerate owners from a NARROWED view', async () => {
+    // The fence is supposed to be a property of the object, and this method
+    // reads past it — so anything holding a view could reach every other
+    // specialist's keys with one call, and every fenced dispatch holds one
+    // (`createTools` is handed a `MemoryStore`). The user's own unowned store is
+    // the only legitimate caller, which is what the two UI sites hold.
+    expect(() => new MemoryStore().asOwner('coder').listAllByOwner()).toThrow();
+    expect(() => new MemoryStore().scoped(['proj-*']).listAllByOwner()).not.toThrow();
+  });
+
+  it('returns keys and never content', async () => {
+    // The whole concession: names and counts are what a user needs, and nothing
+    // here renders a body, so this cannot become a route into one.
+    new MemoryStore().asOwner('coder').writeMemory('secret-note', 'the body');
+    const values = [...new MemoryStore().listAllByOwner().values()].flat();
+    expect(values).toContain('secret-note');
+    expect(values.join(' ')).not.toContain('the body');
+  });
+
   it('lets each agent keep its own record under one key', async () => {
     // Guards the guard above: the refusals must not be "nobody may write a key
     // that exists", which would break every ordinary overwrite.

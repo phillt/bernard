@@ -1,5 +1,7 @@
 import { RAGStore } from './rag.js';
-import { specialistRagDir } from './paths.js';
+import * as path from 'node:path';
+import { listSubdirectories } from './fs-utils.js';
+import { RAG_DIR, specialistRagDir } from './paths.js';
 
 /**
  * The per-specialist RAG stores this process has opened (#501).
@@ -34,6 +36,22 @@ export function specialistRagFor(specialistId: string): RAGStore {
 }
 
 /**
+ * Which specialists actually have a store on disk.
+ *
+ * A `readdir`, deliberately NOT a loop over {@link specialistRagFor}: the
+ * `RAGStore` constructor `mkdirSync`s its directory, so enumerating through the
+ * accessor would materialise an empty store for every id it touched — turning a
+ * listing into a writer. Nothing else in the tree can answer this; `paths.ts`
+ * maps id → path with no inverse.
+ *
+ * Directories only, and `[]` when the parent does not exist — which is every
+ * install where no specialist has yet learned anything.
+ */
+export function listSpecialistRagIds(): string[] {
+  return listSubdirectories(path.join(RAG_DIR, 'specialists'));
+}
+
+/**
  * Drops a cached handle, for `deleteSpecialist`.
  *
  * Without it a long-lived process keeps a store pointed at a directory that has
@@ -61,4 +79,30 @@ export function flushSpecialistRagStores(): void {
       // Best-effort at exit: losing bookkeeping costs one TTL extension.
     }
   }
+}
+
+/**
+ * The sentence that tells a user the other fact stores exist.
+ *
+ * One renderer, because the two surfaces that say it — `bernard facts` and the
+ * REPL's `/rag` — had written it twice on the day it was introduced, in two
+ * spellings, each naming the `--specialist` flag independently. Copies of a
+ * sentence do not fail, they diverge.
+ *
+ * `null` when there are none, which is the suppression rule itself rather than a
+ * second `length` test at each caller — so today's output stays byte-identical
+ * on every install where no specialist has learned anything.
+ *
+ * Takes the ids rather than reading them, so it is a pure renderer a test can
+ * drive directly; {@link listSpecialistRagIds} is the reader beside it.
+ */
+export function specialistFactsNotice(
+  ids: readonly string[],
+): { summary: string; ids: string[]; hint: string } | null {
+  if (ids.length === 0) return null;
+  return {
+    summary: `${ids.length} specialist ${ids.length === 1 ? 'store' : 'stores'} also hold facts:`,
+    ids: [...ids],
+    hint: 'bernard facts --specialist <id>',
+  };
 }

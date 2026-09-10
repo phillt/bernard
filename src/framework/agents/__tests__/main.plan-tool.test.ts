@@ -4,6 +4,7 @@ import type { BernardConfig } from '../../../config.js';
 import type { AgentContext } from '../../context.js';
 import type { PolicyDecision } from '../../../policy/types.js';
 import { toolsOf } from './_mcp-delegation-fixture.js';
+import { makeTestContext } from '../../../__tests__/agent-context.js';
 
 /**
  * `plan` is decoupled from the ReAct enforcement loop: it's available in EVERY
@@ -43,26 +44,17 @@ function baseConfig(coordinatorMode: BernardConfig['coordinatorMode']): BernardC
   } as unknown as BernardConfig;
 }
 
+// The stores this used to declare were a byte-for-byte copy of the fixture's,
+// down to the `noopStore` Proxy — the closest of the twenty-two duplicates
+// #318 counted, in a file that already imported `toolsOf` from beside them.
 function makeCtx(
   coordinatorMode: BernardConfig['coordinatorMode'],
   strategyId?: 'normal' | 'react',
 ): AgentContext {
-  const noopStore = new Proxy({}, { get: () => () => [] });
-  return {
+  return makeTestContext({
     config: baseConfig(coordinatorMode),
-    toolOptions: {},
-    mcp: { tools: {}, serverNames: [] },
-    stores: {
-      memory: { clearScratch: () => {} },
-      routines: noopStore,
-      specialists: noopStore,
-      candidates: noopStore,
-      toolProfiles: { list: () => [] },
-    },
-    provenance: undefined,
-    verification: { record: () => {} },
     policyDecision: strategyId ? ({ strategyId } as PolicyDecision) : undefined,
-  } as unknown as AgentContext;
+  });
 }
 
 const input = { planStore: {}, systemPrompt: '' } as unknown as Parameters<

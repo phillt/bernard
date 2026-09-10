@@ -31,19 +31,10 @@ async function mainApplet(dispatch: ReturnType<typeof vi.fn>) {
   // here instead of silently defaulting.
   const { makeCtx, toolsOf } = await import('./_mcp-delegation-fixture.js');
 
-  // `overrides` is a shallow spread, so `stores` would be REPLACED wholesale —
-  // dropping routines/specialists/candidates and silently changing what
-  // `createTools` builds. Merge onto the fixture's own instead.
-  const base = makeCtx(false);
-  const ctx = {
-    ...base,
-    stores: {
-      ...base.stores,
-      // `main.ts` reads `memory.list` for the tool-profiles prompt; the
-      // fixture's default memory store stops at `clearScratch`.
-      memory: { clearScratch: () => {}, list: () => [] },
-    },
-  } as unknown as AgentContext;
+  // The hand-rolled deep merge this used to carry is gone: `makeCtx` merges
+  // `stores` one level deeper than the rest, and the shared memory double
+  // answers everything `main.ts` reaches for (#318).
+  const ctx = makeCtx(false);
 
   const input = { planStore: {}, systemPrompt: '' } as never;
   const tools = await toolsOf(mainAgentDefinition, ctx, input);

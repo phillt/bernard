@@ -34,6 +34,7 @@ vi.mock('../../../context-message.js', async () => {
 
 import { generateText, type CoreMessage } from 'ai';
 import { runDefinition } from '../run.js';
+import { makeTestContext } from '../../../__tests__/agent-context.js';
 import { DefinitionRegistry, definitions } from '../registry.js';
 import type { AgentDefinition } from '../types.js';
 import { NormalStrategy } from '../../strategies/normal.js';
@@ -67,26 +68,14 @@ function makeConfig(): BernardConfig {
   } as BernardConfig;
 }
 
-// `asOwner` is reached for every dispatch that names a record (the
-// memory-ownership fence), so the double has to answer it. Returning itself
-// keeps these tests about what they are about — the profile — while still
-// exercising the real call.
-const memoryDouble: { fake: boolean; asOwner: () => unknown } = {
-  fake: true,
-  asOwner: () => memoryDouble,
-};
-
+// The shared double answers the whole narrowing surface — `asOwner` for the
+// ownership fence, `scoped` for the three scope axes — which is what stops the
+// NEXT such field breaking this file (#318). It broke on `asOwner` and
+// `fence.test.ts` broke on `scoped`, on disjoint file sets, so neither repair
+// converged. The `mcp` bag here also omitted `serverTools` and `resolveAlias`,
+// both required on `AgentContextMCP`: a shape no real dispatch can be handed.
 function makeCtx(): AgentContext {
-  return {
-    config: makeConfig(),
-    // `asOwner` is reached for every dispatch that names a record (#500's
-    // memory-ownership fence), so the double has to answer it. Returning itself
-    // keeps these tests about what they are about — the profile — while still
-    // exercising the real call.
-    stores: { memory: memoryDouble } as any,
-    mcp: { tools: {}, serverNames: [] },
-    toolOptions: {} as any,
-  };
+  return makeTestContext({ config: makeConfig() });
 }
 
 interface FakeInput {

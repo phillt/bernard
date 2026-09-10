@@ -1,4 +1,5 @@
 import { readToolMeta } from '../framework/tools/adapter.js';
+import type { ToolMeta } from '../framework/tools/types.js';
 import { redactArgs, REDACTED } from '../framework/tools/redact.js';
 
 /**
@@ -74,15 +75,37 @@ function previewOfResult(value: unknown): string {
 }
 
 /**
+ * How a capture finds a tool's redaction metadata.
+ *
+ * A lookup rather than the registry itself, so nothing has to hand a *registry*
+ * around to get two booleans off `ToolMeta`. `RunDefinitionResult` publishes one
+ * of these; before it, the persona path was given the un-augmented registry —
+ * every tool's `execute` with the deny, write-scope and confirm gates stripped
+ * off — on the public result of every dispatch in the product, to read
+ * `sensitiveArgs`. Same reasoning as the `toolBytes: () => number` accessor
+ * beside it: publish the answer, not the thing that can answer.
+ */
+export type ToolMetaLookup = (toolName: string) => ToolMeta | undefined;
+
+/** A lookup over a registry, for the callers that hold one. */
+export function metaLookup(registry: Record<string, unknown>): ToolMetaLookup {
+  return (name) => readToolMeta(registry[name]);
+}
+
+/**
  * Builds a compact record of tool calls for the reasoning log.
  *
- * When a `toolRegistry` is provided, each call's args and result preview are
- * scrubbed against the tool's `ToolMeta.sensitiveArgs` / `sensitiveResult`
- * fields before persistence.
+ * Each call's args and result preview are scrubbed against the tool's
+ * `ToolMeta.sensitiveArgs` / `sensitiveResult` before persistence.
  */
 export function captureToolCalls(
   steps: any[] | undefined,
-  toolRegistry?: Record<string, unknown>,
+  // REQUIRED, and that is the fix rather than passing it at one more call site.
+  // Optional, it made an UNREDACTED log the default: `specialist-run.ts` omitted
+  // it and a persona's `shell` command went to disk verbatim, which since #501
+  // is read back and fed to a model. Required, a third dispatch path that
+  // forgets is a compile error instead of a silent privacy leak.
+  metaFor: ToolMetaLookup,
 ): Array<{
   tool: string;
   args: unknown;
@@ -96,7 +119,7 @@ export function captureToolCalls(
     for (let i = 0; i < calls.length; i++) {
       const tc = calls[i];
       const tr = results[i];
-      const meta = toolRegistry ? readToolMeta(toolRegistry[tc.toolName]) : undefined;
+      const meta = metaFor(tc.toolName);
       out.push({
         tool: tc.toolName,
         args: meta ? redactArgs(tc.args, meta.sensitiveArgs) : tc.args,

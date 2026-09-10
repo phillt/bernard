@@ -3,6 +3,7 @@ import { EMBEDDING_DIMENSIONS, EMBEDDING_MODEL_ID } from '../embeddings.js';
 import * as path from 'node:path';
 import { knowledgeDir } from '../paths.js';
 import { isValidLibraryId } from './ids.js';
+import { listSubdirectories } from '../fs-utils.js';
 import { knowledgeStoreFor, type KnowledgeStore, type LibraryStamp } from './store.js';
 
 /**
@@ -68,17 +69,9 @@ export class KnowledgeCorpus {
    * fail because a directory does not exist yet.
    */
   listIds(): string[] {
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(knowledgeDir(''), { withFileTypes: true });
-    } catch {
-      return [];
-    }
-    return entries
-      .filter((e) => e.isDirectory() && isValidLibraryId(e.name))
-      .map((e) => e.name)
-      .filter((id) => this.inScope(id) && fs.existsSync(path.join(knowledgeDir(id), 'library.db')))
-      .sort();
+    return listSubdirectories(knowledgeDir(''))
+      .filter(isValidLibraryId)
+      .filter((id) => this.inScope(id) && fs.existsSync(path.join(knowledgeDir(id), 'library.db')));
   }
 
   inScope(id: string): boolean {

@@ -21,7 +21,21 @@ const mockConfig = vi.hoisted(() => ({
 }));
 
 vi.mock('./rag.js', () => ({
-  RAGStore: vi.fn(() => mockRAGStore),
+  // `storageFile` derives from the `dir` it was constructed with, because that
+  // is the property under test for `clear-facts`: it must name the store it is
+  // about to destroy, not the main one.
+  RAGStore: vi.fn((cfg?: { dir?: string }) => ({
+    ...mockRAGStore,
+    storageFile: `${cfg?.dir ?? '/main/rag'}/memories.json`,
+  })),
+}));
+
+const mockSpecialistIds = vi.hoisted(() => ({ ids: [] as string[] }));
+vi.mock('./specialist-rag.js', async (orig) => ({
+  // `specialistFactsNotice` comes from the real module over the mocked id list,
+  // so the sentence under test is the one users see rather than a restatement.
+  ...(await orig<Record<string, unknown>>()),
+  listSpecialistRagIds: () => mockSpecialistIds.ids,
 }));
 
 vi.mock('./output.js', () => mockOutput);
@@ -69,6 +83,7 @@ vi.mock('node:fs', () => ({
 const fs = await import('node:fs');
 
 import { factsList, factsSearch, parseSelection, clearFacts } from './facts-cli.js';
+import { RAGStore } from './rag.js';
 
 afterAll(() => {
   vi.restoreAllMocks();
@@ -373,5 +388,99 @@ describe('clearFacts', () => {
     expect(msgs.some((m) => m.includes('10 tool-usage'))).toBe(true);
     expect(msgs.some((m) => m.includes('5 user-preferences'))).toBe(true);
     expect(msgs.some((m) => m.includes('RAG memory is now empty'))).toBe(true);
+  });
+});
+
+/**
+ * Each specialist has had its own store since #501, and these commands had no
+ * flag at all — so the one command that answers "what have you learned?" could
+ * see only the user's own store and said nothing about the others.
+ */
+describe('the --specialist flag', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockConfig.loadConfig.mockReturnValue({ ragEnabled: true });
+    mockRAGStore.listMemories.mockReturnValue([]);
+    mockRAGStore.count.mockReturnValue(0);
+    mockRAGStore.countByDomain.mockReturnValue({});
+    mockSpecialistIds.ids = [];
+    promptAnswer = '';
+    confirmAnswer = 'y';
+  });
+
+  function dirOfLastStore(): string | undefined {
+    const last = vi.mocked(RAGStore).mock.calls.at(-1)?.[0] as { dir?: string } | undefined;
+    return last?.dir;
+  }
+
+  it('opens the specialist store rather than the user`s', async () => {
+    mockSpecialistIds.ids = ['coder'];
+    await factsList('coder');
+    expect(dirOfLastStore()).toContain('specialists');
+    expect(dirOfLastStore()).toContain('coder');
+  });
+
+  it('opens the user`s store when no id is given', async () => {
+    // Byte-identical to before: `new RAGStore()` with no argument.
+    await factsList();
+    expect(dirOfLastStore()).toBeUndefined();
+  });
+
+  it('refuses an unknown id and names the ones that exist', async () => {
+    // Thrown rather than returned as a message: `index.ts` already wraps both
+    // commands in a `try` that prints it, so the three hand-written narrowings
+    // the first cut had bought nothing.
+    mockSpecialistIds.ids = ['coder', 'designer'];
+    await expect(factsList('typo')).rejects.toThrow(/coder, designer/);
+    // Nothing was opened, so nothing could be deleted from the wrong store.
+    expect(vi.mocked(RAGStore)).not.toHaveBeenCalled();
+  });
+
+  it('says so plainly when no specialist has learned anything yet', async () => {
+    await expect(factsList('coder')).rejects.toThrow(/No specialist has its own facts yet/);
+  });
+
+  it('names the other stores on the user`s own listing', async () => {
+    mockSpecialistIds.ids = ['coder', 'designer'];
+    await factsList();
+    expect(infoMessages().join('\n')).toContain('bernard facts --specialist <id>');
+    expect(infoMessages().join('\n')).toContain('coder, designer');
+  });
+
+  it('names them after a SEARCH that found something, too', async () => {
+    // The divergence the `string | null` footer had already produced: the search
+    // path printed it only when there were zero results, so a user who searched
+    // and got hits was never told the other stores existed.
+    mockSpecialistIds.ids = ['coder'];
+    mockRAGStore.searchWithIds.mockResolvedValue([
+      { id: '1', fact: 'a fact', similarity: 0.9, domain: 'general' },
+    ]);
+    await factsSearch('anything');
+    expect(infoMessages().join('\n')).toContain('bernard facts --specialist <id>');
+  });
+
+  it('prints nothing extra when there are no other stores', async () => {
+    // Today's output, unchanged — which is every install until a specialist runs.
+    await factsList();
+    expect(infoMessages().join('\n')).not.toContain('--specialist');
+  });
+
+  it('does not advertise siblings inside a specialist`s own listing', async () => {
+    mockSpecialistIds.ids = ['coder', 'designer'];
+    await factsList('coder');
+    expect(infoMessages().join('\n')).not.toContain('--specialist <id>');
+  });
+
+  it('clear-facts names the store it is about to destroy, not the main one', async () => {
+    // The one screen whose whole job is to say what is about to go. It printed
+    // the imported `MEMORIES_FILE` unconditionally, which became the wrong path
+    // the moment a flag existed.
+    mockSpecialistIds.ids = ['coder'];
+    mockRAGStore.count.mockReturnValue(3);
+    mockRAGStore.countByDomain.mockReturnValue({ general: 3 });
+    clearConfirmAnswer = '';
+    await clearFacts('coder');
+    const storage = infoMessages().find((m) => m.includes('Storage:'));
+    expect(storage).toContain('coder');
   });
 });

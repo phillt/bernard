@@ -548,6 +548,67 @@ export class MemoryStore {
     return out;
   }
 
+  /**
+   * Every live key on disk grouped by owner, for a surface the USER is looking
+   * at. `null` keys the user's own unowned set.
+   *
+   * **The one reader that crosses the owner fence on purpose**, and the reason
+   * is what the fence is for: it exists so an AGENT cannot read another agent's
+   * notes. A person reading `/memory` on their own machine is not an agent, and
+   * a listing that cannot show what is on their disk is not a listing — it
+   * reported "3 memories" while nine sat beside it, with no way to find out.
+   *
+   * Keys only, never content. That is the whole concession: the count and the
+   * names are what a user needs to understand their store, and nothing here
+   * renders a note's body, so this cannot become a route into one.
+   *
+   * Retired and superseded records are excluded, as everywhere else — they cost
+   * no context and showing them would make the listing disagree with what the
+   * model sees.
+   */
+  listAllByOwner(): Map<string | null, string[]> {
+    // **A narrowed view may not call this.** The fence is supposed to be a
+    // property of the object — #511's "unrepresentable rather than remembered" —
+    // and a method that reads past it would make one half of that breakable by
+    // one call from anything holding a view, which is every fenced dispatch
+    // (`createTools` is handed a `MemoryStore`). The user's own unowned store is
+    // the only caller there can be, which is exactly what the two UI call sites
+    // hold.
+    if (this.owner !== null) {
+      throw new MemoryScopeError('(all owners)', this.scope ?? []);
+    }
+    const out = new Map<string | null, string[]>();
+    for (const { key, parsed } of this.rawEntriesOnDisk()) {
+      if (isRetired(parsed)) continue;
+      const owner = parsed.owner ?? null;
+      const list = out.get(owner);
+      if (list) list.push(key);
+      else out.set(owner, [key]);
+    }
+    return out;
+  }
+
+  /**
+   * Every record on disk with its parse, ignoring BOTH fences.
+   *
+   * One traversal for the two readers that have to see past ownership —
+   * {@link listAllByOwner} and {@link deleteByOwner}. `liveEntries` is the
+   * owner-fenced variant of the same walk and stays separate, because it goes
+   * through `load` precisely so the fence applies.
+   *
+   * A fourth retirement state is the thing to keep in mind here: `isRetired`
+   * exists so that test is written once, and three copies of this loop is three
+   * places to forget to call it.
+   */
+  private rawEntriesOnDisk(): Array<{ key: string; parsed: ParsedMemoryFile }> {
+    const out: Array<{ key: string; parsed: ParsedMemoryFile }> = [];
+    for (const key of this.allKeysOnDisk()) {
+      const parsed = this.loadRaw(key)?.parsed;
+      if (parsed) out.push({ key, parsed });
+    }
+    return out;
+  }
+
   /** Every key on disk, including superseded ones. Applies the key fence. */
   listAllMemory(): string[] {
     const keys = this.allKeysOnDisk();
@@ -803,8 +864,8 @@ export class MemoryStore {
     // `unlinkKey` returning `false` rather than throwing is what keeps this
     // best-effort per file: a sweep the caller cannot resume must not stop
     // half-way, which is `deleteApplet`'s rule for its bound-specialist row.
-    for (const key of this.allKeysOnDisk()) {
-      if (this.loadRaw(key)?.parsed.owner !== owner) continue;
+    for (const { key, parsed } of this.rawEntriesOnDisk()) {
+      if (parsed.owner !== owner) continue;
       if (this.unlinkKey(key)) deleted++;
     }
     return deleted;

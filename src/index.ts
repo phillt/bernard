@@ -1611,12 +1611,16 @@ program
 program
   .command('facts [query]')
   .description('Browse and manage RAG facts')
-  .action(async (query?: string) => {
+  // Each specialist has had its own store since #501, and these commands had no
+  // flag at all — so the one command that answers "what have you learned?"
+  // could not see most of it, and said nothing about the stores it was skipping.
+  .option('-s, --specialist <id>', "Read that specialist's own facts instead of yours")
+  .action(async (query: string | undefined, opts: { specialist?: string }) => {
     try {
       if (query) {
-        await factsSearch(query);
+        await factsSearch(query, opts.specialist);
       } else {
-        await factsList();
+        await factsList(opts.specialist);
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -1628,9 +1632,10 @@ program
 program
   .command('clear-facts')
   .description('Permanently delete all stored RAG facts')
-  .action(async () => {
+  .option('-s, --specialist <id>', "Clear that specialist's own facts instead of yours")
+  .action(async (opts: { specialist?: string }) => {
     try {
-      await clearFacts();
+      await clearFacts(opts.specialist);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       printError(message);

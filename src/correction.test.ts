@@ -3,6 +3,7 @@ import { runCorrectionAgent, extractOutcome } from './correction.js';
 import type { RunCorrectionDeps } from './correction.js';
 import type { CorrectionCandidate } from './correction-candidates.js';
 import type { AgentContext } from './framework/context.js';
+import { makeTestContext } from './__tests__/agent-context.js';
 
 vi.mock('./logger.js', () => ({ debugLog: vi.fn() }));
 vi.mock('./output.js', () => ({ printInfo: vi.fn() }));
@@ -31,19 +32,11 @@ function createMockDeps(overrides?: Partial<RunCorrectionDeps>): MockDeps {
     listPending: vi.fn(() => [] as CorrectionCandidate[]),
     update: vi.fn(),
   };
-  const ctx: AgentContext = {
-    config: {} as any,
-    toolOptions: {} as any,
-    stores: {
-      memory: {} as any,
-      specialists: specialistStore as any,
-      correction: correctionStore as any,
-      routines: {} as any,
-      candidates: {} as any,
-      toolProfiles: {} as any,
-    },
-    mcp: { tools: {}, serverNames: [] },
-  };
+  // Over the shared base (#318): four of the six stores here were `{} as any`,
+  // and the `mcp` bag omitted two fields `AgentContextMCP` requires.
+  const ctx: AgentContext = makeTestContext({
+    stores: { specialists: specialistStore, correction: correctionStore } as never,
+  });
   return {
     ctx,
     ...overrides,
