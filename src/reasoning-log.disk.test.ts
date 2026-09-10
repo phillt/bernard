@@ -131,3 +131,37 @@ describe('recording a dispatch', () => {
     expect(String(item.payload.finalOutput).length).toBeLessThan(3000);
   });
 });
+
+describe('every field is bounded, count included', () => {
+  it('caps how many tool calls one entry keeps, and says how many it dropped', async () => {
+    // The field the file's own "a count budget is only honest if EVERY field is
+    // capped" rule had missed. `input`, `finalOutput` and each `args` were
+    // bounded; `toolCalls.length` was not, against a 150-step ceiling — which is
+    // what let one dispatch render past the 12,000-char recall budget and starve
+    // its own queue.
+    const { recordDispatch, readReasoningLog } = await load();
+    recordDispatch(
+      at(Date.now(), {
+        toolCalls: Array.from({ length: 40 }, (_, i) => ({
+          tool: `t${i}`,
+          args: { i },
+          resultPreview: 'ok',
+        })),
+      }),
+    );
+    const [entry] = readReasoningLog(1);
+    expect(entry.toolCalls).toHaveLength(12);
+    expect(entry.droppedToolCalls).toBe(28);
+    // The TAIL is kept: this log exists so a failure can be inspected, and the
+    // call that failed is the last one.
+    expect(entry.toolCalls.at(-1)?.tool).toBe('t39');
+  });
+
+  it('says nothing when nothing was dropped', async () => {
+    // An absent marker has to mean complete, or a reader cannot tell a short
+    // dispatch from a clipped one.
+    const { recordDispatch, readReasoningLog } = await load();
+    recordDispatch(at(Date.now()));
+    expect(readReasoningLog(1)[0].droppedToolCalls).toBeUndefined();
+  });
+});

@@ -163,6 +163,22 @@ async function runSpecialistRecall(config: BernardConfig): Promise<void> {
       // are acknowledged. The marker could not express that: it marked the
       // specialist fully processed and the dropped runs were never seen again.
       const { text, used } = renderTranscript(runs, RECALL_TRANSCRIPT_MAX);
+      if (used.length === 0) {
+        // Every run was individually over budget, so there is nothing to extract
+        // FROM — which is a different thing from extracting nothing. Calling the
+        // model here spends a real cheap-tier request on a zero-length transcript
+        // and then writes whatever it invents, every session, forever.
+        //
+        // These are counted as attempted, because they were: rendering is the
+        // attempt that failed, and it fails the same way every time. That is what
+        // parks them after `maxAttempts` instead of leaving them at the head of
+        // this specialist's queue blocking the runs behind them.
+        for (const item of queue.markAttempt(runs)) {
+          queue.retry(item.id, 'run exceeds the recall transcript budget');
+        }
+        debugLog('specialist-recall:oversized', { specialistId, runs: runs.length });
+        return;
+      }
       // The attempt is counted here, against `used` alone, and BEFORE the model
       // call — durable whether or not this returns, which is what stops an item
       // that kills the worker being retried forever. The runs the budget did not
@@ -344,6 +360,12 @@ async function seedSpecialistRag(
  * most recent. What a specialist did last session is the part worth learning
  * from. Returning the items it used, not just the text, is what lets the caller
  * acknowledge exactly the runs the model actually saw.
+ *
+ * `used` can be empty while `runs` is not — every run individually over budget —
+ * and a caller MUST treat that as "nothing to extract from" rather than as
+ * "extract from nothing". `RECALL_TRANSCRIPT_MAX` against `TOOL_CALLS_MAX` makes
+ * it unreachable for an entry this build wrote, but entries already on the queue
+ * were written by a build with no call cap at all.
  */
 function renderTranscript(
   runs: ReadonlyArray<QueueItem<ReasoningLogEntry>>,
@@ -354,7 +376,16 @@ function renderTranscript(
   let chars = 0;
   for (let i = runs.length - 1; i >= 0; i--) {
     const rendered = renderRun(runs[i].payload);
-    if (chars + rendered.length > budget) break;
+    // `continue`, not `break`. On the FIRST iteration `chars` is 0, so a single
+    // run bigger than the whole budget used to make this return nothing at all —
+    // and with the caller acknowledging only what it rendered, that run then sat
+    // at the head of its specialist's queue forever: no attempt counted, so the
+    // park guard never fired, one real model call burned per session on an empty
+    // transcript, and every older run behind it blocked until `sweep` dropped it
+    // unprocessed at seven days. The same loss the marker had, which this is
+    // supposed to have fixed. Skipping it lets the runs behind it through, and
+    // the caller handles the all-oversized case explicitly.
+    if (chars + rendered.length > budget) continue;
     out.push(rendered);
     used.push(runs[i]);
     chars += rendered.length + 2;

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { useTempHome } from './__tests__/temp-home.js';
@@ -123,13 +123,22 @@ describe('claim', () => {
     expect(parked()).toHaveLength(1);
   });
 
-  it('ignores a half-written temp file in its own directory', () => {
-    // Load-bearing: `atomicWriteFileSync` writes `<name>.tmp` in the directory
-    // being read. A looser predicate reads half-written items.
+  it('leaves a half-written temp file in its own directory completely alone', () => {
+    // Load-bearing: the atomic writers put `<name>.tmp` in the directory being
+    // read, so a looser predicate reads a half-written item.
+    //
+    // The `claim` assertion alone does NOT pin that, which is why the other two
+    // are here: loosening the predicate to `!name.startsWith('.')` still returns
+    // `['a']` — the temp file is listed, fails to parse, and is quietly PARKED as
+    // "a payload this build cannot read", which is the failure dressed as the
+    // mechanism working. What catches it is that nothing happened to the file.
     const q = make();
     q.enqueue({ name: 'a' });
-    fs.writeFileSync(path.join(dirOf(), 'x.json.tmp'), '{"not":');
+    const tmp = path.join(dirOf(), 'x.json.tmp');
+    fs.writeFileSync(tmp, '{"not":');
     expect(q.claim().map((i) => i.payload.name)).toEqual(['a']);
+    expect(parked()).toHaveLength(0);
+    expect(fs.readFileSync(tmp, 'utf-8')).toBe('{"not":');
   });
 });
 
@@ -329,14 +338,99 @@ describe('retention applies itself', () => {
     expect(parked()).toHaveLength(1);
   });
 
-  it('sweeps only once per instance', () => {
+  it('does not re-sweep on every call', () => {
+    // Needs a second sweep that WOULD do something observable, or the assertion
+    // is vacuous: a fresh item makes every later sweep a no-op by construction,
+    // so the predecessor of this test stayed green with the latch deleted
+    // outright. Here the backdated item arrives AFTER the first sweep, so it is
+    // still pending iff the latch held.
     const q = make({ maxAgeMs: 1000 });
     q.enqueue({ name: 'a' });
-    const before = fs.statSync(path.join(dirOf(), names()[0])).mtimeMs;
-    for (let i = 0; i < 3; i++) q.peek();
-    // A second sweep would re-walk and could only churn; nothing moved.
-    expect(fs.statSync(path.join(dirOf(), names()[0])).mtimeMs).toBe(before);
+    q.peek();
+
+    const old = `${String(Date.now() - 60_000).padStart(14, '0')}-000000-bbb.json`;
+    fs.writeFileSync(
+      path.join(dirOf(), old),
+      JSON.stringify({
+        id: old.replace('.json', ''),
+        enqueuedAt: new Date(Date.now() - 60_000).toISOString(),
+        attempts: 0,
+        payload: { name: 'stale' },
+      }),
+    );
+    q.peek();
     expect(parked()).toHaveLength(0);
+    // A fresh instance has not swept yet, so it does — which is what proves the
+    // item really was sweepable and the assertion above meant something.
+    make({ maxAgeMs: 1000 }).peek();
+    expect(parked()).toHaveLength(1);
+  });
+
+  it('re-arms, so a process that stays up keeps applying retention', () => {
+    // Once per INSTANCE is wrong for the processes that hold one: `recallQueue()`
+    // and `correctionQueue()` memoise at module scope, and the cron daemon and the
+    // applet host run for days. For that whole time nothing aged pending items
+    // out and — the part that grows — nothing pruned `parked/`.
+    vi.useFakeTimers();
+    try {
+      const q = make({ maxAgeMs: 1000 });
+      // Arms the latch on an empty directory, so the only thing the later sweeps
+      // can act on is the backdated item below — advancing the clock would
+      // otherwise age an ordinary `enqueue` too and the count would not say which
+      // sweep did what.
+      q.peek();
+
+      const stale = `${String(Date.now() - 60_000).padStart(14, '0')}-000000-ccc.json`;
+      fs.mkdirSync(dirOf(), { recursive: true });
+      fs.writeFileSync(
+        path.join(dirOf(), stale),
+        JSON.stringify({
+          id: stale.replace('.json', ''),
+          enqueuedAt: new Date(Date.now() - 60_000).toISOString(),
+          attempts: 0,
+          payload: { name: 'stale' },
+        }),
+      );
+      q.peek();
+      expect(parked()).toHaveLength(0);
+
+      vi.advanceTimersByTime(61 * 60 * 1000);
+      q.peek();
+      expect(parked()).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('sweeps from pending(), which is the only call a drain may make', () => {
+    // `runCorrectionAgent` asks `pending()` and returns early on zero, so a queue
+    // whose pending set is empty while its `parked/` is full would otherwise never
+    // reach a sweep on any path, in any process.
+    const stale = `${String(Date.now() - 60_000).padStart(14, '0')}-000000-ddd.json`;
+    fs.mkdirSync(dirOf(), { recursive: true });
+    fs.writeFileSync(
+      path.join(dirOf(), stale),
+      JSON.stringify({
+        id: stale.replace('.json', ''),
+        enqueuedAt: new Date(Date.now() - 60_000).toISOString(),
+        attempts: 0,
+        payload: { name: 'stale' },
+      }),
+    );
+    expect(make({ maxAgeMs: 1000 }).pending()).toBe(0);
+    expect(parked()).toHaveLength(1);
+  });
+
+  it('prunes a temp file nothing came back for', () => {
+    // `isItemFile` keeps `.tmp` out of `count()` and out of the age pass, so
+    // without this the directory this module promises to bound has a second way
+    // to grow that "by age and by count" does not cover.
+    const q = make({ maxAgeMs: 1000 });
+    q.enqueue({ name: 'a' });
+    const orphan = path.join(dirOf(), 'something.json.1234.abcd.tmp');
+    fs.writeFileSync(orphan, '{"half":');
+    expect(q.sweep(Date.now() + 5000).prunedTemp).toBe(1);
+    expect(fs.existsSync(orphan)).toBe(false);
   });
 
   it('ages a pending item by its NAME, not by opening it', () => {
@@ -383,9 +477,9 @@ describe('retention applies itself', () => {
     const q = make({ maxAgeMs: 1000 });
     q.enqueue({ name: 'a' });
     const at = Date.now() + 999_999;
-    expect(q.sweep(at)).toEqual({ parked: 1, prunedParked: 0 });
+    expect(q.sweep(at)).toMatchObject({ parked: 1, prunedParked: 0 });
     const [listed] = q.listParked();
-    expect(Date.parse(listed.parkedAt)).toBeCloseTo(at, -4);
+    expect(Date.parse(String(listed.parkedAt))).toBeCloseTo(at, -4);
   });
 });
 

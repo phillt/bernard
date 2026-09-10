@@ -10,6 +10,20 @@ vi.mock('node:fs', () => ({
   renameSync: vi.fn(),
 }));
 
+/**
+ * Stubbed so the drop path is reachable: with `node:fs` mocked, a real queue's
+ * `enqueue` always succeeds here, and the one thing worth asserting about the
+ * producer is what it does when the queue refuses.
+ */
+const mockEnqueue = vi.fn<[unknown], string | null>(() => 'id');
+vi.mock('./recall-queue.js', () => ({ recallQueue: () => ({ enqueue: mockEnqueue }) }));
+
+const mockDebugLog = vi.fn();
+vi.mock('./logger.js', () => ({
+  debugLog: (...a: unknown[]) => mockDebugLog(...a),
+  isDebugEnabled: () => false,
+}));
+
 const fs = await import('node:fs');
 
 // Re-import the module after mocks are in place so logsDirReady is reset each suite.
@@ -40,7 +54,32 @@ describe('recordDispatch', () => {
     // is re-established here rather than left to the factory.
     vi.resetAllMocks();
     vi.mocked(fs.existsSync).mockReturnValue(false);
+    mockEnqueue.mockReturnValue('id');
     vi.resetModules();
+  });
+
+  it('says so when the queue refuses the dispatch', async () => {
+    // The producer half is at-most-once: `enqueue` returns `null` at the cap or on
+    // a write failure, and there is nothing actionable to do here — but dropping
+    // it silently makes "the set of work is exactly the files present" quietly
+    // mean "except the ones we declined to write", with the NEWEST dispatches
+    // lost, since `enqueue` refuses rather than evicts. The predecessor had a
+    // signal for exactly this and the rewrite replaced it with an ignored return.
+    mockEnqueue.mockReturnValue(null);
+    const { recordDispatch } = await import('./reasoning-log.js');
+    recordDispatch(makeEntry());
+    expect(mockDebugLog).toHaveBeenCalledWith('specialist-recall:enqueue-dropped', {
+      specialistId: 'shell-wrapper',
+    });
+  });
+
+  it('stays quiet when the queue took it', async () => {
+    const { recordDispatch } = await import('./reasoning-log.js');
+    recordDispatch(makeEntry());
+    expect(mockDebugLog).not.toHaveBeenCalledWith(
+      'specialist-recall:enqueue-dropped',
+      expect.anything(),
+    );
   });
 
   it('creates LOGS_DIR on first call', async () => {

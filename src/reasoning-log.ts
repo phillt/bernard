@@ -1,6 +1,7 @@
 import { TOOL_WRAPPER_LOG } from './paths.js';
 import { appendJsonlBounded, readJsonlTail, rotateJsonlByCount } from './jsonl.js';
 import { truncate } from './text.js';
+import { debugLog } from './logger.js';
 import { boundValue } from './framework/tools/redact.js';
 import { recallQueue } from './recall-queue.js';
 import type { ToolErrorType } from './framework/tools/types.js';
@@ -18,6 +19,12 @@ export interface ReasoningLogEntry {
   specialistId: string;
   input: string;
   toolCalls: Array<{ tool: string; args: unknown; resultPreview: string }>;
+  /**
+   * How many earlier tool calls were dropped to fit {@link TOOL_CALLS_MAX}.
+   *
+   * Absent when nothing was dropped, so an entry that says nothing is complete.
+   */
+  droppedToolCalls?: number;
   finalOutput: unknown;
   /**
    * `'ok'`, or the `WrapperResult.error` label when there is one — normally a
@@ -53,6 +60,22 @@ const REASONING_LOG_KEEP = 2000;
 const FIELD_MAX = 2000;
 
 /**
+ * How many tool calls one entry keeps.
+ *
+ * The file's own rule is that a count budget is only honest if EVERY field is
+ * capped, and this was the field it missed: `input`, `finalOutput` and each
+ * `args` are bounded, while `toolCalls.length` was not — so one entry is
+ * `2 × FIELD_MAX` plus ~540 characters per call, unbounded, against a 150-step
+ * ceiling. That is what let a single dispatch render past
+ * `RECALL_TRANSCRIPT_MAX` (12,000) at roughly 25 calls and starve its own queue.
+ *
+ * 12 keeps a maximal entry near 10.6k, so one always fits the recall budget with
+ * room for the header. The **tail** is kept rather than the head: this log exists
+ * so a failure can be inspected, and the call that failed is the last one.
+ */
+const TOOL_CALLS_MAX = 12;
+
+/**
  * The same entry with every unbounded field capped.
  *
  * `boundValue` for the two fields of unknown shape — `finalOutput` is a whole
@@ -61,11 +84,19 @@ const FIELD_MAX = 2000;
  * as a marked string. `truncate` for the three that are declared `string`.
  */
 function bounded(entry: ReasoningLogEntry): ReasoningLogEntry {
+  const calls = entry.toolCalls.slice(-TOOL_CALLS_MAX).map((c) => ({
+    ...c,
+    args: boundValue(c.args, FIELD_MAX),
+  }));
+  const dropped = entry.toolCalls.length - calls.length;
   return {
     ...entry,
     input: truncate(entry.input, FIELD_MAX),
     finalOutput: boundValue(entry.finalOutput, FIELD_MAX),
-    toolCalls: entry.toolCalls.map((c) => ({ ...c, args: boundValue(c.args, FIELD_MAX) })),
+    toolCalls: calls,
+    // Marked rather than silently short, the `truncateResult` rule: a clipped
+    // list still reads as the whole story otherwise.
+    ...(dropped > 0 ? { droppedToolCalls: dropped } : {}),
     ...(entry.error ? { error: truncate(entry.error, FIELD_MAX) } : {}),
     ...(entry.reasoning ? { reasoning: entry.reasoning.map((r) => truncate(r, FIELD_MAX)) } : {}),
   };
@@ -101,7 +132,17 @@ function bounded(entry: ReasoningLogEntry): ReasoningLogEntry {
 export function recordDispatch(entry: ReasoningLogEntry): void {
   const capped = bounded(entry);
   appendJsonlBounded(TOOL_WRAPPER_LOG, capped, REASONING_LOG_KEEP);
-  recallQueue().enqueue(capped);
+  // **The producer half is at-most-once, and it says so.** `enqueue` returns
+  // `null` when the queue is at its cap or the write failed, and there is nothing
+  // actionable to do here — but dropping it silently makes the queue's "the set of
+  // work is exactly the files present" quietly mean "except the ones we declined
+  // to write", with the NEWEST dispatches being the ones lost, since `enqueue`
+  // refuses rather than evicts. The predecessor had a signal for exactly this
+  // (`specialist-recall:window-truncated`) and this replaced it with an ignored
+  // return value.
+  if (recallQueue().enqueue(capped) === null) {
+    debugLog('specialist-recall:enqueue-dropped', { specialistId: capped.specialistId });
+  }
 }
 
 /** Reads and parses the reasoning log, returning the most recent `limit` entries. */

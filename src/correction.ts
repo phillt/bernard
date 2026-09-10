@@ -91,6 +91,19 @@ export interface RunCorrectionDeps {
  * orchestrator run would double-execute any side-effects (shell, file edits,
  * MCP writes). The shape-check trades one risk (orchestrator-verifiable
  * fabrication) for another (duplicate side-effects) and we pick the former.
+ *
+ * **That bound is no longer exactly one, and the change is deliberate (#564).**
+ * Every retry branch below re-dispatches `tool_wrapper_run` against the same
+ * specialist with the same input, and the agent runs its proposed call for real
+ * each time — so an unparseable reply from a `shell` or `file_write` wrapper now
+ * executes up to the queue's `maxAttempts` (3). The predecessor's alternative was
+ * worse rather than cheaper: it wrote a provider timeout or an exhausted pool down
+ * as `invalid` and never looked at the candidate again, recording an environmental
+ * failure as a verdict on the work. A transient failure retried at most twice more
+ * beats learning nothing from the candidate forever; lowering the exposure means
+ * telling "the dispatch never ran" from "it ran and answered badly", which nothing
+ * on this path can do. Stated here rather than left for a reader to derive from
+ * three separate `retry` calls.
  */
 export async function runCorrectionAgent(deps: RunCorrectionDeps): Promise<{
   processed: number;
@@ -140,6 +153,10 @@ export async function runCorrectionAgent(deps: RunCorrectionDeps): Promise<{
         // RETRIED, where this used to be written off as `invalid`. An
         // unparseable reply is the model having a bad turn, not a verdict on the
         // candidate — and the queue parks it after a bounded number of those.
+        //
+        // The agent DID already run its proposed call to get here, so this re-runs
+        // it. See the side-effect note on `runCorrectionAgent` for why that trade
+        // is taken rather than the predecessor's "burn the candidate" one.
         queue.retry(item.id, 'Correction agent returned nothing usable.');
         continue;
       }

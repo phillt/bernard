@@ -860,14 +860,23 @@ describe('rag-worker (runWorkerForFile)', () => {
       // replaying 52 real dispatches gave 52 read to acknowledge 19, then 33 for
       // 13, then 17 parked unread. An attempt means tried, so the survivors must
       // come back at zero however many sessions run.
-      const many = Array.from({ length: 60 }, (_, i) =>
+      //
+      // 120 runs against a budget that fits roughly 20, so three sessions cannot
+      // drain it — otherwise `queued()` is 0 and every assertion below holds
+      // vacuously over an empty list.
+      const many = Array.from({ length: 120 }, (_, i) =>
         Object.assign(run('coder'), { input: `run-${i}`, finalOutput: 'x'.repeat(400) }),
       );
       enqueue(...many);
       mockExtractNotes.mockResolvedValue(notesOk([]));
       write({ provider: 'anthropic', model: 'm', specialistRecall: true });
 
-      for (let session = 0; session < 3; session++) await runWorkerForFile(tempFile);
+      for (let session = 0; session < 3; session++) {
+        // Re-seeded: the worker unlinks its payload, so writing once would run the
+        // arm once and leave the assertions below asserting nothing.
+        write({ provider: 'anthropic', model: 'm', specialistRecall: true });
+        await runWorkerForFile(tempFile);
+      }
 
       // Three passes in, with a default `maxAttempts` of 3, nothing has been
       // parked and every survivor is still unattempted.
@@ -878,6 +887,64 @@ describe('rag-worker (runWorkerForFile)', () => {
           .peek()
           .map((i) => i.attempts),
       ).toEqual(new Array(queued()).fill(0));
+    });
+
+    it('never calls the model for a run too big to render, and parks it', async () => {
+      // Found by an adversarial review of the peek/markAttempt split, and it is
+      // that split's own new failure mode. `renderTranscript` starts at `chars`
+      // of 0, so a SINGLE run over the 12,000-char budget returned `used: []` —
+      // and with the caller acknowledging only what it rendered, nothing was
+      // marked, nothing was acked, the attempt guard never fired, and the run sat
+      // at the head of its specialist's queue burning one real cheap-tier call per
+      // session on a zero-length transcript until `sweep` dropped it at seven
+      // days. The marker's loss, reintroduced by the fix for the marker's loss.
+      const fat = Object.assign(run('coder'), {
+        toolCalls: Array.from({ length: 80 }, (_, i) => ({
+          tool: 'shell',
+          args: { command: 'x'.repeat(400) },
+          resultPreview: 'y'.repeat(400),
+        })),
+      });
+      enqueue(fat as never);
+      write({ provider: 'anthropic', model: 'm', specialistRecall: true });
+
+      // Re-seeded each pass: `runWorkerForFile` UNLINKS its payload, so a loop
+      // that writes once runs the arm exactly once and every later assertion is
+      // vacuous. (The first draft of the sibling test below had that bug.)
+      for (let session = 0; session < 4; session++) {
+        write({ provider: 'anthropic', model: 'm', specialistRecall: true });
+        await runWorkerForFile(tempFile);
+      }
+
+      // No transcript to extract from means no extraction — not an extraction
+      // from nothing.
+      expect(mockExtractNotes).not.toHaveBeenCalled();
+      // And it makes progress: attempted each session, parked once spent, rather
+      // than blocking the queue until the age sweep.
+      expect(parked()).toBe(1);
+      expect(queued()).toBe(0);
+    });
+
+    it('does not let one oversized run hide the smaller ones behind it', async () => {
+      // `continue`, not `break`. The oversized run is newest, so a `break` on the
+      // first iteration discarded the whole rest of the specialist's backlog.
+      const fat = Object.assign(run('coder'), {
+        toolCalls: Array.from({ length: 80 }, () => ({
+          tool: 'shell',
+          args: { command: 'x'.repeat(400) },
+          resultPreview: 'y'.repeat(400),
+        })),
+      });
+      enqueue(run('coder'), run('coder'), fat as never);
+      mockExtractNotes.mockResolvedValue(notesOk([{ key: 'k', content: 'c' }]));
+      write({ provider: 'anthropic', model: 'm', specialistRecall: true });
+
+      await runWorkerForFile(tempFile);
+
+      // The two small runs were rendered and acknowledged despite the fat one
+      // sitting in front of them; only it comes back.
+      expect(mockExtractNotes).toHaveBeenCalledTimes(1);
+      expect(queued()).toBe(1);
     });
 
     it('counts an attempt against the runs it DOES extract from', async () => {

@@ -72,7 +72,7 @@ import { runFirstTimeSetup } from './setup.js';
 import { getLocalVersion, startupUpdateCheck, interactiveUpdate } from './update.js';
 import { factsList, factsSearch, clearFacts } from './facts-cli.js';
 import { migrateFromLegacy } from './migrate.js';
-import { MCP_CONFIG_PATH, PROFILES_PATH, PREFS_PATH, RAG_DIR, DATA_DIR } from './paths.js';
+import { MCP_CONFIG_PATH, PROFILES_PATH, PREFS_PATH, RAG_DIR } from './paths.js';
 import { openCorpus } from './knowledge/corpus.js';
 import * as fs from 'node:fs';
 import { listProfiles } from './profiles.js';
@@ -540,19 +540,11 @@ async function runInkRepl(args: {
   // third adopter cannot miss it and ~3 ms of synchronous `readdir` leaves the
   // path to first paint.
   //
-  // What does belong here is the one-off: the predecessor store's directory,
-  // which moved from `DATA_DIR` to `STATE_DIR` with the rewrite and would
-  // otherwise keep those 54 rows on every existing install forever, referenced by
-  // nothing.
-  try {
-    const legacy = path.join(DATA_DIR, 'correction-candidates');
-    if (fs.existsSync(legacy)) {
-      fs.rmSync(legacy, { recursive: true, force: true });
-      debugLog('correction-queue:legacy-removed', { dir: legacy });
-    }
-  } catch {
-    // Housekeeping must never be why a session cannot start.
-  }
+  // The predecessor store's directory is not cleaned up here either, for the same
+  // reason: `migrateLegacyCorrectionCandidates` runs from `correctionQueue()`, so
+  // a cron-only or `bernard script` install migrates its pending rows and drops
+  // the rest on its own first correction instead of keeping the directory forever
+  // because nobody opened a REPL.
 
   // Memory housekeeping (#529). A NOTICE plus a context block, never a change:
   // these are the user's own notes, and the pass that produced these proposals

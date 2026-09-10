@@ -47,11 +47,25 @@ export function atomicWriteFileSync(
  * failed write leaves a distinct orphan forever, where a fixed suffix left one
  * that the next write overwrote. Returns an error message, never throws, so a
  * caller on a best-effort path (a debounced flush) can stay silent.
+ *
+ * `mode` is applied to the temp file before the rename, for the reason
+ * {@link atomicWriteFileSync} gives: a `chmodSync` afterwards leaves a window at
+ * the default umask, and a rename carries no mode of its own. It was missing here,
+ * which forced a caller wanting 0600 to choose between a restrictive mode and a
+ * collision-free temp name.
  */
-export function atomicWriteFileSyncUnique(filePath: string, data: string): string | null {
+export function atomicWriteFileSyncUnique(
+  filePath: string,
+  data: string,
+  opts: { mode?: number } = {},
+): string | null {
   const tmp = `${filePath}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
   try {
-    fs.writeFileSync(tmp, data, 'utf-8');
+    fs.writeFileSync(
+      tmp,
+      data,
+      opts.mode === undefined ? 'utf-8' : { encoding: 'utf-8', mode: opts.mode },
+    );
     fs.renameSync(tmp, filePath);
     return null;
   } catch (err: unknown) {

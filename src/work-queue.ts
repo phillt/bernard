@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { atomicWriteFileSync } from './fs-utils.js';
+import { atomicWriteFileSync, atomicWriteFileSyncUnique } from './fs-utils.js';
 
 /**
  * @module work-queue
@@ -89,6 +89,9 @@ const DEFAULT_MAX_PENDING = 200;
 const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
+/** How often a long-lived process re-applies retention. See `ensureSwept`. */
+const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
+
 /** Width of the zero-padded epoch prefix {@link WorkQueue.enqueue} writes. */
 const EPOCH_PREFIX_LEN = 14;
 
@@ -128,7 +131,7 @@ export class WorkQueue<T> {
   private readonly maxPending: number;
   private readonly maxAttempts: number;
   private readonly maxAgeMs: number;
-  private swept = false;
+  private sweptAt = 0;
 
   constructor(opts: WorkQueueOptions<T>) {
     this.dir = opts.dir;
@@ -162,15 +165,28 @@ export class WorkQueue<T> {
    * not the steady state.
    */
   enqueue(payload: T): string | null {
-    // Measured at 0.128 ms on an empty queue and 0.199 ms at 199 pending,
-    // against 0.0075 ms for `appendJsonlBounded`. The dominant term is the
-    // cap's `readdir`, not the temp-write-and-rename: at 200 files the listing
-    // is 0.080 ms against 0.037 ms for the 3 KB atomic write, and the listing is
-    // what scales (0.021 ms at 52, 0.207 ms at 500). Worth knowing before
-    // optimising the wrong syscall — but not worth caching the count, which is
-    // what `CorrectionCandidateStore` did and what the note below refuses. All of
-    // it is noise on the return path of a dispatch that cost seconds; the 25.7 ms
-    // rotation mattered because it was 25 ms, not because it was per-dispatch.
+    // Measured end to end on real 2.6 KB rows, medians of 400:
+    //
+    //   depth     0    52   200   500   (pending items)
+    //   enqueue  .129  .150  .209  .347  ms
+    //   readdir  .004  .023  .076  .200  ms   <- the cap's listing
+    //
+    // against 0.0075 ms for `appendJsonlBounded`. The one structural fact is that
+    // **the listing is the only term that scales** — the 2.6 KB atomic write is
+    // flat at 0.030 ms from 0 to 500 files — so it is a minority of the cost at
+    // the depth a real install reaches (15% at the busiest five-minute window
+    // measured, 52 dispatches) and the majority only near the 500 cap.
+    //
+    // Deliberately NOT presented as a breakdown: the named components sum to
+    // ~0.043 ms against 0.129 measured, and the remainder is not attributed here.
+    // An earlier version of this comment did claim a breakdown, picked the
+    // dominant term from it, and was wrong in both directions. If you re-measure,
+    // replace these numbers rather than reasoning from the gap.
+    //
+    // Either way it is noise on the return path of a dispatch that cost seconds,
+    // which is why the count is not cached — see the note below, and
+    // `CorrectionCandidateStore` for what caching it bought. The 25.7 ms rotation
+    // mattered because it was 25 ms, not because it was per-dispatch.
     try {
       this.ensureSwept();
       // `mkdirSync` every time, deliberately. A "directory already created this
@@ -314,7 +330,7 @@ export class WorkQueue<T> {
    * mtime. That is what makes it cheap enough to run from {@link ensureSwept}
    * rather than from a call site somebody has to remember.
    */
-  sweep(now = Date.now()): { parked: number; prunedParked: number } {
+  sweep(now = Date.now()): { parked: number; prunedParked: number; prunedTemp: number } {
     let parked = 0;
     const names = this.names();
     const aged = new Set<string>();
@@ -342,11 +358,23 @@ export class WorkQueue<T> {
         }
       }
     }
-    return { parked, prunedParked: this.pruneParked(now) };
+    return {
+      parked,
+      prunedParked: this.pruneParked(now),
+      prunedTemp: this.pruneTemp(now),
+    };
   }
 
-  /** How many items are waiting. Excludes parked ones, which are not work. */
+  /**
+   * How many items are waiting. Excludes parked ones, which are not work.
+   *
+   * Sweeps first, which is not incidental: `runCorrectionAgent` asks this and
+   * returns early on zero, so a queue whose pending set is empty while its
+   * `parked/` is full would otherwise never reach a sweep on any path, in any
+   * process.
+   */
   pending(): number {
+    this.ensureSwept();
     return this.count();
   }
 
@@ -363,26 +391,28 @@ export class WorkQueue<T> {
    * `errorCount`/`dismissed` and `bernard tool-profiles` prints it), not a second
    * listing command.
    *
-   * `parkedAt` comes off the file's mtime rather than a stored field, which is
-   * what makes it always present. Stored, it could only be written by the two
+   * `parkedAt` comes off the file's mtime rather than a stored field, and is
+   * OPTIONAL: when the `stat` fails there is no honest answer, and the enqueue
+   * time is a worse one than none — it is the value the explicit `utimes` in
+   * {@link park} exists to replace. Stored, it could only be written by the two
    * park paths that already hold the item — {@link sweep} deliberately holds
    * none — so the field was there or not depending on WHY an item was parked,
    * which is the most misleading state available. mtime is what
    * {@link pruneParked} ages against anyway, so this is the same number rather
    * than a second one that can disagree.
    */
-  listParked(): Array<QueueItem<T> & { parkedAt: string }> {
-    const out: Array<QueueItem<T> & { parkedAt: string }> = [];
+  listParked(): Array<QueueItem<T> & { parkedAt?: string }> {
+    const out: Array<QueueItem<T> & { parkedAt?: string }> = [];
     for (const name of this.namesIn(this.parkedDir)) {
       const item = this.read(name, this.parkedDir);
       if (!item) continue;
-      let parkedAt = item.enqueuedAt;
+      let parkedAt: string | undefined;
       try {
         parkedAt = new Date(fs.statSync(path.join(this.parkedDir, name)).mtimeMs).toISOString();
       } catch {
-        // Vanished under us; the enqueue time is a worse answer than none at all.
+        // Vanished under us. Left undefined rather than guessed.
       }
-      out.push({ ...item, parkedAt });
+      out.push({ ...item, ...(parkedAt ? { parkedAt } : {}) });
     }
     return out;
   }
@@ -400,12 +430,22 @@ export class WorkQueue<T> {
    *
    * It also moves ~3 ms of synchronous `readdir`-and-parse off the startup path,
    * where it sat 187 lines before `render()` and so was pure time-to-first-paint.
+   *
+   * **A timestamp, not a boolean**, because these queues are memoised at module
+   * scope and the cron daemon and the applet host hold one for days. A once-per-
+   * instance latch means that for the whole life of such a process nothing ages
+   * pending items out and — the part that actually grows — nothing prunes
+   * `parked/`, where every spent retry and every unparseable row lands. `sweep`
+   * reads no files and measures 0.26 ms at 200 items, so re-arming hourly costs
+   * nothing and is what makes "retention is a property of a queue" true for a
+   * process that stays up rather than only for one that restarts.
    */
   private ensureSwept(): void {
-    if (this.swept) return;
-    this.swept = true;
+    const now = Date.now();
+    if (now - this.sweptAt < SWEEP_INTERVAL_MS) return;
+    this.sweptAt = now;
     try {
-      this.sweep();
+      this.sweep(now);
     } catch {
       // Housekeeping must never be why a producer or a drain fails.
     }
@@ -458,10 +498,36 @@ export class WorkQueue<T> {
     }
   }
 
+  /**
+   * Rewrites one item in place.
+   *
+   * **`atomicWriteFileSyncUnique`, not the fixed-suffix variant**, which is the
+   * rule `fs-utils.ts` states for exactly this situation: a shared `<name>.tmp`
+   * means two concurrent writers write one temp file and rename it twice.
+   * {@link enqueue} can use the plain variant because its target name carries a
+   * UUID, so its temp name is unique too — but every path through here addresses
+   * an id a SECOND drain can be holding at the same moment (a REPL closing while
+   * the cron daemon closes, or two REPLs). Interleaved, the fixed suffix yields a
+   * spliced `<id>.json`, which `read` then rejects and the next `peek` parks as
+   * "a payload this build cannot read": the work is dropped and the parked
+   * evidence blames the payload for a writer race. The unique variant also
+   * unlinks its own temp on failure, so a failed write leaves nothing behind —
+   * `isItemFile` excludes `.tmp` from both `count()` and `sweep`, so an orphan
+   * would otherwise sit in the queue directory permanently.
+   *
+   * **What this does NOT fix** is the benign half of the same race: two drains
+   * that both read `attempts: n` both write `n + 1`, so N concurrent attempts
+   * cost one increment and `maxAttempts` stops being a hard bound under
+   * concurrency. Closing that needs a compare-and-swap this has no primitive for;
+   * {@link sweep}'s age bound is what still terminates such an item.
+   */
   private write(name: string, item: QueueItem<T>): boolean {
     try {
-      atomicWriteFileSync(path.join(this.dir, name), JSON.stringify(item), { mode: 0o600 });
-      return true;
+      return (
+        atomicWriteFileSyncUnique(path.join(this.dir, name), JSON.stringify(item), {
+          mode: 0o600,
+        }) === null
+      );
     } catch {
       return false;
     }
@@ -502,9 +568,55 @@ export class WorkQueue<T> {
       const at = now / 1000;
       fs.utimesSync(dest, at, at);
     } catch {
-      // Parked either way; it just ages from whenever it was last written.
+      // **Not a cosmetic fallback.** {@link pruneParked} ages by mtime, and on the
+      // `sweep` path the item's mtime is its ENQUEUE time — already past
+      // `maxAgeMs`, which is why it was parked — so leaving it would have the very
+      // next sweep delete it before anyone could look. Rewriting the file sets
+      // mtime as a side effect, which is the same guarantee by a slower route, and
+      // is reachable on any mount that refuses `utimes` for a foreign uid.
+      try {
+        const current = item ?? this.read(name, this.parkedDir);
+        if (current) {
+          atomicWriteFileSyncUnique(dest, JSON.stringify(current), { mode: 0o600 });
+        }
+      } catch {
+        // Neither worked: the item is parked and will age from its last write,
+        // which for a sweep-parked item means the next sweep removes it.
+      }
     }
     return true;
+  }
+
+  /**
+   * Removes temp files no write came back for.
+   *
+   * `atomicWriteFileSyncUnique` unlinks its own on failure, so this only ever
+   * finds one left by a process that died mid-write — but `isItemFile` keeps
+   * `.tmp` out of `count()` and out of the age pass, so without this the one
+   * directory this module promises to bound has a second way to grow that
+   * "bounds the directory by age and by count" does not cover.
+   */
+  private pruneTemp(now: number): number {
+    let pruned = 0;
+    let entries: string[] = [];
+    try {
+      entries = fs.readdirSync(this.dir);
+    } catch {
+      return 0;
+    }
+    for (const name of entries) {
+      if (!name.includes('.json.') || !name.endsWith('.tmp')) continue;
+      const full = path.join(this.dir, name);
+      try {
+        if (now - fs.statSync(full).mtimeMs > this.maxAgeMs) {
+          fs.unlinkSync(full);
+          pruned++;
+        }
+      } catch {
+        // best-effort
+      }
+    }
+    return pruned;
   }
 
   /**
