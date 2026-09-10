@@ -6,6 +6,15 @@ import type { ToolOptions, ShellResult } from './types.js';
 import { isReadOnlyShellInvocation } from '../tool-permissions.js';
 import type { BernardTool } from '../framework/tools/types.js';
 import { ok, err } from '../framework/tools/types.js';
+import {
+  OFFERABLE_BUDGETS,
+  claimOffer,
+  doubled,
+  offerChoices,
+  shellTimeoutMessage,
+} from '../timeout-offer.js';
+import { saveActiveSettings } from '../profiles.js';
+import { debugLog } from '../logger.js';
 import { normalizeToolText } from '../text.js';
 import { ERROR_SNIPPET_MAX } from '../tool-result-shape.js';
 
@@ -101,6 +110,86 @@ const SHELL_PARAMETERS = z.object({
 
 type ShellArgs = z.infer<typeof SHELL_PARAMETERS>;
 
+/** One `spawnSync` invocation, so the retry below reuses it rather than a copy. */
+function run(command: string, timeout: number) {
+  return spawnSync(command, {
+    shell: true,
+    encoding: 'utf-8',
+    timeout,
+    maxBuffer: 1024 * 1024 * 10, // 10MB
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+}
+
+/**
+ * Whether `spawnSync` killed the child for running too long.
+ *
+ * `code` is the reliable signal; `signal` is checked as well because a kill
+ * delivered as SIGTERM with no code is what some platforms report, and the
+ * alternative — matching the message string — is the thing #477 is fixing one
+ * level up.
+ */
+function isTimeoutError(e: unknown): boolean {
+  if (!e) return false;
+  const err = e as { code?: string; signal?: string };
+  return err.code === 'ETIMEDOUT' || err.signal === 'SIGTERM';
+}
+
+/**
+ * Asks whether to retry with a higher shell timeout, and applies the chosen scope.
+ *
+ * Returns the new budget when the user accepted, `undefined` otherwise. The
+ * once / session / profile ladder is the step-limit continuation's (#292), reused
+ * rather than reinvented so a user who has met one ceiling prompt recognises the
+ * next — and `once` deliberately writes nothing, which is what makes accepting
+ * safe for someone who only wants this one command to finish.
+ *
+ * Fails closed: a prompt channel that throws, an Esc, or an answer that matches no
+ * row all yield `undefined` and the timeout is reported as it would have been.
+ */
+async function offerHigherShellTimeout(
+  options: ToolOptions,
+  command: string,
+  budgetMs: number,
+): Promise<number | undefined> {
+  const next = doubled(budgetMs);
+  const spec = OFFERABLE_BUDGETS.shell;
+  if (!spec) return undefined;
+  const choices = offerChoices(next, spec.command);
+  let answer;
+  try {
+    answer = await options.askUser?.([
+      {
+        question: `\`${command}\` hit the ${budgetMs} ms shell timeout. That budget is ${spec.rationale}. How should I proceed?`,
+        choices: choices.map((c) => c.label),
+        allowOther: false,
+      },
+    ]);
+  } catch {
+    return undefined;
+  }
+  if (!answer || !('answers' in answer)) return undefined;
+  const raw = answer.answers[0];
+  const picked = Array.isArray(raw) ? raw[0] : raw;
+  const scope = choices.find((c) => c.label === picked)?.scope;
+  if (!scope || scope === 'decline') return undefined;
+
+  // A live bump of the shared config, exactly as the step-limit ladder does it.
+  // Through the callback rather than by assigning `options.shellTimeout`, which
+  // is a getter over that config: one source of truth, so `/options
+  // shell-timeout` cannot disagree with what the tool actually uses.
+  if (scope !== 'once') options.raiseShellTimeout?.(next);
+  if (scope === 'profile') {
+    try {
+      saveActiveSettings({ [spec.settingKey]: next });
+    } catch {
+      // Best-effort persist; the session bump above still applies.
+    }
+  }
+  debugLog('shell:timeout-raised', { from: budgetMs, to: next, scope });
+  return next;
+}
+
 /**
  * Creates the shell execution tool that runs commands in the user's terminal.
  *
@@ -167,13 +256,48 @@ export function createShellTool(options: ToolOptions): BernardTool<ShellArgs, Sh
         // Sibling of #363/#364 (a tool that fails while returning), with a
         // mechanism no result-shape check could ever see: the evidence was not
         // in the result at all.
-        const proc = spawnSync(command, {
-          shell: true,
-          encoding: 'utf-8',
-          timeout: options.shellTimeout,
-          maxBuffer: 1024 * 1024 * 10, // 10MB
-          stdio: ['pipe', 'pipe', 'pipe'],
-        });
+        let budgetMs = options.shellTimeout;
+        let proc = run(command, budgetMs);
+
+        // **The timeout branch, which did not exist (#477).** `spawnSync` reports
+        // a kill through `proc.error` with `code: 'ETIMEDOUT'`, and throwing it
+        // into the generic `catch` below produced `spawnSync /bin/sh ETIMEDOUT` —
+        // naming neither the command nor the budget it exceeded, and discarding
+        // the partial output `spawnSync` had already collected.
+        if (isTimeoutError(proc.error)) {
+          const partial = [
+            normalizeToolText(proc.stdout || ''),
+            normalizeToolText(proc.stderr || ''),
+          ]
+            .filter(Boolean)
+            .join('\n');
+          // Offered once per session, and only because `shell` is in
+          // `OFFERABLE_BUDGETS` — the two stall guards are absent from that table
+          // on purpose, since they detect that something stopped responding
+          // rather than express how long work should take. No `askUser` means
+          // headless (cron, `bernard script`), where the improved message still
+          // lands and the offer is simply skipped.
+          if (options.askUser && claimOffer('shell')) {
+            const raised = await offerHigherShellTimeout(options, command, budgetMs);
+            if (raised) {
+              budgetMs = raised;
+              proc = run(command, budgetMs);
+              if (!isTimeoutError(proc.error)) {
+                // The retry got somewhere. Fall through to the ordinary result
+                // handling below rather than duplicating it here.
+                if (proc.error) throw proc.error;
+              }
+            }
+          }
+          if (isTimeoutError(proc.error)) {
+            const message = shellTimeoutMessage(command, budgetMs, partial);
+            return err({
+              type: 'timeout',
+              message,
+              snippet: message.slice(0, ERROR_SNIPPET_MAX),
+            });
+          }
+        }
         if (proc.error) throw proc.error;
         const outText = normalizeToolText(proc.stdout || '');
         const errText = normalizeToolText(proc.stderr || '');

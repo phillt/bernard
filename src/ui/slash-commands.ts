@@ -162,7 +162,11 @@ interface BuiltinSlashCommand extends SlashCommand {
  */
 const CATALOGUE: readonly BuiltinSlashCommand[] = [
   { name: '/help', description: 'Show command list', detail: 'Show this help' },
-  { name: '/clear', description: 'Clear conversation (--save / -s to summarize first)' },
+  {
+    name: '/clear',
+    description: 'Clear conversation (saves to memory first)',
+    detail: 'Clear conversation — saves to memory by default; --do-not-save to skip',
+  },
   { name: '/compact', description: 'Compress conversation history in-place' },
   { name: '/task', description: 'Run an isolated task (no history, structured output)' },
   { name: '/image', description: 'Attach an image: /image <path> [prompt]' },

@@ -133,6 +133,16 @@ export interface ToolOptions {
   /** Maximum time in milliseconds a shell command may run before being killed. */
   shellTimeout: number;
   /**
+   * Raises the shell timeout for the rest of this session (#477).
+   *
+   * Separate from writing `shellTimeout` because that is a getter over the live
+   * config wherever it matters — one source of truth, so a tool cannot assign to
+   * it. Optional, and absent means the offer cannot take a `session` or `profile`
+   * scope: headless callers (`headlessToolOptions`) have nobody to ask in the
+   * first place, so they omit it and the tool never reaches this.
+   */
+  raiseShellTimeout?: (ms: number) => void;
+  /**
    * Callback that prompts the user for confirmation before executing a dangerous command.
    * The optional `signal` lets callers abort the prompt (e.g. when the user presses Esc).
    */

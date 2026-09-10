@@ -759,19 +759,80 @@ describe('<App> /clear', () => {
     vi.clearAllMocks();
   });
 
-  it('clears the agent + stores without --save', async () => {
+  it('clears the agent + stores with --do-not-save', async () => {
+    // The opt-out, which is what a bare `/clear` used to be (#250). Renamed
+    // rather than deleted: the assertions below are about the clear half, which
+    // both flags share, and the flag that reaches them is the only thing that
+    // moved.
     const { stdin, historyStore, provenanceHistoryStore, agentSpy, lastFrame, unmount } =
       renderApp();
     await tick();
-    await submit(stdin, '/clear');
+    await submit(stdin, '/clear --do-not-save');
     expect(historyStore.clear).toHaveBeenCalled();
     expect(provenanceHistoryStore.clear).toHaveBeenCalled();
     expect(agentSpy.clearHistory).toHaveBeenCalled();
-    expect(lastFrame()).toContain('Conversation history cleared');
+    expect(lastFrame()).toContain('Cleared without saving');
+    unmount();
+  });
+
+  it('a bare /clear SAVES, which is the whole of #250', async () => {
+    // The inversion, asserted on the extraction actually running rather than on
+    // the toast — a message is what a reader notices, and a model call is what
+    // makes the save real. Two turns of history so it clears
+    // MIN_HISTORY_FOR_FACTS; with less, the too-short branch would make this
+    // pass without saving anything.
+    const { stdin, agentSpy, unmount } = renderApp({
+      history: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'hi' },
+      ],
+    });
+    await tick();
+    await submit(stdin, '/clear');
+    await tick(40);
+    expect(mockExtractDomainFacts).toHaveBeenCalled();
+    expect(agentSpy.clearHistory).toHaveBeenCalled();
+    unmount();
+  });
+
+  it('--do-not-save really does skip the model call', async () => {
+    // Guards the guard: the test above passes if saving is unconditional, which
+    // would make the opt-out a lie.
+    const { stdin, unmount } = renderApp({
+      history: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'hi' },
+      ],
+    });
+    await tick();
+    await submit(stdin, '/clear --do-not-save');
+    await tick(40);
+    expect(mockExtractDomainFacts).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it('tells the user --save is redundant, but only when they typed it', async () => {
+    const { stdin, lastFrame, unmount } = renderApp();
+    await tick();
+    await submit(stdin, '/clear --save');
+    await tick(40);
+    expect(lastFrame()).toContain('saves by default now');
+    unmount();
+  });
+
+  it('does not nag on a bare /clear', async () => {
+    const { stdin, lastFrame, unmount } = renderApp();
+    await tick();
+    await submit(stdin, '/clear');
+    await tick(40);
+    expect(lastFrame() ?? '').not.toContain('saves by default now');
     unmount();
   });
 
   it('rejects bad arguments to /clear with a usage toast', async () => {
+    // Refused rather than defaulted, and the direction matters now that the
+    // default WRITES: a typo'd flag silently running fact extraction is the
+    // wrong way to fail.
     const { stdin, lastFrame, agentSpy, unmount } = renderApp();
     await tick();
     await submit(stdin, '/clear --bogus');
@@ -907,7 +968,7 @@ describe('<App> /clear --save (#228)', () => {
     expect(agentSpy.clearHistory).toHaveBeenCalled();
     expect(historyStore.clear).toHaveBeenCalled();
     // The final frame shows the "cleared" toast (the warning is transient)
-    expect(lastFrame()).toContain('Conversation history cleared');
+    expect(lastFrame()).toContain('Cleared');
     unmount();
   });
 
@@ -939,7 +1000,7 @@ describe('<App> /clear --save (#228)', () => {
     expect(mockAddFacts).toHaveBeenCalledTimes(1);
     // No crash — history still cleared
     expect(agentSpy.clearHistory).toHaveBeenCalled();
-    expect(lastFrame()).toContain('Conversation history cleared');
+    expect(lastFrame()).toContain('Cleared');
     unmount();
   });
 });
@@ -989,7 +1050,7 @@ describe('<App> Static transcript (#232)', () => {
     expect(lastFrame() ?? '').toContain('answer for first turn');
     await submit(stdin, '/clear');
     expect(agentSpy.clearHistory).toHaveBeenCalled();
-    expect(lastFrame() ?? '').toContain('Conversation history cleared');
+    expect(lastFrame() ?? '').toContain('Cleared');
     // History was emptied by clearHistory(); a new turn must commit cleanly.
     await submit(stdin, 'second turn');
     expect(lastFrame() ?? '').toContain('answer for second turn');

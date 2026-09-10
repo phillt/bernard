@@ -419,7 +419,18 @@ async function runInkRepl(args: {
   };
 
   const toolOptions: ToolOptions = {
-    shellTimeout: config.shellTimeout,
+    // A GETTER over the live config, not a snapshot (#477). It was
+    // `config.shellTimeout` read once at construction and re-synced by nothing —
+    // so `/options shell-timeout` and a mid-session profile switch both changed a
+    // number the shell tool never saw again. Now there is one source of truth,
+    // which is also what lets the timeout offer raise it for the session through
+    // `raiseShellTimeout` without minting a second stale copy.
+    get shellTimeout() {
+      return config.shellTimeout;
+    },
+    raiseShellTimeout: (ms: number) => {
+      config.shellTimeout = ms;
+    },
     confirmDangerous,
     confirmAction,
     blockAction,

@@ -116,6 +116,7 @@ import {
   extractText,
   MIN_HISTORY_FOR_FACTS,
 } from '../context.js';
+import { parseClearArgs, clearResultMessage, CLEAR_USAGE, type SaveOutcome } from './clear-args.js';
 import { isSessionScaffolding } from '../session-markers.js';
 import { detectSpecialistCandidate } from '../specialist-detector.js';
 import { promoteCandidate } from '../candidate-bootstrap.js';
@@ -1230,20 +1231,28 @@ export function App({
       return;
     }
     if (is(text, '/clear') || startsWithCmd(text, '/clear')) {
-      const clearArgs = text.slice('/clear'.length).trim();
-      const shouldSave = clearArgs === '--save' || clearArgs === '-s';
-      if (clearArgs && !shouldSave) {
-        flashToast('Usage: /clear [--save|-s]', 'error');
+      const plan = parseClearArgs(text.slice('/clear'.length));
+      if (!plan) {
+        flashToast(CLEAR_USAGE, 'error');
         return;
       }
-      if (shouldSave) {
+      // What to tell the user once the screen is empty. A transcript notice
+      // cannot carry this: the clear below wipes the transcript, so anything
+      // pushed into it would be destroyed by the same keystroke that produced it.
+      let outcome: SaveOutcome = { kind: 'skipped' };
+      if (plan.save) {
         const history = agent.getHistory();
         // MIN_HISTORY_FOR_FACTS = 2 (one user + one assistant);
         // matches the exit-path threshold in src/index.ts.
         if (history.length < MIN_HISTORY_FOR_FACTS) {
-          flashToast('Not enough conversation to summarize.', 'warning');
+          outcome = { kind: 'too-short' };
         } else {
           setBusy(true);
+          // Counted in the outer scope so the result line can name it. It was
+          // local to the RAG block, which is why every path ended in the same
+          // `Conversation history cleared.` and a save was indistinguishable from
+          // a no-op — the number existed and was thrown away one scope too deep.
+          let storedFacts = 0;
           try {
             const serialized = serializeMessages(history);
             // Route these off-loop /clear --save LLM calls (fact extraction,
@@ -1281,7 +1290,6 @@ export function App({
               const results = await Promise.allSettled(
                 domainFacts.map((df) => stores.rag!.addFacts(df.facts, 'clear-save', df.domain)),
               );
-              let storedFacts = 0;
               let failedDomains = 0;
               results.forEach((r) => {
                 if (r.status === 'fulfilled') {
@@ -1323,9 +1331,10 @@ export function App({
                 // Silent — candidate storage failure is non-critical
               }
             }
+            outcome = { kind: 'saved', facts: storedFacts };
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
-            flashToast(`Failed to summarize: ${message}. Clearing anyway.`, 'error');
+            outcome = { kind: 'failed', message };
           } finally {
             setBusy(false);
           }
@@ -1350,7 +1359,12 @@ export function App({
       historyRef.current = agent.getHistory();
       if (!fullScreen) process.stdout.write('\x1b[3J\x1b[2J\x1b[H');
       setStaticEpoch((e) => e + 1);
-      flashToast('Conversation history cleared.', 'success');
+      // After the clear, never before: the toast is chrome rather than transcript,
+      // so it is the only surface that survives the wipe.
+      flashToast(
+        clearResultMessage(outcome, plan.noteSaveIsDefault),
+        outcome.kind === 'failed' ? 'error' : 'success',
+      );
       return;
     }
     if (is(text, '/help')) {
