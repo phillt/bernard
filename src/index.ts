@@ -419,15 +419,16 @@ async function runInkRepl(args: {
   };
 
   const toolOptions: ToolOptions = {
-    // A GETTER over the live config, not a snapshot (#477). It was
-    // `config.shellTimeout` read once at construction and re-synced by nothing —
-    // so `/options shell-timeout` and a mid-session profile switch both changed a
-    // number the shell tool never saw again. Now there is one source of truth,
-    // which is also what lets the timeout offer raise it for the session through
-    // `raiseShellTimeout` without minting a second stale copy.
-    get shellTimeout() {
-      return config.shellTimeout;
-    },
+    shellTimeout: config.shellTimeout,
+    // A live THUNK over the config beside the snapshot, not a property getter
+    // (#477). The snapshot was re-synced by nothing, so `/options shell-timeout`,
+    // a profile switch and the timeout offer all changed a number the shell tool
+    // never saw again. A getter here reads correctly and is then flattened by
+    // `withUsageRecorder`'s `{...ctx.toolOptions}` on every dispatch — measured —
+    // which is exactly the path the main agent takes, so the fix would have been
+    // inert where it matters. A function survives the spread, and it is the shape
+    // `getToolPermissions` beside it already uses.
+    getShellTimeout: () => config.shellTimeout,
     raiseShellTimeout: (ms: number) => {
       config.shellTimeout = ms;
     },

@@ -1236,11 +1236,19 @@ export function App({
         flashToast(CLEAR_USAGE, 'error');
         return;
       }
-      // What to tell the user once the screen is empty. A transcript notice
-      // cannot carry this: the clear below wipes the transcript, so anything
-      // pushed into it would be destroyed by the same keystroke that produced it.
+      // What to tell the user once the screen is empty. It goes into the
+      // transcript rather than a toast — see the `pushAssistantNotice` call at the
+      // end of this branch for why.
       let outcome: SaveOutcome = { kind: 'skipped' };
-      if (plan.save) {
+      // **Gated on RAG as well as on the flag.** `stores.rag` is undefined unless
+      // `config.ragEnabled`, and the write below already checks it — so without
+      // this the two extraction calls ran and every fact they produced was
+      // discarded. Measured: ~10 s of blocked REPL and ~98,000 input tokens per
+      // clear, for nothing, paid by whoever turned long-term memory off. It was
+      // opt-in behind `--save` before; saving by default made it the common path.
+      if (plan !== 'skip' && !stores.rag) {
+        outcome = { kind: 'no-memory' };
+      } else if (plan !== 'skip') {
         const history = agent.getHistory();
         // MIN_HISTORY_FOR_FACTS = 2 (one user + one assistant);
         // matches the exit-path threshold in src/index.ts.
@@ -1359,12 +1367,19 @@ export function App({
       historyRef.current = agent.getHistory();
       if (!fullScreen) process.stdout.write('\x1b[3J\x1b[2J\x1b[H');
       setStaticEpoch((e) => e + 1);
-      // After the clear, never before: the toast is chrome rather than transcript,
-      // so it is the only surface that survives the wipe.
-      flashToast(
-        clearResultMessage(outcome, plan.noteSaveIsDefault),
-        outcome.kind === 'failed' ? 'error' : 'success',
-      );
+      // **A notice, not a toast, and AFTER the wipe.** `pushTranscriptMessage`
+      // touches only `setStaticItems` — it is display-only and never writes
+      // `agent.history` — so pushed after `setStaticItems([])` it survives, and
+      // the functional updater sees the emptied array. (An earlier comment here
+      // claimed a notice could not survive the clear. That is true of pushing
+      // BEFORE it, and was stated as though it were categorical.)
+      //
+      // It has to outlive a keystroke, which is the rule `catalog-notice`'s
+      // `provider-wiped` and `memory-notice` both already follow: `flashToast` is
+      // cleared by the next submit and REPLACES rather than queues, and "you just
+      // spent ten seconds saving and here is whether it worked, plus a flag you no
+      // longer need" is not a thing to lose to the next keypress.
+      pushAssistantNotice(clearResultMessage(outcome, plan === 'save-noting-default'));
       return;
     }
     if (is(text, '/help')) {

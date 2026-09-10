@@ -10,9 +10,11 @@ import {
   OFFERABLE_BUDGETS,
   claimOffer,
   doubled,
+  formatBudget,
   offerChoices,
   shellTimeoutMessage,
 } from '../timeout-offer.js';
+import { classifyError } from '../error-taxonomy.js';
 import { saveActiveSettings } from '../profiles.js';
 import { debugLog } from '../logger.js';
 import { normalizeToolText } from '../text.js';
@@ -124,15 +126,27 @@ function run(command: string, timeout: number) {
 /**
  * Whether `spawnSync` killed the child for running too long.
  *
- * `code` is the reliable signal; `signal` is checked as well because a kill
- * delivered as SIGTERM with no code is what some platforms report, and the
- * alternative — matching the message string — is the thing #477 is fixing one
- * level up.
+ * Delegates to `classifyError`'s own `errno` table rather than matching here:
+ * that module already maps `ETIMEDOUT -> timeout` and is the classifier the repo
+ * maintains. The first cut of this wrote its own predicate and immediately grew a
+ * clause that could never fire — `err.signal === 'SIGTERM'`, reading a field that
+ * lives on the spawn RESULT, not on its error — which is what a second classifier
+ * costs. It would also have been fail-open if it ever had fired: any
+ * SIGTERM-killed child would have reported as a timeout.
  */
 function isTimeoutError(e: unknown): boolean {
-  if (!e) return false;
-  const err = e as { code?: string; signal?: string };
-  return err.code === 'ETIMEDOUT' || err.signal === 'SIGTERM';
+  const code = (e as { code?: string } | undefined)?.code;
+  if (code === undefined) return false;
+  // `message` is required by `ClassifyInput`; the errno is the channel that decides.
+  const message = (e as { message?: string } | undefined)?.message ?? code;
+  return classifyError({ message, errno: code, toolName: 'shell' }).category === 'timeout';
+}
+
+/** stdout and stderr as one block, normalized. Written three times in this file before. */
+function combinedOutput(proc: { stdout?: string | null; stderr?: string | null }): string {
+  return [normalizeToolText(proc.stdout || ''), normalizeToolText(proc.stderr || '')]
+    .filter(Boolean)
+    .join('\n');
 }
 
 /**
@@ -153,8 +167,11 @@ async function offerHigherShellTimeout(
   budgetMs: number,
 ): Promise<number | undefined> {
   const next = doubled(budgetMs);
+  // `OFFERABLE_BUDGETS` types `shell` as required, so there is no absent case to
+  // guard — the `Partial` that forced one here was generality the type did not
+  // actually have.
   const spec = OFFERABLE_BUDGETS.shell;
-  if (!spec) return undefined;
+  if (next <= budgetMs) return undefined; // already at the ceiling
   const choices = offerChoices(next, spec.command);
   let answer;
   try {
@@ -256,47 +273,47 @@ export function createShellTool(options: ToolOptions): BernardTool<ShellArgs, Sh
         // Sibling of #363/#364 (a tool that fails while returning), with a
         // mechanism no result-shape check could ever see: the evidence was not
         // in the result at all.
-        let budgetMs = options.shellTimeout;
-        let proc = run(command, budgetMs);
+        const budgetMs = options.getShellTimeout?.() ?? options.shellTimeout;
+        const proc = run(command, budgetMs);
 
-        // **The timeout branch, which did not exist (#477).** `spawnSync` reports
-        // a kill through `proc.error` with `code: 'ETIMEDOUT'`, and throwing it
-        // into the generic `catch` below produced `spawnSync /bin/sh ETIMEDOUT` —
-        // naming neither the command nor the budget it exceeded, and discarding
-        // the partial output `spawnSync` had already collected.
+        // **The timeout branch, which did not exist (#477).** `spawnSync` reports a
+        // kill through `proc.error` with `code: 'ETIMEDOUT'`, and throwing it into
+        // the generic `catch` below produced `spawnSync /bin/sh ETIMEDOUT` — naming
+        // neither the command nor the budget it exceeded, and discarding the
+        // partial output `spawnSync` had already collected.
         if (isTimeoutError(proc.error)) {
-          const partial = [
-            normalizeToolText(proc.stdout || ''),
-            normalizeToolText(proc.stderr || ''),
-          ]
-            .filter(Boolean)
-            .join('\n');
           // Offered once per session, and only because `shell` is in
           // `OFFERABLE_BUDGETS` — the two stall guards are absent from that table
-          // on purpose, since they detect that something stopped responding
-          // rather than express how long work should take. No `askUser` means
-          // headless (cron, `bernard script`), where the improved message still
-          // lands and the offer is simply skipped.
+          // on purpose, since they detect that something stopped responding rather
+          // than express how long work should take. No `askUser` means headless
+          // (cron, `bernard script`), where the improved message still lands and
+          // the offer is simply skipped.
+          let raised: number | undefined;
           if (options.askUser && claimOffer('shell')) {
-            const raised = await offerHigherShellTimeout(options, command, budgetMs);
-            if (raised) {
-              budgetMs = raised;
-              proc = run(command, budgetMs);
-              if (!isTimeoutError(proc.error)) {
-                // The retry got somewhere. Fall through to the ordinary result
-                // handling below rather than duplicating it here.
-                if (proc.error) throw proc.error;
-              }
-            }
+            raised = await offerHigherShellTimeout(options, command, budgetMs);
           }
-          if (isTimeoutError(proc.error)) {
-            const message = shellTimeoutMessage(command, budgetMs, partial);
-            return err({
-              type: 'timeout',
-              message,
-              snippet: message.slice(0, ERROR_SNIPPET_MAX),
-            });
-          }
+          // **Raised, and handed back — this deliberately does NOT re-run the
+          // command itself.** A tool that retries inside its own `execute` is
+          // invisible to every layer above it: `augmentTools`' `recordOutcome`
+          // fires once per execute, so a successful retry records a SUCCESS and
+          // the timeout is never counted at all — reintroducing exactly the
+          // blindness #366 exists to remove, for timeouts. It also makes #459's
+          // `tool:execute:end` `durationMs` span two spawns plus however long the
+          // human took to answer, on the one line that is meant to be the
+          // trustworthy record of what a tool did. So the model re-runs it, which
+          // is how every other tool failure already recovers, and each attempt is
+          // recorded and timed once. Getting the human's think-time out of the
+          // first attempt's duration too needs the offer hoisted into
+          // `augmentTools`; see #477.
+          const reported = shellTimeoutMessage(command, budgetMs, combinedOutput(proc));
+          const message = raised
+            ? `${reported}\nThe shell timeout is now ${formatBudget(raised)}. Run the same command again.`
+            : reported;
+          return err({
+            type: 'timeout',
+            message,
+            snippet: message.slice(0, ERROR_SNIPPET_MAX),
+          });
         }
         if (proc.error) throw proc.error;
         const outText = normalizeToolText(proc.stdout || '');

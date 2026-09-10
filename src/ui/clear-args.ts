@@ -1,3 +1,5 @@
+import { plural } from '../text.js';
+
 /**
  * @module clear-args
  *
@@ -9,25 +11,27 @@
  * not the default that caused it — it is the silence. `/clear --save` and
  * `/clear` both ended in the same toast, `Conversation history cleared.`, so
  * there was no way to tell a save from a no-save from a failed save. The fix for
- * that is {@link ClearPlan.noteSaveIsDefault} having something to be appended to:
- * a result line that says what actually happened.
+ * that is a result line which says what actually happened, for the note to be
+ * appended to.
+ *
+ * `plural` comes from `text.ts`, which has no imports either — the idiom this
+ * file would otherwise have been the fifteenth place to hand-roll.
  *
  * A pure leaf so the parse is tested without Ink or a React tree — `App.tsx`'s
  * `/clear` branch reaches a store, an agent, four persistence calls and a
  * terminal escape, none of which this decision depends on.
  */
 
-export interface ClearPlan {
-  /** Whether to extract facts before wiping the history. */
-  save: boolean;
-  /**
-   * Whether to tell the user that `--save` is redundant.
-   *
-   * True only when they actually typed it — a note on every clear is noise, and a
-   * note on `--do-not-save` would be actively wrong.
-   */
-  noteSaveIsDefault: boolean;
-}
+/**
+ * The three things `/clear` can be asked to do.
+ *
+ * A union rather than `{save, noteSaveIsDefault}`, because those two booleans
+ * admit `{save: false, noteSaveIsDefault: true}` — telling the user "saving is
+ * the default" on the flag that turns saving OFF. A docstring had to explain that
+ * the state was meaningless and a test had to assert it never occurred; the union
+ * makes both unnecessary.
+ */
+export type ClearPlan = 'save' | 'save-noting-default' | 'skip';
 
 /** What to print when the arguments do not parse. Names every accepted spelling. */
 export const CLEAR_USAGE = 'Usage: /clear [--save | --do-not-save]';
@@ -54,9 +58,9 @@ const NO_SAVE_FLAGS = new Set(['--do-not-save', '--no-save']);
  */
 export function parseClearArgs(args: string): ClearPlan | null {
   const arg = args.trim();
-  if (arg === '') return { save: true, noteSaveIsDefault: false };
-  if (SAVE_FLAGS.has(arg)) return { save: true, noteSaveIsDefault: true };
-  if (NO_SAVE_FLAGS.has(arg)) return { save: false, noteSaveIsDefault: false };
+  if (arg === '') return 'save';
+  if (SAVE_FLAGS.has(arg)) return 'save-noting-default';
+  if (NO_SAVE_FLAGS.has(arg)) return 'skip';
   return null;
 }
 
@@ -68,8 +72,36 @@ export const SAVE_IS_DEFAULT_NOTE =
 export type SaveOutcome =
   | { kind: 'skipped' }
   | { kind: 'too-short' }
+  /**
+   * RAG is off, so there is nowhere for extracted facts to land.
+   *
+   * Measured before this existed: the two extraction calls ran anyway and every
+   * fact was dropped on the floor — ~10 s of blocked REPL and ~98,000 input
+   * tokens per clear, paid by whoever had turned long-term memory off. Opting in
+   * with `--save` used to be the only way to reach that; saving by default made
+   * it the common path.
+   */
+  | { kind: 'no-memory' }
   | { kind: 'failed'; message: string }
   | { kind: 'saved'; facts: number };
+
+/** The sentence for one outcome. Exhaustive, so a sixth variant is a compile error. */
+function headline(outcome: SaveOutcome): string {
+  switch (outcome.kind) {
+    case 'skipped':
+      return 'Cleared without saving.';
+    case 'too-short':
+      return 'Cleared. Too little conversation to save anything from.';
+    case 'no-memory':
+      return 'Cleared. Nothing was saved — long-term memory is off (BERNARD_RAG_ENABLED).';
+    case 'failed':
+      return `Cleared, but saving failed: ${outcome.message}`;
+    case 'saved':
+      return outcome.facts === 0
+        ? 'Cleared and saved — no new facts beyond what memory already held.'
+        : `Cleared and saved ${outcome.facts} new ${plural(outcome.facts, 'fact', 'facts')} to memory.`;
+  }
+}
 
 /**
  * The one line the user gets after a clear.
@@ -82,19 +114,6 @@ export type SaveOutcome =
  * ordinary result of clearing twice about the same subject, not a failure.
  */
 export function clearResultMessage(outcome: SaveOutcome, noteSaveIsDefault = false): string {
-  const head = (() => {
-    switch (outcome.kind) {
-      case 'skipped':
-        return 'Cleared without saving.';
-      case 'too-short':
-        return 'Cleared. Too little conversation to save anything from.';
-      case 'failed':
-        return `Cleared, but saving failed: ${outcome.message}`;
-      case 'saved':
-        return outcome.facts === 0
-          ? 'Cleared and saved — no new facts beyond what memory already held.'
-          : `Cleared and saved ${outcome.facts} new fact${outcome.facts === 1 ? '' : 's'} to memory.`;
-    }
-  })();
+  const head = headline(outcome);
   return noteSaveIsDefault ? `${head} ${SAVE_IS_DEFAULT_NOTE}` : head;
 }

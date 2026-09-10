@@ -41,7 +41,7 @@
 /** A budget a timeout can be attributed to. */
 export type TimeoutBudget = 'shell' | 'mcp-connect' | 'dispatch';
 
-export interface OfferableBudget {
+interface OfferableBudget {
   /** The `ProfileSettings` key a `profile`-scoped acceptance writes. */
   settingKey: 'shellTimeout';
   /** What the user types to set it themselves, named in the message. */
@@ -65,7 +65,9 @@ export interface OfferableBudget {
  * prompt channel exists in the shape this uses — so they are a separate change.
  * Adding a row here is most of the work when they land.
  */
-export const OFFERABLE_BUDGETS: Readonly<Partial<Record<TimeoutBudget, OfferableBudget>>> = {
+export const OFFERABLE_BUDGETS: Readonly<
+  Record<'shell', OfferableBudget> & Partial<Record<TimeoutBudget, OfferableBudget>>
+> = {
   shell: {
     settingKey: 'shellTimeout',
     command: '/options shell-timeout',
@@ -73,8 +75,17 @@ export const OFFERABLE_BUDGETS: Readonly<Partial<Record<TimeoutBudget, Offerable
   },
 };
 
-/** Whether a timeout on this budget may ask to be raised. */
-export function isOfferable(budget: TimeoutBudget): boolean {
+/**
+ * Whether a timeout on this budget may ask to be raised.
+ *
+ * **This is not what holds the safety property.** The only production call is
+ * `claimOffer('shell')` with a literal, so this always returns `true` there —
+ * what stops a liveness guard being offered is the ABSENCE of a row above, and a
+ * `provider-stall` row would not even type-check against {@link TimeoutBudget}.
+ * Worth stating because the runtime check reads as the enforcement and somebody
+ * may defend it as such.
+ */
+function isOfferable(budget: TimeoutBudget): boolean {
   return budget in OFFERABLE_BUDGETS;
 }
 
@@ -85,9 +96,9 @@ export function isOfferable(budget: TimeoutBudget): boolean {
  * leaves the setting alone, which is what makes accepting safe for someone who
  * only wants this one command to finish.
  */
-export type OfferScope = 'once' | 'session' | 'profile' | 'decline';
+type OfferScope = 'once' | 'session' | 'profile' | 'decline';
 
-export interface OfferChoice {
+interface OfferChoice {
   label: string;
   scope: OfferScope;
 }
@@ -103,8 +114,25 @@ export interface OfferChoice {
  * observe a count.
  */
 export function doubled(ms: number): number {
-  return ms * 2;
+  return Math.min(ms * 2, MAX_SHELL_TIMEOUT_MS);
 }
+
+/**
+ * The ceiling a doubling may not cross.
+ *
+ * The step-limit ladder this copies carries TWO bounds — a per-turn expansion
+ * count and `REACT_MAX_STEPS_CEILING` — and only the first was copied. Without
+ * this, a user already sitting at a hand-raised `shellTimeout` can accept their
+ * way to a twenty-minute **synchronous** `spawnSync` on Ink's render thread.
+ *
+ * 600,000 is not invented here: `profiles-wizard-data.ts` already declares
+ * `{kind:'int', min: 1_000, max: 600_000}` for this very setting, so without the
+ * clamp a `profile`-scoped acceptance could persist a value the wizard's own
+ * field would refuse to accept back. Restated rather than imported, because
+ * importing it would give this zero-import leaf an edge to the wizard's data
+ * module; a test pins the two together instead.
+ */
+export const MAX_SHELL_TIMEOUT_MS = 600_000;
 
 /**
  * Renders a budget the way a person would say it.

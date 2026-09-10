@@ -1,15 +1,15 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 import {
   OFFERABLE_BUDGETS,
-  isOfferable,
   claimOffer,
   _resetOffers,
   doubled,
   offerChoices,
   shellTimeoutMessage,
+  MAX_SHELL_TIMEOUT_MS,
 } from './timeout-offer.js';
+import * as optionsModule from './config.js';
+import { WIZARD_CATEGORIES_DATA } from './profiles-wizard-data.js';
 
 /**
  * Which timeouts may offer to raise themselves (#477).
@@ -23,46 +23,45 @@ import {
 beforeEach(() => _resetOffers());
 
 describe('the offerable set', () => {
-  it('offers the shell timeout, which is the one that bit', () => {
-    expect(isOfferable('shell')).toBe(true);
-  });
-
-  it('never offers either stall guard', () => {
-    // The load-bearing test. Both are liveness detectors: a dead connection stays
-    // dead, so doubling buys a 180-second wait for the same failure — and #302
-    // sized the provider guard at 3.3x the worst legitimate TTFB across 1,230 real
-    // requests precisely so it never fires on slow-but-alive.
+  it('never offers either stall guard, and offers exactly one thing', () => {
+    // The load-bearing assertion. Both stall guards are liveness detectors: a dead
+    // connection stays dead, so doubling buys a 180-second wait for the same
+    // failure — and #302 sized the provider guard at 3.3x the worst legitimate
+    // TTFB across 1,230 real requests precisely so it never fires on slow-but-alive.
     //
-    // Asserted against the table's KEYS rather than by calling `isOfferable` with
-    // a string the type rejects: the point is that no row exists, and a row is
-    // what a future edit would add.
-    const keys = Object.keys(OFFERABLE_BUDGETS);
-    expect(keys).not.toContain('provider-stall');
-    expect(keys).not.toContain('stream-stall');
-    expect(keys).not.toContain('cron-job');
+    // Exact equality on the keys, not three `not.toContain`s. It is strictly
+    // stronger (it fails on ANY new row, which is the event a human should look
+    // at) and it cannot go vacuous. The predecessor sliced the module's own SOURCE
+    // between two `indexOf` anchors, one of which this very review unexported — at
+    // which point `indexOf` returns -1, the slice becomes the file tail, and the
+    // assertions pass without examining the table at all.
+    expect(Object.keys(OFFERABLE_BUDGETS)).toEqual(['shell']);
   });
 
-  it('names a rationale for every budget it does offer', () => {
-    // A row without one is a row somebody added without deciding whether the
-    // budget expresses work or liveness, which is the distinction the whole
-    // module exists to hold.
+  it('names a rationale and a real /options command for the row it has', () => {
+    // A row without a rationale is a row somebody added without deciding whether
+    // the budget expresses work or liveness, which is the distinction the module
+    // exists to hold.
     for (const [budget, spec] of Object.entries(OFFERABLE_BUDGETS)) {
       expect(spec?.rationale, budget).toBeTruthy();
       expect(spec?.command, budget).toMatch(/^\/options /);
     }
   });
 
-  it('keeps the two stall guards out of the source as offerable, not just out of the table', () => {
-    // A scan rather than a type: the env names are the thing a future edit would
-    // reach for, and `meta-coverage`-style source checks are this repo's idiom
-    // where the invariant is "nobody wired this up".
-    const src = fs.readFileSync(path.join(import.meta.dirname, 'timeout-offer.ts'), 'utf-8');
-    const table = src.slice(
-      src.indexOf('OFFERABLE_BUDGETS'),
-      src.indexOf('export function isOfferable'),
-    );
-    expect(table).not.toContain('PROVIDER_STALL');
-    expect(table).not.toContain('STREAM_STALL');
+  it('persists to a key `/options` actually knows, and the command names that row', () => {
+    // The table restates `OPTIONS_REGISTRY`'s `configKey` and its key. Rename
+    // either and the offer would tell the user to type one command while writing a
+    // different setting, with nothing failing. Pinned rather than imported:
+    // `config.ts` pulls dotenv, providers and the model policy, and this is a
+    // zero-import leaf reached from the eager tool group.
+    const { OPTIONS_REGISTRY } = optionsModule;
+    for (const spec of Object.values(OFFERABLE_BUDGETS)) {
+      const optionName = spec!.command.replace('/options ', '');
+      expect(OPTIONS_REGISTRY[optionName as keyof typeof OPTIONS_REGISTRY]).toBeDefined();
+      expect(OPTIONS_REGISTRY[optionName as keyof typeof OPTIONS_REGISTRY].configKey).toBe(
+        spec!.settingKey,
+      );
+    }
   });
 });
 
@@ -81,8 +80,23 @@ describe('claimOffer', () => {
 });
 
 describe('the offer itself', () => {
-  it('doubles, because a killed command reveals no duration to derive one from', () => {
+  it('doubles, and stops at the ceiling the wizard already declares', () => {
+    // The step-limit ladder this copies carries two bounds and only one was
+    // copied. Without the clamp, a user at a hand-raised budget can accept their
+    // way to a twenty-minute SYNCHRONOUS `spawnSync` on Ink's render thread — and
+    // a `profile`-scoped acceptance would persist a value
+    // `profiles-wizard-data.ts` declares out of range.
     expect(doubled(30_000)).toBe(60_000);
+    expect(doubled(400_000)).toBe(MAX_SHELL_TIMEOUT_MS);
+    expect(doubled(MAX_SHELL_TIMEOUT_MS)).toBe(MAX_SHELL_TIMEOUT_MS);
+  });
+
+  it('agrees with the bound the settings wizard enforces', () => {
+    // Restated rather than imported, so a test holds the two together.
+    const shell = WIZARD_CATEGORIES_DATA.flatMap((c) => c.fields).find(
+      (o) => o.key === 'shellTimeout',
+    );
+    expect(shell?.field).toMatchObject({ max: MAX_SHELL_TIMEOUT_MS });
   });
 
   it('offers once / session / profile / decline, in that order', () => {
@@ -108,12 +122,6 @@ describe('the offer itself', () => {
     // what somebody debugging a timeout would set.
     expect(offerChoices(300, '/x')[0].label).toContain('300ms');
     expect(offerChoices(300, '/x')[0].label).not.toContain('0s');
-  });
-
-  it('always offers a way out', () => {
-    // A ceiling prompt with no decline is a prompt that cannot be answered
-    // honestly by someone who wants the guard left alone.
-    expect(offerChoices(60_000, '/x').some((c) => c.scope === 'decline')).toBe(true);
   });
 });
 

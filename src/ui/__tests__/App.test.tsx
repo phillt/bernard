@@ -775,57 +775,81 @@ describe('<App> /clear', () => {
     unmount();
   });
 
-  it('a bare /clear SAVES, which is the whole of #250', async () => {
-    // The inversion, asserted on the extraction actually running rather than on
-    // the toast — a message is what a reader notices, and a model call is what
-    // makes the save real. Two turns of history so it clears
-    // MIN_HISTORY_FOR_FACTS; with less, the too-short branch would make this
-    // pass without saving anything.
-    const { stdin, agentSpy, unmount } = renderApp({
-      history: [
-        { role: 'user', content: 'hello' },
-        { role: 'assistant', content: 'hi' },
-      ],
-    });
+  /** Enough history to clear `MIN_HISTORY_FOR_FACTS`, plus somewhere for facts to go. */
+  const SAVEABLE = {
+    history: [
+      { role: 'user' as const, content: 'hello' },
+      { role: 'assistant' as const, content: 'hi' },
+    ],
+    config: { ragEnabled: true },
+    stores: { rag: { addFacts: vi.fn(async () => 0) } as unknown as RAGStore },
+  };
+
+  it.each([
+    ['/clear', true],
+    ['/clear --do-not-save', false],
+  ])('%s runs the extraction: %s', async (text, shouldSave) => {
+    // The inversion (#250), asserted on the extraction actually running rather
+    // than on the toast — a message is what a reader notices, a model call is what
+    // makes the save real. The second row is the guard: the first passes if saving
+    // is unconditional, which would make the opt-out a lie.
+    const { stdin, agentSpy, unmount } = renderApp(SAVEABLE);
     await tick();
-    await submit(stdin, '/clear');
+    await submit(stdin, text);
     await tick(40);
-    expect(mockExtractDomainFacts).toHaveBeenCalled();
+    if (shouldSave) expect(mockExtractDomainFacts).toHaveBeenCalled();
+    else expect(mockExtractDomainFacts).not.toHaveBeenCalled();
     expect(agentSpy.clearHistory).toHaveBeenCalled();
     unmount();
   });
 
-  it('--do-not-save really does skip the model call', async () => {
-    // Guards the guard: the test above passes if saving is unconditional, which
-    // would make the opt-out a lie.
-    const { stdin, unmount } = renderApp({
+  it('does not spend two model calls when there is nowhere to put the facts', async () => {
+    // Measured before this gate existed: ~10 s of blocked REPL and ~98,000 input
+    // tokens per clear, every fact discarded, paid by whoever turned long-term
+    // memory off. `renderApp` supplies no `stores.rag` by default, which is what
+    // that configuration looks like.
+    const { stdin, lastFrame, unmount } = renderApp({
       history: [
         { role: 'user', content: 'hello' },
         { role: 'assistant', content: 'hi' },
       ],
     });
     await tick();
-    await submit(stdin, '/clear --do-not-save');
+    await submit(stdin, '/clear');
     await tick(40);
     expect(mockExtractDomainFacts).not.toHaveBeenCalled();
+    expect(lastFrame() ?? '').toContain('long-term memory is off');
     unmount();
   });
 
-  it('tells the user --save is redundant, but only when they typed it', async () => {
-    const { stdin, lastFrame, unmount } = renderApp();
+  it.each([
+    ['/clear --save', true],
+    ['/clear', false],
+  ])('%s notes the flag is redundant: %s', async (text, shouldNote) => {
+    const { stdin, lastFrame, unmount } = renderApp(SAVEABLE);
     await tick();
-    await submit(stdin, '/clear --save');
+    await submit(stdin, text);
     await tick(40);
-    expect(lastFrame()).toContain('saves by default now');
+    const frame = lastFrame() ?? '';
+    if (shouldNote) expect(frame).toContain('saves by default now');
+    else expect(frame).not.toContain('saves by default now');
     unmount();
   });
 
-  it('does not nag on a bare /clear', async () => {
-    const { stdin, lastFrame, unmount } = renderApp();
+  it('the result survives the next keystroke, which is why it is not a toast', async () => {
+    // `flashToast` is cleared by the next submit and REPLACES rather than queues.
+    // "You just spent ten seconds saving and here is whether it worked" has to
+    // outlive a keypress — the rule `catalog-notice`'s `provider-wiped` and
+    // `memory-notice` both already follow. A toast passes every other assertion in
+    // this block and fails only this one.
+    const { stdin, lastFrame, unmount } = renderApp(SAVEABLE);
     await tick();
     await submit(stdin, '/clear');
     await tick(40);
-    expect(lastFrame() ?? '').not.toContain('saves by default now');
+    expect(lastFrame() ?? '').toContain('Cleared');
+    await submit(stdin, 'a following turn');
+    await tick(40);
+    expect(lastFrame() ?? '').toContain('Cleared');
     unmount();
   });
 
@@ -897,8 +921,16 @@ describe('<App> /clear --save (#228)', () => {
   it('runs no summarize LLM call — its only consumer was the memory write', async () => {
     // Retiring the write retires the call. Fact extraction still runs; it reads
     // the raw transcript, never the summary.
+    //
+    // Needs a RAG store since #250: extraction is skipped entirely when there is
+    // nowhere for the facts to land, so without one this asserts the absence of a
+    // call that was never going to happen.
     const history = makeHistory();
-    const { stdin, unmount } = renderApp({ history });
+    const { stdin, unmount } = renderApp({
+      history,
+      config: { ragEnabled: true },
+      stores: { rag: { addFacts: vi.fn(async () => 0) } as unknown as RAGStore },
+    });
     await tick();
     await submit(stdin, '/clear --save');
     await tick(80);

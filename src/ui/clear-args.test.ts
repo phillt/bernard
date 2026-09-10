@@ -4,7 +4,7 @@ import {
   clearResultMessage,
   SAVE_IS_DEFAULT_NOTE,
   type SaveOutcome,
-} from '../ui/clear-args.js';
+} from './clear-args.js';
 
 /**
  * `/clear`'s arguments and its one line of output (#250).
@@ -15,35 +15,22 @@ import {
  */
 
 describe('parseClearArgs', () => {
-  it('saves when given nothing, which is the inversion', () => {
-    expect(parseClearArgs('')).toEqual({ save: true, noteSaveIsDefault: false });
-  });
-
-  it('still accepts --save, and says it is redundant', () => {
-    for (const flag of ['--save', '-s']) {
-      expect(parseClearArgs(flag)).toEqual({ save: true, noteSaveIsDefault: true });
-    }
-  });
-
-  it('skips the save on --do-not-save', () => {
-    expect(parseClearArgs('--do-not-save')).toEqual({ save: false, noteSaveIsDefault: false });
-  });
-
-  it('accepts --no-save as well', () => {
+  // A table, because the whole function is a four-row mapping. The predecessor
+  // wrote five near-identical `it`s, one of which (`never nags on the opt-out`)
+  // only restated a `toEqual` two tests above it.
+  it.each([
+    ['', 'save'],
+    ['--save', 'save-noting-default'],
+    ['-s', 'save-noting-default'],
+    ['--do-not-save', 'skip'],
     // #250 names only the long form and that is what `/help` shows. The alias is
-    // here because the one command whose purpose is "do not lose my work" should
-    // not answer the conventional spelling with a usage error.
-    expect(parseClearArgs('--no-save')).toEqual({ save: false, noteSaveIsDefault: false });
-  });
-
-  it('never nags on the opt-out', () => {
-    // A note saying "saving is the default" on the flag that turns saving OFF
-    // would be actively wrong, not merely noisy.
-    expect(parseClearArgs('--do-not-save')?.noteSaveIsDefault).toBe(false);
-  });
-
-  it('tolerates surrounding whitespace', () => {
-    expect(parseClearArgs('   --save  ')).toEqual({ save: true, noteSaveIsDefault: true });
+    // accepted because the one command whose purpose is "do not lose my work"
+    // should not answer the conventional spelling with a usage error.
+    ['--no-save', 'skip'],
+    // Whitespace is the caller's, not the user's: `App.tsx` passes the raw slice.
+    ['   --save  ', 'save-noting-default'],
+  ] as const)('parses %o as %s', (arg, expected) => {
+    expect(parseClearArgs(arg)).toBe(expected);
   });
 
   it('REFUSES anything else rather than defaulting', () => {
@@ -65,6 +52,10 @@ describe('clearResultMessage', () => {
   const cases: Array<[SaveOutcome, string]> = [
     [{ kind: 'skipped' }, 'Cleared without saving.'],
     [{ kind: 'too-short' }, 'Cleared. Too little conversation to save anything from.'],
+    [
+      { kind: 'no-memory' },
+      'Cleared. Nothing was saved — long-term memory is off (BERNARD_RAG_ENABLED).',
+    ],
     [{ kind: 'saved', facts: 7 }, 'Cleared and saved 7 new facts to memory.'],
     [{ kind: 'saved', facts: 1 }, 'Cleared and saved 1 new fact to memory.'],
   ];
