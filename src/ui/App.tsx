@@ -120,6 +120,7 @@ import {
   parseClearArgs,
   clearResultMessage,
   CLEAR_USAGE,
+  CLEAR_RECEIPT_GUTTER,
   type SaveOutcome,
   type SavedFact,
 } from './clear-args.js';
@@ -700,7 +701,7 @@ export function App({
   welcomeLines,
 }: AppProps) {
   const { exit } = useApp();
-  const { rows } = useDimensionsCtx();
+  const { rows, columns } = useDimensionsCtx();
   const [activeOverlay, setActiveOverlay] = useState<Overlay | null>(null);
   const [busy, setBusy] = useState(false);
   // Whether the input line is currently empty — drives the transcript's Home/End
@@ -1393,7 +1394,17 @@ export function App({
       // cleared by the next submit and REPLACES rather than queues, and "you just
       // spent ten seconds saving and here is whether it worked, plus a flag you no
       // longer need" is not a thing to lose to the next keypress.
-      pushAssistantNotice(clearResultMessage(outcome, plan === 'save-noting-default'));
+      // Width derived from the same constant the receipt uses, not a local guess:
+      // the body renders at `columns - 4` and the `❮  ` chevron takes 3 more
+      // beside it, and a row that overshoots does not shorten — it wraps, and the
+      // tail reads as another row.
+      pushAssistantNotice(
+        clearResultMessage(
+          outcome,
+          plan === 'save-noting-default',
+          Math.max(40, columns - CLEAR_RECEIPT_GUTTER),
+        ),
+      );
       return;
     }
     if (is(text, '/help')) {

@@ -99,44 +99,73 @@ describe('the receipt', () => {
     { domain: 'general', fact: 'The repair gated on Latin-1, so it never fired.' },
     { domain: 'tool-usage', fact: 'web_read was never normalized.' },
   ];
+  const render = (width = 73, note = false) =>
+    clearResultMessage({ kind: 'saved', facts: 3, kept }, note, width);
+  /**
+   * The table rows only. The headline is prose and may wrap harmlessly; a ROW
+   * that wraps is the bug, because its tail reads as another row.
+   */
+  const rowsOf = (out: string) => out.split('\n').filter((l) => l.startsWith('  '));
 
   it('lists one line per DOMAIN, not one per fact', () => {
     // What keeps it a receipt rather than a second `/memory`. The domain registry
     // is closed, so the height is bounded with no elision to maintain.
-    const lines = clearResultMessage({ kind: 'saved', facts: 3, kept }).split('\n');
-    expect(lines).toHaveLength(3); // headline + two domains
-    expect(lines[1]).toContain('general (2)');
-    expect(lines[2]).toContain('tool-usage');
+    const lines = render().split('\n');
+    expect(lines).toHaveLength(4); // headline, blank, two domains
+    expect(lines[2]).toContain('general (2)');
+    expect(lines[3]).toContain('tool-usage (1)');
   });
 
-  it('shows a count only when a domain has more than one', () => {
-    expect(clearResultMessage({ kind: 'saved', facts: 3, kept })).toContain('tool-usage ·');
-  });
-
-  it('truncates a long fact rather than wrapping the frame', () => {
-    const long = [{ domain: 'general', fact: 'x'.repeat(500) }];
-    for (const line of clearResultMessage({ kind: 'saved', facts: 1, kept: long }).split('\n')) {
-      expect(line.length).toBeLessThan(100);
+  it('NEVER emits a row wider than the width it was given', () => {
+    // The reported bug: the predecessor budgeted 68 characters for the FACT and
+    // counted neither the indent nor the label, so a long domain name pushed the
+    // row past the frame and Ink wrapped it — and a wrapped tail reads as another
+    // row, which is worse than no receipt.
+    const long = [
+      { domain: 'user-preferences', fact: 'x'.repeat(400) },
+      { domain: 'conversations', fact: 'y'.repeat(400) },
+    ];
+    for (const width of [40, 60, 73, 93, 200]) {
+      const out = clearResultMessage({ kind: 'saved', facts: 2, kept: long }, false, width);
+      expect(rowsOf(out).length).toBeGreaterThan(0);
+      for (const row of rowsOf(out)) {
+        expect(row.length, `width ${width}`).toBeLessThanOrEqual(width);
+      }
     }
+  });
+
+  it('aligns the fact column across rows', () => {
+    // The difference between a table and three sentences. Padding survives
+    // rendering because `renderMarkdown` sets `reflowText: false`.
+    const rows = rowsOf(render());
+    expect(rows).toHaveLength(2);
+    const factColumn = rows.map((r) => (r.match(/^ {2}.*?\S {2,}/) ?? [''])[0].length);
+    expect(new Set(factColumn).size).toBe(1);
+  });
+
+  it('drops the fact rather than crushing it when the frame is tiny', () => {
+    const out = clearResultMessage({ kind: 'saved', facts: 3, kept }, false, 30);
+    for (const row of rowsOf(out)) expect(row.length).toBeLessThanOrEqual(30);
+    expect(out).toContain('general (2)');
+    // The label survives; the fact is what goes.
+    expect(out).not.toContain('Subject header');
   });
 
   it('flattens whitespace so a multi-line fact stays one line', () => {
     const messy = [{ domain: 'general', fact: 'a\n\n  b\tc' }];
-    const out = clearResultMessage({ kind: 'saved', facts: 1, kept: messy });
-    expect(out.split('\n')).toHaveLength(2);
+    const out = clearResultMessage({ kind: 'saved', facts: 1, kept: messy }, false, 73);
+    expect(out.split('\n')).toHaveLength(3);
     expect(out).toContain('a b c');
   });
 
   it('puts the --save note on its own line when there is a receipt', () => {
     // Otherwise it rides the last listed fact and reads as part of it.
-    const out = clearResultMessage({ kind: 'saved', facts: 3, kept }, true);
-    const lines = out.split('\n');
+    const lines = render(73, true).split('\n');
     expect(lines[lines.length - 1]).toBe(SAVE_IS_DEFAULT_NOTE);
   });
 
   it('says nothing extra when the save added nothing', () => {
-    // Zero survivors means no receipt: there is nothing to show, and a header
-    // with no rows under it reads as a bug.
+    // Zero survivors means no receipt: a header with no rows reads as a bug.
     expect(clearResultMessage({ kind: 'saved', facts: 0, kept: [] })).not.toContain('\n');
   });
 });

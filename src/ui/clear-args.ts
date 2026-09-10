@@ -91,8 +91,36 @@ export interface SavedFact {
   fact: string;
 }
 
-/** How wide one listed fact may be before it is cut. */
-const RECEIPT_WIDTH = 68;
+/**
+ * Content width when the caller does not know one — 80 columns minus the frame.
+ * See {@link CLEAR_RECEIPT_GUTTER} for where the 7 comes from.
+ */
+const DEFAULT_WIDTH = 73;
+
+/**
+ * Columns the receipt does not get: `MarkdownLines` renders at `columns - 4`
+ * (App's `paddingX={2}`), and the `❮  ` chevron sits in a flex row BESIDE that
+ * body rather than above it, taking 3 more.
+ *
+ * Exported so `App.tsx` derives the budget from the same number rather than
+ * subtracting its own guess — the first cut budgeted 68 characters for the FACT
+ * and counted neither the indent nor the label, so a long domain name pushed the
+ * line past the frame and Ink wrapped it. A receipt that wraps is worse than no
+ * receipt: the wrapped tail reads as a new row.
+ */
+export const CLEAR_RECEIPT_GUTTER = 7;
+
+/** Indent before each row. Two, not four — four would make markdown a code block. */
+const INDENT = '  ';
+
+/** Gap between the label column and the fact. */
+const GAP = '  ';
+
+/** A label column wider than this is eating the fact; the domain registry is closed, so this is slack. */
+const LABEL_MAX = 24;
+
+/** Below this there is no room for a fact worth reading, so the receipt drops to labels only. */
+const FACT_MIN = 24;
 
 /**
  * The per-domain receipt: what Bernard actually took away from the conversation.
@@ -112,23 +140,42 @@ const RECEIPT_WIDTH = 68;
  * than a second `/memory`. The domain registry is closed — four of them — so the
  * height is bounded by construction with no "…and N more" to maintain, and the
  * count carries what the elision would have said.
+ *
+ * **The label column is padded so the fact column aligns**, which is the whole
+ * difference between a table and three sentences. Padding survives rendering
+ * because `renderMarkdown` sets `reflowText: false` — Ink owns wrapping, so
+ * marked-terminal leaves the lines exactly as written. That is also why every row
+ * must be measured to fit: nothing downstream will shorten it, it will simply
+ * wrap and the tail will read as another row.
  */
-function receiptLines(kept: readonly SavedFact[]): string[] {
+function receiptLines(kept: readonly SavedFact[], width: number): string[] {
   const byDomain = new Map<string, string[]>();
   for (const k of kept) {
     const list = byDomain.get(k.domain);
     if (list) list.push(k.fact);
     else byDomain.set(k.domain, [k.fact]);
   }
-  return Array.from(byDomain, ([domain, facts]) => {
-    const count = facts.length > 1 ? ` (${facts.length})` : '';
-    const sample = truncate(facts[0].replace(/\s+/g, ' ').trim(), RECEIPT_WIDTH);
-    return `  ${domain}${count} · ${sample}`;
+
+  const rows = Array.from(byDomain, ([domain, facts]) => ({
+    label: `${domain} (${facts.length})`,
+    fact: facts[0].replace(/\s+/g, ' ').trim(),
+  }));
+
+  const labelWidth = Math.min(
+    LABEL_MAX,
+    rows.reduce((w, r) => Math.max(w, r.label.length), 0),
+  );
+  const factWidth = width - INDENT.length - labelWidth - GAP.length;
+
+  return rows.map((r) => {
+    const label = r.label.padEnd(labelWidth);
+    if (factWidth < FACT_MIN) return `${INDENT}${label}`.trimEnd();
+    return `${INDENT}${label}${GAP}${truncate(r.fact, factWidth)}`;
   });
 }
 
 /** The sentence for one outcome. Exhaustive, so a sixth variant is a compile error. */
-function headline(outcome: SaveOutcome): string {
+function headline(outcome: SaveOutcome, width: number): string {
   switch (outcome.kind) {
     case 'skipped':
       return 'Cleared without saving.';
@@ -143,7 +190,10 @@ function headline(outcome: SaveOutcome): string {
         return 'Cleared and saved — no new facts beyond what memory already held.';
       }
       const head = `Cleared and saved ${outcome.facts} new ${plural(outcome.facts, 'fact', 'facts')} to memory:`;
-      return [head, ...receiptLines(outcome.kept)].join('\n');
+      // A blank line between the sentence and the table, so markdown keeps them
+      // as separate paragraphs and the receipt reads as a block rather than a
+      // run-on.
+      return [head, '', ...receiptLines(outcome.kept, width)].join('\n');
     }
   }
 }
@@ -158,8 +208,12 @@ function headline(outcome: SaveOutcome): string {
  * zero in a count: `addFacts` returns what survived dedup, so nothing new is the
  * ordinary result of clearing twice about the same subject, not a failure.
  */
-export function clearResultMessage(outcome: SaveOutcome, noteSaveIsDefault = false): string {
-  const head = headline(outcome);
+export function clearResultMessage(
+  outcome: SaveOutcome,
+  noteSaveIsDefault = false,
+  width: number = DEFAULT_WIDTH,
+): string {
+  const head = headline(outcome, width);
   if (!noteSaveIsDefault) return head;
   // Its own line whenever the headline has more than one, or the note rides the
   // last listed fact and reads as part of it.
