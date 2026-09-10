@@ -48,22 +48,22 @@ describe('the file stays bounded', () => {
     // The writer owns rotation — `apps/invocation-log.ts` states the rule, and
     // the two loggers beside it already follow it. This one had a rotate
     // function nothing called.
-    const { appendReasoningLog, TOOL_WRAPPER_LOG } = await load();
-    for (let i = 0; i < 3000; i++) appendReasoningLog(at(i));
+    const { recordDispatch, TOOL_WRAPPER_LOG } = await load();
+    for (let i = 0; i < 3000; i++) recordDispatch(at(i));
     expect(lineCount(TOOL_WRAPPER_LOG)).toBeLessThanOrEqual(CEILING);
   });
 
   it('stays bounded across many multiples of the budget', async () => {
     // Guards the guard: a one-shot trim would pass the case above and still grow
     // without limit. 6,000 appends is three budgets' worth.
-    const { appendReasoningLog, TOOL_WRAPPER_LOG } = await load();
-    for (let i = 0; i < 6000; i++) appendReasoningLog(at(i));
+    const { recordDispatch, TOOL_WRAPPER_LOG } = await load();
+    for (let i = 0; i < 6000; i++) recordDispatch(at(i));
     expect(lineCount(TOOL_WRAPPER_LOG)).toBeLessThanOrEqual(CEILING);
   });
 
   it('keeps the NEWEST entries when it trims', async () => {
-    const { appendReasoningLog, readReasoningLog, TOOL_WRAPPER_LOG } = await load();
-    for (let i = 0; i < 3000; i++) appendReasoningLog(at(i, { input: `run-${i}` }));
+    const { recordDispatch, readReasoningLog, TOOL_WRAPPER_LOG } = await load();
+    for (let i = 0; i < 3000; i++) recordDispatch(at(i, { input: `run-${i}` }));
     expect(lineCount(TOOL_WRAPPER_LOG)).toBeLessThanOrEqual(CEILING);
     expect(readReasoningLog(1).at(-1)?.input).toBe('run-2999');
   });
@@ -74,8 +74,8 @@ describe('the file stays bounded', () => {
     // the renderer bounds it, which is a PROMPT bound and not a disk one.
     // Measured, `args` is where the mass is: the largest real one is a 15.7 KB
     // `shell` invocation, and a `file_write` carries a whole file.
-    const { appendReasoningLog, readReasoningLog } = await load();
-    appendReasoningLog(
+    const { recordDispatch, readReasoningLog } = await load();
+    recordDispatch(
       at(1, {
         finalOutput: 'x'.repeat(50_000),
         error: 'y'.repeat(50_000),
@@ -93,8 +93,8 @@ describe('the file stays bounded', () => {
   it('leaves a small args object structured', async () => {
     // Guards the guard: the cap keeps structure when it fits, or the log stops
     // being replayable — which is what it exists for.
-    const { appendReasoningLog, readReasoningLog } = await load();
-    appendReasoningLog(
+    const { recordDispatch, readReasoningLog } = await load();
+    recordDispatch(
       at(1, { toolCalls: [{ tool: 'shell', args: { command: 'ls' }, resultPreview: 'ok' }] }),
     );
     expect(readReasoningLog(1)[0].toolCalls[0].args).toEqual({ command: 'ls' });
@@ -103,8 +103,8 @@ describe('the file stays bounded', () => {
   it('leaves a structured finalOutput structured', async () => {
     // Guards the guard: the cap is on TEXT. A JSON result must survive as JSON
     // or the log stops being replayable, which is what it exists for.
-    const { appendReasoningLog, readReasoningLog } = await load();
-    appendReasoningLog(at(1, { finalOutput: { status: 'ok', rows: 3 } }));
+    const { recordDispatch, readReasoningLog } = await load();
+    recordDispatch(at(1, { finalOutput: { status: 'ok', rows: 3 } }));
     expect(readReasoningLog(1)[0].finalOutput).toEqual({ status: 'ok', rows: 3 });
   });
 });

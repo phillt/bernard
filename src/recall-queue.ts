@@ -39,8 +39,3 @@ export function recallQueue(): WorkQueue<ReasoningLogEntry> {
   });
   return queue;
 }
-
-/** Drops the memoised queue, for tests that re-point `BERNARD_HOME`. */
-export function _resetRecallQueue(): void {
-  queue = undefined;
-}

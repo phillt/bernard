@@ -436,7 +436,7 @@ export async function dispatchToolWrapper(
           } finally {
             // Every exit path, cancellation included — which is what the
             // success/catch pair it replaces already did, by duplication. It
-            // now trails `appendReasoningLog` rather than leading it; both are
+            // now trails `recordDispatch` rather than leading it; both are
             // bookkeeping and `printSpecialistEnd` is a no-op under Ink.
             printSpecialistEnd(id);
           }

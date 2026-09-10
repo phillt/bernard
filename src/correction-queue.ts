@@ -55,8 +55,3 @@ export function correctionQueue(): WorkQueue<CorrectionWork> {
   });
   return queue;
 }
-
-/** Drops the memoised queue, for tests that re-point `BERNARD_HOME`. */
-export function _resetCorrectionQueue(): void {
-  queue = undefined;
-}

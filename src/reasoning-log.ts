@@ -7,9 +7,11 @@ import type { ToolErrorType } from './framework/tools/types.js';
 
 /**
  * One entry per `tool_wrapper_run` invocation. Appended as a JSONL line to
- * {@link TOOL_WRAPPER_LOG}. The log is append-only and user-readable; it
- * exists primarily so failed runs can be inspected, replayed, or converted
- * into correction candidates.
+ * {@link TOOL_WRAPPER_LOG} by {@link recordDispatch}, which also puts the same
+ * entry on the recall queue. The log is append-only, bounded by count and
+ * user-readable; it exists so a run can be inspected or replayed. It is NOT where
+ * work comes from — corrections and specialist recall both read their own queue,
+ * because one append-only file cannot say which of N items a pass has finished.
  */
 export interface ReasoningLogEntry {
   ts: string;
@@ -70,36 +72,31 @@ function bounded(entry: ReasoningLogEntry): ReasoningLogEntry {
 }
 
 /**
- * Appends one entry to the reasoning log. Never throws — logging must not break
- * the hot path.
- *
- * **Bounded on append**, which nothing did before: `rotateReasoningLog` had no
- * production caller anywhere in the tree, so this file grew without bound (6.7 MB
- * / 2,354 entries on a real install) — and every consumer paid for that, since
- * `readJsonlTail` reads the whole file before slicing.
- *
- * Through `appendJsonlBounded` rather than a hand-paired append + rotate: the
- * naive pairing measured **25.7 ms per append** on that log, synchronously, on
- * the return path of every dispatch, because rotation pins the file at exactly
- * the size that forces a full rewrite next time. See that function for the
- * numbers.
- */
-export function appendReasoningLog(entry: ReasoningLogEntry): void {
-  appendJsonlBounded(TOOL_WRAPPER_LOG, bounded(entry), REASONING_LOG_KEEP);
-}
-
-/**
  * Records one dispatch: to the log, and onto the recall queue.
  *
- * One function rather than two calls at each of the two producers, because the
- * pair is the thing that has to stay together — a dispatch in the log and not in
- * the queue is one a specialist never learns from, silently, and that is exactly
- * the class of bug the queue replaces. It also means both sites bound the entry
- * through the same `bounded()` before either consumer sees it.
+ * **The only writer.** It briefly had a sibling, `appendReasoningLog`, which
+ * wrote the log alone and re-stated this function's append line — and had no
+ * production caller anywhere in the tree, only tests, so the covered path was not
+ * the taken one. One writer rather than two, because the pair is the thing that
+ * has to stay together: a dispatch in the log and not in the queue is one a
+ * specialist never learns from, silently, which is the class of bug the queue
+ * replaces.
  *
- * The log is no longer a queue and the queue is not a log: the log is the
- * human/replay record, bounded by count and rotated; the queue is in-flight work,
- * bounded by count and emptied by a pass. Neither is derived from the other.
+ * **Never throws** — logging must not break the hot path. `enqueue` holds the
+ * same rule and returns `null` instead.
+ *
+ * **Bounded on append**, which nothing did before: `rotateReasoningLog` had no
+ * production caller either, so this file grew without bound (6.7 MB / 2,354
+ * entries on a real install) and every consumer paid for it, since `readJsonlTail`
+ * reads the whole file before slicing. Through `appendJsonlBounded` rather than a
+ * hand-paired append + rotate: the naive pairing measured **25.7 ms per append**
+ * on that log, synchronously, on the return path of every dispatch, because
+ * rotation pins the file at exactly the size that forces a full rewrite next time.
+ *
+ * The log is not a queue and the queue is not a log: the log is the human/replay
+ * record, bounded by count and rotated; the queue is in-flight work, bounded by
+ * count and emptied by a pass. Neither is derived from the other, and `bounded()`
+ * runs once so both see the same entry.
  */
 export function recordDispatch(entry: ReasoningLogEntry): void {
   const capped = bounded(entry);

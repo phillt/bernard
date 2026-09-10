@@ -27,7 +27,7 @@ function makeEntry(overrides: Partial<ReasoningLogEntry> = {}): ReasoningLogEntr
   };
 }
 
-describe('appendReasoningLog', () => {
+describe('recordDispatch', () => {
   beforeEach(() => {
     // `resetAllMocks`, not `clearAllMocks`: the latter clears call RECORDS and
     // leaves the implementation, so the two tests below that make
@@ -44,23 +44,32 @@ describe('appendReasoningLog', () => {
   });
 
   it('creates LOGS_DIR on first call', async () => {
-    const { appendReasoningLog } = await import('./reasoning-log.js');
-    appendReasoningLog(makeEntry());
+    const { recordDispatch } = await import('./reasoning-log.js');
+    recordDispatch(makeEntry());
     expect(fs.mkdirSync).toHaveBeenCalledWith(expect.stringContaining('logs'), { recursive: true });
   });
 
   it('does not create LOGS_DIR on subsequent calls within the same module instance', async () => {
-    const { appendReasoningLog } = await import('./reasoning-log.js');
-    appendReasoningLog(makeEntry());
-    appendReasoningLog(makeEntry());
-    // mkdirSync should be called exactly once (guarded by logsDirReady flag)
-    expect(fs.mkdirSync).toHaveBeenCalledTimes(1);
+    const { recordDispatch } = await import('./reasoning-log.js');
+    recordDispatch(makeEntry());
+    recordDispatch(makeEntry());
+    // Counted against the LOG directory specifically, not `mkdirSync` as a
+    // whole. `recordDispatch` also enqueues, and `WorkQueue.enqueue` re-`mkdir`s
+    // its own directory on EVERY call deliberately — a "created this process"
+    // latch there is a correctness hazard, since a drain empties the directory
+    // and a cached `true` would make every later enqueue fail silently. A bare
+    // call count conflates the two latches and would fail for the queue doing
+    // exactly what it is documented to do.
+    const logsDirCalls = vi
+      .mocked(fs.mkdirSync)
+      .mock.calls.filter(([dir]) => String(dir).endsWith('logs'));
+    expect(logsDirCalls).toHaveLength(1);
   });
 
   it('appends a JSONL line to TOOL_WRAPPER_LOG', async () => {
-    const { appendReasoningLog } = await import('./reasoning-log.js');
+    const { recordDispatch } = await import('./reasoning-log.js');
     const entry = makeEntry({ specialistId: 'web-wrapper' });
-    appendReasoningLog(entry);
+    recordDispatch(entry);
     expect(fs.appendFileSync).toHaveBeenCalledWith(
       expect.stringContaining('tool-wrappers.jsonl'),
       expect.stringContaining('"specialistId":"web-wrapper"'),
@@ -69,8 +78,8 @@ describe('appendReasoningLog', () => {
   });
 
   it('appended line ends with newline', async () => {
-    const { appendReasoningLog } = await import('./reasoning-log.js');
-    appendReasoningLog(makeEntry());
+    const { recordDispatch } = await import('./reasoning-log.js');
+    recordDispatch(makeEntry());
     const [, data] = vi.mocked(fs.appendFileSync).mock.calls[0] as [string, string, string];
     expect(data.endsWith('\n')).toBe(true);
   });
@@ -79,16 +88,16 @@ describe('appendReasoningLog', () => {
     vi.mocked(fs.appendFileSync).mockImplementation(() => {
       throw new Error('disk full');
     });
-    const { appendReasoningLog } = await import('./reasoning-log.js');
-    expect(() => appendReasoningLog(makeEntry())).not.toThrow();
+    const { recordDispatch } = await import('./reasoning-log.js');
+    expect(() => recordDispatch(makeEntry())).not.toThrow();
   });
 
   it('never throws on mkdirSync error', async () => {
     vi.mocked(fs.mkdirSync).mockImplementation(() => {
       throw new Error('permission denied');
     });
-    const { appendReasoningLog } = await import('./reasoning-log.js');
-    expect(() => appendReasoningLog(makeEntry())).not.toThrow();
+    const { recordDispatch } = await import('./reasoning-log.js');
+    expect(() => recordDispatch(makeEntry())).not.toThrow();
   });
 });
 

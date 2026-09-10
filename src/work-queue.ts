@@ -49,6 +49,8 @@ export interface QueueItem<T> {
   /** How many times a drain has taken this item and not finished it. */
   attempts: number;
   payload: T;
+  /** Why the last attempt failed, when a consumer said. Set by {@link WorkQueue.retry}. */
+  lastError?: string;
 }
 
 export interface WorkQueueOptions<T> {
@@ -87,6 +89,9 @@ const DEFAULT_MAX_PENDING = 200;
 const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
+/** Width of the zero-padded epoch prefix {@link WorkQueue.enqueue} writes. */
+const EPOCH_PREFIX_LEN = 14;
+
 /**
  * Only files named exactly `*.json` are items.
  *
@@ -99,6 +104,23 @@ function isItemFile(name: string): boolean {
   return name.endsWith('.json');
 }
 
+/**
+ * When an item was enqueued, read straight off its name.
+ *
+ * `enqueue` zero-pads `Date.now()` into the first {@link EPOCH_PREFIX_LEN}
+ * characters precisely so the directory sorts in arrival order, which means the
+ * age question is already answered without opening anything. `sweep` asks it of
+ * every pending file, and reading each one to parse `enqueuedAt` instead cost
+ * 3.34 ms at 200 pending against 0.26 ms here — for a number the filename was
+ * carrying all along. `NaN` for a name from some other writer, which `sweep`
+ * treats as unaged rather than as infinitely old: a name it cannot read is not
+ * evidence that the item is stale.
+ */
+function enqueuedAtFromName(name: string): number {
+  const prefix = name.slice(0, EPOCH_PREFIX_LEN);
+  return /^\d+$/.test(prefix) ? Number(prefix) : Number.NaN;
+}
+
 export class WorkQueue<T> {
   private readonly dir: string;
   private readonly parkedDir: string;
@@ -106,6 +128,7 @@ export class WorkQueue<T> {
   private readonly maxPending: number;
   private readonly maxAttempts: number;
   private readonly maxAgeMs: number;
+  private swept = false;
 
   constructor(opts: WorkQueueOptions<T>) {
     this.dir = opts.dir;
@@ -124,30 +147,44 @@ export class WorkQueue<T> {
    * deliberately indistinguishable from a failure to the caller, because neither
    * is actionable there.
    *
-   * `<epochMs>-<uuid>.json`, so a lexical sort of the directory IS arrival order
-   * and {@link claim} needs no `stat` — `inbox/send.ts`'s naming, for its reason.
-   * The epoch prefix is zero-padded so the ordering survives the year 2286.
+   * `<epochMs>-<seq>-<uuid>.json`, so a lexical sort of the directory IS arrival
+   * order and {@link peek} needs no `stat` — `inbox/send.ts`'s naming, for its
+   * reason. The epoch prefix is zero-padded so the ordering survives the year
+   * 2286.
+   *
+   * **A full queue refuses the newest item rather than evicting the oldest**,
+   * which is the opposite direction from {@link sweep}'s over-cap branch, and
+   * both are deliberate: refusing is what keeps the starving item at the head
+   * from being the one thrown away, while a backlog that somehow got over the cap
+   * is recovered from the oldest end because those items are closest to expiry
+   * anyway. Since a refusal means the length never exceeds the cap, that branch
+   * is a recovery path — a cap lowered between versions, or two writers racing —
+   * not the steady state.
    */
   enqueue(payload: T): string | null {
-    // Measured: 0.128 ms at an empty queue and 0.199 ms at 199 pending, against
-    // 0.0075 ms for `appendJsonlBounded`. Most of it is the temp-write-and-rename
-    // rather than the cap's `readdir`, and all of it is noise on the return path
-    // of a dispatch that cost seconds — the 25.7 ms rotation mattered because it
-    // was 25 ms, not because it was per-dispatch.
+    // Measured at 0.128 ms on an empty queue and 0.199 ms at 199 pending,
+    // against 0.0075 ms for `appendJsonlBounded`. The dominant term is the
+    // cap's `readdir`, not the temp-write-and-rename: at 200 files the listing
+    // is 0.080 ms against 0.037 ms for the 3 KB atomic write, and the listing is
+    // what scales (0.021 ms at 52, 0.207 ms at 500). Worth knowing before
+    // optimising the wrong syscall — but not worth caching the count, which is
+    // what `CorrectionCandidateStore` did and what the note below refuses. All of
+    // it is noise on the return path of a dispatch that cost seconds; the 25.7 ms
+    // rotation mattered because it was 25 ms, not because it was per-dispatch.
     try {
+      this.ensureSwept();
       // `mkdirSync` every time, deliberately. A "directory already created this
       // process" cache is what `jsonl.ts` does and it is a correctness hazard
       // here: this directory is EMPTIED by a drain and by tests, so a cached
       // `true` makes every later enqueue fail silently. It also bought nothing —
-      // measured, enqueue is 0.128 ms with the `mkdirSync` and the time is in the
-      // temp-write-and-rename.
+      // measured, `mkdirSync` is 0.002 ms of enqueue's 0.128 ms.
       fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 });
       // Counted rather than cached. `CorrectionCandidateStore` kept an in-memory
       // tally to make this O(1), which is a single-process optimisation that is
       // wrong by construction the moment a second writer exists — it is primed
       // once in a constructor and never re-synced.
-      if (this.names().length >= this.maxPending) return null;
-      const id = `${String(Date.now()).padStart(14, '0')}-${String(seq++).padStart(6, '0')}-${randomUUID()}`;
+      if (this.count() >= this.maxPending) return null;
+      const id = `${String(Date.now()).padStart(EPOCH_PREFIX_LEN, '0')}-${String(seq++).padStart(6, '0')}-${randomUUID()}`;
       const item: QueueItem<T> = {
         id,
         enqueuedAt: new Date().toISOString(),
@@ -162,17 +199,25 @@ export class WorkQueue<T> {
   }
 
   /**
-   * The oldest `limit` items, oldest first, with `attempts` already incremented.
+   * The oldest `limit` readable items, oldest first, **without** touching them.
    *
-   * **Claiming bumps the attempt count before the consumer runs**, so an item
-   * that makes a drain crash cannot be retried forever: the increment is durable
-   * whether or not the consumer returns. That is the difference from a lease,
-   * which would need a clock and an expiry this does not.
+   * Split out from {@link claim} because a consumer may not process everything it
+   * has to read. Recall groups by specialist and renders until a character
+   * budget, so the items past that budget were never shown to a model — and while
+   * `claim` counted an attempt against all of them, three sessions of that parked
+   * work nobody had looked at. Replaying the last 52 real dispatches: 52 claimed
+   * to acknowledge 19, then 33 to acknowledge 13, then 17 parked unprocessed.
+   * That is the marker's loss again, with a paper trail.
    *
-   * An item already at `maxAttempts` is parked here rather than handed out, so a
-   * poison row leaves the working set on the pass that would have retried it.
+   * So the rule is now: **read freely, and count an attempt only against what you
+   * are about to run.** {@link markAttempt} is the other half.
+   *
+   * An item already at `maxAttempts`, or one this build cannot parse, is parked
+   * here rather than returned — neither is work, and a reader is the only pass
+   * that can notice.
    */
-  claim(limit = Number.POSITIVE_INFINITY): Array<QueueItem<T>> {
+  peek(limit = Number.POSITIVE_INFINITY): Array<QueueItem<T>> {
+    this.ensureSwept();
     const out: Array<QueueItem<T>> = [];
     for (const name of this.names()) {
       if (out.length >= limit) break;
@@ -184,14 +229,42 @@ export class WorkQueue<T> {
         continue;
       }
       if (item.attempts >= this.maxAttempts) {
-        this.park(name);
+        this.park(name, item);
         continue;
       }
-      const claimed = { ...item, attempts: item.attempts + 1 };
-      if (!this.write(name, claimed)) continue;
-      out.push(claimed);
+      out.push(item);
     }
     return out;
+  }
+
+  /**
+   * Records durably that these items are about to be attempted.
+   *
+   * **Call it before handing the work to anything that can crash**, which is the
+   * whole property: the increment survives whether or not the consumer returns,
+   * so an item that kills a drain cannot be retried forever. That is the
+   * difference from a lease, which would need a clock and an expiry this does
+   * not. Returns the items as they now are, so a caller can keep using them.
+   */
+  markAttempt(items: Array<QueueItem<T>>): Array<QueueItem<T>> {
+    const out: Array<QueueItem<T>> = [];
+    for (const item of items) {
+      const marked = { ...item, attempts: item.attempts + 1 };
+      if (this.write(`${item.id}.json`, marked)) out.push(marked);
+    }
+    return out;
+  }
+
+  /**
+   * {@link peek} plus {@link markAttempt}, for a consumer that processes
+   * everything it takes.
+   *
+   * Which is corrections: it asks for `MAX_CORRECTIONS_PER_RUN` and runs all of
+   * them. A consumer whose batch size is decided after reading — recall, whose
+   * budget is in characters — wants the two halves separately.
+   */
+  claim(limit = Number.POSITIVE_INFINITY): Array<QueueItem<T>> {
+    return this.markAttempt(this.peek(limit));
   }
 
   /**
@@ -213,16 +286,16 @@ export class WorkQueue<T> {
   /**
    * Hands an item back, recording why.
    *
-   * The attempt was already counted by {@link claim}, so this only persists the
-   * reason — and parks the item when the count is spent, which is what stops a
-   * permanently failing payload costing a model call every session forever.
+   * The attempt was already counted by {@link markAttempt}, so this only persists
+   * the reason — and parks the item when the count is spent, which is what stops
+   * a permanently failing payload costing a model call every session forever.
    */
   retry(id: string, error?: string): void {
     const name = `${id}.json`;
     const item = this.read(name);
     if (!item) return;
     if (item.attempts >= this.maxAttempts) {
-      this.park(name, error);
+      this.park(name, item, error);
       return;
     }
     this.write(name, error === undefined ? item : { ...item, lastError: error });
@@ -235,22 +308,38 @@ export class WorkQueue<T> {
    * correction rows and 42 others sit on this install with nothing that could
    * ever remove them. Over-age items are parked rather than dropped, because an
    * item nobody drained for a week is evidence about the drain; over-cap items
-   * are the oldest, for the same reason `claim` is oldest-first.
+   * are the oldest, for the reason {@link enqueue} gives.
+   *
+   * Reads nothing: a pending item's age is in its name and a parked one's is its
+   * mtime. That is what makes it cheap enough to run from {@link ensureSwept}
+   * rather than from a call site somebody has to remember.
    */
   sweep(now = Date.now()): { parked: number; prunedParked: number } {
     let parked = 0;
     const names = this.names();
+    const aged = new Set<string>();
     for (const name of names) {
-      const item = this.read(name);
-      const age = item ? now - Date.parse(item.enqueuedAt) : Number.POSITIVE_INFINITY;
-      if (!Number.isFinite(age) || age > this.maxAgeMs) {
-        if (this.park(name, undefined, now)) parked++;
+      const at = enqueuedAtFromName(name);
+      // `NaN` — a name this module did not write — is left alone rather than
+      // treated as infinitely old. A file we cannot date is not evidence that it
+      // is stale, and the cap below still bounds the directory either way.
+      if (Number.isFinite(at) && now - at > this.maxAgeMs) {
+        if (this.park(name, undefined, undefined, now)) {
+          parked++;
+          aged.add(name);
+        }
       }
     }
-    const over = this.names().length - this.maxPending;
+    const over = names.length - aged.size - this.maxPending;
     if (over > 0) {
-      for (const name of this.names().slice(0, over)) {
-        if (this.park(name, undefined, now)) parked++;
+      let dropped = 0;
+      for (const name of names) {
+        if (dropped >= over) break;
+        if (aged.has(name)) continue;
+        if (this.park(name, undefined, undefined, now)) {
+          parked++;
+          dropped++;
+        }
       }
     }
     return { parked, prunedParked: this.pruneParked(now) };
@@ -258,17 +347,68 @@ export class WorkQueue<T> {
 
   /** How many items are waiting. Excludes parked ones, which are not work. */
   pending(): number {
-    return this.names().length;
+    return this.count();
   }
 
-  /** Parked items, for a surface that wants to show what could not be processed. */
-  listParked(): Array<QueueItem<T> & { lastError?: string; parkedAt?: string }> {
-    const out: Array<QueueItem<T> & { lastError?: string; parkedAt?: string }> = [];
+  /**
+   * Parked items, for a surface that wants to show what could not be processed.
+   *
+   * **Nothing reads this yet**, and that is worth stating rather than leaving to
+   * be discovered: `parked/` plus `lastError` is an audit trail with no reader,
+   * which is the same shape as the four `CorrectionCandidateStore` statuses this
+   * module deleted for being exactly that. The difference is that these are
+   * bounded — {@link sweep} ages them out — so the failure mode is "nobody
+   * looked", not "the directory grew forever". The reader that would earn its keep
+   * is a failure count on the thing a user already opens (`ToolProfile` carries
+   * `errorCount`/`dismissed` and `bernard tool-profiles` prints it), not a second
+   * listing command.
+   *
+   * `parkedAt` comes off the file's mtime rather than a stored field, which is
+   * what makes it always present. Stored, it could only be written by the two
+   * park paths that already hold the item — {@link sweep} deliberately holds
+   * none — so the field was there or not depending on WHY an item was parked,
+   * which is the most misleading state available. mtime is what
+   * {@link pruneParked} ages against anyway, so this is the same number rather
+   * than a second one that can disagree.
+   */
+  listParked(): Array<QueueItem<T> & { parkedAt: string }> {
+    const out: Array<QueueItem<T> & { parkedAt: string }> = [];
     for (const name of this.namesIn(this.parkedDir)) {
       const item = this.read(name, this.parkedDir);
-      if (item) out.push(item);
+      if (!item) continue;
+      let parkedAt = item.enqueuedAt;
+      try {
+        parkedAt = new Date(fs.statSync(path.join(this.parkedDir, name)).mtimeMs).toISOString();
+      } catch {
+        // Vanished under us; the enqueue time is a worse answer than none at all.
+      }
+      out.push({ ...item, parkedAt });
     }
     return out;
+  }
+
+  /**
+   * Retention, applied once per process at the first use of the queue.
+   *
+   * **Not a call site.** The predecessor swept from `index.ts`, which meant the
+   * correction queue — the one whose 54 measured rows are half the reason this
+   * module exists — was never swept at all, because only the recall queue's line
+   * got written. Retention is a property of a queue, so the queue applies it, and
+   * the third adopter cannot silently get none. Hung off `enqueue` as well as
+   * {@link peek} so a queue nobody drains (corrections, with
+   * `correctionEnabled: false`) is still bounded.
+   *
+   * It also moves ~3 ms of synchronous `readdir`-and-parse off the startup path,
+   * where it sat 187 lines before `render()` and so was pure time-to-first-paint.
+   */
+  private ensureSwept(): void {
+    if (this.swept) return;
+    this.swept = true;
+    try {
+      this.sweep();
+    } catch {
+      // Housekeeping must never be why a producer or a drain fails.
+    }
   }
 
   /**
@@ -289,10 +429,18 @@ export class WorkQueue<T> {
     }
   }
 
-  private read(
-    name: string,
-    dir = this.dir,
-  ): (QueueItem<T> & { lastError?: string; parkedAt?: string }) | null {
+  /** The length of {@link names} without paying for the sort nobody asked for. */
+  private count(): number {
+    try {
+      let n = 0;
+      for (const name of fs.readdirSync(this.dir)) if (isItemFile(name)) n++;
+      return n;
+    } catch {
+      return 0;
+    }
+  }
+
+  private read(name: string, dir = this.dir): QueueItem<T> | null {
     try {
       const parsed: unknown = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf-8'));
       if (
@@ -304,16 +452,13 @@ export class WorkQueue<T> {
       ) {
         return null;
       }
-      return parsed as QueueItem<T> & { lastError?: string; parkedAt?: string };
+      return parsed as QueueItem<T>;
     } catch {
       return null;
     }
   }
 
-  private write(
-    name: string,
-    item: QueueItem<T> & { lastError?: string; parkedAt?: string },
-  ): boolean {
+  private write(name: string, item: QueueItem<T>): boolean {
     try {
       atomicWriteFileSync(path.join(this.dir, name), JSON.stringify(item), { mode: 0o600 });
       return true;
@@ -330,39 +475,54 @@ export class WorkQueue<T> {
    * anything. It is also why there is no `status` enum here at all: the four
    * `CorrectionCandidateStore` terminals were an audit trail nothing read and
    * nothing ever compacted.
+   *
+   * Rewrites the file only to persist an `error` the caller supplied, using the
+   * `item` the caller already holds rather than re-reading it. **When** it was
+   * parked is carried by the mtime instead of a stored field, and the
+   * `utimesSync` is what makes that true on every path: a rename does NOT touch
+   * mtime, so without it an item parked for being old would arrive in `parked/`
+   * still carrying its enqueue time and be deleted by the very sweep that parked
+   * it — the bug that made the evidence unviewable.
    */
-  private park(name: string, error?: string, now = Date.now()): boolean {
+  private park(
+    name: string,
+    item?: QueueItem<T> | null,
+    error?: string,
+    now = Date.now(),
+  ): boolean {
+    const dest = path.join(this.parkedDir, name);
     try {
       fs.mkdirSync(this.parkedDir, { recursive: true, mode: 0o700 });
-      // Stamped on the way out, and the stamp is what `pruneParked` ages
-      // against. Ageing a parked item by `enqueuedAt` would delete an item
-      // parked FOR being old in the same sweep that parked it, so nobody could
-      // ever see it.
-      const item = this.read(name);
-      if (item) {
-        this.write(name, {
-          ...item,
-          parkedAt: new Date(now).toISOString(),
-          ...(error === undefined ? {} : { lastError: error }),
-        });
-      }
-      fs.renameSync(path.join(this.dir, name), path.join(this.parkedDir, name));
-      return true;
+      if (item && error !== undefined) this.write(name, { ...item, lastError: error });
+      fs.renameSync(path.join(this.dir, name), dest);
     } catch {
       return false;
     }
+    try {
+      const at = now / 1000;
+      fs.utimesSync(dest, at, at);
+    } catch {
+      // Parked either way; it just ages from whenever it was last written.
+    }
+    return true;
   }
 
-  /** Parked items are evidence, not work, so they age out too — from when they were parked. */
+  /**
+   * Parked items are evidence, not work, so they age out too — from when they
+   * were parked, which is the file's mtime.
+   *
+   * mtime, set explicitly by {@link park}, rather than a field inside the file —
+   * which is what lets {@link sweep} read nothing at all. Ageing by `enqueuedAt`
+   * instead would delete an item parked FOR being old in the same sweep that
+   * parked it, so nobody could ever see it.
+   */
   private pruneParked(now: number): number {
     let pruned = 0;
     for (const name of this.namesIn(this.parkedDir)) {
+      const full = path.join(this.parkedDir, name);
       try {
-        const item = this.read(name, this.parkedDir);
-        const since = item?.parkedAt ? Date.parse(item.parkedAt) : Number.NaN;
-        // An item with no readable stamp is pruned: it is unreadable evidence.
-        if (!Number.isFinite(since) || now - since > this.maxAgeMs) {
-          fs.unlinkSync(path.join(this.parkedDir, name));
+        if (now - fs.statSync(full).mtimeMs > this.maxAgeMs) {
+          fs.unlinkSync(full);
           pruned++;
         }
       } catch {

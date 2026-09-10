@@ -852,6 +852,51 @@ describe('rag-worker (runWorkerForFile)', () => {
       expect(queued()).toBeLessThan(60);
     });
 
+    it('leaves the runs the budget dropped completely untouched', async () => {
+      // The half the count above cannot see, and the defect the `peek`/
+      // `markAttempt` split exists for. `claim` counted an attempt against
+      // EVERYTHING it read, so a budget-dropped run arrived at `maxAttempts`
+      // after three sessions and was parked having never been shown to a model:
+      // replaying 52 real dispatches gave 52 read to acknowledge 19, then 33 for
+      // 13, then 17 parked unread. An attempt means tried, so the survivors must
+      // come back at zero however many sessions run.
+      const many = Array.from({ length: 60 }, (_, i) =>
+        Object.assign(run('coder'), { input: `run-${i}`, finalOutput: 'x'.repeat(400) }),
+      );
+      enqueue(...many);
+      mockExtractNotes.mockResolvedValue(notesOk([]));
+      write({ provider: 'anthropic', model: 'm', specialistRecall: true });
+
+      for (let session = 0; session < 3; session++) await runWorkerForFile(tempFile);
+
+      // Three passes in, with a default `maxAttempts` of 3, nothing has been
+      // parked and every survivor is still unattempted.
+      expect(parked()).toBe(0);
+      expect(queued()).toBeGreaterThan(0);
+      expect(
+        recallQueue()
+          .peek()
+          .map((i) => i.attempts),
+      ).toEqual(new Array(queued()).fill(0));
+    });
+
+    it('counts an attempt against the runs it DOES extract from', async () => {
+      // The other direction: the crash guard still has to hold for the work that
+      // actually reached a model, or an item that kills the worker is retried
+      // forever. Marked before the call, so the count survives either outcome.
+      enqueue(run('coder'));
+      mockExtractNotes.mockRejectedValue(new Error('boom'));
+      write({ provider: 'anthropic', model: 'm', specialistRecall: true });
+
+      await runWorkerForFile(tempFile);
+
+      expect(
+        recallQueue()
+          .peek()
+          .map((i) => i.attempts),
+      ).toEqual([1]);
+    });
+
     it('one specialist failing does not cost the others their notes', async () => {
       // `Promise.allSettled`, not `Promise.all`: a rejected extraction must not
       // discard work the siblings already did, in a detached process nobody is

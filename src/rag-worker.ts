@@ -96,8 +96,8 @@ export interface TempPayload {
    * Ask for the specialist-recall pass (#501).
    *
    * A third independent gate, for the reason `consolidateMemory` is a second
-   * one: this arm reads the REASONING LOG, not the payload, so it needs neither
-   * a transcript here nor RAG to be enabled. Hanging it off either would make it
+   * one: this arm drains the RECALL QUEUE, not the payload, so it needs neither a
+   * transcript here nor RAG to be enabled. Hanging it off either would make it
    * silently never run for settings that have nothing to do with what a
    * specialist should remember.
    */
@@ -111,14 +111,15 @@ export interface TempPayload {
  * extracted into facts. A specialist got nothing, so the one agent that most
  * needs to remember its own mistakes could not.
  *
- * **Reads the reasoning log rather than a new buffer.** Every dispatch now
- * writes one entry there, so the transcripts are already durable and already
- * survive the process that produced them — a per-session in-memory buffer would
- * be a second mechanism holding the same bytes, and would lose them on a crash.
+ * **The work is a queue, not a window over the log.** Every dispatch enqueues
+ * itself when it finishes, so the set to process is exactly the files present and
+ * acknowledgement is per item — where the predecessor's one shared cursor had to
+ * be dragged backwards over every specialist newer than a single failure.
  *
- * The gate is the marker's INCLUSION CUTOFF, the shape #529 had to correct
- * once: storing the run time makes the trigger set and the input set exact
- * complements, so the most recent work is never examined.
+ * It reads with `peek` and counts an attempt only against the runs it is about to
+ * extract from. `claim` would count one against everything it read, and this
+ * consumer reads more than it uses: `renderTranscript` stops at a character
+ * budget, so three sessions of that parked work no model had ever seen.
  */
 async function runSpecialistRecall(config: BernardConfig): Promise<void> {
   // The work is the queue, full stop — no cursor, no clock, no window. Every
@@ -126,7 +127,7 @@ async function runSpecialistRecall(config: BernardConfig): Promise<void> {
   // the files present, and acknowledgement is per item rather than one shared
   // bookmark that a single failure had to drag backwards over everybody.
   const queue = recallQueue();
-  const items = queue.claim();
+  const items = queue.peek();
   if (items.length === 0) return;
 
   // Grouped so one specialist that ran five times gets ONE extraction over all
@@ -162,6 +163,12 @@ async function runSpecialistRecall(config: BernardConfig): Promise<void> {
       // are acknowledged. The marker could not express that: it marked the
       // specialist fully processed and the dropped runs were never seen again.
       const { text, used } = renderTranscript(runs, RECALL_TRANSCRIPT_MAX);
+      // The attempt is counted here, against `used` alone, and BEFORE the model
+      // call — durable whether or not this returns, which is what stops an item
+      // that kills the worker being retried forever. The runs the budget did not
+      // fit are left completely untouched, so next session sees them exactly as
+      // they are rather than three attempts closer to being parked unread.
+      queue.markAttempt(used);
       const { notes, failed } = await extractSpecialistNotes(specialistId, text, config, {
         abortSignal: AbortSignal.timeout(WORKER_RECALL_TIMEOUT_MS),
       });

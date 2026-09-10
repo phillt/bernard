@@ -72,7 +72,7 @@ import { runFirstTimeSetup } from './setup.js';
 import { getLocalVersion, startupUpdateCheck, interactiveUpdate } from './update.js';
 import { factsList, factsSearch, clearFacts } from './facts-cli.js';
 import { migrateFromLegacy } from './migrate.js';
-import { MCP_CONFIG_PATH, PROFILES_PATH, PREFS_PATH, RAG_DIR } from './paths.js';
+import { MCP_CONFIG_PATH, PROFILES_PATH, PREFS_PATH, RAG_DIR, DATA_DIR } from './paths.js';
 import { openCorpus } from './knowledge/corpus.js';
 import * as fs from 'node:fs';
 import { listProfiles } from './profiles.js';
@@ -104,7 +104,6 @@ import { HELP_CONFIG } from './cli-help.js';
 import { appletSuggestionBlock } from './applet-detector.js';
 import { runCorrectionAgent } from './correction.js';
 import { debugLog, isDebugEnabled } from './logger.js';
-import { recallQueue } from './recall-queue.js';
 import { installInstrumentedFetchIfDebug } from './framework/instrumented-fetch.js';
 import { initShellParser } from './permissions/shell-ast.js';
 import { App } from './ui/App.js';
@@ -533,17 +532,23 @@ async function runInkRepl(args: {
     }
   }
 
-  // Queue housekeeping, beside the two candidate sweeps above and for the same
-  // reason they run here: once per process, at the one moment a user is
-  // definitely not mid-turn. This is the retention every existing candidate
-  // store lacks — measured, 54 correction rows and 42 others sit on a real
-  // install with nothing that could ever remove them — and it is what bounds a
-  // queue belonging to someone who never exits cleanly, since `cleanup()` has no
-  // signal handler and a killed REPL drains nothing.
+  // Queue retention is NOT here, deliberately. It used to be, and that is
+  // exactly how the correction queue — whose 54 measured rows are half the
+  // reason `work-queue.ts` exists — ended up never swept at all: one line was
+  // written for the recall queue and the second adopter silently got none.
+  // `WorkQueue.ensureSwept` applies it on the queue's own first use instead, so a
+  // third adopter cannot miss it and ~3 ms of synchronous `readdir` leaves the
+  // path to first paint.
+  //
+  // What does belong here is the one-off: the predecessor store's directory,
+  // which moved from `DATA_DIR` to `STATE_DIR` with the rewrite and would
+  // otherwise keep those 54 rows on every existing install forever, referenced by
+  // nothing.
   try {
-    const swept = recallQueue().sweep();
-    if (swept.parked > 0 || swept.prunedParked > 0) {
-      debugLog('recall-queue:swept', swept);
+    const legacy = path.join(DATA_DIR, 'correction-candidates');
+    if (fs.existsSync(legacy)) {
+      fs.rmSync(legacy, { recursive: true, force: true });
+      debugLog('correction-queue:legacy-removed', { dir: legacy });
     }
   } catch {
     // Housekeeping must never be why a session cannot start.
@@ -674,18 +679,15 @@ async function runInkRepl(args: {
 
     if (config.correctionEnabled) {
       try {
-        // No prefetch: the drain claims its own batch, oldest-first. The
-        // prefetch existed to avoid a second full readdir-and-parse of every row
-        // ever written, which is a cost the queue does not have.
-        const waiting = agent.getCorrectionStore().pending();
-        if (waiting > 0) {
-          printInfo(`Reviewing ${waiting} tool-wrapper failure(s) for learning...`);
-          const result = await runCorrectionAgent({ ctx: agent.getContext() });
-          if (result.applied > 0) {
-            printInfo(
-              `  Learned from ${result.applied}/${result.processed} failure(s); examples updated.`,
-            );
-          }
+        // No prefetch and no count either: `runCorrectionAgent` reads the queue
+        // once for both, returns zeroes when it is empty, and prints what it is
+        // about to do. Counting here as well was a second full `readdir` to
+        // decide whether to ask the drain to do its own.
+        const result = await runCorrectionAgent({ ctx: agent.getContext() });
+        if (result.applied > 0) {
+          printInfo(
+            `  Learned from ${result.applied}/${result.processed} failure(s); examples updated.`,
+          );
         }
       } catch (err) {
         debugLog('correction:error', err instanceof Error ? err.message : String(err));

@@ -125,10 +125,13 @@ export function rotateJsonlByCount(filePath: string, keep: number): void {
       .filter((l) => l.trim().length > 0);
     if (lines.length <= keep) return;
     // UNIQUE temp name: `fs-utils.ts` says to use this variant wherever two
-    // processes can write the same file, and the reasoning log has four writers
-    // (the REPL, the cron daemon, the applet host and `bernard script`). A fixed
-    // suffix leaves one orphan that the next write overwrites; the unique form
-    // unlinks its own on failure.
+    // processes can write the same file. The reasoning log is in fact written
+    // only by the REPL — measured, cron, the applet host and `bernard script` all
+    // reach `runHeadless` with `surface: 'worker'`, no dispatch overlay and no
+    // shim, so none of them records a dispatch — but this helper is generic and
+    // `logs/` holds files that several processes do write. A fixed suffix leaves
+    // one orphan that the next write overwrites; the unique form unlinks its own
+    // on failure.
     atomicWriteFileSyncUnique(filePath, lines.slice(-keep).join('\n') + '\n');
   } catch {
     // best-effort

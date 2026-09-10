@@ -9,8 +9,9 @@ import { atomicWriteFileSync } from './fs-utils.js';
  *
  * A sibling of `CandidateStore` rather than a generalization of it. The two
  * share a shape — one JSON file per record, a pending cap, an age sweep — and
- * `CorrectionCandidateStore` is the existing proof that this shape gets
- * instantiated more than once. What they do not share is the payload:
+ * `MemoryCandidateStore` is the existing proof that this shape gets instantiated
+ * more than once (it cited `CorrectionCandidateStore`, which #564 replaced with a
+ * work queue; see the note in that file for why a queue is not this shape). What they do not share is the payload:
  * `SpecialistCandidate` carries `systemPrompt`, `guidelines` and an
  * `enhancement` block for merging into an existing specialist, and
  * `reconcileSaved` matches a draft id against a saved specialist id. None of

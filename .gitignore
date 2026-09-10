@@ -21,3 +21,6 @@ local_cache/
 
 # Stray output from photorec/testdisk recovery runs.
 photorec.log
+
+# Local browser-automation scratch output (never Bernard's)
+adp-*

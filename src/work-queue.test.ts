@@ -133,6 +133,55 @@ describe('claim', () => {
   });
 });
 
+describe('peek vs claim', () => {
+  it('peek reads without counting an attempt', () => {
+    // The defect fix. `claim` counted one against everything it READ, and recall
+    // reads more than it uses — `renderTranscript` stops at a character budget.
+    // So every session bumped the unrendered remainder, and three sessions of
+    // that parked work no model had ever seen: replaying 52 real dispatches gave
+    // 52 claimed to acknowledge 19, then 33 for 13, then 17 parked unread.
+    const q = make();
+    q.enqueue({ name: 'a' });
+    expect(q.peek()[0].attempts).toBe(0);
+    expect(q.peek()[0].attempts).toBe(0);
+    expect(q.peek()[0].attempts).toBe(0);
+  });
+
+  it('never parks an item that was only ever read', () => {
+    // The property the whole split exists for, stated as the outcome rather than
+    // as an attempt count: a consumer that reads four and processes one must
+    // leave the other three exactly as they were, however many sessions run.
+    const q = make({ maxAttempts: 2 });
+    for (let i = 0; i < 4; i++) q.enqueue({ name: `n${i}` });
+    for (let pass = 0; pass < 6; pass++) {
+      const read = q.peek();
+      if (read.length === 0) break;
+      q.markAttempt(read.slice(0, 1));
+      q.done(read[0].id);
+    }
+    // One acknowledged per pass, four passes' worth of work, nothing parked.
+    expect(parked()).toHaveLength(0);
+    expect(q.pending()).toBe(0);
+  });
+
+  it('markAttempt counts it durably, before the consumer runs', () => {
+    // The crash guard, now owned by the caller that knows what it is about to
+    // run: the increment is on disk whether or not the consumer returns.
+    const q = make();
+    q.enqueue({ name: 'a' });
+    const marked = q.markAttempt(q.peek());
+    expect(marked[0].attempts).toBe(1);
+    expect(make().peek()[0].attempts).toBe(1);
+  });
+
+  it('claim is peek plus markAttempt, for a consumer that takes what it runs', () => {
+    const q = make();
+    q.enqueue({ name: 'a' });
+    expect(q.claim()[0].attempts).toBe(1);
+    expect(make().peek()[0].attempts).toBe(1);
+  });
+});
+
 describe('acknowledgement', () => {
   it('done removes the item', () => {
     const q = make();
@@ -257,6 +306,86 @@ describe('sweep', () => {
     expect(q.listParked()).toHaveLength(1);
     expect(q.sweep(parkedAtMs + 2000).prunedParked).toBe(1);
     expect(q.listParked()).toHaveLength(0);
+  });
+});
+
+describe('retention applies itself', () => {
+  it('sweeps on first use, with no call site to forget', () => {
+    // The predecessor swept from `index.ts`, which is exactly how the CORRECTION
+    // queue — whose 54 measured rows are half the reason this module exists —
+    // ended up never swept at all: one line was written for the recall queue and
+    // the second adopter silently got none.
+    const stale = make({ maxAgeMs: 1 });
+    stale.enqueue({ name: 'old' });
+    const nameOf = names()[0];
+    // Backdate the item by rewriting it under an older arrival key, which is how
+    // age is read — see `enqueuedAtFromName`.
+    const old = `${String(Date.now() - 60_000).padStart(14, '0')}-000000-aaa.json`;
+    fs.renameSync(path.join(dirOf(), nameOf), path.join(dirOf(), old));
+
+    const fresh = make({ maxAgeMs: 1000 });
+    // No `sweep()` call anywhere: a plain enqueue is enough.
+    fresh.enqueue({ name: 'new' });
+    expect(parked()).toHaveLength(1);
+  });
+
+  it('sweeps only once per instance', () => {
+    const q = make({ maxAgeMs: 1000 });
+    q.enqueue({ name: 'a' });
+    const before = fs.statSync(path.join(dirOf(), names()[0])).mtimeMs;
+    for (let i = 0; i < 3; i++) q.peek();
+    // A second sweep would re-walk and could only churn; nothing moved.
+    expect(fs.statSync(path.join(dirOf(), names()[0])).mtimeMs).toBe(before);
+    expect(parked()).toHaveLength(0);
+  });
+
+  it('ages a pending item by its NAME, not by opening it', () => {
+    // Asserted as behaviour rather than as a syscall count: the body is garbage,
+    // so a sweep that read it would get no `enqueuedAt` at all. The name still
+    // says when it arrived, and that is the number it has to use — reading each
+    // item to parse the field instead cost 3.34 ms at 200 pending against 0.26 ms
+    // here, on a pass that used to run before first paint.
+    const q = make({ maxAgeMs: 1000 });
+    q.enqueue({ name: 'a' });
+    const [only] = names();
+    fs.writeFileSync(path.join(dirOf(), only), 'not json at all');
+
+    // Fresh by its name: kept, even though nothing in it is parseable. The
+    // predecessor read the file, got `NaN` and treated that as infinitely old —
+    // so this item was parked on the first sweep.
+    expect(q.sweep(Date.now()).parked).toBe(0);
+    // Old by its name: parked, on the strength of the name alone.
+    expect(make({ maxAgeMs: 1000 }).sweep(Date.now() + 5000).parked).toBe(1);
+  });
+
+  it('leaves a name it did not write alone rather than calling it infinitely old', () => {
+    // `NaN` age, because the prefix is not an epoch. Treating that as stale would
+    // park a file some other writer put here, which is a claim this module cannot
+    // support — and the cap still bounds the directory either way.
+    const q = make({ maxAgeMs: 1 });
+    fs.mkdirSync(dirOf(), { recursive: true });
+    fs.writeFileSync(
+      path.join(dirOf(), 'handwritten.json'),
+      JSON.stringify({
+        id: 'x',
+        enqueuedAt: new Date(0).toISOString(),
+        attempts: 0,
+        payload: { name: 'x' },
+      }),
+    );
+    expect(q.sweep(Date.now() + 999_999).parked).toBe(0);
+  });
+
+  it('dates a parked item from when it was parked, not when it arrived', () => {
+    // A rename does not touch mtime, so without the explicit `utimes` an item
+    // parked FOR being old would arrive in `parked/` still carrying its enqueue
+    // time and be deleted by the very sweep that parked it.
+    const q = make({ maxAgeMs: 1000 });
+    q.enqueue({ name: 'a' });
+    const at = Date.now() + 999_999;
+    expect(q.sweep(at)).toEqual({ parked: 1, prunedParked: 0 });
+    const [listed] = q.listParked();
+    expect(Date.parse(listed.parkedAt)).toBeCloseTo(at, -4);
   });
 });
 
