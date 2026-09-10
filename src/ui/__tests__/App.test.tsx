@@ -851,11 +851,7 @@ describe('<App> /clear', () => {
       { domain: 'general', facts: ['The Subject header was raw UTF-8'] },
     ]);
     const { stdin, lastFrame, unmount } = renderApp({
-      history: [
-        { role: 'user', content: 'hello' },
-        { role: 'assistant', content: 'hi' },
-      ],
-      config: { ragEnabled: true },
+      ...SAVEABLE,
       stores: { rag: { addFacts } as unknown as RAGStore },
     });
     await tick();

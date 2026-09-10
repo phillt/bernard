@@ -62,28 +62,20 @@ describe('clearResultMessage', () => {
     ],
   ];
   it.each(cases)('renders %j distinctly', (outcome, expected) => {
-    expect(clearResultMessage(outcome)).toBe(expected);
-  });
-
-  it('distinguishes a save that added nothing from one that saved', () => {
-    // `addFacts` returns what survived dedup, so zero is the ordinary result of
-    // clearing twice about one subject — a sentence, not a zero in a count.
-    const zero = clearResultMessage({ kind: 'saved', facts: 0, kept: [] });
-    expect(zero).toContain('no new facts');
-    expect(zero).not.toMatch(/\b0\b/);
+    expect(clearResultMessage(outcome, 73)).toBe(expected);
   });
 
   it('names the failure rather than claiming a save', () => {
-    expect(clearResultMessage({ kind: 'failed', message: 'provider down' })).toBe(
+    expect(clearResultMessage({ kind: 'failed', message: 'provider down' }, 73)).toBe(
       'Cleared, but saving failed: provider down',
     );
   });
 
   it('appends the note only when asked', () => {
-    expect(clearResultMessage({ kind: 'saved', facts: 0, kept: [] }, true)).toContain(
+    expect(clearResultMessage({ kind: 'saved', kept: [] }, 73, true)).toContain(
       SAVE_IS_DEFAULT_NOTE,
     );
-    expect(clearResultMessage({ kind: 'saved', facts: 0, kept: [] }, false)).not.toContain(
+    expect(clearResultMessage({ kind: 'saved', kept: [] }, 73, false)).not.toContain(
       SAVE_IS_DEFAULT_NOTE,
     );
   });
@@ -100,12 +92,23 @@ describe('the receipt', () => {
     { domain: 'tool-usage', fact: 'web_read was never normalized.' },
   ];
   const render = (width = 73, note = false) =>
-    clearResultMessage({ kind: 'saved', facts: 3, kept }, note, width);
+    clearResultMessage({ kind: 'saved', kept }, width, note);
   /**
    * The table rows only. The headline is prose and may wrap harmlessly; a ROW
    * that wraps is the bug, because its tail reads as another row.
    */
   const rowsOf = (out: string) => out.split('\n').filter((l) => l.startsWith('  '));
+
+  it('states the count and pluralises it', () => {
+    // The sentence every user reads. Folding the zero case into the table above
+    // removed the only assertions on `plural()` and on this wording; the receipt
+    // tests count `lines[0]` without ever reading it.
+    expect(render().split('\n')[0]).toBe('Cleared and saved 3 new facts to memory:');
+    const one = [{ domain: 'general', fact: 'a' }];
+    expect(clearResultMessage({ kind: 'saved', kept: one }, 73).split('\n')[0]).toBe(
+      'Cleared and saved 1 new fact to memory:',
+    );
+  });
 
   it('lists one line per DOMAIN, not one per fact', () => {
     // What keeps it a receipt rather than a second `/memory`. The domain registry
@@ -125,7 +128,7 @@ describe('the receipt', () => {
       { domain: 'user-preferences', fact: 'x'.repeat(400) },
       { domain: 'conversations', fact: 'y'.repeat(400) },
     ];
-    for (const width of [40, 60, 73, 93, 200]) {
+    for (const width of [30, 40, 60, 73, 93, 200]) {
       const out = clearResultMessage({ kind: 'saved', facts: 2, kept: long }, false, width);
       expect(rowsOf(out).length).toBeGreaterThan(0);
       for (const row of rowsOf(out)) {
@@ -153,7 +156,7 @@ describe('the receipt', () => {
 
   it('flattens whitespace so a multi-line fact stays one line', () => {
     const messy = [{ domain: 'general', fact: 'a\n\n  b\tc' }];
-    const out = clearResultMessage({ kind: 'saved', facts: 1, kept: messy }, false, 73);
+    const out = clearResultMessage({ kind: 'saved', kept: messy }, 73);
     expect(out.split('\n')).toHaveLength(3);
     expect(out).toContain('a b c');
   });
@@ -166,6 +169,6 @@ describe('the receipt', () => {
 
   it('says nothing extra when the save added nothing', () => {
     // Zero survivors means no receipt: a header with no rows reads as a bug.
-    expect(clearResultMessage({ kind: 'saved', facts: 0, kept: [] })).not.toContain('\n');
+    expect(clearResultMessage({ kind: 'saved', kept: [] }, 73)).not.toContain('\n');
   });
 });

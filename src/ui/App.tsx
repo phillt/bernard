@@ -120,7 +120,6 @@ import {
   parseClearArgs,
   clearResultMessage,
   CLEAR_USAGE,
-  CLEAR_RECEIPT_GUTTER,
   type SaveOutcome,
   type SavedFact,
 } from './clear-args.js';
@@ -163,7 +162,13 @@ import type {
   ValuePromptOptions,
   ValueResult,
 } from './menu-types.js';
-import { Thread, REWRITE_ICON, formatDuration, type StaticItem } from './Thread.js';
+import {
+  Thread,
+  REWRITE_ICON,
+  formatDuration,
+  markdownBodyWidth,
+  type StaticItem,
+} from './Thread.js';
 import { TranscriptViewport } from './TranscriptViewport.js';
 import { useDimensionsCtx } from './DimensionsContext.js';
 import { formatAgentError, type ErrorPanelData } from './error-format.js';
@@ -1267,10 +1272,9 @@ export function App({
           // local to the RAG block, which is why every path ended in the same
           // `Conversation history cleared.` and a save was indistinguishable from
           // a no-op — the number existed and was thrown away one scope too deep.
-          let storedFacts = 0;
-          // The facts that actually survived dedup, for the receipt. Collected
-          // through `addFacts`' observer because the extraction cannot know which
-          // ones were new — that is decided inside the store.
+          // The facts that actually survived dedup — the receipt's content AND its
+          // count. Collected through `addFacts`' observer because the extraction
+          // cannot know which ones were new; that is decided inside the store.
           const keptFacts: SavedFact[] = [];
           try {
             const serialized = serializeMessages(history);
@@ -1313,18 +1317,14 @@ export function App({
                   ),
                 ),
               );
-              let failedDomains = 0;
-              results.forEach((r) => {
-                if (r.status === 'fulfilled') {
-                  // addFacts returns the number of new facts actually stored
-                  // (after dedup), not the input count.
-                  storedFacts += r.value;
-                } else {
-                  failedDomains++;
-                }
-              });
-              if (storedFacts > 0) {
-                debugLog('app:clear-save:rag', { storedFacts });
+              // `keptFacts` is the count as well as the content: the observer
+              // pushed once per stored fact, so summing `addFacts`' returns
+              // separately was a second source of truth that could disagree — a
+              // domain that rejects after storing some facts loses its return
+              // value to `Promise.allSettled` while its pushes survive.
+              const failedDomains = results.filter((r) => r.status === 'rejected').length;
+              if (keptFacts.length > 0) {
+                debugLog('app:clear-save:rag', { storedFacts: keptFacts.length });
               }
               if (failedDomains > 0) {
                 flashToast(
@@ -1354,7 +1354,7 @@ export function App({
                 // Silent — candidate storage failure is non-critical
               }
             }
-            outcome = { kind: 'saved', facts: storedFacts, kept: keptFacts };
+            outcome = { kind: 'saved', kept: keptFacts };
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             outcome = { kind: 'failed', message };
@@ -1394,15 +1394,14 @@ export function App({
       // cleared by the next submit and REPLACES rather than queues, and "you just
       // spent ten seconds saving and here is whether it worked, plus a flag you no
       // longer need" is not a thing to lose to the next keypress.
-      // Width derived from the same constant the receipt uses, not a local guess:
-      // the body renders at `columns - 4` and the `❮  ` chevron takes 3 more
-      // beside it, and a row that overshoots does not shorten — it wraps, and the
-      // tail reads as another row.
+      // Width from the component that owns the two facts it is made of, rather
+      // than restated here: a row that overshoots does not shorten, it wraps, and
+      // the tail reads as another row.
       pushAssistantNotice(
         clearResultMessage(
           outcome,
+          markdownBodyWidth(columns, { chevron: true }),
           plan === 'save-noting-default',
-          Math.max(40, columns - CLEAR_RECEIPT_GUTTER),
         ),
       );
       return;

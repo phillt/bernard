@@ -270,6 +270,9 @@ function extendExpiry(memory: RAGMemory, days: number, nowMs: number): void {
  * Stores facts as embeddings, supports similarity search with per-domain top-k ranking,
  * and manages memory lifecycle via TTL-based expiration and capacity pruning.
  */
+/** Told about each fact {@link RAGStore.addFacts} actually stored, in order. */
+export type AddedFactObserver = (fact: string) => void;
+
 export class RAGStore {
   private memories: RAGMemory[] = [];
   private topKPerDomain: number;
@@ -477,7 +480,7 @@ export class RAGStore {
     facts: string[],
     source: string,
     domain: string = DEFAULT_DOMAIN,
-    onAdded?: (fact: string) => void,
+    onAdded?: AddedFactObserver,
   ): Promise<number> {
     if (facts.length === 0) return 0;
 
@@ -544,7 +547,19 @@ export class RAGStore {
         expiresAt: new Date(Date.now() + this.ragTtlDays * 86400000).toISOString(),
       });
       added++;
-      onAdded?.(fact);
+      // Guarded, which is the house rule for an observer and not defensiveness:
+      // both siblings say why (`shapeMCPResult` — "an observer that threw would
+      // be indistinguishable from a failed tool call"; `CapabilityTable` — "an
+      // audit trail that takes down the thing it audits is worse than a gap").
+      // It matters more here than in either: this sits mid-loop AFTER the record
+      // was pushed, so a throw would abandon the remaining facts and reject
+      // `addFacts` with facts already in the store — which the caller's
+      // `Promise.allSettled` would count as a wholly failed domain.
+      try {
+        onAdded?.(fact);
+      } catch {
+        // The fact is stored either way; only the receipt loses a line.
+      }
     }
 
     if (added > 0) {

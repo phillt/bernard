@@ -1,4 +1,5 @@
 import { plural, truncate } from '../text.js';
+import { cell } from './overlays/table.js';
 
 /**
  * @module clear-args
@@ -83,7 +84,15 @@ export type SaveOutcome =
    */
   | { kind: 'no-memory' }
   | { kind: 'failed'; message: string }
-  | { kind: 'saved'; facts: number; kept: SavedFact[] };
+  /**
+   * `kept` is the ONLY count. An earlier shape carried `facts` beside it — the
+   * summed `addFacts` return — and the two can disagree: if one domain rejects
+   * after storing some facts, `Promise.allSettled` drops its return value while
+   * the observer's pushes survive, so the headline said "saved 2" above rows
+   * summing to 3. The pushes are the truth, on a type whose whole purpose is to
+   * say what actually happened.
+   */
+  | { kind: 'saved'; kept: SavedFact[] };
 
 /** One fact that survived dedup, with the domain it was filed under. */
 export interface SavedFact {
@@ -91,35 +100,7 @@ export interface SavedFact {
   fact: string;
 }
 
-/**
- * Content width when the caller does not know one — 80 columns minus the frame.
- * See {@link CLEAR_RECEIPT_GUTTER} for where the 7 comes from.
- */
-const DEFAULT_WIDTH = 73;
-
-/**
- * Columns the receipt does not get: `MarkdownLines` renders at `columns - 4`
- * (App's `paddingX={2}`), and the `❮  ` chevron sits in a flex row BESIDE that
- * body rather than above it, taking 3 more.
- *
- * Exported so `App.tsx` derives the budget from the same number rather than
- * subtracting its own guess — the first cut budgeted 68 characters for the FACT
- * and counted neither the indent nor the label, so a long domain name pushed the
- * line past the frame and Ink wrapped it. A receipt that wraps is worse than no
- * receipt: the wrapped tail reads as a new row.
- */
-export const CLEAR_RECEIPT_GUTTER = 7;
-
-/** Indent before each row. Two, not four — four would make markdown a code block. */
-const INDENT = '  ';
-
-/** Gap between the label column and the fact. */
-const GAP = '  ';
-
-/** A label column wider than this is eating the fact; the domain registry is closed, so this is slack. */
-const LABEL_MAX = 24;
-
-/** Below this there is no room for a fact worth reading, so the receipt drops to labels only. */
+/** Below this there is no room for a fact worth reading, so the row drops to its label. */
 const FACT_MIN = 24;
 
 /**
@@ -141,12 +122,33 @@ const FACT_MIN = 24;
  * height is bounded by construction with no "…and N more" to maintain, and the
  * count carries what the elision would have said.
  *
- * **The label column is padded so the fact column aligns**, which is the whole
- * difference between a table and three sentences. Padding survives rendering
- * because `renderMarkdown` sets `reflowText: false` — Ink owns wrapping, so
- * marked-terminal leaves the lines exactly as written. That is also why every row
- * must be measured to fit: nothing downstream will shorten it, it will simply
- * wrap and the tail will read as another row.
+ * **Padded with `cell`, not `padEnd`**, which is the combination `preview-lines`
+ * already rejected in writing for this exact computation: a label longer than the
+ * column pads to nothing and pushes its own fact out of alignment, so the one row
+ * that most needed the column is the one that loses it. `cell` truncates first.
+ *
+ * The alignment survives rendering because `renderMarkdown` sets
+ * `reflowText: false` — Ink owns wrapping, so marked-terminal leaves the lines
+ * exactly as written. That is also why every row must be measured to fit:
+ * nothing downstream will shorten one, it will simply wrap and its tail will read
+ * as another row.
+ *
+ * **Known limit: the fit holds only at the width it was pushed at.** Nothing
+ * downstream re-measures either. `pushTranscriptMessage` stores an immutable
+ * string in `staticItems`, so unlike every other width-aware surface here — which
+ * re-derive at render, `SourcesViewer` from `innerWidth` in a `useMemo`,
+ * `MarkdownLines` from `useDimensionsCtx` — this one is frozen. Measured: baked at
+ * 120 columns and rendered at 100, two rows wrap and their tails read as extra
+ * rows, which is exactly what the row-width test prevents at push time and cannot
+ * prevent at render time.
+ *
+ * Left as a recorded limit rather than fixed, because the fix is a structured
+ * `StaticItem` variant and `StaticItemView` exists precisely because there are TWO
+ * transcript surfaces — "a variant added to one is broken for half the users and
+ * invisible to whoever wrote it" — plus `pushTranscriptMessage`'s one-writer
+ * invariant. That is a large change against two cosmetic phantom rows, on one
+ * notice, after a resize. If a structured item ever lands for another reason, the
+ * receipt should move to it.
  */
 function receiptLines(kept: readonly SavedFact[], width: number): string[] {
   const byDomain = new Map<string, string[]>();
@@ -160,22 +162,21 @@ function receiptLines(kept: readonly SavedFact[], width: number): string[] {
     label: `${domain} (${facts.length})`,
     fact: facts[0].replace(/\s+/g, ' ').trim(),
   }));
+  const labelWidth = rows.reduce((w, r) => Math.max(w, r.label.length), 0);
 
-  const labelWidth = Math.min(
-    LABEL_MAX,
-    rows.reduce((w, r) => Math.max(w, r.label.length), 0),
+  // Two-space indent, not four: four would make markdown treat these as a code
+  // block. The gap is two spaces for the same reason `preview-lines` uses a
+  // literal there — it is the column, not a knob.
+  const factWidth = width - 2 - labelWidth - 2;
+  return rows.map((r) =>
+    factWidth < FACT_MIN
+      ? `  ${r.label}`
+      : `  ${cell(r.label, labelWidth)}  ${truncate(r.fact, factWidth)}`,
   );
-  const factWidth = width - INDENT.length - labelWidth - GAP.length;
-
-  return rows.map((r) => {
-    const label = r.label.padEnd(labelWidth);
-    if (factWidth < FACT_MIN) return `${INDENT}${label}`.trimEnd();
-    return `${INDENT}${label}${GAP}${truncate(r.fact, factWidth)}`;
-  });
 }
 
 /** The sentence for one outcome. Exhaustive, so a sixth variant is a compile error. */
-function headline(outcome: SaveOutcome, width: number): string {
+function headline(outcome: SaveOutcome): string {
   switch (outcome.kind) {
     case 'skipped':
       return 'Cleared without saving.';
@@ -186,14 +187,10 @@ function headline(outcome: SaveOutcome, width: number): string {
     case 'failed':
       return `Cleared, but saving failed: ${outcome.message}`;
     case 'saved': {
-      if (outcome.facts === 0) {
-        return 'Cleared and saved — no new facts beyond what memory already held.';
-      }
-      const head = `Cleared and saved ${outcome.facts} new ${plural(outcome.facts, 'fact', 'facts')} to memory:`;
-      // A blank line between the sentence and the table, so markdown keeps them
-      // as separate paragraphs and the receipt reads as a block rather than a
-      // run-on.
-      return [head, '', ...receiptLines(outcome.kept, width)].join('\n');
+      const n = outcome.kept.length;
+      return n === 0
+        ? 'Cleared and saved — no new facts beyond what memory already held.'
+        : `Cleared and saved ${n} new ${plural(n, 'fact', 'facts')} to memory:`;
     }
   }
 }
@@ -210,14 +207,19 @@ function headline(outcome: SaveOutcome, width: number): string {
  */
 export function clearResultMessage(
   outcome: SaveOutcome,
+  width: number,
   noteSaveIsDefault = false,
-  width: number = DEFAULT_WIDTH,
 ): string {
-  const head = headline(outcome, width);
-  if (!noteSaveIsDefault) return head;
-  // Its own line whenever the headline has more than one, or the note rides the
-  // last listed fact and reads as part of it.
-  return head.includes('\n')
-    ? `${head}\n${SAVE_IS_DEFAULT_NOTE}`
-    : `${head} ${SAVE_IS_DEFAULT_NOTE}`;
+  // A blank line between the sentence and the table, so markdown keeps them as
+  // separate paragraphs and the receipt reads as a block rather than a run-on.
+  const rows =
+    outcome.kind === 'saved' && outcome.kept.length > 0
+      ? ['', ...receiptLines(outcome.kept, width)]
+      : [];
+  // The note goes on its own line whenever rows were emitted — appended, it rides
+  // the last listed fact and reads as part of it. Decided from the fact that
+  // produced the rows rather than by scanning the output for a newline.
+  const body = [headline(outcome), ...rows].join('\n');
+  if (!noteSaveIsDefault) return body;
+  return rows.length > 0 ? `${body}\n${SAVE_IS_DEFAULT_NOTE}` : `${body} ${SAVE_IS_DEFAULT_NOTE}`;
 }
