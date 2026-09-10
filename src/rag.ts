@@ -462,10 +462,22 @@ export class RAGStore {
    * Embed and store new facts. Deduplicates against existing memories.
    * Returns the number of facts actually added.
    */
+  /**
+   * @param onAdded Called with each fact that was actually STORED, in order.
+   *
+   * An observer rather than a richer return value, following `shapeMCPResult`'s
+   * `onReport` and `CapabilityTable`'s `MintObserver`: three of the four callers
+   * want only the count, several test doubles return a bare number, and nothing
+   * should be computed when nobody is listening. The one caller that needs the
+   * text — `/clear`, which shows the user a receipt for what it just saved —
+   * cannot get it any other way, because dedup happens in here: the difference
+   * between "extracted" and "actually new" is only known at this line.
+   */
   async addFacts(
     facts: string[],
     source: string,
     domain: string = DEFAULT_DOMAIN,
+    onAdded?: (fact: string) => void,
   ): Promise<number> {
     if (facts.length === 0) return 0;
 
@@ -532,6 +544,7 @@ export class RAGStore {
         expiresAt: new Date(Date.now() + this.ragTtlDays * 86400000).toISOString(),
       });
       added++;
+      onAdded?.(fact);
     }
 
     if (added > 0) {

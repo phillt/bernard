@@ -836,6 +836,38 @@ describe('<App> /clear', () => {
     unmount();
   });
 
+  it('shows WHAT it saved, not just how many', async () => {
+    // The receipt. A count answers "did it work" and nothing else — and the facts
+    // have to come from `addFacts`' observer, because only the store knows which
+    // survived dedup. Listing an extracted-but-duplicate fact would claim a save
+    // that did not happen.
+    const addFacts = vi.fn(
+      async (facts: string[], _source: string, _domain: string, onAdded?: (f: string) => void) => {
+        onAdded?.(facts[0]);
+        return 1;
+      },
+    );
+    mockExtractDomainFacts.mockResolvedValue([
+      { domain: 'general', facts: ['The Subject header was raw UTF-8'] },
+    ]);
+    const { stdin, lastFrame, unmount } = renderApp({
+      history: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'hi' },
+      ],
+      config: { ragEnabled: true },
+      stores: { rag: { addFacts } as unknown as RAGStore },
+    });
+    await tick();
+    await submit(stdin, '/clear');
+    await tick(60);
+
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('general');
+    expect(frame).toContain('Subject header was raw UTF-8');
+    unmount();
+  });
+
   it('the result survives the next keystroke, which is why it is not a toast', async () => {
     // `flashToast` is cleared by the next submit and REPLACES rather than queues.
     // "You just spent ten seconds saving and here is whether it worked" has to
@@ -959,11 +991,19 @@ describe('<App> /clear --save (#228)', () => {
     await submit(stdin, '/clear --save');
     await tick(80);
 
-    expect(mockAddFacts).toHaveBeenCalledWith(['TypeScript project'], 'clear-save', 'general');
+    // The fourth argument is the receipt observer (#250). Asserted as a function
+    // rather than elided, because dropping it is how the receipt silently empties.
+    expect(mockAddFacts).toHaveBeenCalledWith(
+      ['TypeScript project'],
+      'clear-save',
+      'general',
+      expect.any(Function),
+    );
     expect(mockAddFacts).toHaveBeenCalledWith(
       ['npm run build compiles'],
       'clear-save',
       'tool-usage',
+      expect.any(Function),
     );
     unmount();
   });

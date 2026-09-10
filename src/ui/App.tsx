@@ -116,7 +116,13 @@ import {
   extractText,
   MIN_HISTORY_FOR_FACTS,
 } from '../context.js';
-import { parseClearArgs, clearResultMessage, CLEAR_USAGE, type SaveOutcome } from './clear-args.js';
+import {
+  parseClearArgs,
+  clearResultMessage,
+  CLEAR_USAGE,
+  type SaveOutcome,
+  type SavedFact,
+} from './clear-args.js';
 import { isSessionScaffolding } from '../session-markers.js';
 import { detectSpecialistCandidate } from '../specialist-detector.js';
 import { promoteCandidate } from '../candidate-bootstrap.js';
@@ -1261,6 +1267,10 @@ export function App({
           // `Conversation history cleared.` and a save was indistinguishable from
           // a no-op — the number existed and was thrown away one scope too deep.
           let storedFacts = 0;
+          // The facts that actually survived dedup, for the receipt. Collected
+          // through `addFacts`' observer because the extraction cannot know which
+          // ones were new — that is decided inside the store.
+          const keptFacts: SavedFact[] = [];
           try {
             const serialized = serializeMessages(history);
             // Route these off-loop /clear --save LLM calls (fact extraction,
@@ -1296,7 +1306,11 @@ export function App({
             // store is filled by the recall arm at session close instead.
             if (stores.rag && domainFacts.length > 0) {
               const results = await Promise.allSettled(
-                domainFacts.map((df) => stores.rag!.addFacts(df.facts, 'clear-save', df.domain)),
+                domainFacts.map((df) =>
+                  stores.rag!.addFacts(df.facts, 'clear-save', df.domain, (fact) =>
+                    keptFacts.push({ domain: df.domain, fact }),
+                  ),
+                ),
               );
               let failedDomains = 0;
               results.forEach((r) => {
@@ -1339,7 +1353,7 @@ export function App({
                 // Silent — candidate storage failure is non-critical
               }
             }
-            outcome = { kind: 'saved', facts: storedFacts };
+            outcome = { kind: 'saved', facts: storedFacts, kept: keptFacts };
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             outcome = { kind: 'failed', message };

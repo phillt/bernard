@@ -1,4 +1,4 @@
-import { plural } from '../text.js';
+import { plural, truncate } from '../text.js';
 
 /**
  * @module clear-args
@@ -83,7 +83,49 @@ export type SaveOutcome =
    */
   | { kind: 'no-memory' }
   | { kind: 'failed'; message: string }
-  | { kind: 'saved'; facts: number };
+  | { kind: 'saved'; facts: number; kept: SavedFact[] };
+
+/** One fact that survived dedup, with the domain it was filed under. */
+export interface SavedFact {
+  domain: string;
+  fact: string;
+}
+
+/** How wide one listed fact may be before it is cut. */
+const RECEIPT_WIDTH = 68;
+
+/**
+ * The per-domain receipt: what Bernard actually took away from the conversation.
+ *
+ * A count alone answers "did it work" and nothing else, and the whole reason
+ * `/clear` needed a result line was that its outcome was unknowable. Someone who
+ * has just spent ten seconds on two model calls should be able to see what they
+ * bought — and, more usefully, correct it: a wrong fact is far easier to notice
+ * here than in `/memory` three sessions later.
+ *
+ * **Only facts that survived dedup are listed**, which is why the text comes from
+ * inside `addFacts` through its observer rather than from the extraction.
+ * Listing an extracted fact that turned out to be a duplicate would claim a save
+ * that did not happen, on the one surface built to stop exactly that.
+ *
+ * One line per DOMAIN, not per fact, and that is what keeps it a receipt rather
+ * than a second `/memory`. The domain registry is closed — four of them — so the
+ * height is bounded by construction with no "…and N more" to maintain, and the
+ * count carries what the elision would have said.
+ */
+function receiptLines(kept: readonly SavedFact[]): string[] {
+  const byDomain = new Map<string, string[]>();
+  for (const k of kept) {
+    const list = byDomain.get(k.domain);
+    if (list) list.push(k.fact);
+    else byDomain.set(k.domain, [k.fact]);
+  }
+  return Array.from(byDomain, ([domain, facts]) => {
+    const count = facts.length > 1 ? ` (${facts.length})` : '';
+    const sample = truncate(facts[0].replace(/\s+/g, ' ').trim(), RECEIPT_WIDTH);
+    return `  ${domain}${count} · ${sample}`;
+  });
+}
 
 /** The sentence for one outcome. Exhaustive, so a sixth variant is a compile error. */
 function headline(outcome: SaveOutcome): string {
@@ -96,10 +138,13 @@ function headline(outcome: SaveOutcome): string {
       return 'Cleared. Nothing was saved — long-term memory is off (BERNARD_RAG_ENABLED).';
     case 'failed':
       return `Cleared, but saving failed: ${outcome.message}`;
-    case 'saved':
-      return outcome.facts === 0
-        ? 'Cleared and saved — no new facts beyond what memory already held.'
-        : `Cleared and saved ${outcome.facts} new ${plural(outcome.facts, 'fact', 'facts')} to memory.`;
+    case 'saved': {
+      if (outcome.facts === 0) {
+        return 'Cleared and saved — no new facts beyond what memory already held.';
+      }
+      const head = `Cleared and saved ${outcome.facts} new ${plural(outcome.facts, 'fact', 'facts')} to memory:`;
+      return [head, ...receiptLines(outcome.kept)].join('\n');
+    }
   }
 }
 
@@ -115,5 +160,10 @@ function headline(outcome: SaveOutcome): string {
  */
 export function clearResultMessage(outcome: SaveOutcome, noteSaveIsDefault = false): string {
   const head = headline(outcome);
-  return noteSaveIsDefault ? `${head} ${SAVE_IS_DEFAULT_NOTE}` : head;
+  if (!noteSaveIsDefault) return head;
+  // Its own line whenever the headline has more than one, or the note rides the
+  // last listed fact and reads as part of it.
+  return head.includes('\n')
+    ? `${head}\n${SAVE_IS_DEFAULT_NOTE}`
+    : `${head} ${SAVE_IS_DEFAULT_NOTE}`;
 }

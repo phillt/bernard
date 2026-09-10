@@ -56,8 +56,10 @@ describe('clearResultMessage', () => {
       { kind: 'no-memory' },
       'Cleared. Nothing was saved — long-term memory is off (BERNARD_RAG_ENABLED).',
     ],
-    [{ kind: 'saved', facts: 7 }, 'Cleared and saved 7 new facts to memory.'],
-    [{ kind: 'saved', facts: 1 }, 'Cleared and saved 1 new fact to memory.'],
+    [
+      { kind: 'saved', facts: 0, kept: [] },
+      'Cleared and saved — no new facts beyond what memory already held.',
+    ],
   ];
   it.each(cases)('renders %j distinctly', (outcome, expected) => {
     expect(clearResultMessage(outcome)).toBe(expected);
@@ -66,7 +68,7 @@ describe('clearResultMessage', () => {
   it('distinguishes a save that added nothing from one that saved', () => {
     // `addFacts` returns what survived dedup, so zero is the ordinary result of
     // clearing twice about one subject — a sentence, not a zero in a count.
-    const zero = clearResultMessage({ kind: 'saved', facts: 0 });
+    const zero = clearResultMessage({ kind: 'saved', facts: 0, kept: [] });
     expect(zero).toContain('no new facts');
     expect(zero).not.toMatch(/\b0\b/);
   });
@@ -78,13 +80,63 @@ describe('clearResultMessage', () => {
   });
 
   it('appends the note only when asked', () => {
-    expect(clearResultMessage({ kind: 'saved', facts: 2 }, true)).toContain(SAVE_IS_DEFAULT_NOTE);
-    expect(clearResultMessage({ kind: 'saved', facts: 2 }, false)).not.toContain(
+    expect(clearResultMessage({ kind: 'saved', facts: 0, kept: [] }, true)).toContain(
+      SAVE_IS_DEFAULT_NOTE,
+    );
+    expect(clearResultMessage({ kind: 'saved', facts: 0, kept: [] }, false)).not.toContain(
       SAVE_IS_DEFAULT_NOTE,
     );
   });
 
   it('names the opt-out in the note, or the note is not actionable', () => {
     expect(SAVE_IS_DEFAULT_NOTE).toContain('--do-not-save');
+  });
+});
+
+describe('the receipt', () => {
+  const kept = [
+    { domain: 'general', fact: 'The Subject header was raw UTF-8 where RFC 5322 wants US-ASCII.' },
+    { domain: 'general', fact: 'The repair gated on Latin-1, so it never fired.' },
+    { domain: 'tool-usage', fact: 'web_read was never normalized.' },
+  ];
+
+  it('lists one line per DOMAIN, not one per fact', () => {
+    // What keeps it a receipt rather than a second `/memory`. The domain registry
+    // is closed, so the height is bounded with no elision to maintain.
+    const lines = clearResultMessage({ kind: 'saved', facts: 3, kept }).split('\n');
+    expect(lines).toHaveLength(3); // headline + two domains
+    expect(lines[1]).toContain('general (2)');
+    expect(lines[2]).toContain('tool-usage');
+  });
+
+  it('shows a count only when a domain has more than one', () => {
+    expect(clearResultMessage({ kind: 'saved', facts: 3, kept })).toContain('tool-usage ·');
+  });
+
+  it('truncates a long fact rather than wrapping the frame', () => {
+    const long = [{ domain: 'general', fact: 'x'.repeat(500) }];
+    for (const line of clearResultMessage({ kind: 'saved', facts: 1, kept: long }).split('\n')) {
+      expect(line.length).toBeLessThan(100);
+    }
+  });
+
+  it('flattens whitespace so a multi-line fact stays one line', () => {
+    const messy = [{ domain: 'general', fact: 'a\n\n  b\tc' }];
+    const out = clearResultMessage({ kind: 'saved', facts: 1, kept: messy });
+    expect(out.split('\n')).toHaveLength(2);
+    expect(out).toContain('a b c');
+  });
+
+  it('puts the --save note on its own line when there is a receipt', () => {
+    // Otherwise it rides the last listed fact and reads as part of it.
+    const out = clearResultMessage({ kind: 'saved', facts: 3, kept }, true);
+    const lines = out.split('\n');
+    expect(lines[lines.length - 1]).toBe(SAVE_IS_DEFAULT_NOTE);
+  });
+
+  it('says nothing extra when the save added nothing', () => {
+    // Zero survivors means no receipt: there is nothing to show, and a header
+    // with no rows under it reads as a bug.
+    expect(clearResultMessage({ kind: 'saved', facts: 0, kept: [] })).not.toContain('\n');
   });
 });
