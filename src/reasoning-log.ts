@@ -1,7 +1,8 @@
 import { TOOL_WRAPPER_LOG } from './paths.js';
-import { appendJsonlBounded, readJsonlSince, readJsonlTail, rotateJsonlByCount } from './jsonl.js';
+import { appendJsonlBounded, readJsonlTail, rotateJsonlByCount } from './jsonl.js';
 import { truncate } from './text.js';
 import { boundValue } from './framework/tools/redact.js';
+import { recallQueue } from './recall-queue.js';
 import type { ToolErrorType } from './framework/tools/types.js';
 
 /**
@@ -87,29 +88,28 @@ export function appendReasoningLog(entry: ReasoningLogEntry): void {
   appendJsonlBounded(TOOL_WRAPPER_LOG, bounded(entry), REASONING_LOG_KEEP);
 }
 
+/**
+ * Records one dispatch: to the log, and onto the recall queue.
+ *
+ * One function rather than two calls at each of the two producers, because the
+ * pair is the thing that has to stay together — a dispatch in the log and not in
+ * the queue is one a specialist never learns from, silently, and that is exactly
+ * the class of bug the queue replaces. It also means both sites bound the entry
+ * through the same `bounded()` before either consumer sees it.
+ *
+ * The log is no longer a queue and the queue is not a log: the log is the
+ * human/replay record, bounded by count and rotated; the queue is in-flight work,
+ * bounded by count and emptied by a pass. Neither is derived from the other.
+ */
+export function recordDispatch(entry: ReasoningLogEntry): void {
+  const capped = bounded(entry);
+  appendJsonlBounded(TOOL_WRAPPER_LOG, capped, REASONING_LOG_KEEP);
+  recallQueue().enqueue(capped);
+}
+
 /** Reads and parses the reasoning log, returning the most recent `limit` entries. */
 export function readReasoningLog(limit = 100): ReasoningLogEntry[] {
   return readJsonlTail<ReasoningLogEntry>(TOOL_WRAPPER_LOG, limit);
-}
-
-/**
- * Every entry written after `cursorMs`, oldest-first, plus whether the scan
- * actually reached the cursor.
- *
- * The reader a consumer with a marker wants, in place of a fixed-size tail: see
- * {@link readJsonlSince} for why the two are not interchangeable, and for why
- * `reachedCursor` has to come back rather than be inferred from the entries. An
- * entry whose `ts` will not parse is KEPT rather than treated as old, so a
- * malformed timestamp costs a re-read and never a lost dispatch.
- */
-export function readReasoningLogSince(cursorMs: number): {
-  entries: ReasoningLogEntry[];
-  reachedCursor: boolean;
-} {
-  return readJsonlSince<ReasoningLogEntry>(TOOL_WRAPPER_LOG, (e) => {
-    const t = Date.parse(e.ts);
-    return Number.isFinite(t) && t <= cursorMs;
-  });
 }
 
 /** Trims the reasoning log to the last `keep` entries. Used for maintenance. */

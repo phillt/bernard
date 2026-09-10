@@ -54,6 +54,18 @@ describe('enqueue', () => {
     expect(q.pending()).toBe(2);
   });
 
+  it('works again after the directory is removed under it', () => {
+    // A cached "already created this process" flag — which `jsonl.ts` keeps for
+    // its own append — is a correctness hazard HERE, because a drain empties this
+    // directory and a test removes it. With the cache, every enqueue after the
+    // first removal failed silently.
+    const q = make();
+    expect(q.enqueue({ name: 'a' })).toBeTruthy();
+    fs.rmSync(dirOf(), { recursive: true, force: true });
+    expect(q.enqueue({ name: 'b' })).toBeTruthy();
+    expect(q.claim().map((i) => i.payload.name)).toEqual(['b']);
+  });
+
   it('never throws when the directory cannot be created', () => {
     const blocker = path.join(home(), 'blocker');
     fs.writeFileSync(blocker, 'x');

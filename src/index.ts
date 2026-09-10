@@ -104,6 +104,7 @@ import { HELP_CONFIG } from './cli-help.js';
 import { appletSuggestionBlock } from './applet-detector.js';
 import { runCorrectionAgent } from './correction.js';
 import { debugLog, isDebugEnabled } from './logger.js';
+import { recallQueue } from './recall-queue.js';
 import { installInstrumentedFetchIfDebug } from './framework/instrumented-fetch.js';
 import { initShellParser } from './permissions/shell-ast.js';
 import { App } from './ui/App.js';
@@ -530,6 +531,22 @@ async function runInkRepl(args: {
       const block = appletSuggestionBlock(pendingApplets, eligible);
       alertContext = alertContext ? alertContext + '\n\n' + block : block;
     }
+  }
+
+  // Queue housekeeping, beside the two candidate sweeps above and for the same
+  // reason they run here: once per process, at the one moment a user is
+  // definitely not mid-turn. This is the retention every existing candidate
+  // store lacks — measured, 54 correction rows and 42 others sit on a real
+  // install with nothing that could ever remove them — and it is what bounds a
+  // queue belonging to someone who never exits cleanly, since `cleanup()` has no
+  // signal handler and a killed REPL drains nothing.
+  try {
+    const swept = recallQueue().sweep();
+    if (swept.parked > 0 || swept.prunedParked > 0) {
+      debugLog('recall-queue:swept', swept);
+    }
+  } catch {
+    // Housekeeping must never be why a session cannot start.
   }
 
   // Memory housekeeping (#529). A NOTICE plus a context block, never a change:

@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { MEMORY_CONSOLIDATED_MARKER, SPECIALIST_RECALL_MARKER } from './paths.js';
+import { MEMORY_CONSOLIDATED_MARKER, RECALL_QUEUE_DIR } from './paths.js';
+import { recallQueue } from './recall-queue.js';
 
 // Mock dependencies before importing anything that uses them
 const mockExtractDomainFacts = vi.fn();
@@ -86,7 +87,6 @@ const mockAsOwner = vi.fn(() => ({
   retire: mockRetire,
   supersede: mockSupersede,
 }));
-const mockReadJsonlTail = vi.fn(() => [] as unknown[]);
 const mockSpecialistGet = vi.fn((id: string) => ({ id }) as unknown);
 
 vi.mock('./specialist-recall.js', () => ({
@@ -96,20 +96,6 @@ vi.mock('./specialist-recall.js', () => ({
 // The reasoning log's own reader, not `jsonl.js` beneath it: `readJsonlTail` is
 // shared with `session-telemetry` and the script log, and mocking a module three
 // unrelated readers go through is broader than this suite needs.
-vi.mock('./reasoning-log.js', async (orig) => ({
-  ...(await orig<Record<string, unknown>>()),
-  readReasoningLog: (...a: any[]) => mockReadJsonlTail(...(a as [])),
-  // The cursor reader is mocked over the SAME array and applies the cursor
-  // itself, mirroring the real one. Leaving it to the real implementation would
-  // read the (empty) temp-home log and make every marker test pass for a reason
-  // that has nothing to do with the code under test.
-  readReasoningLogSince: (cursorMs: number) =>
-    (mockReadJsonlTail() as Array<{ ts: string }>).filter((e) => {
-      const t = Date.parse(e.ts);
-      return !Number.isFinite(t) || t > cursorMs;
-    }),
-}));
-
 vi.mock('./memory-consolidation.js', () => ({
   consolidationInputs: (...a: any[]) => mockConsolidationInputs(...(a as [])),
   proposeConsolidation: (...a: any[]) => mockProposeConsolidation(...(a as [])),
@@ -511,7 +497,6 @@ describe('rag-worker (runWorkerForFile)', () => {
       // Re-seeded, not merely cleared: `clearAllMocks` leaves implementations
       // and `*Once` queues, so a sibling's `mockReturnValue` on these is what
       // the next test sees — the #457 class, and this block hit it immediately.
-      mockReadJsonlTail.mockReset().mockReturnValue([]);
       mockExtractNotes.mockReset().mockResolvedValue(notesOk([]));
       mockSpecialistGet.mockReset().mockImplementation((id: string) => ({ id }) as unknown);
       mockAsOwner.mockReset().mockReturnValue({
@@ -522,12 +507,11 @@ describe('rag-worker (runWorkerForFile)', () => {
       mockWriteMemory.mockReset();
       mockRetire.mockReset().mockReturnValue(true);
       mockSupersede.mockReset().mockReturnValue(true);
-      // On-disk state, not a mock: a successful pass WRITES this marker, so a
-      // sibling test leaves a cutoff of `now` behind and every later test's log
-      // entries are filtered out as already-seen. Owned here rather than by the
-      // one test that seeds it deliberately — a trailing `rmSync` does not run
-      // when the assertion above it fails, which is exactly when it matters.
-      fs.rmSync(SPECIALIST_RECALL_MARKER, { force: true });
+      // On-disk state, not a mock — the queue IS the input now, and the arm's
+      // whole contract is which items it leaves behind. Owned by the hook rather
+      // than by the tests, because a trailing cleanup does not run when the
+      // assertion above it fails, which is exactly when it matters.
+      fs.rmSync(RECALL_QUEUE_DIR, { recursive: true, force: true });
     });
 
     const run = (specialistId: string, ts = new Date().toISOString()) => ({
@@ -539,11 +523,18 @@ describe('rag-worker (runWorkerForFile)', () => {
       status: 'ok',
     });
 
+    /** Puts dispatches on the real queue, the way a dispatch would. */
+    const enqueue = (...entries: Array<ReturnType<typeof run>>) => {
+      for (const e of entries) recallQueue().enqueue(e as never);
+    };
+    const queued = () => recallQueue().pending();
+    const parked = () => recallQueue().listParked().length;
+
     it('runs without a transcript and without RAG — its gate is the log', async () => {
       // The whole reason it is a third independent gate. Hanging it off
       // `serialized` or `ragEnabled` would make it silently never run for
       // settings that have nothing to do with what a specialist remembers.
-      mockReadJsonlTail.mockReturnValue([run('coder')]);
+      enqueue(run('coder'));
       mockExtractNotes.mockResolvedValue(
         notesOk([{ key: 'build-uses-pnpm', content: 'Use pnpm.' }]),
       );
@@ -558,7 +549,7 @@ describe('rag-worker (runWorkerForFile)', () => {
     it('writes the note as that specialist, not as the user', async () => {
       // The fence is the point: a note written unowned would land in the shared
       // pool the main agent reads, which is exactly what ownership prevents.
-      mockReadJsonlTail.mockReturnValue([run('coder')]);
+      enqueue(run('coder'));
       mockExtractNotes.mockResolvedValue(
         notesOk([{ key: 'build-uses-pnpm', content: 'Use pnpm.' }]),
       );
@@ -575,7 +566,7 @@ describe('rag-worker (runWorkerForFile)', () => {
       // transcript, and four specialists in a session would be sixteen. Grouping
       // also means a specialist that ran five times gets one extraction that can
       // see all five rather than five that cannot see each other.
-      mockReadJsonlTail.mockReturnValue([run('coder'), run('coder'), run('designer')]);
+      enqueue(run('coder'), run('coder'), run('designer'));
       mockExtractNotes.mockResolvedValue(notesOk([]));
       write({ provider: 'anthropic', model: 'm', specialistRecall: true });
 
@@ -591,7 +582,7 @@ describe('rag-worker (runWorkerForFile)', () => {
     it('skips a specialist that no longer exists', async () => {
       // Its notes would be owned by an id nothing resolves — unreadable the
       // moment they land, and swept by nothing, because the sweep already ran.
-      mockReadJsonlTail.mockReturnValue([run('deleted-one')]);
+      enqueue(run('deleted-one'));
       mockSpecialistGet.mockReturnValue(undefined as never);
       write({ provider: 'anthropic', model: 'm', specialistRecall: true });
 
@@ -605,7 +596,7 @@ describe('rag-worker (runWorkerForFile)', () => {
       // The producer gap: a store per specialist is an EMPTY store until
       // something writes into it, and the three existing RAG producers all read
       // the MAIN transcript. This is the one that fills it.
-      mockReadJsonlTail.mockReturnValue([run('coder')]);
+      enqueue(run('coder'));
       mockExtractNotes.mockResolvedValue(notesOk([{ key: 'k', content: 'Use pnpm.' }]));
       write({ provider: 'anthropic', model: 'm', specialistRecall: true });
 
@@ -618,7 +609,7 @@ describe('rag-worker (runWorkerForFile)', () => {
       // Guards the guard: the common case is no notes, and an unconditional
       // write would construct a store — and a directory — for every specialist
       // that ran, whether or not it learned anything.
-      mockReadJsonlTail.mockReturnValue([run('coder')]);
+      enqueue(run('coder'));
       mockExtractNotes.mockResolvedValue(notesOk([]));
       write({ provider: 'anthropic', model: 'm', specialistRecall: true });
 
@@ -628,25 +619,29 @@ describe('rag-worker (runWorkerForFile)', () => {
     });
 
     it('does not run when the payload does not ask for it', async () => {
-      mockReadJsonlTail.mockReturnValue([run('coder')]);
+      enqueue(run('coder'));
       write({ serialized: 'x', provider: 'anthropic', model: 'm' });
       await runWorkerForFile(tempFile);
       expect(mockExtractNotes).not.toHaveBeenCalled();
     });
 
-    it('examines only what happened since the last pass', async () => {
-      // The marker stores the inclusion CUTOFF, not the run time — the shape #529
-      // had to correct once, because storing the run time makes the trigger set
-      // and the input set exact complements.
-      fs.mkdirSync(path.dirname(SPECIALIST_RECALL_MARKER), { recursive: true });
-      fs.writeFileSync(SPECIALIST_RECALL_MARKER, new Date(Date.now() - 1000).toISOString() + '\n');
-      mockReadJsonlTail.mockReturnValue([run('old', '2020-01-01T00:00:00.000Z')]);
+    it('examines each dispatch exactly once', async () => {
+      // What the cursor was for, now a property of the queue rather than of a
+      // clock: a successful pass removes the items, so a second pass over an
+      // unchanged queue has nothing to do. No marker, no `Date` comparison, and
+      // no "inclusion cutoff vs run time" distinction to get wrong — the shape
+      // #529 had to correct once.
+      enqueue(run('coder'));
+      mockExtractNotes.mockResolvedValue(notesOk([{ key: 'k', content: 'c' }]));
       write({ provider: 'anthropic', model: 'm', specialistRecall: true });
 
       await runWorkerForFile(tempFile);
+      expect(mockExtractNotes).toHaveBeenCalledTimes(1);
+      expect(queued()).toBe(0);
 
-      expect(mockExtractNotes).not.toHaveBeenCalled();
-      fs.rmSync(SPECIALIST_RECALL_MARKER, { force: true });
+      write({ provider: 'anthropic', model: 'm', specialistRecall: true });
+      await runWorkerForFile(tempFile);
+      expect(mockExtractNotes).toHaveBeenCalledTimes(1);
     });
 
     it('shows the model the error text, not just that something failed', async () => {
@@ -654,12 +649,12 @@ describe('rag-worker (runWorkerForFile)', () => {
       // prompt nowhere — only the coarse `status` label. The extractor's first
       // instruction is "a mistake it made and what the correct approach turned
       // out to be", which it cannot follow from "status: error" alone.
-      mockReadJsonlTail.mockReturnValue([
+      enqueue(
         Object.assign(run('coder'), {
           status: 'invalid_args',
           error: 'file_write requires `path`, received `pth`',
         }),
-      ]);
+      );
       write({ provider: 'anthropic', model: 'm', specialistRecall: true });
 
       await runWorkerForFile(tempFile);
@@ -670,7 +665,7 @@ describe('rag-worker (runWorkerForFile)', () => {
     it('omits the error line entirely for a run that succeeded', async () => {
       // Guards the guard: an unconditional line would put `Error:` under every
       // successful run, which teaches the extractor the opposite lesson.
-      mockReadJsonlTail.mockReturnValue([run('coder')]);
+      enqueue(run('coder'));
       write({ provider: 'anthropic', model: 'm', specialistRecall: true });
 
       await runWorkerForFile(tempFile);
@@ -688,7 +683,7 @@ describe('rag-worker (runWorkerForFile)', () => {
       const many = Array.from({ length: 60 }, (_, i) =>
         Object.assign(run('coder'), { input: `run-${i}` }),
       );
-      mockReadJsonlTail.mockReturnValue(many);
+      enqueue(...many);
       write({ provider: 'anthropic', model: 'm', specialistRecall: true });
 
       await runWorkerForFile(tempFile);
@@ -711,7 +706,7 @@ describe('rag-worker (runWorkerForFile)', () => {
         live--;
         return notesOk([]);
       });
-      mockReadJsonlTail.mockReturnValue([run('a'), run('b'), run('c')]);
+      enqueue(run('a'), run('b'), run('c'));
       write({ provider: 'anthropic', model: 'm', specialistRecall: true });
 
       await runWorkerForFile(tempFile);
@@ -724,7 +719,7 @@ describe('rag-worker (runWorkerForFile)', () => {
       // are excluded from it permanently — and this arm writes them every
       // session. Without a counterpart, "memory only ever grows" is recreated
       // one fence down.
-      mockReadJsonlTail.mockReturnValue([run('coder')]);
+      enqueue(run('coder'));
       mockConsolidationInputs.mockReturnValue(
         Array.from({ length: 9 }, (_, i) => ({ key: `k${i}` })),
       );
@@ -748,7 +743,7 @@ describe('rag-worker (runWorkerForFile)', () => {
       // A floor rather than a rate: a specialist with two notes has nothing to
       // consolidate, and paying for the judgement would make this cost
       // something every session for nothing.
-      mockReadJsonlTail.mockReturnValue([run('coder')]);
+      enqueue(run('coder'));
       mockConsolidationInputs.mockReturnValue([{ key: 'a' }, { key: 'b' }]);
       write({ provider: 'anthropic', model: 'm', specialistRecall: true });
 
@@ -762,7 +757,7 @@ describe('rag-worker (runWorkerForFile)', () => {
       // The distinction `MemoryRecord` draws between "X replaced this" and "this
       // was never worth keeping", kept rather than collapsed — and the keeper
       // itself must survive.
-      mockReadJsonlTail.mockReturnValue([run('coder')]);
+      enqueue(run('coder'));
       mockConsolidationInputs.mockReturnValue(
         Array.from({ length: 9 }, (_, i) => ({ key: `k${i}` })),
       );
@@ -781,7 +776,7 @@ describe('rag-worker (runWorkerForFile)', () => {
     it('never applies a merge, which would write text nobody wrote', async () => {
       // The one disposition where a wrong call INVENTS a note. The user's pass
       // gets a human to look at that before it lands; this one has nobody.
-      mockReadJsonlTail.mockReturnValue([run('coder')]);
+      enqueue(run('coder'));
       mockConsolidationInputs.mockReturnValue(
         Array.from({ length: 9 }, (_, i) => ({ key: `k${i}` })),
       );
@@ -796,36 +791,65 @@ describe('rag-worker (runWorkerForFile)', () => {
       expect(mockSupersede).not.toHaveBeenCalled();
     });
 
-    it('holds the marker back when a look FAILED, so those runs are re-read', async () => {
-      // The other half of making the read exact, and the one the first cut
-      // missed. `extractSpecialistNotes` fails closed, so a timed-out cheap-tier
-      // call was indistinguishable from "nothing worth remembering" — and the
-      // marker advanced past those dispatches regardless, which are then never
-      // seen again. An exact reader with an unconditional commit still loses
-      // work, just on the common path instead of the rare one.
-      const ts = '2026-02-01T00:00:00.000Z';
-      mockReadJsonlTail.mockReturnValue([run('coder', ts)]);
-      mockExtractNotes.mockResolvedValue({ notes: [], failed: true });
+    it('returns a FAILED specialist\u2019s items, and nobody else\u2019s', async () => {
+      // The property the shared cursor could not have, and the whole reason for
+      // the queue. `extractSpecialistNotes` fails closed, so a timed-out
+      // cheap-tier call is indistinguishable from "nothing worth remembering" —
+      // and the marker's answer was to retreat behind the oldest failure, which
+      // re-did every specialist newer than it. Here the failure costs exactly
+      // its own item.
+      enqueue(run('coder'), run('designer'));
+      mockExtractNotes.mockImplementation(async (id: string) =>
+        id === 'coder' ? { notes: [], failed: true } : notesOk([{ key: 'k', content: 'c' }]),
+      );
       write({ provider: 'anthropic', model: 'm', specialistRecall: true });
 
       await runWorkerForFile(tempFile);
 
-      // Behind the entry, not at `now`.
-      const stamped = Date.parse(fs.readFileSync(SPECIALIST_RECALL_MARKER, 'utf-8').trim());
-      expect(stamped).toBeLessThan(Date.parse(ts));
+      expect(queued()).toBe(1);
+      expect(recallQueue().claim()[0].payload.specialistId).toBe('coder');
     });
 
-    it('advances past a look that ran and found nothing', async () => {
-      // Guards the guard: "nothing to learn" is the common outcome and MUST
-      // advance, or every quiet session re-pays for the same transcript forever.
-      mockReadJsonlTail.mockReturnValue([run('coder', '2026-02-01T00:00:00.000Z')]);
+    it('acknowledges a look that ran and found nothing', async () => {
+      // Guards the guard: "nothing to learn" is the common outcome and MUST be
+      // acknowledged, or every quiet session re-pays for the same transcript.
+      enqueue(run('coder'));
       mockExtractNotes.mockResolvedValue(notesOk([]));
       write({ provider: 'anthropic', model: 'm', specialistRecall: true });
 
       await runWorkerForFile(tempFile);
 
-      const stamped = Date.parse(fs.readFileSync(SPECIALIST_RECALL_MARKER, 'utf-8').trim());
-      expect(stamped).toBeGreaterThan(Date.parse('2026-02-01T00:00:00.000Z'));
+      expect(queued()).toBe(0);
+    });
+
+    it('acknowledges the items of a specialist that no longer exists', async () => {
+      // Not retried: the owner is never coming back, so retrying would park
+      // these three passes later for no reason.
+      mockSpecialistGet.mockReturnValue(undefined);
+      enqueue(run('gone'));
+      write({ provider: 'anthropic', model: 'm', specialistRecall: true });
+
+      await runWorkerForFile(tempFile);
+
+      expect(queued()).toBe(0);
+      expect(parked()).toBe(0);
+    });
+
+    it('gives back only the runs the budget could not fit', async () => {
+      // The marker could not express this: it marked the specialist fully
+      // processed, so the runs `renderTranscript` dropped were never seen again.
+      const many = Array.from({ length: 60 }, (_, i) =>
+        Object.assign(run('coder'), { input: `run-${i}`, finalOutput: 'x'.repeat(400) }),
+      );
+      enqueue(...many);
+      mockExtractNotes.mockResolvedValue(notesOk([]));
+      write({ provider: 'anthropic', model: 'm', specialistRecall: true });
+
+      await runWorkerForFile(tempFile);
+
+      // Some were rendered and acknowledged, and some were not and came back.
+      expect(queued()).toBeGreaterThan(0);
+      expect(queued()).toBeLessThan(60);
     });
 
     it('one specialist failing does not cost the others their notes', async () => {
@@ -835,7 +859,7 @@ describe('rag-worker (runWorkerForFile)', () => {
       mockExtractNotes.mockImplementation(async (id: string) =>
         id === 'a' ? Promise.reject(new Error('boom')) : notesOk([{ key: 'k', content: 'c' }]),
       );
-      mockReadJsonlTail.mockReturnValue([run('a'), run('b')]);
+      enqueue(run('a'), run('b'));
       write({ provider: 'anthropic', model: 'm', specialistRecall: true });
 
       await runWorkerForFile(tempFile);

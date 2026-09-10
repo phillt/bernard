@@ -45,14 +45,12 @@ import {
 } from './memory-candidates.js';
 import { consolidationInputs, proposeConsolidation } from './memory-consolidation.js';
 import { keysRetiredBy } from './memory-proposal.js';
-import { MEMORY_CONSOLIDATED_MARKER, SPECIALIST_RECALL_MARKER } from './paths.js';
+import { MEMORY_CONSOLIDATED_MARKER } from './paths.js';
 import { debugLog } from './logger.js';
 import { extractSpecialistNotes } from './specialist-recall.js';
-import {
-  readReasoningLog,
-  readReasoningLogSince,
-  type ReasoningLogEntry,
-} from './reasoning-log.js';
+import type { ReasoningLogEntry } from './reasoning-log.js';
+import { recallQueue } from './recall-queue.js';
+import type { QueueItem } from './work-queue.js';
 import { atomicWriteFileSync } from './fs-utils.js';
 import { truncate } from './text.js';
 import { SpecialistStore } from './specialists.js';
@@ -123,47 +121,22 @@ export interface TempPayload {
  * complements, so the most recent work is never examined.
  */
 async function runSpecialistRecall(config: BernardConfig): Promise<void> {
-  const lastCutoff = readCutoffMarker(SPECIALIST_RECALL_MARKER);
-  const cutoff = Date.now();
-  // A CURSOR once a marker exists, not a fixed window. A tail read's limit
-  // bounds the parse and not the read, so everything between the marker and the
-  // start of the window was dropped — reported by the line below and never
-  // recovered. `readReasoningLogSince` reads backwards from EOF and stops at the
-  // marker, so every dispatch since the last pass is seen however many precede
-  // it, and nothing older is parsed at all.
-  //
-  // The first run has no marker and nothing to be exact about, so it takes the
-  // tail: reading a whole rotated log to extract from a session that already
-  // ended would be paying for history nobody asked for.
-  const read =
-    lastCutoff === null
-      ? { entries: readReasoningLog(RECALL_LOG_SCAN), reachedCursor: true }
-      : readReasoningLogSince(lastCutoff);
-  const entries = read.entries.filter((e) => {
-    const t = Date.parse(e.ts);
-    return Boolean(e.specialistId) && Number.isFinite(t) && t <= cutoff;
-  });
-
-  // Loss is still possible and is still reported — rotation can evict entries
-  // between two passes, and the backwards read has its own ceiling.
-  //
-  // **From the reader's own verdict, not from the entries.** Every entry it
-  // returns is newer than the cursor BY CONSTRUCTION, so the obvious test —
-  // "is the oldest one already newer than the marker?" — is a tautology that
-  // fires on every ordinary session, which would turn the one loss signal into
-  // noise. `reachedCursor` is the fact only the scan knows.
-  if (!read.reachedCursor) {
-    debugLog('specialist-recall:window-truncated', { scanned: read.entries.length, lastCutoff });
-  }
+  // The work is the queue, full stop — no cursor, no clock, no window. Every
+  // dispatch enqueued itself when it finished, so the set to process is exactly
+  // the files present, and acknowledgement is per item rather than one shared
+  // bookmark that a single failure had to drag backwards over everybody.
+  const queue = recallQueue();
+  const items = queue.claim();
+  if (items.length === 0) return;
 
   // Grouped so one specialist that ran five times gets ONE extraction over all
   // five, not five extractions that cannot see each other. That is also what
   // keeps the call count at one per specialist rather than one per dispatch.
-  const byOwner = new Map<string, ReasoningLogEntry[]>();
-  for (const e of entries) {
-    const list = byOwner.get(e.specialistId);
-    if (list) list.push(e);
-    else byOwner.set(e.specialistId, [e]);
+  const byOwner = new Map<string, Array<QueueItem<ReasoningLogEntry>>>();
+  for (const item of items) {
+    const list = byOwner.get(item.payload.specialistId);
+    if (list) list.push(item);
+    else byOwner.set(item.payload.specialistId, [item]);
   }
 
   const specialists = new SpecialistStore({ seed: false });
@@ -174,26 +147,32 @@ async function runSpecialistRecall(config: BernardConfig): Promise<void> {
   // latency measures p50 4.7 s, so four specialists cost 19 s in sequence and
   // one round trip in parallel. This arm otherwise decides how long the detached
   // worker lives.
-  // The oldest entry belonging to a specialist whose extraction could not run,
-  // so the marker can be held back behind it. See below.
-  let unread: number | null = null;
   await Promise.allSettled(
     Array.from(byOwner, async ([specialistId, runs]) => {
       // A deleted specialist's notes would be written under an owner nothing can
       // resolve — unreadable the moment they land, and swept by nothing because
-      // the sweep already ran.
-      if (!specialists.get(specialistId)) return;
-      const { notes, failed } = await extractSpecialistNotes(
-        specialistId,
-        renderTranscript(runs, RECALL_TRANSCRIPT_MAX),
-        config,
-        { abortSignal: AbortSignal.timeout(WORKER_RECALL_TIMEOUT_MS) },
-      );
-      if (failed) {
-        const oldest = Math.min(...runs.map((r) => Date.parse(r.ts)).filter(Number.isFinite));
-        if (Number.isFinite(oldest)) unread = unread === null ? oldest : Math.min(unread, oldest);
+      // the sweep already ran. Acknowledged, not retried: the owner is never
+      // coming back, so retrying would park these items three passes later for
+      // no reason.
+      if (!specialists.get(specialistId)) {
+        for (const item of runs) queue.done(item.id);
         return;
       }
+      // Only the runs the budget actually fit are rendered — and so only those
+      // are acknowledged. The marker could not express that: it marked the
+      // specialist fully processed and the dropped runs were never seen again.
+      const { text, used } = renderTranscript(runs, RECALL_TRANSCRIPT_MAX);
+      const { notes, failed } = await extractSpecialistNotes(specialistId, text, config, {
+        abortSignal: AbortSignal.timeout(WORKER_RECALL_TIMEOUT_MS),
+      });
+      if (failed) {
+        // THIS specialist's items come back, and nobody else's. The shared
+        // cursor had to retreat behind the oldest failure, which re-did every
+        // specialist newer than it — duplicate model calls and duplicate notes.
+        for (const item of used) queue.retry(item.id, 'extraction failed');
+        return;
+      }
+      for (const item of used) queue.done(item.id);
       writeOwnedNotes(memory, specialistId, notes);
       // Independent of each other — both only need the notes — so they overlap
       // rather than the embed waiting behind a cheap-tier round trip measured at
@@ -202,21 +181,14 @@ async function runSpecialistRecall(config: BernardConfig): Promise<void> {
         seedSpecialistRag(specialistId, notes),
         consolidateOwnedNotes(memory, specialistId, config),
       ]);
-      debugLog('specialist-recall:wrote', { specialistId, runs: runs.length, notes: notes.length });
+      debugLog('specialist-recall:wrote', {
+        specialistId,
+        runs: runs.length,
+        rendered: used.length,
+        notes: notes.length,
+      });
     }),
   );
-  // Stamped unconditionally when every look succeeded, INCLUDING when nothing
-  // matched: otherwise a quiet session re-scans the same window forever.
-  //
-  // **Held back behind a failed look, which is the other half of making the read
-  // exact.** `extractSpecialistNotes` fails closed, so a timed-out cheap-tier
-  // call came back indistinguishable from "nothing worth remembering" — and the
-  // marker then advanced past those dispatches, which are never seen again. An
-  // exact reader with an unconditional commit is still a queue that loses work,
-  // just on the common path rather than the rare one. Retreating to just before
-  // the oldest entry of every failed group restores at-least-once: those
-  // dispatches are re-read next session, and the ones that succeeded are not.
-  writeCutoffMarker(SPECIALIST_RECALL_MARKER, unread === null ? cutoff : unread - 1);
 }
 
 /** The notes a specialist just learned, under its own name. */
@@ -363,18 +335,27 @@ async function seedSpecialistRag(
  * (#347) already states — and, worse, `runs` is in log order, so a front slice
  * fed the model the OLDEST 7 of `shell-wrapper`'s 265 runs and discarded the 258
  * most recent. What a specialist did last session is the part worth learning
- * from.
+ * from. Returning the items it used, not just the text, is what lets the caller
+ * acknowledge exactly the runs the model actually saw.
  */
-function renderTranscript(runs: readonly ReasoningLogEntry[], budget: number): string {
+function renderTranscript(
+  runs: ReadonlyArray<QueueItem<ReasoningLogEntry>>,
+  budget: number,
+): { text: string; used: Array<QueueItem<ReasoningLogEntry>> } {
   const out: string[] = [];
-  let used = 0;
+  const used: Array<QueueItem<ReasoningLogEntry>> = [];
+  let chars = 0;
   for (let i = runs.length - 1; i >= 0; i--) {
-    const rendered = renderRun(runs[i]);
-    if (used + rendered.length > budget) break;
+    const rendered = renderRun(runs[i].payload);
+    if (chars + rendered.length > budget) break;
     out.push(rendered);
-    used += rendered.length + 2;
+    used.push(runs[i]);
+    chars += rendered.length + 2;
   }
-  return out.join('\n\n');
+  // Which items were rendered comes back with the text, because the caller
+  // acknowledges exactly those. Returning only the string is what let the
+  // dropped runs be marked processed.
+  return { text: out.join('\n\n'), used };
 }
 
 /** One logged run, as the extractor sees it. */
@@ -443,17 +424,6 @@ const WORKER_CONSOLIDATE_TIMEOUT_MS = 60_000;
 
 /** Same deadline shape; a stuck provider must not outlive this detached run. */
 const WORKER_RECALL_TIMEOUT_MS = 60_000;
-
-/**
- * How far back the FIRST run scans, before a marker exists.
- *
- * Only that run: every later pass reads backwards to the marker instead, so this
- * does not bound the steady state and sizing it as though it did would be wrong.
- * A first run has no cursor and nothing to be exact about — 500 entries is far
- * more than any session produces, and reading the whole rotated file to extract
- * from sessions that already ended is history nobody asked for.
- */
-const RECALL_LOG_SCAN = 500;
 
 /** Per-specialist transcript budget, so one busy specialist cannot dominate. */
 const RECALL_TRANSCRIPT_MAX = 12_000;

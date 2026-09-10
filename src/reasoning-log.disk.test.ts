@@ -109,40 +109,25 @@ describe('the file stays bounded', () => {
   });
 });
 
-describe('reading since a cursor', () => {
-  it('returns everything after it, however many entries precede it', async () => {
-    // The property a tail read cannot have. With a fixed window, entries
-    // between the cursor and the window's start are dropped silently — which is
-    // what `specialist-recall:window-truncated` was reporting without being
-    // able to recover.
-    const { appendReasoningLog, readReasoningLogSince } = await load();
-    const base = Date.parse('2026-01-01T00:00:00.000Z');
-    for (let i = 0; i < 1500; i++) appendReasoningLog(at(base + i * 1000, { input: `run-${i}` }));
-    const since = readReasoningLogSince(base + 1496 * 1000);
-    expect(since.entries.map((e) => e.input)).toEqual(['run-1497', 'run-1498', 'run-1499']);
-    // And it says it got all of them — the fact a caller cannot infer from the
-    // entries, since every one is newer than the cursor by construction.
-    expect(since.reachedCursor).toBe(true);
+describe('recording a dispatch', () => {
+  it('writes the log entry AND the queue item', async () => {
+    // One function rather than two calls at each producer, because the pair is
+    // what has to stay together: a dispatch in the log and not in the queue is
+    // one a specialist never learns from, silently — the class of bug the queue
+    // replaces.
+    const { recordDispatch, readReasoningLog } = await load();
+    const { recallQueue } = await import('./recall-queue.js');
+    recordDispatch(at(Date.now(), { input: 'do it' }));
+    expect(readReasoningLog(1)[0].input).toBe('do it');
+    expect(recallQueue().pending()).toBe(1);
   });
 
-  it('returns nothing when the cursor is at the end', async () => {
-    const { appendReasoningLog, readReasoningLogSince } = await load();
-    const base = Date.parse('2026-01-01T00:00:00.000Z');
-    appendReasoningLog(at(base));
-    expect(readReasoningLogSince(base).entries).toEqual([]);
-  });
-
-  it('keeps an entry whose timestamp will not parse', async () => {
-    // On an append-only log the only thing worse than re-reading an entry is
-    // not reading it, so an unparseable `ts` must not read as "old".
-    const { appendReasoningLog, readReasoningLogSince } = await load();
-    const base = Date.parse('2026-01-01T00:00:00.000Z');
-    appendReasoningLog(at(base, { ts: 'not-a-date' }));
-    expect(readReasoningLogSince(base + 10_000).entries).toHaveLength(1);
-  });
-
-  it('returns [] rather than throwing when the log does not exist', async () => {
-    const { readReasoningLogSince } = await load();
-    expect(readReasoningLogSince(0)).toEqual({ entries: [], reachedCursor: true });
+  it('bounds the entry once, for both consumers', async () => {
+    const { recordDispatch, readReasoningLog } = await load();
+    const { recallQueue } = await import('./recall-queue.js');
+    recordDispatch(at(Date.now(), { finalOutput: 'x'.repeat(50_000) }));
+    expect(String(readReasoningLog(1)[0].finalOutput).length).toBeLessThan(3000);
+    const [item] = recallQueue().claim();
+    expect(String(item.payload.finalOutput).length).toBeLessThan(3000);
   });
 });

@@ -83,12 +83,6 @@ export interface WorkQueueOptions<T> {
  */
 let seq = 0;
 
-/**
- * Queue directories already created this process, so an enqueue is not a
- * `mkdirSync` every time. `jsonl.ts`'s `readyDirs` exactly, for its reason.
- */
-const readyDirs = new Set<string>();
-
 const DEFAULT_MAX_PENDING = 200;
 const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -141,10 +135,13 @@ export class WorkQueue<T> {
     // of a dispatch that cost seconds — the 25.7 ms rotation mattered because it
     // was 25 ms, not because it was per-dispatch.
     try {
-      if (!readyDirs.has(this.dir)) {
-        fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 });
-        readyDirs.add(this.dir);
-      }
+      // `mkdirSync` every time, deliberately. A "directory already created this
+      // process" cache is what `jsonl.ts` does and it is a correctness hazard
+      // here: this directory is EMPTIED by a drain and by tests, so a cached
+      // `true` makes every later enqueue fail silently. It also bought nothing —
+      // measured, enqueue is 0.128 ms with the `mkdirSync` and the time is in the
+      // temp-write-and-rename.
+      fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 });
       // Counted rather than cached. `CorrectionCandidateStore` kept an in-memory
       // tally to make this O(1), which is a single-process optimisation that is
       // wrong by construction the moment a second writer exists — it is primed
