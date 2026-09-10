@@ -60,7 +60,7 @@ async function main(): Promise<void> {
   const { RoutineStore } = await import('../src/routines.js');
   const { SpecialistStore } = await import('../src/specialists.js');
   const { CandidateStore } = await import('../src/specialist-candidates.js');
-  const { CorrectionCandidateStore } = await import('../src/correction-candidates.js');
+  const { correctionQueue } = await import('../src/correction-queue.js');
   const { ToolProfileStore } = await import('../src/tool-profiles.js');
   type SeedMemory = { key: string; content: string };
   type Scenario = {
@@ -145,7 +145,7 @@ async function main(): Promise<void> {
         routines: new RoutineStore(),
         specialists: new SpecialistStore(),
         candidates: new CandidateStore(),
-        correction: new CorrectionCandidateStore(),
+        correction: correctionQueue(),
         toolProfiles: new ToolProfileStore(),
       },
     });
