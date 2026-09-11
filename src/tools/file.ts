@@ -1,4 +1,5 @@
 import { tool } from 'ai';
+import { normalizeToolText } from '../text.js';
 import { z } from 'zod';
 import { MAX_VERIFY_TEXT } from '../provenance.js';
 import { atomicWriteFileSyncUnique } from '../fs-utils.js';
@@ -288,7 +289,11 @@ export function createFileTools(provenance?: ProvenanceStore) {
             if (isBinaryContent(rawBuffer)) {
               return { error: `File appears to be binary: ${absPath}` };
             }
-            const content = rawBuffer.toString('utf-8');
+            // Normalized on the way in (#mojibake). A file whose bytes are already
+            // mojibake otherwise reaches the model verbatim and gets quoted onward;
+            // `web_read` had the same gap. Repair is a no-op on clean UTF-8 and on
+            // pure ASCII, which is nearly every file read.
+            const content = normalizeToolText(rawBuffer.toString('utf-8'));
             const allLines = splitLines(content);
             const totalLines = allLines.length;
 
@@ -523,6 +528,34 @@ export function createFileTools(provenance?: ProvenanceStore) {
             if (isBinaryContent(rawBuffer)) {
               return { error: `File appears to be binary: ${absPath}` };
             }
+            // NOT normalized, deliberately — unlike the read above. This is the
+            // edit path: it splits the file, splices the model's lines in, and
+            // writes the whole thing back. Repairing here would rewrite bytes the
+            // user never asked to touch, turning a three-line edit into a
+            // whole-file re-encode.
+            //
+            // **The "a write only changes what was asked for" line that used to
+            // end this comment is not quite true, and the gap is worth naming.**
+            // It holds for the lines the model does not touch and breaks for the
+            // ones it does: the model was SHOWN line 5 as `Café news` (repaired),
+            // is asked to change a word, and hands back `Café updates` — because
+            // that is the text it read. On disk line 5 was the mojibake form, so
+            // after the edit the file carries repaired bytes on the edited lines
+            // and mojibake everywhere else, and the returned `diff` presents the
+            // encoding change as part of the requested edit.
+            //
+            // Nothing in the round trip can detect it either: `file_read_lines`
+            // returns no hash of what it showed, and `old_hash` here is computed
+            // from raw bytes, so there is no value a caller could compare. A
+            // normalized-content hash on the read side would at least make the
+            // divergence visible; that is a change to the read/edit contract and
+            // is not made here.
+            //
+            // What IS verified: line NUMBERING cannot drift between the two.
+            // `normalizeToolText` can neither add nor remove a newline — the
+            // shortest decode is U+0080 and `sequenceLength` only matches leads at
+            // or above 0xC2 — so the line the model was shown is the line this
+            // splices.
             const rawContent = rawBuffer.toString('utf-8');
             const lineEnding = detectLineEnding(rawContent);
             const hadTrailingNewline =

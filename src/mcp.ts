@@ -15,7 +15,7 @@ import {
 import { attachMeta } from './framework/tools/adapter.js';
 import { isReadOnlyMCPSuffix } from './risk.js';
 import type { ToolMeta } from './framework/tools/types.js';
-import { normalizeToolResult } from './text.js';
+import { normalizeToolResult, foldTypographyDeep } from './text.js';
 import { shapeMCPResult, type MCPResultShapingConfig } from './mcp-result-shaper.js';
 import type { AgentContextMCP } from './framework/context.js';
 
@@ -31,6 +31,54 @@ interface MCPUrlConfig {
   url: string;
   type?: 'sse' | 'http';
   headers?: Record<string, string>;
+}
+
+/**
+ * Whether outbound MCP arguments have their typography folded to ASCII (#mojibake).
+ *
+ * **Default OFF, and that is a reversal.** It shipped default-on, and the review
+ * that followed demonstrated it corrupts every argument kind that is not prose.
+ * Measured against the real `foldTypographyDeep`:
+ *
+ * ```
+ * {"body":"{\"note\":\"a — b\",\"q\":\"“x”\"}"}
+ *   -> …"q":""x""}   <- no longer parses: "Expected ',' or '}'"
+ * {"content":"see ‹note› below"}   -> "see <note> below"   <- a content-type change
+ * {"url":"https://ex.com/a–b?q=x"} -> "…/a-b?q=x"          <- a different resource
+ * {"path":"/home/u/Don’t Panic – notes.md"} -> "Don't Panic - notes.md"
+ * {"selector":"text=Sign in — it’s free"}   -> "text=Sign in - it's free"
+ * {"xpath":"//button[contains(., '…more')]"} -> "'...more'"
+ * {"pattern":"loading…$"}          -> "loading...$"  <- a literal becomes ANY three chars
+ * ```
+ *
+ * The last three are not hypothetical: `browser-control` and `playwright` are on
+ * Bernard's surface, and real page copy uses curly apostrophes, so a folded
+ * selector stops matching the page it was written against.
+ *
+ * The deciding argument is the fold's own stated exclusion principle, turned on
+ * itself. `foldTypography`'s doc excludes `file_write` because "folding an em dash
+ * out of a document the user asked for is corruption, not normalization" — and a
+ * filesystem MCP server's `write_file`, or Notion, or a Gmail body, is that same
+ * operation reached through a different door. The boundary was drawn around the
+ * implementation rather than around the operation. `mcp.ts` cannot draw the right
+ * one either: the schema belongs to the server, so there is no notion of argument
+ * kind here to branch on.
+ *
+ * What is left is a mitigation for a sender that is already fixed at the sender
+ * (the Gmail server now RFC 2047-encodes its headers) and a reader that is fixed
+ * at the reader (the CP1252 repair). Those two are the legs that carry this; the
+ * fold was the speculative third. It stays available for someone shipping into a
+ * sink they know mangles typography, and it is now their explicit decision.
+ *
+ * Read per call rather than at module load so it can be flipped without a
+ * restart, and because a `readonly` snapshot of an env var is the shape that made
+ * `toolOptions.shellTimeout` stale for a whole session.
+ *
+ * Env-only, like `BERNARD_MCP_DELEGATION` and `BERNARD_RAG_ENABLED` beside it.
+ */
+function asciiOutboundEnabled(): boolean {
+  const v = process.env.BERNARD_ASCII_OUTBOUND;
+  return v === 'true' || v === '1';
 }
 
 /** Discriminated union of stdio and URL-based MCP server configurations. */
@@ -485,8 +533,24 @@ export class MCPManager {
           // If the retry also fails, the *retry* error is thrown (not the original)
           // so the caller sees the most recent failure reason.
           execute: async (args: unknown) => {
+            // **Outbound**, which this wrapper did not do — it normalized the
+            // RESULT and handed the ARGS straight through, one parameter position
+            // away from the fix. That asymmetry is how a plain em dash reached a
+            // Gmail MCP server that writes raw UTF-8 into a `Subject:` header and
+            // came back as `Ã¢Â€Â”`. That server was fixed; the next one cannot be,
+            // so Bernard hands it nothing that can break.
+            //
+            // MCP args ONLY, and OFF unless asked for — see
+            // `asciiOutboundEnabled` for why the default reversed. `file_write`,
+            // applet HTML and the `shell` command string are excluded for the
+            // same reason that makes this opt-in: nothing here knows whether an
+            // argument is prose or a selector, a path, a regex or a JSON
+            // document. `augmentTools` is the tempting single chokepoint and is
+            // the wrong one precisely because it cannot tell those cases apart
+            // either.
+            const outbound = asciiOutboundEnabled() ? foldTypographyDeep(args) : args;
             try {
-              const result = await originalExecute(args);
+              const result = await originalExecute(outbound);
               return shape(normalizeToolResult(result), serverName, raw);
             } catch (error) {
               // The RAW name: this line is for the user, and the raw name is
@@ -496,7 +560,7 @@ export class MCPManager {
               const fresh = this.serverTools.get(serverName)?.[name];
               if (reconnected && fresh) {
                 const freshTool = this.convertTool(name, fresh.tool);
-                const retryResult = await freshTool.execute(args);
+                const retryResult = await freshTool.execute(outbound);
                 return shape(normalizeToolResult(retryResult), serverName, raw);
               }
               throw error;

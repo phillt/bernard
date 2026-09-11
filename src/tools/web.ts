@@ -1,6 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { htmlToMarkdown } from '../html-text.js';
+import { normalizeToolText } from '../text.js';
 import { attachMeta } from '../framework/tools/adapter.js';
 import type { ProvenanceStore } from '../provenance.js';
 
@@ -70,11 +71,35 @@ export function createWebReadTool(provenance?: ProvenanceStore) {
         let html: string;
         try {
           const buffer = await response.arrayBuffer();
-          if (buffer.byteLength > MAX_HTML_BYTES) {
-            html = new TextDecoder().decode(buffer.slice(0, MAX_HTML_BYTES));
-          } else {
-            html = new TextDecoder().decode(buffer);
-          }
+          // `normalizeToolText` on the way in, which this path was missing. Text
+          // that is already mojibake otherwise entered context verbatim, and the
+          // model reproduced it faithfully in whatever it wrote next. That is the
+          // real reason corrupt characters have shown up in GitHub issue bodies:
+          // not the model inventing them, the model quoting them.
+          //
+          // **What this does and does not cover**, stated because an earlier
+          // version of this comment named "older sites" and had the causation
+          // backwards. An old site's actual failure is a legacy charset on the
+          // wire (`Content-Type: …; charset=windows-1252`), and nothing here
+          // sniffs it — `new TextDecoder()` is UTF-8, non-fatal, so those bytes
+          // become U+FFFD at the decode and the repair is a measured no-op:
+          //
+          //     decoded : "Caf? ? ?ok?"   (four U+FFFD)
+          //     repaired: "Caf? ? ?ok?"
+          //
+          // The information is gone before the repair can see it. What this DOES
+          // fix is a page whose bytes are valid UTF-8 that something upstream
+          // already double-encoded — `"CafÃ© â€“ â€œokâ€"` → `"Café – “ok”"` —
+          // which has nothing to do with the site being old. Covering the legacy
+          // case means reading the charset off `Content-Type` with a
+          // `<meta charset>` fallback, and that is a separate change; the
+          // `buffer.slice` below, which can cut mid-sequence, is the line it
+          // would land on.
+          const raw =
+            buffer.byteLength > MAX_HTML_BYTES
+              ? new TextDecoder().decode(buffer.slice(0, MAX_HTML_BYTES))
+              : new TextDecoder().decode(buffer);
+          html = normalizeToolText(raw);
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
           return `Error: Failed to read response body — ${message}`;

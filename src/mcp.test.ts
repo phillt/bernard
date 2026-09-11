@@ -113,6 +113,113 @@ describe('MCPManager reconnection', () => {
     return client;
   }
 
+  describe('outbound argument folding (#mojibake)', () => {
+    /**
+     * The asymmetry this closes, and why it is **opt-in**. The wrapper normalized
+     * the RESULT and handed the ARGS straight through — one parameter position
+     * apart — which is how a plain em dash reached a Gmail MCP server that writes
+     * raw UTF-8 into a `Subject:` header and came back as `Ã¢Â€Â”`.
+     *
+     * It shipped default-on and the default was reversed: `mcp.ts` has no notion
+     * of argument kind (the schema belongs to the server), and folding a JSON
+     * document, a URL, a path, an XPath, a regex or a selector corrupts it. The
+     * off-by-default case is therefore the one asserted FIRST here, because it is
+     * the behaviour almost every user gets.
+     */
+    const original = process.env.BERNARD_ASCII_OUTBOUND;
+    beforeEach(() => {
+      process.env.BERNARD_ASCII_OUTBOUND = 'true';
+    });
+    afterEach(() => {
+      if (original === undefined) delete process.env.BERNARD_ASCII_OUTBOUND;
+      else process.env.BERNARD_ASCII_OUTBOUND = original;
+    });
+
+    it('is off unless asked for, so an unflagged argument crosses untouched', async () => {
+      delete process.env.BERNARD_ASCII_OUTBOUND;
+      const executeFn = vi.fn().mockResolvedValue('sent');
+      await setupWithServer('test-server', { send: makeDynamicTool(executeFn) });
+
+      // A selector and a JSON document: the two shapes the fold breaks worst.
+      const args = {
+        selector: 'text=Sign in — it’s free',
+        body: '{"note":"a — b","q":"“x”"}',
+      };
+      await manager.getTools()[mcpToolName('test-server', 'send')].execute(args);
+
+      expect(executeFn).toHaveBeenCalledWith(args);
+    });
+
+    it('corrupts non-prose arguments when it IS enabled, which is why it is opt-in', async () => {
+      // Pinned deliberately. This is not a bug report against the fold — it is
+      // what folding means, and it is the evidence for the default. If someone
+      // narrows the fold to prose-shaped arguments later, this is the test that
+      // should start failing.
+      const executeFn = vi.fn().mockResolvedValue('sent');
+      await setupWithServer('test-server', { send: makeDynamicTool(executeFn) });
+
+      await manager.getTools()[mcpToolName('test-server', 'send')].execute({
+        body: '{"q":"“x”"}',
+      });
+
+      const sent = (executeFn.mock.calls[0][0] as { body: string }).body;
+      expect(sent).toBe('{"q":""x""}');
+      expect(() => JSON.parse(sent)).toThrow();
+    });
+
+    it('folds typography in the args the server actually receives', async () => {
+      const executeFn = vi.fn().mockResolvedValue('sent');
+      await setupWithServer('test-server', { send: makeDynamicTool(executeFn) });
+
+      await manager
+        .getTools()
+        [mcpToolName('test-server', 'send')].execute({ subject: 'Daily Blaze — Wed 9/9' });
+
+      expect(executeFn).toHaveBeenCalledWith({ subject: 'Daily Blaze - Wed 9/9' });
+    });
+
+    it('leaves meaning-bearing characters alone', async () => {
+      // The boundary: these break in a naive consumer exactly the same way an em
+      // dash does, but folding them destroys content rather than normalizing it.
+      const executeFn = vi.fn().mockResolvedValue('sent');
+      await setupWithServer('test-server', { send: makeDynamicTool(executeFn) });
+
+      const args = { to: 'José', body: '日本語 🎉 €5' };
+      await manager.getTools()[mcpToolName('test-server', 'send')].execute(args);
+
+      expect(executeFn).toHaveBeenCalledWith(args);
+    });
+
+    it('stays off when explicitly disabled', async () => {
+      process.env.BERNARD_ASCII_OUTBOUND = 'false';
+      const executeFn = vi.fn().mockResolvedValue('sent');
+      await setupWithServer('test-server', { send: makeDynamicTool(executeFn) });
+
+      await manager.getTools()[mcpToolName('test-server', 'send')].execute({ s: 'a — b' });
+
+      expect(executeFn).toHaveBeenCalledWith({ s: 'a — b' });
+    });
+
+    it('sends the FOLDED args on the reconnect retry too', async () => {
+      // The retry is a second call site three lines from the first. Passing the
+      // original args there would make the fold depend on whether the server
+      // happened to fail once — the quietest possible way for this to half-work.
+      const failExecute = vi.fn().mockRejectedValue(new Error('SSE stream disconnected'));
+      await setupWithServer('test-server', { send: makeDynamicTool(failExecute) });
+      const tools = manager.getTools();
+
+      const retryExecute = vi.fn().mockResolvedValue('sent');
+      mockCreateMCPClient.mockResolvedValue(
+        makeMockClient({ send: makeDynamicTool(retryExecute) }),
+      );
+
+      await tools[mcpToolName('test-server', 'send')].execute({ subject: 'a — b' });
+
+      expect(failExecute).toHaveBeenCalledWith({ subject: 'a - b' });
+      expect(retryExecute).toHaveBeenCalledWith({ subject: 'a - b' });
+    });
+  });
+
   it('tool call succeeds normally without reconnection', async () => {
     const executeFn = vi.fn().mockResolvedValue('success');
     await setupWithServer('test-server', { myTool: makeDynamicTool(executeFn) });

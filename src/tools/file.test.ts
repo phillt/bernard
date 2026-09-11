@@ -144,6 +144,30 @@ describe('file_read_lines', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  it('repairs mojibake on the way in, but never on the way out (#mojibake)', async () => {
+    // A file whose bytes are already mojibake otherwise reaches the model verbatim
+    // and gets quoted onward; `web_read` had the same gap.
+    //
+    // The second half is the part worth keeping: `file_edit_lines` deliberately
+    // does NOT normalize. It rewrites the whole file, so repairing there would
+    // change bytes the user never asked to touch — a three-line edit becoming a
+    // whole-file re-encode. A read shows; a write must only change what was asked.
+    const fs = await import('node:fs');
+    const mojibake = String.fromCodePoint(0x00c3, 0x00a2, 0x00c2, 0x20ac, 0x00c2, 0x201d);
+    const file = path.join(tmpDir, 'moji.txt');
+    fs.writeFileSync(file, `Daily Blaze ${mojibake} Wed\nsecond line\n`);
+
+    const read = await tools.file_read_lines.execute!({ path: file }, {} as any);
+    expect(JSON.stringify(read)).toContain('Daily Blaze — Wed');
+
+    await tools.file_edit_lines.execute!(
+      { path: file, edits: [{ type: 'replace', start: 2, end: 2, content: 'edited' }] },
+      {} as any,
+    );
+    // The untouched first line still holds its original bytes.
+    expect(fs.readFileSync(file, 'utf-8')).toContain(mojibake);
+  });
+
   it('reads a small file with all lines numbered', async () => {
     const fs = await import('node:fs');
     fs.writeFileSync(path.join(tmpDir, 'test.txt'), 'line1\nline2\nline3\n');
