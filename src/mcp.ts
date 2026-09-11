@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import { createMCPClient, type MCPClient } from '@ai-sdk/mcp';
 import { Experimental_StdioMCPTransport } from '@ai-sdk/mcp/mcp-stdio';
 import { jsonSchema } from 'ai';
-import { printInfo, printError } from './output.js';
+import { printError } from './output.js';
 import { MCP_CONFIG_PATH as CONFIG_PATH } from './paths.js';
 import { debugLog, openSessionSidecarFd } from './logger.js';
 import {
@@ -553,9 +553,19 @@ export class MCPManager {
               const result = await originalExecute(outbound);
               return shape(normalizeToolResult(result), serverName, raw);
             } catch (error) {
-              // The RAW name: this line is for the user, and the raw name is
-              // the one they see in the server's own docs and in `mcp_verify`.
-              printInfo(`MCP tool "${raw}" failed, reconnecting to "${serverName}"...`);
+              // `debugLog`, NOT `printInfo`. This runs while Ink owns the
+              // screen — in full-screen mode it owns the alternate buffer
+              // outright — and a raw stdout write lands at the cursor, corrupts
+              // the current frame, and is painted over on Ink's next ~32 ms
+              // render. So the line least likely to be READ is the one written
+              // straight to the terminal; the same hazard `index.ts` works
+              // around by deferring `cleanup()` until after teardown.
+              //
+              // Pre-existing, and it became much likelier when a background
+              // watcher poll started calling MCP tools between turns rather
+              // than only inside one (#479). The RAW name is kept: it is the
+              // one a user sees in the server's own docs and in `mcp_verify`.
+              debugLog('mcp:tool-retry', { tool: raw, server: serverName });
               const reconnected = await this.reconnectServer(serverName);
               const fresh = this.serverTools.get(serverName)?.[name];
               if (reconnected && fresh) {

@@ -2260,3 +2260,257 @@ describe('<App> an aborted turn withdraws the echoed answers', () => {
     unmount();
   }, 10000);
 });
+
+/**
+ * Watcher wakes (#479).
+ *
+ * The whole feature in three assertions: a watcher that fires starts a turn
+ * nobody typed, that turn is announced before it runs, and the instruction it
+ * carries is the one the session authored — never anything observed.
+ *
+ * A `time` target is used because it needs no network, no MCP and no clock
+ * manipulation: `at` in the past is due, and `WatcherPoller.start` looks once
+ * immediately rather than waiting for its interval.
+ */
+describe('<App> watcher wakes', () => {
+  beforeEach(() => {
+    process.env.BERNARD_HOME = TMP_HOME;
+  });
+
+  async function seedDueWatcher(instructions: string, dueAt = Date.now() - 1000) {
+    const { WatcherStore } = await import('../../watchers/store.js');
+    const { getSessionId } = await import('../../logger.js');
+    const store = new WatcherStore();
+    for (const w of store.list()) store.remove(w.id);
+    return store.create({
+      name: 'reply from John',
+      target: { kind: 'time', at: new Date(dueAt).toISOString() },
+      predicate: { kind: 'changed' },
+      instructions,
+      ownerSessionId: getSessionId(),
+    });
+  }
+
+  it('starts a turn carrying the authored instruction', async () => {
+    await seedDueWatcher('Draft a reply to John.');
+    const { unmount, agentSpy } = renderApp();
+    await tick(300);
+    expect(agentSpy.processInput).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(agentSpy.processInput).mock.calls[0][0]).toContain('Draft a reply to John.');
+    unmount();
+  });
+
+  it('announces where the turn came from, before it runs', async () => {
+    // #493's rule: a turn nobody typed must say so and must never be able to
+    // look like the user typed it.
+    await seedDueWatcher('Draft a reply to John.');
+    const { unmount, lastFrame } = renderApp();
+    await tick(300);
+    const frame = lastFrame();
+    expect(frame).toMatch(/Woken/);
+    expect(frame).toMatch(/reply from John/);
+    unmount();
+  });
+
+  it('marks the watcher spent so it cannot fire twice', async () => {
+    const w = await seedDueWatcher('Draft a reply.');
+    const { unmount } = renderApp();
+    await tick(300);
+    const { WatcherStore } = await import('../../watchers/store.js');
+    expect(new WatcherStore().read(w.id)?.status).toBe('fired');
+    unmount();
+  });
+
+  it('queues rather than dropping when it fires mid-turn', async () => {
+    // THE regression this whole queue exists for. `runAgentTurn`'s
+    // `submittingRef` guard returns SILENTLY, so before the queue a watcher
+    // firing mid-turn marked itself spent and told the user nothing.
+    //
+    // The watcher is due in the near future rather than the past, so the
+    // poller's immediate look at mount does NOT fire it — otherwise the wake
+    // wins the race and it is the user's turn that gets dropped, which is a
+    // different bug and not this one.
+    let release!: () => void;
+    const turn = new Promise<void>((r) => (release = r));
+    let calls = 0;
+    process.env.BERNARD_WATCHER_TICK_MS = '20';
+    await seedDueWatcher('the queued instruction', Date.now() + 150);
+    const { stdin, unmount, agentSpy } = renderApp({
+      agent: {
+        processInput: vi.fn(async () => {
+          calls += 1;
+          if (calls === 1) await turn;
+        }),
+      },
+    });
+    await tick();
+    await submit(stdin, 'a turn the user started');
+    await tick(400);
+    // The user's turn is running; the wake must not have disturbed it.
+    expect(agentSpy.processInput).toHaveBeenCalledTimes(1);
+
+    release();
+    await tick(300);
+    expect(agentSpy.processInput).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(agentSpy.processInput).mock.calls[1][0]).toContain('the queued instruction');
+    delete process.env.BERNARD_WATCHER_TICK_MS;
+    unmount();
+  });
+});
+
+/**
+ * `/sleep` (#201) — a `time` watcher underneath, not a second mechanism.
+ */
+describe('<App> /sleep', () => {
+  beforeEach(() => {
+    process.env.BERNARD_HOME = TMP_HOME;
+  });
+
+  async function watchers() {
+    const { WatcherStore } = await import('../../watchers/store.js');
+    return new WatcherStore().list();
+  }
+
+  it('creates a time watcher carrying the instruction', async () => {
+    const { WatcherStore } = await import('../../watchers/store.js');
+    const store = new WatcherStore();
+    for (const w of store.list()) store.remove(w.id);
+
+    const { stdin, unmount, lastFrame } = renderApp();
+    await tick();
+    await submit(stdin, '/sleep 2h check whether the deploy settled');
+    await tick(100);
+
+    const all = await watchers();
+    expect(all).toHaveLength(1);
+    expect(all[0].target.kind).toBe('time');
+    expect(all[0].instructions).toBe('check whether the deploy settled');
+    expect(lastFrame()).toMatch(/Sleeping 2h/);
+    unmount();
+  });
+
+  it('reads `until <time>` as two tokens, not one', async () => {
+    const { WatcherStore } = await import('../../watchers/store.js');
+    const store = new WatcherStore();
+    for (const w of store.list()) store.remove(w.id);
+
+    const { stdin, unmount } = renderApp();
+    await tick();
+    await submit(stdin, '/sleep until 23:30 send the summary');
+    await tick(100);
+
+    const all = await watchers();
+    expect(all).toHaveLength(1);
+    // The instruction must not have swallowed the clock time.
+    expect(all[0].instructions).toBe('send the summary');
+    unmount();
+  });
+
+  it('refuses a time it cannot read rather than guessing', async () => {
+    // A sleep that silently lands at the wrong hour is worse than one that did
+    // not start, because the user believes it is set.
+    const { WatcherStore } = await import('../../watchers/store.js');
+    const store = new WatcherStore();
+    for (const w of store.list()) store.remove(w.id);
+
+    const { stdin, unmount, lastFrame } = renderApp();
+    await tick();
+    await submit(stdin, '/sleep soonish do the thing');
+    await tick(100);
+
+    expect(await watchers()).toHaveLength(0);
+    expect(lastFrame()).toMatch(/Could not read/);
+    unmount();
+  });
+
+  it('refuses when no instruction is given', async () => {
+    const { WatcherStore } = await import('../../watchers/store.js');
+    const store = new WatcherStore();
+    for (const w of store.list()) store.remove(w.id);
+
+    const { stdin, unmount, lastFrame } = renderApp();
+    await tick();
+    await submit(stdin, '/sleep 2h');
+    await tick(100);
+
+    expect(await watchers()).toHaveLength(0);
+    expect(lastFrame()).toMatch(/Say what to do/);
+    unmount();
+  });
+});
+
+/**
+ * `bernard say --run` (#493).
+ *
+ * The two directions are the whole feature: a plain session must keep #462's
+ * guarantee exactly, and an opted-in one must actually run the thing.
+ */
+describe('<App> remote prompts', () => {
+  beforeEach(() => {
+    process.env.BERNARD_HOME = TMP_HOME;
+  });
+
+  async function deliverPrompt(text: string) {
+    const { sendToSessions } = await import('../../inbox/send.js');
+    const { resetSendDedupe } = await import('../../inbox/send.js');
+    resetSendDedupe();
+    return sendToSessions({
+      text,
+      kind: 'prompt',
+      source: { kind: 'cli', label: 'ci' },
+      target: { all: true },
+    });
+  }
+
+  it('is refused against a session that has not opted in', async () => {
+    // The default REPL keeps #462's structural guarantee: a local writer cannot
+    // put instructions in front of the agent. The refusal happens at the SENDER,
+    // because the capability lives on the record the session wrote.
+    const { unmount, agentSpy } = renderApp();
+    await tick();
+    const result = await deliverPrompt('do something');
+    expect(result.delivered).toHaveLength(0);
+    expect(result.reason).toBe('not-accepted');
+    await tick(200);
+    expect(agentSpy.processInput).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it('runs as a turn when the session opted in', async () => {
+    // Through the config, not the env var: `renderApp` builds a literal config
+    // rather than calling `loadConfig`, and it is the config field the session
+    // actually advertises from. Env parsing is `config.test.ts`'s job.
+    const { unmount, agentSpy, lastFrame } = renderApp({
+      config: { acceptRemotePrompts: true },
+    });
+    await tick();
+    const result = await deliverPrompt('summarise the deploy log');
+    expect(result.delivered.length).toBeGreaterThan(0);
+    await tick(300);
+    expect(agentSpy.processInput).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(agentSpy.processInput).mock.calls[0][0]).toContain('summarise the deploy log');
+    // Attributed, and visibly not user input.
+    expect(lastFrame()).toMatch(/Woken/);
+    expect(lastFrame()).toMatch(/sent by ci/);
+    unmount();
+  });
+
+  it('still delivers a plain notice to an opted-in session without running it', async () => {
+    // Opting in to prompts must not turn every notice into a turn.
+    const { unmount, agentSpy, lastFrame } = renderApp({
+      config: { acceptRemotePrompts: true },
+    });
+    await tick();
+    const { sendToSessions, resetSendDedupe } = await import('../../inbox/send.js');
+    resetSendDedupe();
+    sendToSessions({
+      text: 'the deploy finished',
+      source: { kind: 'cli', label: 'ci' },
+      target: { all: true },
+    });
+    await tick(300);
+    expect(agentSpy.processInput).not.toHaveBeenCalled();
+    expect(lastFrame()).toMatch(/Bernard has not seen this/);
+    unmount();
+  });
+});

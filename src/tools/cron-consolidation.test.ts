@@ -21,6 +21,10 @@ const MAIN_AUDIENCE_TOOLS = [
   'mcp_config',
   'mcp_add_url',
   'mcp_verify',
+  // Main-only for cron's reason and one more: a watcher wakes the session that
+  // created it, and a dispatched worker has no session to wake — one created
+  // inside a sub-agent would be orphaned at birth.
+  'watcher',
   // Not a control, but main-only for a measured reason: as `audience: 'any'` it
   // added 839 bytes to the worker tool block, re-billed at full rate on every
   // step of every dispatch that will never build an applet. A `tool-wrapper`

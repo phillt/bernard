@@ -4,6 +4,7 @@ import { getThemeColors } from '../theme.js';
 import { formatTokenCount, finiteOr0, type SpinnerStats } from '../output.js';
 import { formatAggCost, computeTurnUsageReport } from '../usage-report.js';
 import { HintDivider, HintEntry } from './hints.js';
+import { getActiveWatcherCount } from '../watchers/active-count.js';
 import { getContextWindow, COMPRESSION_THRESHOLD } from '../context.js';
 import type { Agent } from '../agent.js';
 
@@ -18,7 +19,12 @@ const PULSE_DECAY_MS = 250;
 
 /** Serialize the fields StatusBar actually renders, for change detection. */
 function snapshotStats(stats: SpinnerStats | null, strategy: string | null): string {
-  if (!stats) return `null|${strategy ?? ''}`;
+  // The watcher count joins the snapshot rather than being read only at render:
+  // this string is the ONLY thing that decides whether the bar repaints, so a
+  // value rendered but not snapshotted would sit stale until some unrelated
+  // token counter happened to move.
+  const watching = getActiveWatcherCount();
+  if (!stats) return `null|${strategy ?? ''}|${watching}`;
   return [
     stats.turnPromptTokens,
     stats.turnCompletionTokens,
@@ -28,6 +34,7 @@ function snapshotStats(stats: SpinnerStats | null, strategy: string | null): str
     stats.sessionCostUsd,
     stats.sessionCostPartial,
     strategy ?? '',
+    watching,
   ].join('|');
 }
 
@@ -117,7 +124,11 @@ export function StatusBar({ agent }: StatusBarProps) {
 
   const stats: SpinnerStats | null = agent.spinnerStats;
   const strategy = agent.currentStrategy;
-  if (!stats && !strategy) return null;
+  const watching = getActiveWatcherCount();
+  // `watching` joins the early-out: a session with a watcher set but no turn yet
+  // has neither stats nor a strategy, and returning null there would hide the
+  // one signal that something is running in the background.
+  if (!stats && !strategy && watching === 0) return null;
 
   const up = stats ? formatTokenCount(stats.turnPromptTokens) : '0';
   const down = stats ? formatTokenCount(stats.turnCompletionTokens) : '0';
@@ -171,6 +182,15 @@ export function StatusBar({ agent }: StatusBarProps) {
       <Text key="strategy" color={strategy === 'react' ? colors.accent : colors.muted}>
         {strategy === 'react' ? '◆ coordinator' : '◇ normal'}
       </Text>,
+    );
+  }
+
+  // Watchers poll between turns, with no spinner and no output, so without this
+  // the only evidence that anything is running is the wake itself — arriving
+  // from nowhere, minutes or hours later.
+  if (watching > 0) {
+    groups.push(
+      <HintEntry key="watching" hintKey="watching" label={String(watching)} />,
     );
   }
 

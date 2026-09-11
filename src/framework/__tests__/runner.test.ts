@@ -18,6 +18,7 @@ vi.mock('../../logger.js', async () => {
 });
 
 import { runAgent, type AgentSpec } from '../runner.js';
+import { providerStallInfo, DISPATCH_ABORT_NAME } from '../../error-taxonomy.js';
 import type { AgentHook } from '../hooks/types.js';
 import { generateText, streamText } from 'ai';
 
@@ -338,6 +339,77 @@ describe('runAgent — mid-stream stall guard', () => {
         new Promise<string>((r) => setTimeout(() => r('still-running'), 400)),
       ]);
       expect(race).toBe('still-running');
+    });
+  });
+
+  /**
+   * The half of the stall report that recovery actually acts on. `OutputSink`
+   * is append-only with no reset, so re-issuing a dispatch that already emitted
+   * a `text-delta` prints a second copy beside the first — `producedOutput` is
+   * what stops that, and it is a fact only this layer can observe.
+   */
+  it('reports that nothing reached the sink when the stream was silent from the start', async () => {
+    (streamText as unknown as ReturnType<typeof vi.fn>).mockReturnValue(makeStalledStream([]));
+    await withStallBudget('60', async () => {
+      const err = await runAgent(makeSpec({ useStreaming: true })).catch((e: unknown) => e);
+      // The observed incident's exact shape: headers, then nothing at all.
+      expect(providerStallInfo(err)).toEqual({ phase: 'stream', producedOutput: false });
+      // The brand rides ALONGSIDE the name rather than replacing it — once
+      // recovery gives up, the five dispatch boundaries still need the name to
+      // unwind instead of handing the model a stall dressed as a tool result.
+      expect((err as Error).name).toBe(DISPATCH_ABORT_NAME);
+    });
+  });
+
+  it('reports that output was produced when parts flowed before the silence', async () => {
+    (streamText as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeStalledStream([{ type: 'text-delta', textDelta: 'hi' }]),
+    );
+    await withStallBudget('60', async () => {
+      const err = await runAgent(makeSpec({ useStreaming: true })).catch((e: unknown) => e);
+      expect(providerStallInfo(err)).toEqual({ phase: 'stream', producedOutput: true });
+    });
+  });
+
+  it('does not brand a dispatch timeout, which must never be retried', async () => {
+    // `BERNARD_DISPATCH_TIMEOUT_MS` is a wall clock the operator set. Silently
+    // re-issuing past it would defeat exactly what they asked for, so only the
+    // STALL arm brands — a mutation that brands both arms fails here.
+    (generateText as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (opts: { abortSignal?: AbortSignal }) =>
+        new Promise((_r, reject) => {
+          opts.abortSignal?.addEventListener('abort', () =>
+            reject(new DOMException('Aborted', 'AbortError')),
+          );
+        }),
+    );
+    const prev = process.env.BERNARD_DISPATCH_TIMEOUT_MS;
+    process.env.BERNARD_DISPATCH_TIMEOUT_MS = '20';
+    try {
+      const err = await runAgent(makeSpec()).catch((e: unknown) => e);
+      expect((err as Error).message).toMatch(/Dispatch timed out/);
+      expect(providerStallInfo(err)).toBeNull();
+    } finally {
+      if (prev === undefined) delete process.env.BERNARD_DISPATCH_TIMEOUT_MS;
+      else process.env.BERNARD_DISPATCH_TIMEOUT_MS = prev;
+    }
+  });
+
+  it('lets a caller shorten the stall budget, and never lengthen it', async () => {
+    (streamText as unknown as ReturnType<typeof vi.fn>).mockReturnValue(makeStalledStream([]));
+    // Configured 5000 ms, caller asks for 60 ms: the short one must win, or a
+    // retry would sit on the full budget and the three-attempt loop would be a
+    // six-minute wait.
+    await withStallBudget('5000', async () => {
+      await expect(runAgent(makeSpec({ useStreaming: true, stallTimeoutMs: 60 }))).rejects.toThrow(
+        /no data received/,
+      );
+    });
+    // Configured 60 ms, caller asks for 5000 ms: the short one must STILL win.
+    await withStallBudget('60', async () => {
+      await expect(
+        runAgent(makeSpec({ useStreaming: true, stallTimeoutMs: 5000 })),
+      ).rejects.toThrow(/no data received/);
     });
   });
 

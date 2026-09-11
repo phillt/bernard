@@ -62,6 +62,7 @@ export function makePolicyInput(overrides?: {
     memoryConsolidation: true,
     fullScreen: false,
     mouse: true,
+    acceptRemotePrompts: false,
   };
   return {
     userInput: overrides?.userInput ?? 'hello',

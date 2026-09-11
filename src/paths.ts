@@ -65,6 +65,23 @@ export const CRON_NOTES_DIR = path.join(CRON_DIR, 'notes');
 export const WORKSPACES_DIR = path.join(DATA_DIR, 'workspaces');
 
 /**
+ * Watchers — one-shot event monitors bound to a session (#479/#201).
+ *
+ * `DATA_DIR` rather than `STATE_DIR` for the reason {@link APPLET_BRIEFS_DIR}
+ * states: a watcher is the user's own content — *"tell me when John replies"* —
+ * not Bernard's regenerable bookkeeping. It sits beside `CRON_DIR`, which is the
+ * closest existing thing and is already here.
+ *
+ * One file per watcher rather than a single `watchers.json`, which is the one
+ * place this deliberately diverges from `CronStore`: that store re-reads and
+ * rewrites the whole array on every mutation with no locking, so two concurrent
+ * writers lose one another's edits. Several sessions can each hold watchers, and
+ * each polls its own on its own clock, so concurrent writes are the normal case
+ * here rather than the exception.
+ */
+export const WATCHERS_DIR = path.join(DATA_DIR, 'watchers');
+
+/**
  * The workspace a scoped run may always write to.
  *
  * One convention in one place: `<namespace>/<stable id>`. Keyed on a *stable*

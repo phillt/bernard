@@ -102,7 +102,19 @@ import {
 } from '../image.js';
 import { runDefinition } from '../framework/agents/run.js';
 import { taskDefinition, type TaskInput } from '../framework/agents/task.js';
-import { renderTaskText } from '../framework/agents/user-message.js';
+import { renderTaskText, type UntrustedData } from '../framework/agents/user-message.js';
+import { WatcherStore } from '../watchers/store.js';
+import { WatcherPoller } from '../watchers/poller.js';
+import { statFileSync } from '../watchers/probe.js';
+import { describeWatchTarget } from '../watchers/types.js';
+import { formatRelative, parseWhen } from '../watchers/duration.js';
+import {
+  TurnQueue,
+  MAX_QUEUED_TURNS,
+  describeSource,
+  type EnqueueResult,
+  type QueuedTurnSource,
+} from './turn-queue.js';
 import type { CoreMessage } from 'ai';
 import {
   resolveMainModel,
@@ -852,6 +864,14 @@ export function App({
   // Synchronous guard against double-Enter: setBusy schedules a re-render but
   // a second submit can land before Prompt sees `disabled={busy}` flip.
   const submittingRef = useRef(false);
+  /**
+   * Turns waiting for the current one. A ref, not state: it is drained from
+   * `runAgentTurn`'s `finally` and nothing renders from it directly, so making
+   * it state would repaint the transcript on every background arrival.
+   */
+  const turnQueueRef = useRef(new TurnQueue());
+  /** Watcher records. One store per session; the poller below drives it. */
+  const watcherStoreRef = useRef(new WatcherStore());
   // Turn-level abort controller. Esc aborts this controller (cancels the
   // pre-turn pipeline) AND calls agent.abort() (cancels the agent loop once
   // it's started). Reset to null in runAgentTurn's finally block.
@@ -963,6 +983,58 @@ export function App({
    * Registered here rather than in `src/index.ts` before `render()`: a mount
    * that threw would otherwise advertise a session that can never drain.
    */
+  /**
+   * Watchers (#479/#201).
+   *
+   * Structurally the sibling of the inbox watcher above, and deliberately NOT
+   * the cron daemon: this reuses the session's already-connected `MCPManager`,
+   * where cron reconnects MCP per job run at a measured 1.1-1.6 s — a cost a
+   * 60 s poll cannot pay. It also means watchers never touch cron's scheduler,
+   * so cron's silent dropping of fires during OS sleep (#400) is not a
+   * prerequisite for any of this.
+   *
+   * The one thing that differs from the inbox above, and it is the whole
+   * feature: a wake DOES start a turn. It goes through `requestTurn` rather
+   * than `runAgentTurn`, so a wake arriving mid-turn queues instead of hitting
+   * `submittingRef` and vanishing.
+   */
+  useEffect(() => {
+    const poller = new WatcherPoller({
+      store: watcherStoreRef.current,
+      sessionId: getSessionId(),
+      deps: {
+        fetch: globalThis.fetch,
+        statFile: statFileSync,
+        // A GETTER, re-taken every poll, never a cached bag. `MCPManager.
+        // snapshot()` is the single assembler for a reason: handing the flat
+        // `tools` object around without `serverTools` is the #305 regression
+        // that silently zeroed every `delegate_<server>`, and a captured bag
+        // also cannot see a server that has since reconnected.
+        //
+        // The poller BORROWS this manager and must never close it — `close()`
+        // tears down every client for the whole session, and the REPL owns that.
+        tools: () => (stores.mcp ? stores.mcp.snapshot().tools : {}),
+      },
+      onWake: (wake) => {
+        requestTurn({
+          text: wake.instruction,
+          ...(wake.data ? { data: wake.data } : {}),
+          source: {
+            kind: 'watcher',
+            watcherId: wake.watcherId,
+            name: wake.name,
+            reason: wake.reason,
+          },
+        });
+      },
+    });
+    poller.start();
+    return () => poller.stop();
+    // Mount-once, like the inbox watcher: the poller reads the store and the
+    // manager through refs and getters, so nothing here goes stale.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     const push = (notice: NoticeData) =>
       setStaticItems((prev) => [
@@ -971,7 +1043,25 @@ export function App({
       ]);
     const watcher = new InboxWatcher({
       sessionId: getSessionId(),
-      onMessage: (message) => push(toNoticeData(message)),
+      // Advertised only when the session was started with the opt-in (#493), so
+      // a plain REPL keeps the original guarantee and a `prompt` sent to it is
+      // refused at the SENDER rather than arriving somewhere that would not run
+      // it. A sender cannot upgrade itself: this record is written here.
+      ...(config.acceptRemotePrompts ? { capabilities: ['notice', 'prompt'] as const } : {}),
+      onMessage: (message) => {
+        if (message.kind === 'prompt') {
+          // Through the queue, never `runAgentTurn` — a prompt arriving mid-turn
+          // must not hit `submittingRef` and vanish. #493 requires the mid-turn
+          // answer to be #200's or #202's rather than a third rule; this is
+          // #202's: a new top-level request, run after the current turn.
+          requestTurn({
+            text: message.text,
+            source: { kind: 'remote', label: message.sourceLabel },
+          });
+          return;
+        }
+        push(toNoticeData(message));
+      },
       onCoalesced: (count, label) => push(coalescedNotice(count, label)),
     });
     watcher.start();
@@ -1625,6 +1715,105 @@ export function App({
       return;
     }
 
+    if (startsWithCmd(text, '/sleep')) {
+      // #201, and it is a `time` watcher underneath rather than a second
+      // mechanism: "wake me at T and do X" is the same suspend/resume as "wake
+      // me when X changes", with a clock as the trigger instead of a probe.
+      // Every durable-execution runtime models it that way — Inngest's
+      // `sleepUntil` beside `waitForEvent`, Temporal's timers beside signals.
+      const rest = text.slice('/sleep'.length).trim();
+      const sep = rest.search(/\s(?=[^\s])/);
+      // The first token (or `until <time>`) is the when; the remainder is the
+      // instruction. `until 3pm do the thing` needs two tokens for the when.
+      const untilMatch = /^until\s+\S+/i.exec(rest);
+      const whenText = untilMatch ? untilMatch[0] : sep === -1 ? rest : rest.slice(0, sep);
+      const instruction = rest.slice(whenText.length).trim();
+      if (!whenText) {
+        flashToast('Usage: /sleep 2h <what to do>  ·  /sleep until 15:30 <what to do>', 'error');
+        return;
+      }
+      const at = parseWhen(whenText);
+      if (at === null) {
+        flashToast(`Could not read "${whenText}" as a time. Try 2h, 90m, or until 15:30.`, 'error');
+        return;
+      }
+      if (!instruction) {
+        flashToast('Say what to do when you wake: /sleep 2h <what to do>', 'error');
+        return;
+      }
+      try {
+        const w = watcherStoreRef.current.create({
+          name: `sleep — ${truncate(instruction.replace(/\s+/g, ' '), 40)}`,
+          target: { kind: 'time', at: new Date(at).toISOString() },
+          predicate: { kind: 'changed' },
+          instructions: instruction,
+          ownerSessionId: getSessionId(),
+          // A sleep must outlive its own wake-up by a margin, or a session
+          // closed over the weekend loses it to the sweep before it fires.
+          ttlMs: at - Date.now() + 86_400_000,
+        });
+        flashToast(
+          `Sleeping ${formatRelative(at - Date.now())} — will wake at ${new Date(at).toLocaleTimeString()}. (${w.id.slice(0, 8)})`,
+          'success',
+        );
+      } catch (err) {
+        flashToast(err instanceof Error ? err.message : String(err), 'error');
+      }
+      return;
+    }
+    if (is(text, '/watchers')) {
+      const store = watcherStoreRef.current;
+      let listIndex = 0;
+      for (;;) {
+        const all = store.list();
+        if (all.length === 0) {
+          flashToast('No watchers. Ask me to watch for something.');
+          return;
+        }
+        const byId = new Map(all.map((w) => [w.id, w]));
+        const entries: MenuEntry[] = all.map((w) => ({
+          label: w.name,
+          annotation: w.status,
+          description: `${describeWatchTarget(w.target)}${
+            w.lastCheckedAt ? ` — last checked ${new Date(w.lastCheckedAt).toLocaleTimeString()}` : ''
+          }`,
+          value: w.id,
+        }));
+        const pick = await requestMenu(entries, {
+          title: 'Watchers — select one',
+          headerLines: [
+            'A watcher polls, then starts a turn when it fires. One-shot.',
+          ],
+          initialIndex: listIndex,
+        });
+        if (pick.cancelled) return;
+        listIndex = pick.index;
+        const w = byId.get(pick.item.value as string);
+        if (!w) continue;
+        const action = await requestMenu(
+          [
+            ...(w.status === 'active' ? [{ label: 'Cancel this watcher' }] : []),
+            { label: 'Remove from the list' },
+            { label: 'Back' },
+          ],
+          {
+            title: `"${w.name}" — ${w.status}`,
+            // The instructions, because they are the thing a user most needs to
+            // check before deciding whether to keep it: this is what Bernard
+            // will be told to do, unattended, when it fires.
+            headerLines: [`Will do: ${truncate(w.instructions.replace(/\s+/g, ' '), 160)}`],
+          },
+        );
+        if (action.cancelled || action.item.label === 'Back') continue;
+        if (action.item.label === 'Cancel this watcher') {
+          store.finish(w.id, 'cancelled');
+          flashToast(`Cancelled "${w.name}".`, 'success');
+          continue;
+        }
+        store.remove(w.id);
+        flashToast(`Removed "${w.name}".`, 'success');
+      }
+    }
     if (is(text, '/cron')) {
       const store = new CronStore();
       // Start/stop the daemon to match whether any job is enabled — mirrors the
@@ -4096,9 +4285,19 @@ export function App({
     });
   }
 
-  async function runAgentTurn(input: string, images?: ImageAttachment[]): Promise<void> {
+  async function runAgentTurn(
+    input: string,
+    images?: ImageAttachment[],
+    extra?: { data?: UntrustedData },
+  ): Promise<void> {
     // Drop a second Enter that arrives before the busy re-render has propagated
     // to <Prompt disabled={busy}>. Without this, two turns can run concurrently.
+    //
+    // This guard is right for a keystroke and WRONG for anything else: it
+    // returns silently, so a turn nobody typed simply vanishes. A watcher that
+    // fired mid-turn would have marked itself spent and told the user nothing.
+    // Non-keystroke producers therefore never call this directly — they go
+    // through `requestTurn`, which queues instead of dropping.
     if (submittingRef.current) return;
     submittingRef.current = true;
     // Clear the previous turn's stream events so the in-flight
@@ -4136,6 +4335,9 @@ export function App({
         recallReconciliation,
         memoryPriority,
         originalInput: input,
+        // The data channel (#479). Untrusted bytes a watcher observed, kept out
+        // of the instruction slot by their type rather than by convention.
+        ...(extra?.data ? { data: extra.data } : {}),
       });
       commitNewHistory({ rewriteForLastUser: input !== agentInput ? input : undefined });
       // Snapshot history length AFTER the user message push (synchronous) so
@@ -4318,7 +4520,73 @@ export function App({
           },
         ]);
       }
+      // Drain one queued turn (#202/#479). LAST in the finally, after
+      // `submittingRef` is released and the transcript is committed, or the
+      // drained turn would hit the very re-entrancy guard it was queued to
+      // avoid. Deferred to a macrotask so this turn's React batch paints first
+      // — otherwise a queued turn's output can commit into the same frame and
+      // the two runs read as one.
+      //
+      // One at a time, recursively: each drained turn drains the next from its
+      // own finally, so the queue empties in order and a turn that throws still
+      // lets its successor run.
+      if (turnQueueRef.current.size > 0) {
+        setTimeout(() => void drainNextTurn(), 0);
+      }
     }
+  }
+
+  /**
+   * Runs the next queued turn, announcing where it came from first.
+   *
+   * The panel is rendered BEFORE the turn starts, per #493: a turn nobody typed
+   * must say so, and it must not be able to look like the user typed it. The
+   * `❯`/`❮` chevrons stay reserved for the two real voices.
+   */
+  async function drainNextTurn(): Promise<void> {
+    if (submittingRef.current) return;
+    const next = turnQueueRef.current.take();
+    if (!next) return;
+    setStaticItems((prev) => [
+      ...prev,
+      {
+        key: String(itemKeyRef.current++),
+        toolDetails: false,
+        wake: { source: describeSource(next.source), text: next.text },
+      },
+    ]);
+    await runAgentTurn(next.text, undefined, next.data ? { data: next.data as UntrustedData } : {});
+  }
+
+  /**
+   * The one door for a turn that nobody typed.
+   *
+   * Runs it now when idle, queues it when busy, and never drops it. Every
+   * non-keystroke producer — a watcher wake, a `say --run` — goes through here
+   * rather than calling `runAgentTurn`, whose `submittingRef` guard would
+   * silently discard it.
+   */
+  function requestTurn(turn: {
+    text: string;
+    data?: UntrustedData;
+    source: QueuedTurnSource;
+  }): EnqueueResult {
+    const queued = turnQueueRef.current.enqueue({
+      text: turn.text,
+      ...(turn.data ? { data: turn.data } : {}),
+      source: turn.source,
+    });
+    if (!queued.ok) {
+      // Told now, while the producer still has the payload. A watcher has
+      // already marked itself fired by this point, so silence here would lose
+      // the one notification it existed to deliver.
+      pushAssistantNotice(
+        `⚠ Could not queue "${turn.text.slice(0, 60)}" — ${MAX_QUEUED_TURNS} turns are already waiting.`,
+      );
+      return queued;
+    }
+    if (!submittingRef.current) setTimeout(() => void drainNextTurn(), 0);
+    return queued;
   }
 
   // Execute a saved routine: tasks (`task-` prefix) run single-shot via

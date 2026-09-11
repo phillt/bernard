@@ -13,7 +13,12 @@ import { toolBlockBytes } from '../tool-bytes.js';
 import type { AgentHook, StepFinishPayload } from './hooks/types.js';
 import { runWithDispatchId } from './dispatch-context.js';
 import { normalizeUsage } from './hooks/token-stats.js';
-import { DISPATCH_ABORT_NAME } from '../error-taxonomy.js';
+import {
+  DISPATCH_ABORT_NAME,
+  markProviderStall,
+  type ProviderStallInfo,
+} from '../error-taxonomy.js';
+import { withStallBudget } from '../providers/stall-guard.js';
 
 const WATCHDOG_INTERVAL_MS = 30_000;
 
@@ -120,6 +125,20 @@ export interface AgentSpec {
   system?: string;
   messages: CoreMessage[];
   abortSignal?: AbortSignal;
+  /**
+   * Ceiling on every liveness budget for this dispatch, in ms — the transport's
+   * header and body-inactivity guards and the mid-stream watchdog alike.
+   *
+   * Set only by the stall-recovery loop in `agents/run.ts`, and only on RETRY
+   * attempts. It can only SHORTEN: each budget takes `min(configured, this)`, so
+   * an off switch stays off and no caller can lengthen a liveness guard.
+   *
+   * This is not a policy knob on the runner — the runner still owns no retry.
+   * It is one number the caller of a retry needs to be able to say, because
+   * three attempts at the full budget is a six-minute wait and the whole point
+   * of recovering is that it is faster than not recovering.
+   */
+  stallTimeoutMs?: number;
   /** AI SDK accepts at most one — top-level field, not a hook. */
   prepareStep?: Parameters<typeof generateText>[0]['experimental_prepareStep'];
   /** AI SDK accepts at most one — top-level field, not a hook. */
@@ -222,7 +241,13 @@ export async function runAgent(spec: AgentSpec): Promise<AgentResult> {
   // near-free and it's what lets the token hooks stamp `callId`/`parentCallId`
   // onto every telemetry record so the session trace forms a real tree. The
   // watchdog / step debug logs inside `runAgentInner` stay debug-gated.
-  return runWithDispatchId(dispatchId, () => runAgentInner(spec, dispatchId));
+  const run = (): Promise<AgentResult> => runAgentInner(spec, dispatchId);
+  // A retry's shortened budget has to reach a `fetch` the AI SDK calls several
+  // frames below anything we hand it, so it rides the same ALS mechanism the
+  // dispatch id already uses to cross that gap.
+  return runWithDispatchId(dispatchId, () =>
+    spec.stallTimeoutMs === undefined ? run() : withStallBudget(spec.stallTimeoutMs, run),
+  );
 }
 
 async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<AgentResult> {
@@ -329,8 +354,15 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
   // us a slow failure, a false abort costs the user completed work.
   let lastProgressAt = dispatchStartedAt;
   let inFlightTools = 0;
+  // Whether ANYTHING reached the sink. This is what decides, one layer up,
+  // whether a stall may be retried: `OutputSink` is append-only with no reset,
+  // so re-running a dispatch that already emitted a `text-delta` prints a second
+  // copy beside the first and the answer visibly stutters. Counted here because
+  // this callback is the only place that knows a part was pulled off the stream.
+  let partsSeen = 0;
   const progress: StreamProgress = {
     onPart: (type) => {
+      partsSeen += 1;
       lastProgressAt = Date.now();
       if (type === 'tool-call') inFlightTools += 1;
       else if (type === 'tool-result' && inFlightTools > 0) inFlightTools -= 1;
@@ -342,7 +374,13 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
   // and every non-streaming dispatch would be killed at the budget. That branch
   // stays covered by the first-byte guard plus step boundaries; the asymmetry is
   // real and stating it beats pretending the fix is symmetric.
-  const stallMs = spec.useStreaming ? parseStreamStallTimeoutMs() : null;
+  const configuredStallMs = spec.useStreaming ? parseStreamStallTimeoutMs() : null;
+  // `min`, never the override alone: a disabled guard must stay disabled, and a
+  // retry may only tighten a liveness budget (see `AgentSpec.stallTimeoutMs`).
+  const stallMs =
+    configuredStallMs !== null && spec.stallTimeoutMs !== undefined
+      ? Math.min(configuredStallMs, spec.stallTimeoutMs)
+      : configuredStallMs;
 
   // Optional per-dispatch timeout. Chains a fresh AbortController off the
   // caller's signal so we don't leak a timer past dispatch completion. The
@@ -355,6 +393,11 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
   // dispatch timer had fired first. `??=` reports whichever actually caused the
   // abort, and a third reason needs no new arm.
   let selfAbortMessage: string | null = null;
+  // Set only by the STALL arm, never the dispatch-timeout arm. The distinction
+  // is the point: a stall is the provider going quiet and is worth re-issuing,
+  // while `BERNARD_DISPATCH_TIMEOUT_MS` is a wall clock the operator set and
+  // silently retrying past it would defeat what they asked for.
+  let selfAbortStall: ProviderStallInfo | null = null;
   let effectiveSignal = spec.abortSignal;
   let abortChained: (() => void) | null = null;
   if (timeoutMs !== null || stallMs !== null) {
@@ -422,6 +465,7 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
             selfAbortMessage ??=
               `Provider stream timed out — no data received for ${sinceProgress} ms ` +
               `(BERNARD_STREAM_STALL_TIMEOUT_MS)`;
+            selfAbortStall ??= { phase: 'stream', producedOutput: partsSeen > 0 };
             abortChained?.();
           }
         }, watchdogIntervalMs(stallMs))
@@ -463,6 +507,11 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
       // Names it as ours so `isDispatchCancellation` can tell this from a
       // provider's (retryable) network timeout without reading the message.
       self.name = DISPATCH_ABORT_NAME;
+      // The brand rides ALONGSIDE that name rather than replacing it: recovery
+      // reads the brand, and once recovery gives up the five dispatch
+      // boundaries still need the name to unwind instead of handing the model a
+      // stall message as a successful tool result.
+      if (selfAbortStall) markProviderStall(self, selfAbortStall);
       wrapped = self;
     }
     debugLog('agent:dispatch:error', {

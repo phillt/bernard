@@ -400,3 +400,74 @@ export function isDispatchCancellation(err: unknown): boolean {
   }
   return false;
 }
+
+/**
+ * A provider stall, and whether it is safe to re-issue the request (#302/#325).
+ *
+ * Two different guards detect "the provider stopped talking", one layer apart,
+ * and a recovery loop needs to treat them identically:
+ *
+ *  - `phase: 'headers'` — `providers/stall-guard.ts`. The POST was accepted and
+ *    no response headers arrived within the budget. Nothing was consumed.
+ *  - `phase: 'body'` — the same module, one step later. Headers arrived and then
+ *    the response body stopped delivering chunks. Measured between chunks, not
+ *    from request start, so a model generating steadily for minutes never trips
+ *    it.
+ *  - `phase: 'stream'` — the runner's mid-stream watchdog, which spans the
+ *    several HTTP requests one `fullStream` is assembled from and so can see a
+ *    silence no single request can.
+ *
+ * `producedOutput` is the half that decides recoverability, and it is a fact
+ * about the SINK, not about the error. `OutputSink` is `append`-only — there is
+ * deliberately no reset, since the framework layer is not allowed to know what
+ * a consumer buffers — so once a `text-delta` has been appended, re-running the
+ * dispatch appends a second copy beside the first and the user watches the
+ * answer stutter. A stall that produced nothing is invisible to re-run, which
+ * is also the shape the failure actually takes: the observed incident aborted
+ * at `stepsCompleted: 0` with zero parts, because a provider that goes quiet
+ * usually does so before saying anything.
+ *
+ * It also carries the accounting argument: with no step finished, no hook ran,
+ * so nothing was recorded that a retry could double-count. (The dead attempt's
+ * prompt tokens WERE billed by the provider and are not recorded anywhere —
+ * a known under-count, small next to the cache-read rate, and the alternative
+ * is inventing a usage row for a call that produced no usage report.)
+ *
+ * Carried as a property rather than a name because the NAME slot is already
+ * spoken for on the stream side: a mid-stream stall must keep
+ * {@link DISPATCH_ABORT_NAME} so {@link isDispatchCancellation} still unwinds
+ * it at the five dispatch boundaries when recovery gives up.
+ */
+export interface ProviderStallInfo {
+  phase: 'headers' | 'body' | 'stream';
+  producedOutput: boolean;
+}
+
+const PROVIDER_STALL = Symbol.for('bernard.providerStall');
+
+/** Brand `err` as a provider stall. Returns the same error, for `throw mark(...)`. */
+export function markProviderStall<E extends Error>(err: E, info: ProviderStallInfo): E {
+  Object.defineProperty(err, PROVIDER_STALL, {
+    value: info,
+    enumerable: false,
+    configurable: true,
+  });
+  return err;
+}
+
+/**
+ * The stall info on `err`, or `null`.
+ *
+ * Walks `cause` for {@link isDispatchCancellation}'s reason and with its bound:
+ * the AI SDK rewraps a throw out of `fetch` (a `headers` stall surfaces through
+ * `streamText` inside an `APICallError`), so the brand is never on the outermost
+ * error by the time a caller sees it.
+ */
+export function providerStallInfo(err: unknown): ProviderStallInfo | null {
+  for (let e: unknown = err, depth = 0; e instanceof Error && depth < 8; depth++) {
+    const info = (e as { [PROVIDER_STALL]?: ProviderStallInfo })[PROVIDER_STALL];
+    if (info) return info;
+    e = e.cause;
+  }
+  return null;
+}

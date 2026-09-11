@@ -34,6 +34,7 @@ import { resolveRetrieval } from './retrieval.js';
 import { metaLookup, type ToolMetaLookup } from '../../tools/capture-tool-calls.js';
 import { visionRefusal } from './vision-gate.js';
 import { seedBudgetRefusal } from './seed-budget.js';
+import { runWithStallRecovery } from './stall-recovery.js';
 import { hasImagePart, isVisionCapableModel, stripImagesFromHistory } from '../../image.js';
 import type {
   AgentDefinition,
@@ -620,13 +621,24 @@ export async function runDefinition<TInput, TFormatted>(
         ...declaredFence,
       });
     }
-    const r = await runAgent({
-      ...baseSpec,
-      system: cached.system,
-      messages: cached.messages,
-      maxSteps: callMaxSteps,
-      dispatchId,
-    });
+    // Wrapped here rather than around `iterate`, because THIS is the point at
+    // which the prompt is fully materialised: a retry re-sends `cached.system`
+    // and `cached.messages` byte for byte, with no context re-assembly and no
+    // chance of attempt 2 asking a subtly different question. `recordDispatchContext`
+    // above stays outside the loop on purpose — one context record covers every
+    // attempt, which is correct, since the context is identical each time.
+    const r = await runWithStallRecovery(
+      (stallTimeoutMs) =>
+        runAgent({
+          ...baseSpec,
+          system: cached.system,
+          messages: cached.messages,
+          maxSteps: callMaxSteps,
+          dispatchId,
+          ...(stallTimeoutMs === undefined ? {} : { stallTimeoutMs }),
+        }),
+      { abortSignal: opts.abortSignal, definitionId: def.id },
+    );
     stepLimitHit = r.finishReason === 'tool-calls' && (r.steps?.length ?? 0) >= callMaxSteps;
     return r;
   };

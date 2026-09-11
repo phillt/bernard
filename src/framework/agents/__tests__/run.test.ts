@@ -34,6 +34,7 @@ vi.mock('../../../context-message.js', async () => {
 
 import { generateText, type CoreMessage } from 'ai';
 import { runDefinition } from '../run.js';
+import { markProviderStall } from '../../../error-taxonomy.js';
 import { makeTestContext } from '../../../__tests__/agent-context.js';
 import { DefinitionRegistry, definitions } from '../registry.js';
 import type { AgentDefinition } from '../types.js';
@@ -473,6 +474,53 @@ describe('runDefinition', () => {
     );
     expect(out.resolved.provider).toBe('openai');
     expect(out.resolved.modelName).toBe('gpt-4o-mini');
+  });
+
+  /**
+   * Pins the WIRING, which the unit tests in `stall-recovery.test.ts` cannot:
+   * that loop is correct in isolation whether or not `runDefinition` calls it,
+   * so deleting the wrapper in `run.ts` would leave every one of them green.
+   * Asserts on the real `generateText` seam instead.
+   */
+  it('re-issues a dispatch whose provider stalled, with byte-identical input', async () => {
+    const def = fakeDefinition();
+    const ctx = makeCtx();
+    const stall = markProviderStall(new Error('Provider timed out — no data on the body.'), {
+      phase: 'body',
+      producedOutput: false,
+    });
+    vi.mocked(generateText).mockReset();
+    (generateText as unknown as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(stall)
+      .mockResolvedValue({
+        text: 'recovered',
+        steps: [],
+        response: { messages: [] },
+        finishReason: 'stop',
+      });
+
+    const out = await runDefinition(ctx, def, { text: 'x' }, {});
+
+    expect(out.result.text).toBe('recovered');
+    const calls = (generateText as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.length).toBe(2);
+    // The retry must ask the SAME question. The loop wraps the point at which
+    // `system`/`messages` are already materialised precisely so a re-issue
+    // cannot pick up a re-assembled context.
+    expect(calls[1][0].system).toEqual(calls[0][0].system);
+    expect(calls[1][0].messages).toEqual(calls[0][0].messages);
+  });
+
+  it('does not retry a dispatch failure that is not a stall', async () => {
+    const def = fakeDefinition();
+    const ctx = makeCtx();
+    vi.mocked(generateText).mockReset();
+    (generateText as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('rate limit exceeded'),
+    );
+
+    await expect(runDefinition(ctx, def, { text: 'x' }, {})).rejects.toThrow(/rate limit/);
+    expect((generateText as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
   });
 
   it('forwards abortSignal to runAgent and repair hook', async () => {

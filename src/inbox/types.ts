@@ -17,8 +17,34 @@
  * being silently delivered as something it is not.
  */
 
-/** What a message asks the receiving REPL to do. Only one thing, so far. */
-export type InboxKind = 'notice';
+/**
+ * What a message asks the receiving REPL to do.
+ *
+ * - `notice` — put this on screen. Never billed, never enters `agent.history`,
+ *   never reaches the model. The default, and the only kind every session
+ *   accepts.
+ * - `prompt` — RUN this as a turn (#493). A session advertises it only when
+ *   started with an explicit opt-in, so a plain REPL keeps `notice`'s
+ *   guarantee untouched and a sender cannot upgrade itself.
+ *
+ * The distinction is the instruction-source boundary. Anything that can write
+ * the state directory can write a message file, so `notice` is safe by
+ * construction — the text has no path to the model, and no later refactor can
+ * accidentally open one. `prompt` deliberately gives up that structural property
+ * in exchange for usefulness, which is why it is per-session opt-in rather than
+ * per-message: the decision is the user's, made once, not the sender's.
+ *
+ * Note a watcher wake is NOT this. It never touches this transport: its
+ * instruction comes from a record the session itself wrote, so no local writer
+ * can author it. See `watchers/wake.ts`.
+ */
+export type InboxKind = 'notice' | 'prompt';
+
+/** Every kind, for validation and for advertising capabilities. */
+export const INBOX_KINDS: readonly InboxKind[] = ['notice', 'prompt'];
+
+/** What a default session accepts — unchanged by #493, deliberately. */
+export const DEFAULT_CAPABILITIES: readonly InboxKind[] = ['notice'];
 
 /** Where a message claims to come from. A CLAIM — see {@link sanitizeSourceLabel}. */
 export type InboxSourceKind = 'cli' | 'applet';
@@ -141,7 +167,11 @@ export function isInboxMessage(value: unknown): value is InboxMessage {
   const m = value as Partial<InboxMessage>;
   return (
     m.schemaVersion === 1 &&
-    m.kind === 'notice' &&
+    // Membership, not a literal. The "fail loudly against an older binary"
+    // property rested entirely on this comparison, and a second kind would have
+    // silently become undeliverable rather than refused.
+    typeof m.kind === 'string' &&
+    (INBOX_KINDS as readonly string[]).includes(m.kind) &&
     typeof m.sourceLabel === 'string' &&
     typeof m.text === 'string' &&
     typeof m.sentAt === 'number' &&

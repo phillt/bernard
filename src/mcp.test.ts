@@ -249,9 +249,17 @@ describe('MCPManager reconnection', () => {
     expect(result).toBe('reconnected-result');
     expect(failExecute).toHaveBeenCalledTimes(1);
     expect(successExecute).toHaveBeenCalledTimes(1);
-    expect(mockPrintInfo).toHaveBeenCalledWith(
-      'MCP tool "myTool" failed, reconnecting to "test-server"...',
-    );
+    // The debug log, and deliberately NOT stdout. This runs while Ink owns the
+    // screen — in full-screen it owns the alternate buffer — so a `printInfo`
+    // here lands at the cursor, corrupts the live frame, and is painted over on
+    // the next render: the line least likely to be read. It also fires between
+    // turns now that a watcher poll calls MCP tools (#479), where there is no
+    // turn output to hide behind.
+    expect(debugLog).toHaveBeenCalledWith('mcp:tool-retry', {
+      tool: 'myTool',
+      server: 'test-server',
+    });
+    expect(mockPrintInfo).not.toHaveBeenCalledWith(expect.stringContaining('reconnecting'));
   });
 
   it('surfaces original error when reconnection fails', async () => {

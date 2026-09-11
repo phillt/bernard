@@ -5,6 +5,9 @@ import {
   isMessageFile,
   isInboxMessage,
   isSessionRecord,
+  sessionAccepts,
+  DEFAULT_CAPABILITIES,
+  type SessionRecord,
   MAX_NOTICE_BYTES,
   MAX_NOTICE_LINES,
   INBOX_POLL_MS,
@@ -96,17 +99,36 @@ describe('the wire guards', () => {
   it('accepts a well-formed message and rejects every malformed shape', () => {
     expect(isInboxMessage(MSG)).toBe(true);
     expect(isInboxMessage({ ...MSG, schemaVersion: 2 })).toBe(false);
-    expect(isInboxMessage({ ...MSG, kind: 'prompt' })).toBe(false);
+    // `prompt` is a real kind since #493, so the parser accepts it — the
+    // refusal moved to `sessionAccepts`, which is where it belongs: whether a
+    // message may RUN is a property of the receiving session's opt-in, not of
+    // whether the bytes are well-formed.
+    expect(isInboxMessage({ ...MSG, kind: 'prompt' })).toBe(true);
     expect(isInboxMessage({ ...MSG, sourceKind: 'made-up' })).toBe(false);
     expect(isInboxMessage({ ...MSG, text: 42 })).toBe(false);
     expect(isInboxMessage(null)).toBe(false);
     expect(isInboxMessage('a string')).toBe(false);
   });
 
-  it('rejects a kind an older binary would not understand', () => {
-    // The reason `kind` exists: a later "start a turn" mode must fail here
-    // rather than be delivered as a notice.
+  it('rejects a kind this binary does not understand', () => {
+    // The reason `kind` exists: a kind from a NEWER binary must fail here rather
+    // than be delivered as something it is not. The check is membership of
+    // `INBOX_KINDS` rather than a literal comparison — as a literal it happened
+    // to refuse everything, which looked like the property holding while
+    // actually making a second kind undeliverable rather than refused.
     expect(isInboxMessage({ ...MSG, kind: 'run' })).toBe(false);
+    expect(isInboxMessage({ ...MSG, kind: '' })).toBe(false);
+  });
+
+  it('refuses a prompt against a session that has not opted in', () => {
+    // THE #493 gate, and the reason `capabilities` is on the record at all: a
+    // plain REPL keeps `notice`'s guarantee, and a sender cannot upgrade itself.
+    const plain = { capabilities: DEFAULT_CAPABILITIES } as SessionRecord;
+    expect(sessionAccepts(plain, 'notice')).toBe(true);
+    expect(sessionAccepts(plain, 'prompt')).toBe(false);
+
+    const optedIn = { capabilities: ['notice', 'prompt'] } as SessionRecord;
+    expect(sessionAccepts(optedIn, 'prompt')).toBe(true);
   });
 
   it('validates a session record', () => {

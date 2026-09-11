@@ -10,6 +10,7 @@ import {
   INBOX_POLL_MS,
   MAX_RENDER_BURST,
   type InboxMessage,
+  type InboxKind,
 } from './types.js';
 
 /**
@@ -50,6 +51,14 @@ export interface InboxWatcherOptions {
    */
   onCoalesced: (count: number, sourceLabel: string) => void;
   pollMs?: number;
+  /**
+   * What this session advertises it can be asked to do (#493).
+   *
+   * Defaults to `notice` only, which is what keeps a plain REPL's guarantee: a
+   * `prompt` sent to it is refused at the sender rather than delivered and
+   * mis-handled. A caller opts in explicitly — see `--accept-remote-prompts`.
+   */
+  capabilities?: readonly InboxKind[];
 }
 
 export class InboxWatcher {
@@ -71,7 +80,10 @@ export class InboxWatcher {
    * `bernard say` hits.
    */
   start(): void {
-    const record = registerSession({ sessionId: this.opts.sessionId });
+    const record = registerSession({
+      sessionId: this.opts.sessionId,
+      ...(this.opts.capabilities ? { capabilities: this.opts.capabilities } : {}),
+    });
     this.inboxDir = record.inboxDir;
     this.drain();
 
