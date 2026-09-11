@@ -268,6 +268,17 @@ interface HarnessOptions {
   welcomeLines?: string[];
 }
 
+/**
+ * A RAG stub answering every method a turn reaches, not only the one the test
+ * is about. `runAgentTurn` calls `retrievalDisabledReason()` after every submit
+ * (#520), so a stub carrying `addFacts` alone throws there — and it throws as an
+ * unhandled rejection, which leaves every test in the file green while the run
+ * exits non-zero. That is how it reached CI, and it is why this is a helper
+ * rather than a fourth object literal.
+ */
+const ragStub = (addFacts: unknown = vi.fn(async () => 0)): RAGStore =>
+  ({ addFacts, retrievalDisabledReason: () => null }) as unknown as RAGStore;
+
 function renderApp(opts: HarnessOptions = {}) {
   const agentSpy: AgentSpy = {
     processInput: vi.fn(async () => {}),
@@ -782,7 +793,7 @@ describe('<App> /clear', () => {
       { role: 'assistant' as const, content: 'hi' },
     ],
     config: { ragEnabled: true },
-    stores: { rag: { addFacts: vi.fn(async () => 0) } as unknown as RAGStore },
+    stores: { rag: ragStub() },
   };
 
   it.each([
@@ -852,7 +863,7 @@ describe('<App> /clear', () => {
     ]);
     const { stdin, lastFrame, unmount } = renderApp({
       ...SAVEABLE,
-      stores: { rag: { addFacts } as unknown as RAGStore },
+      stores: { rag: ragStub(addFacts) },
     });
     await tick();
     await submit(stdin, '/clear');
@@ -957,7 +968,7 @@ describe('<App> /clear --save (#228)', () => {
     const { stdin, unmount } = renderApp({
       history,
       config: { ragEnabled: true },
-      stores: { rag: { addFacts: vi.fn(async () => 0) } as unknown as RAGStore },
+      stores: { rag: ragStub() },
     });
     await tick();
     await submit(stdin, '/clear --save');

@@ -1849,6 +1849,11 @@ describe('scoring: the entrenchment loop (#372)', () => {
 });
 
 describe('the addFacts observer (#250)', () => {
+  // Without this the `node:fs` mocks carry over from whichever describe ran
+  // last, so an empty-store assumption holds only in file order. Under a
+  // shuffled run the fact was already on disk and `addFacts` deduped it away.
+  beforeEach(resetFsMocks);
+
   it('reports only facts that were actually stored', async () => {
     // The receipt's whole honesty rests on this: the extraction knows what it
     // proposed, and only the store knows what survived dedup.
