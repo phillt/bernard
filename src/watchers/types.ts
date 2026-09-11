@@ -136,8 +136,24 @@ export const MAX_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
  */
 export const MAX_PROBE_FAILURES = 5;
 
-/** Cap on the observation handed to a woken turn. */
-export const MAX_OBSERVATION_BYTES = 4_000;
+/**
+ * Cap on the observation handed to a woken turn, in CHARACTERS.
+ *
+ * Named for what it measures: it was `_BYTES` and compared against
+ * `String.length`, while a second site multiplied it by four to get an HTTP
+ * body ceiling — one constant meaning two different things at two sites.
+ */
+export const MAX_OBSERVATION_CHARS = 4_000;
+
+/**
+ * Ceiling on an HTTP response body a probe will hold.
+ *
+ * Larger than {@link MAX_OBSERVATION_CHARS} because the whole body is digested
+ * for a `changed` comparison, and only the excerpt handed to the woken turn is
+ * capped at the smaller number. Its own constant so the relationship is a stated
+ * ratio rather than a `* 4` nobody can explain.
+ */
+export const MAX_HTTP_BODY_CHARS = 16_000;
 
 /** Watcher ids are minted by us; a hand-edited file is refused, never repaired. */
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;

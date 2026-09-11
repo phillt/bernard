@@ -16,6 +16,7 @@ import { normalizeUsage } from './hooks/token-stats.js';
 import {
   DISPATCH_ABORT_NAME,
   markProviderStall,
+  providerStallInfo,
   type ProviderStallInfo,
 } from '../error-taxonomy.js';
 import { withStallBudget } from '../providers/stall-guard.js';
@@ -316,9 +317,24 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
   // Still `debug`-only — otherwise this would force `onStepFinish` to be defined
   // on every dispatch even when the caller passed no hooks, breaking the
   // param-parity contract.
+  // Counting steps is NOT debug-only, and that is a safety requirement rather
+  // than tidiness. `stepsCompleted` used to move only inside the debug-gated
+  // observer above, so in production it was permanently 0 — and stall recovery
+  // reads it to decide whether re-running a dispatch would re-execute tool calls
+  // that already ran. A retry that re-sends six completed steps' worth of writes
+  // must not be gated on whether someone happened to set BERNARD_DEBUG.
+  //
+  // Separate from the logging observer so the debug gate keeps its stated
+  // meaning (no per-step log lines unless asked) while the fact itself is always
+  // available. Composed FIRST, so the observer's `n` reads the incremented value.
+  const stepCounter: AgentHook = {
+    onStepFinish: async () => {
+      stepsCompleted += 1;
+    },
+  };
   const composedHooks: AgentHook[] = debug
-    ? [stepObserver, ...(spec.hooks ?? [])]
-    : (spec.hooks ?? []);
+    ? [stepCounter, stepObserver, ...(spec.hooks ?? [])]
+    : [stepCounter, ...(spec.hooks ?? [])];
   const onStepFinish = composeOnStepFinish(composedHooks);
 
   debugLog('agent:dispatch:start', {
@@ -513,6 +529,21 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
       // stall message as a successful tool result.
       if (selfAbortStall) markProviderStall(self, selfAbortStall);
       wrapped = self;
+    }
+    // Correct `producedOutput` with what the DISPATCH knows, whatever branded
+    // it. The transport cannot answer this: `stall-guard.ts` mints `false` for a
+    // headers-phase stall, which is true of that one HTTP REQUEST and says
+    // nothing about the dispatch — and `partsSeen` only moves on the streaming
+    // branch, so every non-streaming dispatch (`sub`, `task`, `specialist`,
+    // `tool-wrapper`, the PAC phases, `cron`, `mcp-delegate`) reported `false`
+    // permanently. Recovery would then re-run a sub-agent that stalled on step 7
+    // from step 1, re-executing six steps of tool calls — including writes.
+    //
+    // `providerStallInfo` walks outermost-in, so re-marking here shadows the
+    // transport's optimistic value rather than fighting it.
+    const stall = providerStallInfo(wrapped);
+    if (stall && !stall.producedOutput && (stepsCompleted > 0 || partsSeen > 0)) {
+      markProviderStall(wrapped as Error, { ...stall, producedOutput: true });
     }
     debugLog('agent:dispatch:error', {
       dispatchId,

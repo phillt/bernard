@@ -102,7 +102,10 @@ export function extractPath(value: unknown, path: string): unknown {
  * Cycles cannot occur on a `JSON.parse` result, but a `file`/`http` probe builds
  * its own object, so the seen-set stays.
  */
-export function stableStringify(value: unknown, opts: { collapseWhitespace?: boolean } = {}): string {
+export function stableStringify(
+  value: unknown,
+  opts: { collapseWhitespace?: boolean } = {},
+): string {
   const seen = new WeakSet<object>();
   const text = (v: string): string =>
     JSON.stringify(opts.collapseWhitespace ? normalizeForDigest(v) : v);

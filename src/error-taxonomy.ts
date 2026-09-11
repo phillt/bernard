@@ -394,11 +394,29 @@ export function isDispatchCancellation(err: unknown): boolean {
   // Bounded rather than `while (cause)`: an error chain is attacker-adjacent
   // input (providers and MCP servers build these) and a cycle would hang the
   // catch handler. Eight is far past any real nesting here.
-  for (let e: Error | undefined = err, depth = 0; e && depth < 8; depth++) {
-    if (e.name === 'AbortError' || e.name === DISPATCH_ABORT_NAME) return true;
-    e = e.cause instanceof Error ? e.cause : undefined;
+  return (
+    findInCauseChain(err, (e) =>
+      e.name === 'AbortError' || e.name === DISPATCH_ABORT_NAME ? true : null,
+    ) ?? false
+  );
+}
+
+/**
+ * The first non-null `f(e)` over `err` and its `cause` chain, outermost first.
+ *
+ * One walk, because the bound and the reason for it were stated twice in this
+ * file with two different termination spellings. Bounded rather than
+ * `while (cause)`: an error chain is attacker-adjacent input — providers and MCP
+ * servers build these — and a cycle would hang whichever catch handler called
+ * it. Eight is far past any real nesting here.
+ */
+function findInCauseChain<T>(err: unknown, f: (e: Error) => T | null): T | null {
+  for (let e: unknown = err, depth = 0; e instanceof Error && depth < 8; depth++) {
+    const hit = f(e);
+    if (hit !== null) return hit;
+    e = e.cause;
   }
-  return false;
+  return null;
 }
 
 /**
@@ -464,10 +482,8 @@ export function markProviderStall<E extends Error>(err: E, info: ProviderStallIn
  * error by the time a caller sees it.
  */
 export function providerStallInfo(err: unknown): ProviderStallInfo | null {
-  for (let e: unknown = err, depth = 0; e instanceof Error && depth < 8; depth++) {
-    const info = (e as { [PROVIDER_STALL]?: ProviderStallInfo })[PROVIDER_STALL];
-    if (info) return info;
-    e = e.cause;
-  }
-  return null;
+  return findInCauseChain(
+    err,
+    (e) => (e as { [PROVIDER_STALL]?: ProviderStallInfo })[PROVIDER_STALL] ?? null,
+  );
 }

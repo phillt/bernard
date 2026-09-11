@@ -26,8 +26,7 @@
  */
 import { debugLog } from '../logger.js';
 import { resetActiveWatcherCount, setActiveWatcherCount } from './active-count.js';
-import { evaluate, digestOf } from './evaluate.js';
-import { idsAt } from './extract.js';
+import { evaluate } from './evaluate.js';
 import { probe, type ProbeDeps } from './probe.js';
 import { buildWake, type Wake } from './wake.js';
 import type { WatcherStore } from './store.js';
@@ -144,7 +143,7 @@ export class WatcherPoller {
       setActiveWatcherCount(owned.filter((w) => isPollable(w, now)).length);
       for (const w of owned) {
         if (!isPollable(w, now)) {
-          if (w.status === 'active') this.opts.store.finish(w.id, 'expired');
+          if (w.status === 'active') this.opts.store.finish(w.id, 'expired', {}, w);
           continue;
         }
         if (!isDue(w, now)) continue;
@@ -173,26 +172,39 @@ export class WatcherPoller {
       // A watcher that has been failing all day is not watching anything, and
       // the user believes it is. It stops rather than retrying forever.
       if (failureCount >= MAX_PROBE_FAILURES) {
-        this.opts.store.finish(w.id, 'failed', { failureCount, lastError: result.error, lastCheckedAt: checkedAt });
+        this.opts.store.finish(
+          w.id,
+          'failed',
+          { failureCount, lastError: result.error, lastCheckedAt: checkedAt },
+          w,
+        );
         debugLog('watcher:failed', { id: w.id, name: w.name, error: result.error });
         return;
       }
-      this.opts.store.update(w.id, { failureCount, lastError: result.error, lastCheckedAt: checkedAt });
+      this.opts.store.update(
+        w.id,
+        { failureCount, lastError: result.error, lastCheckedAt: checkedAt },
+        w,
+      );
       return;
     }
 
     const verdict = evaluate(w, result.observation);
     if (!verdict.fired) {
-      this.opts.store.update(w.id, {
-        lastCheckedAt: checkedAt,
-        // Reset on success: five *consecutive* failures is the rule, so a
-        // transient blip a week ago must not add to today's.
-        failureCount: 0,
-        ...(verdict.snapshot === undefined ? {} : { snapshot: verdict.snapshot }),
-        ...(verdict.baselineIds === undefined ? {} : { baselineIds: verdict.baselineIds }),
-        ...(verdict.etag === undefined ? {} : { etag: verdict.etag }),
-        ...(verdict.lastModified === undefined ? {} : { lastModified: verdict.lastModified }),
-      });
+      this.opts.store.update(
+        w.id,
+        {
+          lastCheckedAt: checkedAt,
+          // Reset on success: five *consecutive* failures is the rule, so a
+          // transient blip a week ago must not add to today's.
+          failureCount: 0,
+          ...(verdict.snapshot === undefined ? {} : { snapshot: verdict.snapshot }),
+          ...(verdict.baselineIds === undefined ? {} : { baselineIds: verdict.baselineIds }),
+          ...(verdict.etag === undefined ? {} : { etag: verdict.etag }),
+          ...(verdict.lastModified === undefined ? {} : { lastModified: verdict.lastModified }),
+        },
+        w,
+      );
       return;
     }
 
@@ -200,7 +212,12 @@ export class WatcherPoller {
     // a watcher left active in the meantime would fire again on the next tick —
     // the user asked to be told once.
     const firedAt = new Date(this.now()).toISOString();
-    this.opts.store.finish(w.id, 'fired', { firedAt, lastCheckedAt: checkedAt, failureCount: 0 });
+    this.opts.store.finish(
+      w.id,
+      'fired',
+      { firedAt, lastCheckedAt: checkedAt, failureCount: 0 },
+      w,
+    );
     debugLog('watcher:fired', { id: w.id, name: w.name, reason: verdict.reason });
 
     const wake = buildWake(
@@ -211,41 +228,4 @@ export class WatcherPoller {
     );
     this.opts.onWake(wake);
   }
-}
-
-/** The baseline a watcher must carry before its first poll. */
-export async function captureBaseline(
-  target: Watcher['target'],
-  predicate: Watcher['predicate'],
-  deps: ProbeDeps,
-): Promise<
-  { ok: true; snapshot?: string; baselineIds?: string[]; etag?: string; lastModified?: string }
-  | { ok: false; error: string }
-> {
-  // A `time` target has nothing to baseline against.
-  if (target.kind === 'time') return { ok: true };
-
-  const result = await probe(target, deps);
-  if (!result.ok) return { ok: false, error: result.error };
-
-  const obs = result.observation;
-  const extract = target.kind === 'mcp' ? target.extract : undefined;
-  const out: { ok: true; snapshot?: string; baselineIds?: string[]; etag?: string; lastModified?: string } = {
-    ok: true,
-    ...(obs.etag === undefined ? {} : { etag: obs.etag }),
-    ...(obs.lastModified === undefined ? {} : { lastModified: obs.lastModified }),
-  };
-
-  // Captured at CREATION, which is what makes "tell me when this changes" mean
-  // what it says. Deferred to the first poll, a real digest would compare
-  // unequal to an absent one and every watcher would fire the moment it was made.
-  if (predicate.kind === 'changed') out.snapshot = digestOf(obs.value, extract);
-  if (predicate.kind === 'appeared') {
-    // `?? []` is right HERE and wrong in `evaluate`: at creation an unreadable
-    // path means "nothing known yet", so the first poll's ids all count as new;
-    // mid-flight it would mean "forget what you knew", which fires a false wake
-    // naming items that were always there.
-    out.baselineIds = idsAt(obs.value, predicate.idPath) ?? [];
-  }
-  return out;
 }

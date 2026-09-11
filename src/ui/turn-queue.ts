@@ -46,10 +46,10 @@
  * prefix arrives it is a parser and a branch on top of this, not a rewrite.
  */
 
+import type { UntrustedData } from '../framework/agents/user-message.js';
+
 /** Where a queued turn came from, which decides how it is announced. */
 export type QueuedTurnSource =
-  /** The user typed `+ something` while busy. */
-  | { kind: 'user' }
   /** A watcher fired. */
   | { kind: 'watcher'; watcherId: string; name: string; reason: string }
   /** A `bernard say --run` arrived from another process (#493). */
@@ -59,8 +59,16 @@ export interface QueuedTurn {
   id: string;
   /** The instruction channel. Never contains anything observed. */
   text: string;
-  /** The data channel, carried opaquely — see `watchers/wake.ts`. */
-  data?: { readonly text: string };
+  /**
+   * The data channel — see `watchers/wake.ts`.
+   *
+   * The branded type, not a structural `{ text: string }`. A structural widening
+   * is exactly what #509's brand test declares must NOT satisfy `UntrustedData`,
+   * and it forced an `as UntrustedData` at the drain — the escape hatch the brand
+   * exists to make unnecessary, in the one path that actually carries a live
+   * observation into a turn. Type-only import, so this leaf gains no runtime edge.
+   */
+  data?: UntrustedData;
   source: QueuedTurnSource;
   queuedAt: number;
 }
@@ -76,9 +84,8 @@ export interface QueuedTurn {
  */
 export const MAX_QUEUED_TURNS = 10;
 
-export type EnqueueResult =
-  | { ok: true; position: number }
-  | { ok: false; reason: 'full' };
+/** Whether the turn was accepted. */
+export type EnqueueResult = { ok: boolean };
 
 /**
  * A plain FIFO. Deliberately not a React store: `App` holds it in a ref and
@@ -95,9 +102,9 @@ export class TurnQueue {
     // `WorkQueue.enqueue`. Dropping the oldest silently discards something
     // already accepted and reported as queued; refusing tells the producer now,
     // while it still has the payload.
-    if (this.items.length >= MAX_QUEUED_TURNS) return { ok: false, reason: 'full' };
+    if (this.items.length >= MAX_QUEUED_TURNS) return { ok: false };
     this.items.push({ ...turn, id: `q${++this.seq}`, queuedAt: now });
-    return { ok: true, position: this.items.length };
+    return { ok: true };
   }
 
   /** Removes and returns the next turn, or `null`. */
@@ -105,35 +112,14 @@ export class TurnQueue {
     return this.items.shift() ?? null;
   }
 
-  peek(): readonly QueuedTurn[] {
-    return this.items;
-  }
-
   get size(): number {
     return this.items.length;
-  }
-
-  /** Drops everything. Returns how many went. */
-  clear(): number {
-    const n = this.items.length;
-    this.items = [];
-    return n;
-  }
-
-  /** Drops one by id. */
-  remove(id: string): boolean {
-    const i = this.items.findIndex((t) => t.id === id);
-    if (i === -1) return false;
-    this.items.splice(i, 1);
-    return true;
   }
 }
 
 /** One line describing where a queued turn came from, for the panel. */
 export function describeSource(source: QueuedTurnSource): string {
   switch (source.kind) {
-    case 'user':
-      return 'queued by you';
     case 'watcher':
       return `watcher "${source.name}" — ${source.reason}`;
     case 'remote':

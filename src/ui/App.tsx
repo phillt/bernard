@@ -107,6 +107,7 @@ import { WatcherStore } from '../watchers/store.js';
 import { WatcherPoller } from '../watchers/poller.js';
 import { statFileSync } from '../watchers/probe.js';
 import { describeWatchTarget } from '../watchers/types.js';
+import { stableStringify } from '../watchers/extract.js';
 import { formatRelative, parseWhen } from '../watchers/duration.js';
 import {
   TurnQueue,
@@ -870,8 +871,21 @@ export function App({
    * it state would repaint the transcript on every background arrival.
    */
   const turnQueueRef = useRef(new TurnQueue());
-  /** Watcher records. One store per session; the poller below drives it. */
-  const watcherStoreRef = useRef(new WatcherStore());
+  /**
+   * Watcher records. One store per session; the poller below drives it.
+   *
+   * Lazily, because React evaluates a `useRef` ARGUMENT on every render and
+   * throws all but the first away — and `WatcherStore`'s constructor is a
+   * `mkdirSync`. That was one `mkdir(2)` per render (measured 2.18 µs), on a
+   * surface that re-renders on `busy`, `staticItems`, toasts and every
+   * streaming delta, against Ink's 32 ms frame budget.
+   */
+  const watcherStoreLazy = useRef<WatcherStore | null>(null);
+  const watcherStoreRef = {
+    get current(): WatcherStore {
+      return (watcherStoreLazy.current ??= new WatcherStore());
+    },
+  };
   // Turn-level abort controller. Esc aborts this controller (cancels the
   // pre-turn pipeline) AND calls agent.abort() (cancels the agent loop once
   // it's started). Reset to null in runAgentTurn's finally block.
@@ -1032,7 +1046,6 @@ export function App({
     return () => poller.stop();
     // Mount-once, like the inbox watcher: the poller reads the store and the
     // manager through refs and getters, so nothing here goes stale.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -1770,31 +1783,36 @@ export function App({
           flashToast('No watchers. Ask me to watch for something.');
           return;
         }
-        const byId = new Map(all.map((w) => [w.id, w]));
         const entries: MenuEntry[] = all.map((w) => ({
           label: w.name,
           annotation: w.status,
           description: `${describeWatchTarget(w.target)}${
-            w.lastCheckedAt ? ` — last checked ${new Date(w.lastCheckedAt).toLocaleTimeString()}` : ''
+            w.lastCheckedAt
+              ? ` — last checked ${new Date(w.lastCheckedAt).toLocaleTimeString()}`
+              : ''
           }`,
           value: w.id,
         }));
         const pick = await requestMenu(entries, {
           title: 'Watchers — select one',
-          headerLines: [
-            'A watcher polls, then starts a turn when it fires. One-shot.',
-          ],
+          headerLines: ['A watcher polls, then starts a turn when it fires. One-shot.'],
           initialIndex: listIndex,
         });
         if (pick.cancelled) return;
         listIndex = pick.index;
-        const w = byId.get(pick.item.value as string);
+        // `entries` is 1:1 with `all` in order, so the index IS the lookup —
+        // the Map was rebuilt every iteration to answer a question the index
+        // already answers.
+        const w = all[pick.index];
         if (!w) continue;
         const action = await requestMenu(
           [
-            ...(w.status === 'active' ? [{ label: 'Cancel this watcher' }] : []),
-            { label: 'Remove from the list' },
-            { label: 'Back' },
+            // Branch on `value`, never the label: the list menu directly above
+            // already does, and a copy edit to a display string must not change
+            // control flow.
+            ...(w.status === 'active' ? [{ label: 'Cancel this watcher', value: 'cancel' }] : []),
+            { label: 'Remove from the list', value: 'remove' },
+            { label: 'Back', value: 'back' },
           ],
           {
             title: `"${w.name}" — ${w.status}`,
@@ -1804,8 +1822,8 @@ export function App({
             headerLines: [`Will do: ${truncate(w.instructions.replace(/\s+/g, ' '), 160)}`],
           },
         );
-        if (action.cancelled || action.item.label === 'Back') continue;
-        if (action.item.label === 'Cancel this watcher') {
+        if (action.cancelled || action.item.value === 'back') continue;
+        if (action.item.value === 'cancel') {
           store.finish(w.id, 'cancelled');
           flashToast(`Cancelled "${w.name}".`, 'success');
           continue;
@@ -4555,7 +4573,7 @@ export function App({
         wake: { source: describeSource(next.source), text: next.text },
       },
     ]);
-    await runAgentTurn(next.text, undefined, next.data ? { data: next.data as UntrustedData } : {});
+    await runAgentTurn(next.text, undefined, next.data ? { data: next.data } : {});
   }
 
   /**
@@ -6520,19 +6538,15 @@ async function runLineupEditorInk(
 }
 
 /**
- * Sort-keys-first JSON so `{a:1,b:2}` and `{b:2,a:1}` produce the same string.
- * Keeps the confirm-allow session memo stable across re-renders that reshuffle
- * object key order.
+ * djb2 over the stable-JSON form.
+ *
+ * The sort-keys-first stringify used to be a private copy here. It had already
+ * drifted from the one in `watchers/extract.ts` — `undefined` serialised as
+ * `'null'` in one and `'undefined'` in the other, and this copy had no cycle
+ * guard, surviving only because the `catch` below turns the resulting
+ * `RangeError` into a fallback. Two functions with one name and one job giving
+ * different answers is the drift this repo keeps writing down.
  */
-function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
-  const obj = value as Record<string, unknown>;
-  const keys = Object.keys(obj).sort();
-  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(',')}}`;
-}
-
-/** djb2 over the stable-JSON form. */
 function stableHash(value: unknown): string {
   let json: string;
   try {

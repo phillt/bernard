@@ -21,8 +21,9 @@ import { statSync } from 'node:fs';
 
 import { readToolMeta } from '../framework/tools/adapter.js';
 import { isReadOnlyMCPSuffix } from '../risk.js';
-import { MAX_OBSERVATION_BYTES, type WatchTarget } from './types.js';
-import type { Observation } from './evaluate.js';
+import { digestOf, type Observation } from './evaluate.js';
+import { idsAt } from './extract.js';
+import { MAX_HTTP_BODY_CHARS, type WatchTarget, type Watcher } from './types.js';
 
 /**
  * The production `statFile`, kept here rather than at the call site so the UI
@@ -130,12 +131,12 @@ function suggestions(wanted: string, available: Record<string, unknown>): string
 /** Looks once. Never throws; a failure is a value the caller counts. */
 /** Carried-forward state a probe can use to ask a cheaper question. */
 export interface ProbeContext {
-  signal?: AbortSignal;
   /** From the last poll, so an HTTP probe can send a conditional request. */
   etag?: string;
   lastModified?: string;
 }
 
+/** Looks once. Never throws; a failure is a value the caller counts. */
 export async function probe(
   target: WatchTarget,
   deps: ProbeDeps,
@@ -151,7 +152,7 @@ export async function probe(
     case 'http':
       return probeHttp(target, deps, ctx);
     case 'mcp':
-      return probeMcp(target, deps, ctx);
+      return probeMcp(target, deps);
   }
 }
 
@@ -180,7 +181,12 @@ async function probeHttp(
       // `If-None-Match` wins over `If-Modified-Since` when a server sees both,
       // an entity tag being the stronger signal, so sending both is free.
       headers: conditionalHeaders(ctx),
-      signal: ctx.signal,
+      // A real deadline. `ProbeContext` used to carry a `signal` that NO caller
+      // ever populated, so this was `undefined` and an HTTP probe had no bound
+      // at all — one unresponsive host would hold a poll slot indefinitely,
+      // while the MCP path was bounded by its own race. A dead field that reads
+      // as cancellation support is worse than none.
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
       redirect: 'follow',
     });
     if (res.status === 304) {
@@ -191,7 +197,7 @@ async function probeHttp(
     return {
       ok: true,
       observation: {
-        value: body.slice(0, MAX_OBSERVATION_BYTES * 4),
+        value: body.slice(0, MAX_HTTP_BODY_CHARS),
         etag: res.headers.get('etag') ?? undefined,
         lastModified: res.headers.get('last-modified') ?? undefined,
       },
@@ -211,7 +217,6 @@ function conditionalHeaders(ctx: ProbeContext): Record<string, string> {
 async function probeMcp(
   target: Extract<WatchTarget, { kind: 'mcp' }>,
   deps: ProbeDeps,
-  ctx: ProbeContext,
 ): Promise<ProbeResult> {
   const registry = deps.tools();
   const tool = registry[target.tool];
@@ -224,17 +229,28 @@ async function probeMcp(
     // entirely, which is the reason `reference-tool-lookup.ts` wraps its own
     // call the same way. Without it one unresponsive server stalls every other
     // watcher behind it.
-    const result = await Promise.race([
-      execute(target.args, {
-        toolCallId: `watch-${Date.now()}`,
-        messages: [],
-        abortSignal: ctx.signal,
-      }),
-      new Promise<never>((_r, reject) =>
-        setTimeout(() => reject(new Error('probe timed out')), PROBE_TIMEOUT_MS).unref?.(),
-      ),
-    ]);
-    return { ok: true, observation: { value: unwrap(result) } };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        execute(target.args, {
+          toolCallId: `watch-${Date.now()}`,
+          messages: [],
+          abortSignal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+        }),
+        new Promise<never>((_r, reject) => {
+          timer = setTimeout(() => reject(new Error('probe timed out')), PROBE_TIMEOUT_MS);
+          timer.unref?.();
+        }),
+      ]);
+      return { ok: true, observation: { value: unwrap(result) } };
+    } finally {
+      // Every other hand-rolled race in the tree clears its timer in a `finally`
+      // — `reference-tool-lookup`, `mcp`, `cron/scheduler`, `runner` (twice).
+      // Without it each probe leaves a live 10 s timer that later rejects an
+      // already-settled promise; `unref` keeps that from holding the process
+      // open but does not stop it firing.
+      if (timer) clearTimeout(timer);
+    }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
@@ -265,4 +281,55 @@ function unwrap(result: unknown): unknown {
     // Plenty of servers return prose. That is a legitimate value to watch.
     return only.text;
   }
+}
+
+/**
+ * The baseline a watcher must carry before its first poll.
+ *
+ * Here rather than in `poller.ts`, which never called it: its only caller is
+ * `tools/watcher.ts`, which was importing the whole `WatcherPoller` class — and
+ * transitively `active-count`, `wake` and the store — to reach one function that
+ * only looks once. It also made `poller.ts` import `digestOf` and `idsAt` for
+ * nothing else.
+ */
+export async function captureBaseline(
+  target: Watcher['target'],
+  predicate: Watcher['predicate'],
+  deps: ProbeDeps,
+): Promise<
+  | { ok: true; snapshot?: string; baselineIds?: string[]; etag?: string; lastModified?: string }
+  | { ok: false; error: string }
+> {
+  // A `time` target has nothing to baseline against.
+  if (target.kind === 'time') return { ok: true };
+
+  const result = await probe(target, deps);
+  if (!result.ok) return { ok: false, error: result.error };
+
+  const obs = result.observation;
+  const extract = target.kind === 'mcp' ? target.extract : undefined;
+  const out: {
+    ok: true;
+    snapshot?: string;
+    baselineIds?: string[];
+    etag?: string;
+    lastModified?: string;
+  } = {
+    ok: true,
+    ...(obs.etag === undefined ? {} : { etag: obs.etag }),
+    ...(obs.lastModified === undefined ? {} : { lastModified: obs.lastModified }),
+  };
+
+  // Captured at CREATION, which is what makes "tell me when this changes" mean
+  // what it says. Deferred to the first poll, a real digest would compare
+  // unequal to an absent one and every watcher would fire the moment it was made.
+  if (predicate.kind === 'changed') out.snapshot = digestOf(obs.value, extract);
+  if (predicate.kind === 'appeared') {
+    // `?? []` is right HERE and wrong in `evaluate`: at creation an unreadable
+    // path means "nothing known yet", so the first poll's ids all count as new;
+    // mid-flight it would mean "forget what you knew", which fires a false wake
+    // naming items that were always there.
+    out.baselineIds = idsAt(obs.value, predicate.idPath) ?? [];
+  }
+  return out;
 }

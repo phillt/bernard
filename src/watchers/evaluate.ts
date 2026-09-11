@@ -83,16 +83,26 @@ function evaluatePredicate(
 ): Evaluation {
   const extract = watcher.target.kind === 'mcp' ? watcher.target.extract : undefined;
 
+  /**
+   * "Nothing happened" — carry state forward and do not wake.
+   *
+   * Written out seven times before this, which is seven places to keep in step
+   * and seven edits the day an eighth carried field appears.
+   */
+  const hold = (snapshot = watcher.snapshot, baselineIds = watcher.baselineIds): Evaluation => ({
+    fired: false,
+    snapshot,
+    baselineIds,
+    ...carry,
+  });
+
   switch (predicate.kind) {
     case 'changed': {
       const next = digestOf(obs.value, extract);
-      // No baseline: record it, do not fire. See the docstring above.
-      if (!watcher.snapshot) {
-        return { fired: false, snapshot: next, baselineIds: watcher.baselineIds, ...carry };
-      }
-      if (next === watcher.snapshot) {
-        return { fired: false, snapshot: next, baselineIds: watcher.baselineIds, ...carry };
-      }
+      // No baseline means record-and-hold, not fire — see the docstring above.
+      // Folded with the unchanged case because both returned a byte-identical
+      // value, and two branches that cannot differ read as though they can.
+      if (!watcher.snapshot || next === watcher.snapshot) return hold(next);
       return { fired: true, reason: 'content changed', snapshot: next, ...carry };
     }
 
@@ -101,17 +111,13 @@ function evaluatePredicate(
       // Could not evaluate. Deliberately NOT treated as an empty list: an empty
       // baseline would make every pre-existing item look new on the next poll
       // and fire a false wake naming things that were always there.
-      if (ids === null) {
-        return { fired: false, snapshot: watcher.snapshot, baselineIds: watcher.baselineIds, ...carry };
-      }
+      if (ids === null) return hold();
       const baseline = watcher.baselineIds ?? [];
       const known = new Set(baseline);
       const fresh = ids.filter((id) => !known.has(id));
-      if (fresh.length === 0) {
-        // Carry the CURRENT ids forward, not the original baseline: an item that
-        // disappears must not be able to reappear and count as new.
-        return { fired: false, snapshot: watcher.snapshot, baselineIds: ids, ...carry };
-      }
+      // Carry the CURRENT ids forward, not the original baseline: an item that
+      // disappears must not be able to reappear and count as new.
+      if (fresh.length === 0) return hold(watcher.snapshot, ids);
       return {
         fired: true,
         reason: fresh.length === 1 ? '1 new item' : `${fresh.length} new items`,
@@ -128,14 +134,10 @@ function evaluatePredicate(
       try {
         re = new RegExp(predicate.pattern);
       } catch {
-        // An unparseable pattern is a broken watcher, not a match. Reported
-        // through the probe-failure path by the caller rather than silently
-        // never firing.
-        return { fired: false, snapshot: watcher.snapshot, baselineIds: watcher.baselineIds, ...carry };
+        // An unparseable pattern is a broken watcher, not a match.
+        return hold();
       }
-      if (!re.test(text)) {
-        return { fired: false, snapshot: watcher.snapshot, baselineIds: watcher.baselineIds, ...carry };
-      }
+      if (!re.test(text)) return hold();
       return { fired: true, reason: `matched /${predicate.pattern}/`, ...carry };
     }
   }

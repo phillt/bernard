@@ -5,8 +5,12 @@ import { attachActionMeta } from '../framework/tools/adapter.js';
 import { debugLog, getSessionId } from '../logger.js';
 import { getActiveMCPManager } from '../mcp.js';
 import { WatcherStore } from '../watchers/store.js';
-import { captureBaseline } from '../watchers/poller.js';
-import { statFileSync, watchableToolRefusal, type ProbeDeps } from '../watchers/probe.js';
+import {
+  captureBaseline,
+  statFileSync,
+  watchableToolRefusal,
+  type ProbeDeps,
+} from '../watchers/probe.js';
 import {
   DEFAULT_INTERVAL_MS,
   MAX_LIFETIME_MS,

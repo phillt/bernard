@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
 import { buildWake, renderObservation } from './wake.js';
-import { MAX_OBSERVATION_BYTES, type Watcher } from './types.js';
+import { MAX_OBSERVATION_CHARS, type Watcher } from './types.js';
 
 function watcher(over: Partial<Watcher> = {}): Watcher {
   return {
@@ -64,10 +64,20 @@ describe('renderObservation', () => {
     // A woken turn pays for every byte a server chose to return, and an
     // observation that stops mid-sentence without saying so invites the model to
     // reason about a message it only half saw.
-    const big = 'x'.repeat(MAX_OBSERVATION_BYTES * 2);
+    const big = 'x'.repeat(MAX_OBSERVATION_CHARS * 2);
     const out = renderObservation(big);
     expect(out.length).toBeLessThan(big.length);
     expect(out).toMatch(/truncated, \d+ chars total/);
+
+    // The object path must bound DURING serialization rather than build the
+    // whole string and slice — an uncapped MCP page was measured at ~350 KB
+    // materialised to keep 4 KB.
+    const wide = {
+      items: Array.from({ length: 5000 }, (_, i) => ({ id: i, body: 'y'.repeat(80) })),
+    };
+    const objOut = renderObservation(wide);
+    expect(objOut.length).toBeLessThan(MAX_OBSERVATION_CHARS * 2);
+    expect(objOut).toMatch(/truncated, \d+ chars total/);
   });
 
   it('leaves a small observation alone', () => {

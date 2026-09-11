@@ -18,24 +18,35 @@ function deps(over: Partial<ProbeDeps> = {}): ProbeDeps {
 }
 
 function fakeTool(meta: Partial<ToolMeta>, execute: (a: unknown) => Promise<unknown>) {
-  return attachMeta({ description: '', parameters: {} as never, execute } as never, {
-    name: 'x',
-    kind: 'read',
-    deterministic: false,
-    sideEffect: 'network',
-    ...meta,
-  } as ToolMeta);
+  return attachMeta(
+    { description: '', parameters: {} as never, execute } as never,
+    {
+      name: 'x',
+      kind: 'read',
+      deterministic: false,
+      sideEffect: 'network',
+      ...meta,
+    } as ToolMeta,
+  );
 }
 
 describe('watchableToolRefusal', () => {
   it('allows a read-classified tool', () => {
-    expect(watchableToolRefusal('gmail_list', fakeTool({ kind: 'read' }, async () => ({})))).toBeNull();
+    expect(
+      watchableToolRefusal(
+        'gmail_list',
+        fakeTool({ kind: 'read' }, async () => ({})),
+      ),
+    ).toBeNull();
   });
 
   it('refuses a write tool', () => {
     // A watcher runs unattended and repeatedly. A write target would be a way to
     // make something happen 1,440 times a day with nobody looking.
-    const r = watchableToolRefusal('gmail_send', fakeTool({ kind: 'write' }, async () => ({})));
+    const r = watchableToolRefusal(
+      'gmail_send',
+      fakeTool({ kind: 'write' }, async () => ({})),
+    );
     expect(r).toMatch(/not a read-only tool/);
   });
 
@@ -69,16 +80,22 @@ describe('probe — http', () => {
 
   it('carries validators forward from a 200', async () => {
     const res = new Response('hello', { status: 200, headers: { etag: 'W/"v2"' } });
-    const r = await probe({ kind: 'http', url: 'https://e.com' }, deps({
-      fetch: (async () => res) as unknown as typeof fetch,
-    }));
+    const r = await probe(
+      { kind: 'http', url: 'https://e.com' },
+      deps({
+        fetch: (async () => res) as unknown as typeof fetch,
+      }),
+    );
     expect(r).toMatchObject({ ok: true, observation: { value: 'hello', etag: 'W/"v2"' } });
   });
 
   it('reports a non-2xx as a failure, not as content', async () => {
-    const r = await probe({ kind: 'http', url: 'https://e.com' }, deps({
-      fetch: (async () => new Response('nope', { status: 500 })) as unknown as typeof fetch,
-    }));
+    const r = await probe(
+      { kind: 'http', url: 'https://e.com' },
+      deps({
+        fetch: (async () => new Response('nope', { status: 500 })) as unknown as typeof fetch,
+      }),
+    );
     expect(r).toEqual({ ok: false, error: 'HTTP 500' });
   });
 });
@@ -93,9 +110,12 @@ describe('probe — file', () => {
   });
 
   it('reports mtime and size', async () => {
-    const r = await probe({ kind: 'file', path: '/x' }, deps({
-      statFile: () => ({ mtimeMs: 42, size: 7 }),
-    }));
+    const r = await probe(
+      { kind: 'file', path: '/x' },
+      deps({
+        statFile: () => ({ mtimeMs: 42, size: 7 }),
+      }),
+    );
     expect(r).toMatchObject({ observation: { value: { exists: true, mtimeMs: 42, size: 7 } } });
   });
 });
@@ -108,7 +128,10 @@ describe('probe — mcp', () => {
     const tool = fakeTool({ kind: 'read' }, async () => ({
       content: [{ type: 'text', text: JSON.stringify({ messages: [{ id: 'm1' }] }) }],
     }));
-    const r = await probe({ kind: 'mcp', tool: 't', args: {} }, deps({ tools: () => ({ t: tool }) }));
+    const r = await probe(
+      { kind: 'mcp', tool: 't', args: {} },
+      deps({ tools: () => ({ t: tool }) }),
+    );
     expect(r).toMatchObject({ ok: true, observation: { value: { messages: [{ id: 'm1' }] } } });
   });
 
@@ -116,14 +139,20 @@ describe('probe — mcp', () => {
     const tool = fakeTool({ kind: 'read' }, async () => ({
       content: [{ type: 'text', text: 'not json' }],
     }));
-    const r = await probe({ kind: 'mcp', tool: 't', args: {} }, deps({ tools: () => ({ t: tool }) }));
+    const r = await probe(
+      { kind: 'mcp', tool: 't', args: {} },
+      deps({ tools: () => ({ t: tool }) }),
+    );
     expect(r).toMatchObject({ observation: { value: 'not json' } });
   });
 
   it('refuses a write tool before calling it', async () => {
     const execute = vi.fn(async () => ({}));
     const tool = fakeTool({ kind: 'write' }, execute);
-    const r = await probe({ kind: 'mcp', tool: 't', args: {} }, deps({ tools: () => ({ t: tool }) }));
+    const r = await probe(
+      { kind: 'mcp', tool: 't', args: {} },
+      deps({ tools: () => ({ t: tool }) }),
+    );
     expect(r).toMatchObject({ ok: false });
     expect(execute).not.toHaveBeenCalled();
   });
@@ -132,7 +161,10 @@ describe('probe — mcp', () => {
     const tool = fakeTool({ kind: 'read' }, async () => {
       throw new Error('server down');
     });
-    const r = await probe({ kind: 'mcp', tool: 't', args: {} }, deps({ tools: () => ({ t: tool }) }));
+    const r = await probe(
+      { kind: 'mcp', tool: 't', args: {} },
+      deps({ tools: () => ({ t: tool }) }),
+    );
     expect(r).toEqual({ ok: false, error: 'server down' });
   });
 
@@ -150,9 +182,12 @@ describe('probe — mcp', () => {
 describe('probe — time', () => {
   it('makes no call at all', async () => {
     const fetchMock = vi.fn();
-    const r = await probe({ kind: 'time', at: new Date().toISOString() }, deps({
-      fetch: fetchMock as unknown as typeof fetch,
-    }));
+    const r = await probe(
+      { kind: 'time', at: new Date().toISOString() },
+      deps({
+        fetch: fetchMock as unknown as typeof fetch,
+      }),
+    );
     expect(r).toEqual({ ok: true, observation: { value: null } });
     expect(fetchMock).not.toHaveBeenCalled();
   });

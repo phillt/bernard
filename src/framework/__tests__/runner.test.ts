@@ -72,16 +72,27 @@ describe('runAgent', () => {
     expect(args.experimental_repairToolCall).toBe(repair);
   });
 
-  it('omits onStepFinish entirely when no hooks are passed (critic shape)', async () => {
+  /**
+   * These two used to assert `onStepFinish` was UNDEFINED for a hook-less
+   * dispatch. That contract was given up deliberately: the runner now always
+   * composes a step COUNTER, because `stepsCompleted` is read by stall recovery
+   * to decide whether re-running a dispatch would re-execute tool calls that
+   * already ran — and a retry that re-sends six completed steps' worth of writes
+   * must not depend on whether someone set BERNARD_DEBUG.
+   *
+   * What the tests are really protecting is that the runner does not disturb a
+   * caller's hooks, which is asserted directly below and is unchanged.
+   */
+  it('always attaches a step counter, even with no caller hooks (critic shape)', async () => {
     await runAgent(makeSpec());
     const args = (generateText as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(args.onStepFinish).toBeUndefined();
+    expect(typeof args.onStepFinish).toBe('function');
   });
 
-  it('omits onStepFinish when all hooks lack the observer (e.g. repair-only)', async () => {
+  it('attaches the counter alongside hooks that lack an observer (repair-only)', async () => {
     await runAgent(makeSpec({ hooks: [{}, {}] }));
     const args = (generateText as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(args.onStepFinish).toBeUndefined();
+    expect(typeof args.onStepFinish).toBe('function');
   });
 
   it('composes hook onStepFinish callbacks in declaration order', async () => {
@@ -369,6 +380,32 @@ describe('runAgent — mid-stream stall guard', () => {
       const err = await runAgent(makeSpec({ useStreaming: true })).catch((e: unknown) => e);
       expect(providerStallInfo(err)).toEqual({ phase: 'stream', producedOutput: true });
     });
+  });
+
+  it('reports output as produced once a step has completed, whatever branded it', async () => {
+    // The transport cannot answer this. `stall-guard.ts` mints `producedOutput:
+    // false` for a headers stall — true of that one HTTP request, and silent
+    // about the dispatch — and `partsSeen` moves only on the streaming branch.
+    // Left uncorrected, a sub-agent that stalled on step 7 is re-run from step
+    // 1, re-executing six steps of tool calls including writes.
+    const { markProviderStall } = await import('../../error-taxonomy.js');
+    (generateText as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      async (opts: { onStepFinish?: (p: unknown) => Promise<void> }) => {
+        await opts.onStepFinish?.({
+          text: 'partial',
+          toolCalls: [],
+          toolResults: [],
+          finishReason: 'tool-calls',
+          usage: {},
+        });
+        throw markProviderStall(new Error('Provider timed out — no headers.'), {
+          phase: 'headers',
+          producedOutput: false,
+        });
+      },
+    );
+    const err = await runAgent(makeSpec()).catch((e: unknown) => e);
+    expect(providerStallInfo(err)?.producedOutput).toBe(true);
   });
 
   it('does not brand a dispatch timeout, which must never be retried', async () => {

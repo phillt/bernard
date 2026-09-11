@@ -2,7 +2,10 @@ import { describe, it, expect } from 'vitest';
 
 import { TurnQueue, MAX_QUEUED_TURNS, describeSource } from './turn-queue.js';
 
-const userTurn = (text: string) => ({ text, source: { kind: 'user' as const } });
+const userTurn = (text: string) => ({
+  text,
+  source: { kind: 'remote' as const, label: 'ci' },
+});
 
 describe('TurnQueue', () => {
   it('is FIFO', () => {
@@ -22,7 +25,7 @@ describe('TurnQueue', () => {
     for (let i = 0; i < MAX_QUEUED_TURNS; i++) {
       expect(q.enqueue(userTurn(`t${i}`)).ok).toBe(true);
     }
-    expect(q.enqueue(userTurn('overflow'))).toEqual({ ok: false, reason: 'full' });
+    expect(q.enqueue(userTurn('overflow'))).toEqual({ ok: false });
     expect(q.take()?.text).toBe('t0');
   });
 
@@ -41,23 +44,18 @@ describe('TurnQueue', () => {
     expect(t?.data?.text).toBe('OBSERVED BYTES');
   });
 
-  it('removes by id and clears', () => {
+  it('reports its depth', () => {
     const q = new TurnQueue();
+    expect(q.size).toBe(0);
     q.enqueue(userTurn('a'));
-    const second = q.enqueue(userTurn('b'));
-    expect(second.ok).toBe(true);
-    const id = q.peek()[1].id;
-    expect(q.remove(id)).toBe(true);
-    expect(q.remove('nope')).toBe(false);
     expect(q.size).toBe(1);
-    expect(q.clear()).toBe(1);
+    q.take();
     expect(q.size).toBe(0);
   });
 });
 
 describe('describeSource', () => {
   it('names each origin', () => {
-    expect(describeSource({ kind: 'user' })).toMatch(/queued by you/);
     expect(
       describeSource({ kind: 'watcher', watcherId: 'w', name: 'John', reason: '1 new item' }),
     ).toMatch(/watcher "John" — 1 new item/);

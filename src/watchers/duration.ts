@@ -10,7 +10,8 @@
  * did not start, because the user believes it is set.
  */
 
-const DURATION_RE = /^(\d+(?:\.\d+)?)\s*(s|sec|secs|seconds?|m|min|mins|minutes?|h|hr|hrs|hours?|d|days?)$/i;
+const DURATION_RE =
+  /^(\d+(?:\.\d+)?)\s*(s|sec|secs|seconds?|m|min|mins|minutes?|h|hr|hrs|hours?|d|days?)$/i;
 
 const UNIT_MS: Record<string, number> = {
   s: 1000,
@@ -65,7 +66,19 @@ export function parseWhen(input: string, now = new Date()): number | null {
   return duration === null ? null : now.getTime() + duration;
 }
 
-/** `2h 5m` — for telling the user when it will happen. */
+/**
+ * `2h 5m` — for telling the user when a sleep will wake.
+ *
+ * Deliberately not `formatElapsed` (`src/output.ts`), and the difference is one
+ * a reader will otherwise assume is an oversight: that one always prints both
+ * units (`2h0m`, `5m0s`) because it labels a DURATION THAT HAPPENED, where a
+ * trailing zero is information. This labels a wait that has not happened yet,
+ * where `2h0m` reads as false precision about a time the user chose.
+ *
+ * Kept here rather than moved beside its sibling because `output.ts` is imported
+ * almost everywhere and this is the only caller; the honest cost of the split is
+ * this comment, which is cheaper than the edge.
+ */
 export function formatRelative(ms: number): string {
   if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
   const mins = Math.round(ms / 60_000);

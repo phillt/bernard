@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import { WatcherStore } from './store.js';
-import { WatcherPoller, captureBaseline } from './poller.js';
+import { WatcherPoller } from './poller.js';
+import { captureBaseline } from './probe.js';
 import { digestOf } from './evaluate.js';
 import { MAX_PROBE_FAILURES } from './types.js';
 import type { ProbeDeps } from './probe.js';
@@ -13,12 +14,15 @@ import type { ToolMeta } from '../framework/tools/types.js';
  * sleeping. Time is a function so "eleven missed polls" costs nothing.
  */
 function readTool(result: unknown) {
-  return attachMeta({ description: '', parameters: {} as never, execute: async () => result } as never, {
-    name: 't',
-    kind: 'read',
-    deterministic: false,
-    sideEffect: 'network',
-  } as ToolMeta);
+  return attachMeta(
+    { description: '', parameters: {} as never, execute: async () => result } as never,
+    {
+      name: 't',
+      kind: 'read',
+      deterministic: false,
+      sideEffect: 'network',
+    } as ToolMeta,
+  );
 }
 
 function deps(over: Partial<ProbeDeps> = {}): ProbeDeps {
@@ -137,7 +141,9 @@ describe('WatcherPoller', () => {
     const poller = new WatcherPoller({
       store,
       sessionId: 's1',
-      deps: deps({ fetch: (async () => new Response('', { status: 500 })) as unknown as typeof fetch }),
+      deps: deps({
+        fetch: (async () => new Response('', { status: 500 })) as unknown as typeof fetch,
+      }),
       onWake: vi.fn(),
       now: () => now,
     });
@@ -268,7 +274,9 @@ describe('captureBaseline', () => {
   });
 
   it('captures the current id set for an appeared watcher', async () => {
-    const tool = readTool({ content: [{ type: 'text', text: JSON.stringify({ m: [{ id: 'a' }] }) }] });
+    const tool = readTool({
+      content: [{ type: 'text', text: JSON.stringify({ m: [{ id: 'a' }] }) }],
+    });
     const got = await captureBaseline(
       { kind: 'mcp', tool: 't', args: {} },
       { kind: 'appeared', idPath: '$.m.id' },

@@ -170,8 +170,20 @@ export class WatcherStore {
    * the same process. Stated rather than discovered, the way `AppletBriefStore`
    * states its own.
    */
-  update(id: string, patch: Partial<Omit<Watcher, 'id' | 'schemaVersion'>>): Watcher | null {
-    const current = this.read(id);
+  update(
+    id: string,
+    patch: Partial<Omit<Watcher, 'id' | 'schemaVersion'>>,
+    /**
+     * The record the caller already holds, so the common path skips a re-read.
+     *
+     * `tick` parses every watcher through `ownedBy()` and then, milliseconds
+     * later, `update` re-read and re-parsed the same file — pure duplication on
+     * a loop that runs for the life of the session. Optional rather than
+     * required: `sweep` and the `/watchers` menu genuinely do not have one.
+     */
+    known?: Watcher,
+  ): Watcher | null {
+    const current = known?.id === id ? known : this.read(id);
     if (!current) return null;
     const next = { ...current, ...patch };
     this.write(next);
@@ -179,8 +191,13 @@ export class WatcherStore {
   }
 
   /** Marks a terminal state. Returns the record, or `null` if it is gone. */
-  finish(id: string, status: WatchStatus, extra: Partial<Watcher> = {}): Watcher | null {
-    return this.update(id, { status, ...extra });
+  finish(
+    id: string,
+    status: WatchStatus,
+    extra: Partial<Watcher> = {},
+    known?: Watcher,
+  ): Watcher | null {
+    return this.update(id, { status, ...extra }, known);
   }
 
   /** Removes a record entirely. Used by `/watchers` and by the sweep. */
