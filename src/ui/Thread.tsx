@@ -230,6 +230,49 @@ function groupByLabel(events: readonly StreamEvent[]): EventGroup[] {
  * buffer through `healStreamMarkdown` first so incomplete mid-stream syntax
  * (`**partial`, open fences) doesn't flash raw delimiters.
  */
+/** The `❮  ` gutter an assistant message renders BESIDE its body, not above it. */
+export const CHEVRON = '❮  ';
+
+/**
+ * How wide a markdown body actually gets.
+ *
+ * Two facts, both owned here and both previously unnamed: App's outer `<Box>`
+ * has `paddingX={2}`, and {@link CHEVRON} sits in a flex row beside the body
+ * rather than above it, so a chevroned message really does lose those columns
+ * too.
+ *
+ * Exported because `/clear`'s receipt (#250) lays out an aligned table that must
+ * fit — and a row that overshoots does not shorten, it wraps, and the tail reads
+ * as another row. That caller previously restated this formula plus a magic `7`
+ * from a pure leaf two modules away, which made a file that knows nothing about
+ * Ink the authority on this component's layout.
+ *
+ * `chevron` defaults false, which is the behaviour `MarkdownLines` has always
+ * had: it measures itself without the gutter even when one is rendered. That
+ * over-measures a chevroned body by three columns — harmless today, since the
+ * width only sizes tables and rules while Ink owns wrapping, and left alone here
+ * deliberately rather than folded into a receipt change.
+ *
+ * **`floor` is what separates the two callers, and it is not cosmetic.** The 40
+ * is right for `MarkdownLines`, whose width only sizes tables and horizontal
+ * rules: a floor there keeps a table from collapsing, and Ink wraps the result
+ * anyway. It is wrong for a caller using this as a hard fit budget, because
+ * below 47 columns the floor is LARGER than the space that exists —
+ * `columns: 40` reports 40 against 33 usable — so every receipt row is laid out
+ * for more room than it gets, wraps, and every tail reads as an extra row. That
+ * is the same phantom-row failure as the frozen-width limit recorded in
+ * `clear-args.ts`, except it needs no resize: it bites at push time, on any
+ * terminal narrower than 47 columns. Defaulted `true` so the existing caller is
+ * byte-identical.
+ */
+export function markdownBodyWidth(
+  columns: number,
+  opts?: { chevron?: boolean; floor?: boolean },
+): number {
+  const usable = columns - 4 - (opts?.chevron ? CHEVRON.length : 0);
+  return opts?.floor === false ? Math.max(0, usable) : Math.max(40, usable);
+}
+
 function MarkdownLines({ text, streaming = false }: { text: string; streaming?: boolean }) {
   // `useDimensionsCtx`, not `useStdout`: the context is subscribed to stdout's
   // `resize`, so markdown re-lays-out when the terminal does. `useStdout` is not
@@ -238,8 +281,7 @@ function MarkdownLines({ text, streaming = false }: { text: string; streaming?: 
   // full-screen too. Every other consumer in the tree already reads the context.
   const { columns } = useDimensionsCtx();
   const colors = getThemeColors();
-  // App's outer <Box> has paddingX={2}; keep the table/rule width inside it.
-  const width = Math.max(40, columns - 4);
+  const width = markdownBodyWidth(columns);
   const rendered = renderMarkdown(text, width, colors, streaming);
   return (
     <Box flexDirection="column">
@@ -289,7 +331,7 @@ function StreamGroupBody({
   const colors = getThemeColors();
   const chevron = (
     <Text color={colors.accent} bold>
-      {'❮  '}
+      {CHEVRON}
     </Text>
   );
   // Each text-run and each tool-call renders as its own block with a top
@@ -553,7 +595,7 @@ function AssistantMessage({
   const costSuffix = formatCostSuffix(costUsd);
   const chevron = (
     <Text color={colors.accent} bold>
-      {'❮  '}
+      {CHEVRON}
     </Text>
   );
   // The chevron mirrors the user's right-aligned `❯` and rides the first

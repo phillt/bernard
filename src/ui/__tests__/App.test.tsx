@@ -268,6 +268,17 @@ interface HarnessOptions {
   welcomeLines?: string[];
 }
 
+/**
+ * A RAG stub answering every method a turn reaches, not only the one the test
+ * is about. `runAgentTurn` calls `retrievalDisabledReason()` after every submit
+ * (#520), so a stub carrying `addFacts` alone throws there — and it throws as an
+ * unhandled rejection, which leaves every test in the file green while the run
+ * exits non-zero. That is how it reached CI, and it is why this is a helper
+ * rather than a fourth object literal.
+ */
+const ragStub = (addFacts: unknown = vi.fn(async () => 0)): RAGStore =>
+  ({ addFacts, retrievalDisabledReason: () => null }) as unknown as RAGStore;
+
 function renderApp(opts: HarnessOptions = {}) {
   const agentSpy: AgentSpy = {
     processInput: vi.fn(async () => {}),
@@ -756,22 +767,186 @@ describe('<App> /clear', () => {
     process.env.BERNARD_HOME = TMP_HOME;
   });
   afterEach(() => {
+    // `clearAllMocks` resets CALLS and leaves implementations in place, so a
+    // `mockImplementation` set by one test is still live in the next. Harmless
+    // for the `mockResolvedValue` cases, which each set their own — and not
+    // harmless for a promise that never resolves, which silently hangs whatever
+    // runs after it.
     vi.clearAllMocks();
+    mockExtractDomainFacts.mockReset();
+    mockExtractDomainFacts.mockResolvedValue([]);
   });
 
-  it('clears the agent + stores without --save', async () => {
+  it('clears the agent + stores with --do-not-save', async () => {
+    // The opt-out, which is what a bare `/clear` used to be (#250). Renamed
+    // rather than deleted: the assertions below are about the clear half, which
+    // both flags share, and the flag that reaches them is the only thing that
+    // moved.
     const { stdin, historyStore, provenanceHistoryStore, agentSpy, lastFrame, unmount } =
       renderApp();
     await tick();
-    await submit(stdin, '/clear');
+    await submit(stdin, '/clear --do-not-save');
     expect(historyStore.clear).toHaveBeenCalled();
     expect(provenanceHistoryStore.clear).toHaveBeenCalled();
     expect(agentSpy.clearHistory).toHaveBeenCalled();
-    expect(lastFrame()).toContain('Conversation history cleared');
+    expect(lastFrame()).toContain('Cleared without saving');
+    unmount();
+  });
+
+  /** Enough history to clear `MIN_HISTORY_FOR_FACTS`, plus somewhere for facts to go. */
+  const SAVEABLE = {
+    history: [
+      { role: 'user' as const, content: 'hello' },
+      { role: 'assistant' as const, content: 'hi' },
+    ],
+    config: { ragEnabled: true },
+    stores: { rag: ragStub() },
+  };
+
+  it.each([
+    ['/clear', true],
+    ['/clear --do-not-save', false],
+  ])('%s runs the extraction: %s', async (text, shouldSave) => {
+    // The inversion (#250), asserted on the extraction actually running rather
+    // than on the toast — a message is what a reader notices, a model call is what
+    // makes the save real. The second row is the guard: the first passes if saving
+    // is unconditional, which would make the opt-out a lie.
+    const { stdin, agentSpy, unmount } = renderApp(SAVEABLE);
+    await tick();
+    await submit(stdin, text);
+    await tick(40);
+    if (shouldSave) expect(mockExtractDomainFacts).toHaveBeenCalled();
+    else expect(mockExtractDomainFacts).not.toHaveBeenCalled();
+    expect(agentSpy.clearHistory).toHaveBeenCalled();
+    unmount();
+  });
+
+  it('Esc cancels the save instead of blocking the REPL for 60 s', async () => {
+    // `extractSignal` was a standalone `AbortSignal.timeout(60_000)` with no
+    // controller registered in `turnAbortRef`, so Esc aborted `null`, called
+    // `agent.abort()` on a loop that was not running, and set interrupted state
+    // for a turn that did not exist — while cancelling nothing. The REPL stayed
+    // blocked until extraction returned or the cap fired. A bounded freeze is
+    // still a freeze, and this is the command people type reflexively.
+    let signal: AbortSignal | undefined;
+    mockExtractDomainFacts.mockImplementation(
+      (...args: unknown[]) =>
+        new Promise((_resolve, reject) => {
+          signal = args[3] as AbortSignal;
+          signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        }) as Promise<never>,
+    );
+    const { stdin, lastFrame, unmount } = renderApp(SAVEABLE);
+    await tick();
+    await submit(stdin, '/clear');
+    expect(signal?.aborted).toBe(false);
+    stdin.write(ESC);
+    await tick(40);
+    expect(signal?.aborted).toBe(true);
+    // And it is reported as the deliberate act it was, not as an error.
+    expect(lastFrame() ?? '').toContain('Saving was cancelled');
+    unmount();
+  });
+
+  // NOT tested: that the `/clear` save takes and releases `submittingRef`.
+  //
+  // Both halves resist a test at this level, and the attempts are worth recording
+  // so the next person does not ship one that passes for the wrong reason. The
+  // RACE is sub-render-tick by construction — any test that writes to stdin has
+  // already awaited a tick, so `disabled={busy}` has propagated and the guard is
+  // not what stopped the second Enter; such a test passes with the guard deleted,
+  // measured. The RELEASE cannot be observed either: `/clear` ends in a
+  // `setStaticEpoch` bump that remounts the tree, and under `ink-testing-library`
+  // no turn submits after that remount at any tick count — including after
+  // `/clear --do-not-save`, which never touches the ref. So the harness, not the
+  // guard, is what fails such a test.
+  //
+  // What the fix rests on instead: it is the same two lines `runAgentTurn` takes,
+  // released in the same `finally` that calls `setBusy(false)`, so the pair is
+  // symmetric by inspection.
+
+  it('does not spend two model calls when there is nowhere to put the facts', async () => {
+    // Measured before this gate existed: ~10 s of blocked REPL and ~98,000 input
+    // tokens per clear, every fact discarded, paid by whoever turned long-term
+    // memory off. `renderApp` supplies no `stores.rag` by default, which is what
+    // that configuration looks like.
+    const { stdin, lastFrame, unmount } = renderApp({
+      history: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'hi' },
+      ],
+    });
+    await tick();
+    await submit(stdin, '/clear');
+    await tick(40);
+    expect(mockExtractDomainFacts).not.toHaveBeenCalled();
+    expect(lastFrame() ?? '').toContain('long-term memory is off');
+    unmount();
+  });
+
+  it.each([
+    ['/clear --save', true],
+    ['/clear', false],
+  ])('%s notes the flag is redundant: %s', async (text, shouldNote) => {
+    const { stdin, lastFrame, unmount } = renderApp(SAVEABLE);
+    await tick();
+    await submit(stdin, text);
+    await tick(40);
+    const frame = lastFrame() ?? '';
+    if (shouldNote) expect(frame).toContain('saves by default now');
+    else expect(frame).not.toContain('saves by default now');
+    unmount();
+  });
+
+  it('shows WHAT it saved, not just how many', async () => {
+    // The receipt. A count answers "did it work" and nothing else — and the facts
+    // have to come from `addFacts`' observer, because only the store knows which
+    // survived dedup. Listing an extracted-but-duplicate fact would claim a save
+    // that did not happen.
+    const addFacts = vi.fn(
+      async (facts: string[], _source: string, _domain: string, onAdded?: (f: string) => void) => {
+        onAdded?.(facts[0]);
+        return 1;
+      },
+    );
+    mockExtractDomainFacts.mockResolvedValue([
+      { domain: 'general', facts: ['The Subject header was raw UTF-8'] },
+    ]);
+    const { stdin, lastFrame, unmount } = renderApp({
+      ...SAVEABLE,
+      stores: { rag: ragStub(addFacts) },
+    });
+    await tick();
+    await submit(stdin, '/clear');
+    await tick(60);
+
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('general');
+    expect(frame).toContain('Subject header was raw UTF-8');
+    unmount();
+  });
+
+  it('the result survives the next keystroke, which is why it is not a toast', async () => {
+    // `flashToast` is cleared by the next submit and REPLACES rather than queues.
+    // "You just spent ten seconds saving and here is whether it worked" has to
+    // outlive a keypress — the rule `catalog-notice`'s `provider-wiped` and
+    // `memory-notice` both already follow. A toast passes every other assertion in
+    // this block and fails only this one.
+    const { stdin, lastFrame, unmount } = renderApp(SAVEABLE);
+    await tick();
+    await submit(stdin, '/clear');
+    await tick(40);
+    expect(lastFrame() ?? '').toContain('Cleared');
+    await submit(stdin, 'a following turn');
+    await tick(40);
+    expect(lastFrame() ?? '').toContain('Cleared');
     unmount();
   });
 
   it('rejects bad arguments to /clear with a usage toast', async () => {
+    // Refused rather than defaulted, and the direction matters now that the
+    // default WRITES: a typo'd flag silently running fact extraction is the
+    // wrong way to fail.
     const { stdin, lastFrame, agentSpy, unmount } = renderApp();
     await tick();
     await submit(stdin, '/clear --bogus');
@@ -836,8 +1011,16 @@ describe('<App> /clear --save (#228)', () => {
   it('runs no summarize LLM call — its only consumer was the memory write', async () => {
     // Retiring the write retires the call. Fact extraction still runs; it reads
     // the raw transcript, never the summary.
+    //
+    // Needs a RAG store since #250: extraction is skipped entirely when there is
+    // nowhere for the facts to land, so without one this asserts the absence of a
+    // call that was never going to happen.
     const history = makeHistory();
-    const { stdin, unmount } = renderApp({ history });
+    const { stdin, unmount } = renderApp({
+      history,
+      config: { ragEnabled: true },
+      stores: { rag: ragStub() },
+    });
     await tick();
     await submit(stdin, '/clear --save');
     await tick(80);
@@ -866,11 +1049,19 @@ describe('<App> /clear --save (#228)', () => {
     await submit(stdin, '/clear --save');
     await tick(80);
 
-    expect(mockAddFacts).toHaveBeenCalledWith(['TypeScript project'], 'clear-save', 'general');
+    // The fourth argument is the receipt observer (#250). Asserted as a function
+    // rather than elided, because dropping it is how the receipt silently empties.
+    expect(mockAddFacts).toHaveBeenCalledWith(
+      ['TypeScript project'],
+      'clear-save',
+      'general',
+      expect.any(Function),
+    );
     expect(mockAddFacts).toHaveBeenCalledWith(
       ['npm run build compiles'],
       'clear-save',
       'tool-usage',
+      expect.any(Function),
     );
     unmount();
   });
@@ -907,7 +1098,7 @@ describe('<App> /clear --save (#228)', () => {
     expect(agentSpy.clearHistory).toHaveBeenCalled();
     expect(historyStore.clear).toHaveBeenCalled();
     // The final frame shows the "cleared" toast (the warning is transient)
-    expect(lastFrame()).toContain('Conversation history cleared');
+    expect(lastFrame()).toContain('Cleared');
     unmount();
   });
 
@@ -939,7 +1130,7 @@ describe('<App> /clear --save (#228)', () => {
     expect(mockAddFacts).toHaveBeenCalledTimes(1);
     // No crash — history still cleared
     expect(agentSpy.clearHistory).toHaveBeenCalled();
-    expect(lastFrame()).toContain('Conversation history cleared');
+    expect(lastFrame()).toContain('Cleared');
     unmount();
   });
 });
@@ -989,7 +1180,7 @@ describe('<App> Static transcript (#232)', () => {
     expect(lastFrame() ?? '').toContain('answer for first turn');
     await submit(stdin, '/clear');
     expect(agentSpy.clearHistory).toHaveBeenCalled();
-    expect(lastFrame() ?? '').toContain('Conversation history cleared');
+    expect(lastFrame() ?? '').toContain('Cleared');
     // History was emptied by clearHistory(); a new turn must commit cleanly.
     await submit(stdin, 'second turn');
     expect(lastFrame() ?? '').toContain('answer for second turn');

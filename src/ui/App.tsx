@@ -116,6 +116,13 @@ import {
   extractText,
   MIN_HISTORY_FOR_FACTS,
 } from '../context.js';
+import {
+  parseClearArgs,
+  clearResultMessage,
+  CLEAR_USAGE,
+  type SaveOutcome,
+  type SavedFact,
+} from './clear-args.js';
 import { isSessionScaffolding } from '../session-markers.js';
 import { detectSpecialistCandidate } from '../specialist-detector.js';
 import { promoteCandidate } from '../candidate-bootstrap.js';
@@ -155,7 +162,13 @@ import type {
   ValuePromptOptions,
   ValueResult,
 } from './menu-types.js';
-import { Thread, REWRITE_ICON, formatDuration, type StaticItem } from './Thread.js';
+import {
+  Thread,
+  REWRITE_ICON,
+  formatDuration,
+  markdownBodyWidth,
+  type StaticItem,
+} from './Thread.js';
 import { TranscriptViewport } from './TranscriptViewport.js';
 import { useDimensionsCtx } from './DimensionsContext.js';
 import { formatAgentError, type ErrorPanelData } from './error-format.js';
@@ -693,7 +706,7 @@ export function App({
   welcomeLines,
 }: AppProps) {
   const { exit } = useApp();
-  const { rows } = useDimensionsCtx();
+  const { rows, columns } = useDimensionsCtx();
   const [activeOverlay, setActiveOverlay] = useState<Overlay | null>(null);
   const [busy, setBusy] = useState(false);
   // Whether the input line is currently empty — drives the transcript's Home/End
@@ -1230,30 +1243,80 @@ export function App({
       return;
     }
     if (is(text, '/clear') || startsWithCmd(text, '/clear')) {
-      const clearArgs = text.slice('/clear'.length).trim();
-      const shouldSave = clearArgs === '--save' || clearArgs === '-s';
-      if (clearArgs && !shouldSave) {
-        flashToast('Usage: /clear [--save|-s]', 'error');
+      const plan = parseClearArgs(text.slice('/clear'.length));
+      if (!plan) {
+        flashToast(CLEAR_USAGE, 'error');
         return;
       }
-      if (shouldSave) {
+      // What to tell the user once the screen is empty. It goes into the
+      // transcript rather than a toast — see the `pushAssistantNotice` call at the
+      // end of this branch for why.
+      let outcome: SaveOutcome = { kind: 'skipped' };
+      // **Gated on RAG as well as on the flag.** `stores.rag` is undefined unless
+      // `config.ragEnabled`, and the write below already checks it — so without
+      // this the two extraction calls ran and every fact they produced was
+      // discarded. Measured: ~10 s of blocked REPL and ~98,000 input tokens per
+      // clear, for nothing, paid by whoever turned long-term memory off. It was
+      // opt-in behind `--save` before; saving by default made it the common path.
+      if (plan !== 'skip' && !stores.rag) {
+        outcome = { kind: 'no-memory' };
+      } else if (plan !== 'skip') {
         const history = agent.getHistory();
         // MIN_HISTORY_FOR_FACTS = 2 (one user + one assistant);
         // matches the exit-path threshold in src/index.ts.
         if (history.length < MIN_HISTORY_FOR_FACTS) {
-          flashToast('Not enough conversation to summarize.', 'warning');
+          outcome = { kind: 'too-short' };
         } else {
+          // **Both of `runAgentTurn`'s guards, because this path now holds the
+          // REPL for as long as extraction takes.**
+          //
+          // `submittingRef` is the synchronous double-Enter guard described at
+          // its declaration: `setBusy` schedules a re-render, and an Enter that
+          // lands before `<Prompt disabled={busy}>` sees the flip starts a turn.
+          // That was survivable while the default `/clear` was instantaneous —
+          // the window was one render. Saving by default makes it seconds, and
+          // the tail of this branch then runs `agent.clearHistory()` and
+          // `setStaticItems([])` underneath a live turn, wiping the message the
+          // user just sent along with whatever the turn had accumulated.
+          //
+          // `turnAbortRef` is what makes Esc mean what it looks like it means.
+          // The Esc handler aborts that ref and calls `agent.abort()`; with no
+          // controller registered it aborted `null` and stopped an agent loop
+          // that was not running, so the UI reported an interrupted turn, nothing
+          // was cancelled, and the REPL stayed blocked until the 60 s cap fired.
+          // A bounded freeze is still a freeze, and this is the command people
+          // type reflexively.
+          if (submittingRef.current) return;
+          submittingRef.current = true;
           setBusy(true);
+          const clearAbort = new AbortController();
+          turnAbortRef.current = clearAbort;
+          // Counted in the outer scope so the result line can name it. It was
+          // local to the RAG block, which is why every path ended in the same
+          // `Conversation history cleared.` and a save was indistinguishable from
+          // a no-op — the number existed and was thrown away one scope too deep.
+          // The facts that actually survived dedup — the receipt's content AND its
+          // count. Collected through `addFacts`' observer because the extraction
+          // cannot know which ones were new; that is decided inside the store.
+          const keptFacts: SavedFact[] = [];
+          // Outer scope so the durable notice can name it. It used to live inside
+          // the RAG block and reach the user only as a `flashToast` — which is
+          // cleared by the next submit, on the one PR whose argument was that the
+          // thing worth keeping has to go in the transcript. A partial failure is
+          // exactly the thing worth keeping, and it was the half that stayed in a
+          // toast.
+          let failedDomains = 0;
           try {
             const serialized = serializeMessages(history);
             // Route these off-loop /clear --save LLM calls (fact extraction,
             // specialist detection) through the session telemetry sink so they
             // aren't an accounting hole (#session-telemetry).
             const recordSaveUsage = makeUsageRecorder(agent);
-            // Cap fact extraction at 60 s to prevent a hung LLM call from
-            // freezing the REPL. Fails open: timeout → empty domain facts.
-            // AbortSignal.timeout auto-cancels without manual teardown.
-            const extractSignal = AbortSignal.timeout(60_000);
+            // Two ways out, and the 60 s one is the backstop rather than the
+            // answer. `AbortSignal.timeout` bounds a hung LLM call and needs no
+            // teardown; `clearAbort` is what Esc reaches. Composed with
+            // `AbortSignal.any` so neither has to know about the other.
+            const extractSignal = AbortSignal.any([AbortSignal.timeout(60_000), clearAbort.signal]);
             // No prose summary here (#307): `extractDomainFacts` already routes
             // this transcript to RAG, including the `conversations` domain.
             //
@@ -1279,27 +1342,23 @@ export function App({
             // store is filled by the recall arm at session close instead.
             if (stores.rag && domainFacts.length > 0) {
               const results = await Promise.allSettled(
-                domainFacts.map((df) => stores.rag!.addFacts(df.facts, 'clear-save', df.domain)),
+                domainFacts.map((df) =>
+                  stores.rag!.addFacts(df.facts, 'clear-save', df.domain, (fact) =>
+                    keptFacts.push({ domain: df.domain, fact }),
+                  ),
+                ),
               );
-              let storedFacts = 0;
-              let failedDomains = 0;
-              results.forEach((r) => {
-                if (r.status === 'fulfilled') {
-                  // addFacts returns the number of new facts actually stored
-                  // (after dedup), not the input count.
-                  storedFacts += r.value;
-                } else {
-                  failedDomains++;
-                }
-              });
-              if (storedFacts > 0) {
-                debugLog('app:clear-save:rag', { storedFacts });
+              // `keptFacts` is the count as well as the content: the observer
+              // pushed once per stored fact, so summing `addFacts`' returns
+              // separately was a second source of truth that could disagree — a
+              // domain that rejects after storing some facts loses its return
+              // value to `Promise.allSettled` while its pushes survive.
+              failedDomains = results.filter((r) => r.status === 'rejected').length;
+              if (keptFacts.length > 0) {
+                debugLog('app:clear-save:rag', { storedFacts: keptFacts.length });
               }
               if (failedDomains > 0) {
-                flashToast(
-                  `Warning: ${failedDomains} domain(s) failed to save to RAG memory.`,
-                  'warning',
-                );
+                debugLog('app:clear-save:rag-failed', { failedDomains });
               }
             }
             if (candidateResult) {
@@ -1323,11 +1382,22 @@ export function App({
                 // Silent — candidate storage failure is non-critical
               }
             }
+            outcome = { kind: 'saved', kept: keptFacts, failed: failedDomains };
           } catch (err: unknown) {
-            const message = err instanceof Error ? err.message : String(err);
-            flashToast(`Failed to summarize: ${message}. Clearing anyway.`, 'error');
+            // A user Esc is not a failure to report as one — they stopped the
+            // wait, and the clear below still happens because that is what they
+            // asked for. Read off the controller rather than the error, since
+            // what surfaces here is whatever the aborted call chose to throw.
+            if (clearAbort.signal.aborted) {
+              outcome = { kind: 'cancelled' };
+            } else {
+              const message = err instanceof Error ? err.message : String(err);
+              outcome = { kind: 'failed', message };
+            }
           } finally {
             setBusy(false);
+            submittingRef.current = false;
+            turnAbortRef.current = null;
           }
         }
       }
@@ -1350,7 +1420,28 @@ export function App({
       historyRef.current = agent.getHistory();
       if (!fullScreen) process.stdout.write('\x1b[3J\x1b[2J\x1b[H');
       setStaticEpoch((e) => e + 1);
-      flashToast('Conversation history cleared.', 'success');
+      // **A notice, not a toast, and AFTER the wipe.** `pushTranscriptMessage`
+      // touches only `setStaticItems` — it is display-only and never writes
+      // `agent.history` — so pushed after `setStaticItems([])` it survives, and
+      // the functional updater sees the emptied array. (An earlier comment here
+      // claimed a notice could not survive the clear. That is true of pushing
+      // BEFORE it, and was stated as though it were categorical.)
+      //
+      // It has to outlive a keystroke, which is the rule `catalog-notice`'s
+      // `provider-wiped` and `memory-notice` both already follow: `flashToast` is
+      // cleared by the next submit and REPLACES rather than queues, and "you just
+      // spent ten seconds saving and here is whether it worked, plus a flag you no
+      // longer need" is not a thing to lose to the next keypress.
+      // Width from the component that owns the two facts it is made of, rather
+      // than restated here: a row that overshoots does not shorten, it wraps, and
+      // the tail reads as another row.
+      pushAssistantNotice(
+        clearResultMessage(
+          outcome,
+          markdownBodyWidth(columns, { chevron: true, floor: false }),
+          plan === 'save-noting-default',
+        ),
+      );
       return;
     }
     if (is(text, '/help')) {

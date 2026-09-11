@@ -1,0 +1,228 @@
+import { describe, it, expect } from 'vitest';
+import stringWidth from 'string-width';
+import {
+  parseClearArgs,
+  clearResultMessage,
+  SAVE_IS_DEFAULT_NOTE,
+  type SaveOutcome,
+} from './clear-args.js';
+
+/**
+ * `/clear`'s arguments and its one line of output (#250).
+ *
+ * A pure leaf, so none of this needs Ink, a React tree, a store or an agent —
+ * which is the reason the decision was extracted from `App.tsx` rather than
+ * asserted through a rendered frame.
+ */
+
+describe('parseClearArgs', () => {
+  // A table, because the whole function is a four-row mapping. The predecessor
+  // wrote five near-identical `it`s, one of which (`never nags on the opt-out`)
+  // only restated a `toEqual` two tests above it.
+  it.each([
+    ['', 'save'],
+    ['--save', 'save-noting-default'],
+    ['-s', 'save-noting-default'],
+    ['--do-not-save', 'skip'],
+    // #250 names only the long form and that is what `/help` shows. The alias is
+    // accepted because the one command whose purpose is "do not lose my work"
+    // should not answer the conventional spelling with a usage error.
+    ['--no-save', 'skip'],
+    // Whitespace is the caller's, not the user's: `App.tsx` passes the raw slice.
+    ['   --save  ', 'save-noting-default'],
+  ] as const)('parses %o as %s', (arg, expected) => {
+    expect(parseClearArgs(arg)).toBe(expected);
+  });
+
+  it('REFUSES anything else rather than defaulting', () => {
+    // The direction matters now that the default writes: a typo'd flag silently
+    // running fact extraction is the wrong way to fail.
+    for (const bad of ['--bogus', '--save --do-not-save', 'now', '-x']) {
+      expect(parseClearArgs(bad)).toBeNull();
+    }
+  });
+});
+
+describe('clearResultMessage', () => {
+  /**
+   * Every outcome reads differently, because the predecessor's single
+   * `Conversation history cleared.` was shown on all of them — including the ones
+   * that saved nothing and the ones that threw. That is what made "did it
+   * actually save?" unanswerable, and is the reported complaint this answers.
+   */
+  const cases: Array<[SaveOutcome, string]> = [
+    [{ kind: 'skipped' }, 'Cleared without saving.'],
+    [{ kind: 'too-short' }, 'Cleared. Too little conversation to save anything from.'],
+    [
+      { kind: 'no-memory' },
+      'Cleared. Nothing was saved — long-term memory is off (BERNARD_RAG_ENABLED).',
+    ],
+    [
+      { kind: 'saved', facts: 0, kept: [] },
+      'Cleared and saved — no new facts beyond what memory already held.',
+    ],
+  ];
+  it.each(cases)('renders %j distinctly', (outcome, expected) => {
+    expect(clearResultMessage(outcome, 73)).toBe(expected);
+  });
+
+  it('names the failure rather than claiming a save', () => {
+    expect(clearResultMessage({ kind: 'failed', message: 'provider down' }, 73)).toBe(
+      'Cleared, but saving failed: provider down',
+    );
+  });
+
+  it('appends the note only when asked', () => {
+    expect(clearResultMessage({ kind: 'saved', kept: [] }, 73, true)).toContain(
+      SAVE_IS_DEFAULT_NOTE,
+    );
+    expect(clearResultMessage({ kind: 'saved', kept: [] }, 73, false)).not.toContain(
+      SAVE_IS_DEFAULT_NOTE,
+    );
+  });
+
+  it('names the opt-out in the note, or the note is not actionable', () => {
+    expect(SAVE_IS_DEFAULT_NOTE).toContain('--do-not-save');
+  });
+});
+
+describe('the receipt', () => {
+  const kept = [
+    { domain: 'general', fact: 'The Subject header was raw UTF-8 where RFC 5322 wants US-ASCII.' },
+    { domain: 'general', fact: 'The repair gated on Latin-1, so it never fired.' },
+    { domain: 'tool-usage', fact: 'web_read was never normalized.' },
+  ];
+  const render = (width = 73, note = false) =>
+    clearResultMessage({ kind: 'saved', kept }, width, note);
+  /**
+   * The table rows only. The headline is prose and may wrap harmlessly; a ROW
+   * that wraps is the bug, because its tail reads as another row.
+   */
+  const rowsOf = (out: string) => out.split('\n').filter((l) => l.startsWith('  '));
+
+  it('states the count and pluralises it', () => {
+    // The sentence every user reads. Folding the zero case into the table above
+    // removed the only assertions on `plural()` and on this wording; the receipt
+    // tests count `lines[0]` without ever reading it.
+    expect(render().split('\n')[0]).toBe('Cleared and saved 3 new facts to memory:');
+    const one = [{ domain: 'general', fact: 'a' }];
+    expect(clearResultMessage({ kind: 'saved', kept: one }, 73).split('\n')[0]).toBe(
+      'Cleared and saved 1 new fact to memory:',
+    );
+  });
+
+  it('lists one line per DOMAIN, not one per fact', () => {
+    // What keeps it a receipt rather than a second `/memory`. The domain registry
+    // is closed, so the height is bounded with no elision to maintain.
+    const lines = render().split('\n');
+    expect(lines).toHaveLength(4); // headline, blank, two domains
+    expect(lines[2]).toContain('general (2)');
+    expect(lines[3]).toContain('tool-usage (1)');
+  });
+
+  it('NEVER emits a row wider than the width it was given', () => {
+    // The reported bug: the predecessor budgeted 68 characters for the FACT and
+    // counted neither the indent nor the label, so a long domain name pushed the
+    // row past the frame and Ink wrapped it — and a wrapped tail reads as another
+    // row, which is worse than no receipt.
+    //
+    // Two things were wrong with this test as first written, and they compounded.
+    // It passed its arguments in the wrong ORDER — `(outcome, false, width)`
+    // against a `(outcome, width, note)` signature — so every iteration measured
+    // `width: false`, which is negative after the indent arithmetic and drops
+    // every row to its label. The loop therefore ran six times and asserted the
+    // same short string against six different bounds, and would have passed with
+    // the fix reverted entirely. And it measured `row.length`, which is UTF-16
+    // code units rather than terminal columns, so it could not see the failure it
+    // is named for on any non-Latin fact.
+    const long = [
+      { domain: 'user-preferences', fact: 'x'.repeat(400) },
+      { domain: 'conversations', fact: 'y'.repeat(400) },
+    ];
+    // CJK is the case that motivated the column measurement: one ordinary
+    // Japanese fact measured 51 by `.length` and occupied 87 columns.
+    const cjk = [
+      {
+        domain: 'general',
+        fact: 'ユーザーは日本語で会話することを好み、技術文書も日本語で読みたいと述べた',
+      },
+      {
+        domain: 'conversations',
+        fact: '每次部署之前都要先跑一遍完整的测试套件，然后再检查依赖是否有变化',
+      },
+    ];
+    for (const kept of [long, cjk]) {
+      for (const width of [30, 40, 60, 73, 93, 200]) {
+        const out = clearResultMessage({ kind: 'saved', kept }, width);
+        expect(rowsOf(out).length).toBeGreaterThan(0);
+        for (const row of rowsOf(out)) {
+          expect(stringWidth(row), `width ${width}: ${row}`).toBeLessThanOrEqual(width);
+        }
+      }
+    }
+  });
+
+  it('aligns the fact column across rows', () => {
+    // The difference between a table and three sentences. Padding survives
+    // rendering because `renderMarkdown` sets `reflowText: false`.
+    const rows = rowsOf(render());
+    expect(rows).toHaveLength(2);
+    const factColumn = rows.map((r) => (r.match(/^ {2}.*?\S {2,}/) ?? [''])[0].length);
+    expect(new Set(factColumn).size).toBe(1);
+  });
+
+  it('drops the fact rather than crushing it when the frame is tiny', () => {
+    // Same argument-order bug as above: this passed `width: false`, which lands
+    // in the label-only branch for the wrong reason, so it asserted the fallback
+    // without ever exercising the width that selects it.
+    const out = clearResultMessage({ kind: 'saved', kept }, 30);
+    for (const row of rowsOf(out)) expect(stringWidth(row)).toBeLessThanOrEqual(30);
+    expect(out).toContain('general (2)');
+    // The label survives; the fact is what goes.
+    expect(out).not.toContain('Subject header');
+  });
+
+  it('flattens whitespace so a multi-line fact stays one line', () => {
+    const messy = [{ domain: 'general', fact: 'a\n\n  b\tc' }];
+    const out = clearResultMessage({ kind: 'saved', kept: messy }, 73);
+    expect(out.split('\n')).toHaveLength(3);
+    expect(out).toContain('a b c');
+  });
+
+  it('puts the --save note on its own line when there is a receipt', () => {
+    // Otherwise it rides the last listed fact and reads as part of it.
+    const lines = render(73, true).split('\n');
+    expect(lines[lines.length - 1]).toBe(SAVE_IS_DEFAULT_NOTE);
+  });
+
+  it('names a partial failure on the headline, above the rows it qualifies', () => {
+    // This reached the user as a `flashToast` and nowhere else, on the one change
+    // whose whole argument was that a toast is cleared by the next submit and the
+    // thing worth keeping has to go in the transcript. A partial failure is
+    // exactly the thing worth keeping, and it was the half that stayed in a toast
+    // — so the durable notice recorded a partial failure as an unqualified
+    // success.
+    const out = clearResultMessage({ kind: 'saved', kept, failed: 1 }, 73);
+    expect(out.split('\n')[0]).toBe('Cleared and saved 3 new facts to memory (1 domain failed):');
+    expect(clearResultMessage({ kind: 'saved', kept, failed: 2 }, 73)).toContain(
+      '(2 domains failed)',
+    );
+    // Absent and zero both read as a clean save.
+    expect(clearResultMessage({ kind: 'saved', kept, failed: 0 }, 73)).not.toContain('failed');
+    expect(clearResultMessage({ kind: 'saved', kept }, 73)).not.toContain('failed');
+  });
+
+  it('reports a cancelled save as cancelled, not as an error', () => {
+    // Esc during the extraction is a deliberate act, and reporting the user's own
+    // keystroke back to them as `Cleared, but saving failed: …` reads as a fault
+    // in Bernard. The clear still happened — that is what was asked for.
+    const out = clearResultMessage({ kind: 'cancelled' }, 73);
+    expect(out).toBe('Cleared. Saving was cancelled.');
+    expect(out).not.toContain('failed');
+  });
+
+  it('says nothing extra when the save added nothing', () => {
+    // Zero survivors means no receipt: a header with no rows reads as a bug.
+    expect(clearResultMessage({ kind: 'saved', kept: [] }, 73)).not.toContain('\n');
+  });
+});

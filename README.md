@@ -631,7 +631,7 @@ Storage: one JSON file per specialist in `~/.local/share/bernard/specialists/`. 
 
 ### Specialist Suggestions _(v0.6.0+)_
 
-Bernard automatically detects recurring delegation patterns in your conversations and suggests new specialists. Detection runs in the background when you exit a session or use `/clear --save`.
+Bernard automatically detects recurring delegation patterns in your conversations and suggests new specialists. Detection runs in the background when you exit a session or use `/clear` (which saves by default — pass `--do-not-save` to skip it).
 
 When candidates are detected, you'll see a notification at the start of your next session:
 

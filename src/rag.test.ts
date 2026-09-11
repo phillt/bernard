@@ -346,6 +346,8 @@ describe('RAGStore', () => {
         ['User prefers dark mode', 'Project uses TypeScript'],
         'compression',
       );
+      // Both, not one: an unguarded throw would abandon the second fact — and would
+      // reject, with the first already written.
       expect(added).toBe(2);
       expect(store.count()).toBe(2);
     });
@@ -1843,5 +1845,43 @@ describe('scoring: the entrenchment loop (#372)', () => {
     ]);
     const kept = await pruneTo(2);
     expect(kept.some((f) => f.includes('a fact past its window'))).toBe(false);
+  });
+});
+
+describe('the addFacts observer (#250)', () => {
+  // Without this the `node:fs` mocks carry over from whichever describe ran
+  // last, so an empty-store assumption holds only in file order. Under a
+  // shuffled run the fact was already on disk and `addFacts` deduped it away.
+  beforeEach(resetFsMocks);
+
+  it('reports only facts that were actually stored', async () => {
+    // The receipt's whole honesty rests on this: the extraction knows what it
+    // proposed, and only the store knows what survived dedup.
+    const store = await createStore();
+    const seen: string[] = [];
+    await store.addFacts(['a unique first fact about deployment'], 'test', 'general', (f) =>
+      seen.push(f),
+    );
+    const before = seen.length;
+    await store.addFacts(['a unique first fact about deployment'], 'test', 'general', (f) =>
+      seen.push(f),
+    );
+    expect(before).toBe(1);
+    expect(seen.length).toBe(1); // the duplicate reported nothing
+  });
+
+  it('survives a throwing observer with the facts still stored', async () => {
+    // Mid-loop and AFTER the push, so an unguarded throw would abandon the
+    // remaining facts and reject `addFacts` with records already written.
+    const store = await createStore();
+    const added = await store.addFacts(
+      ['the deployment pipeline runs on Tuesdays', 'jalapeño harvest peaks in August'],
+      'test',
+      'general',
+      () => {
+        throw new Error('boom');
+      },
+    );
+    expect(added).toBe(2);
   });
 });
