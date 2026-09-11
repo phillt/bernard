@@ -153,10 +153,20 @@ export class InboxWatcher {
    * Rate limiting belongs on the receive side because the send side is
    * untrusted: a page in a retry loop can write as fast as it likes, and the
    * screen is the resource being protected.
+   *
+   * The cap applies to NOTICES only. A notice folded into "3 more from ci" has
+   * still been delivered — the user can see that it happened. A `prompt` folded
+   * away is a turn that never runs, after `sendToSessions` already reported the
+   * delivery as a success, so the sender believes work was accepted that was
+   * silently discarded. Prompts are bounded by the turn queue instead, which
+   * refuses visibly and at a depth the user can inspect.
    */
   private deliver(messages: InboxMessage[]): void {
-    for (const message of messages.slice(0, MAX_RENDER_BURST)) this.opts.onMessage(message);
-    const extra = messages.length - MAX_RENDER_BURST;
+    const prompts = messages.filter((m) => m.kind === 'prompt');
+    const notices = messages.filter((m) => m.kind !== 'prompt');
+    for (const message of prompts) this.opts.onMessage(message);
+    for (const message of notices.slice(0, MAX_RENDER_BURST)) this.opts.onMessage(message);
+    const extra = notices.length - MAX_RENDER_BURST;
     if (extra > 0) {
       this.opts.onCoalesced(extra, messages[messages.length - 1].sourceLabel);
     }

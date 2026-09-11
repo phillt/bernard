@@ -41,6 +41,15 @@ export interface Evaluation {
   lastModified?: string;
 }
 
+/**
+ * How much of an observation a `matches` predicate sees.
+ *
+ * Deliberately far below `MAX_HTTP_BODY_CHARS`: a pattern that needs more than
+ * 4 KB of context is not the shape this predicate is for, and the cap is what
+ * keeps a pathological pattern from holding the poll loop.
+ */
+const MATCH_INPUT_MAX = 4_000;
+
 /** The digest a `changed` comparison is made against. */
 export function digestOf(value: unknown, extract?: string): string {
   const target = extract ? extractPath(value, extract) : value;
@@ -129,7 +138,18 @@ function evaluatePredicate(
 
     case 'matches': {
       const target = extract ? extractPath(obs.value, extract) : obs.value;
-      const text = typeof target === 'string' ? target : stableStringify(target);
+      const full = typeof target === 'string' ? target : stableStringify(target);
+      // Bounded before it reaches the pattern. Both sides here are hostile-ish:
+      // the pattern is model-authored free text and the input is up to
+      // `MAX_HTTP_BODY_CHARS` of whatever a server returned, so a catastrophically
+      // backtracking pattern would wedge the poll loop — and the poller is not
+      // tied to `turnAbortRef`, so Esc does not reach it. The `try` below covers
+      // a syntax error, which is a different failure.
+      //
+      // A cap is not a cure for backtracking, and is not claimed as one: it
+      // bounds the blast radius to something a person will wait through. The
+      // real fix is a matcher with a time budget, which Node has no primitive for.
+      const text = full.length > MATCH_INPUT_MAX ? full.slice(0, MATCH_INPUT_MAX) : full;
       let re: RegExp;
       try {
         re = new RegExp(predicate.pattern);

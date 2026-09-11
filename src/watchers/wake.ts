@@ -68,10 +68,24 @@ export function renderObservation(value: unknown): string {
   //
   // It also puts the truncation marker back on the one spelling the rest of the
   // tree uses, so anything scanning for `(truncated, N chars total)` matches.
+  // A string is serialized too, NOT returned verbatim — and that is the fence.
+  //
+  // Returned raw, a string observation keeps its newlines, so an observation
+  // containing a line of ``` closes the block early and everything after it
+  // lands OUTSIDE the banner that disclaims it. An email body is the motivating
+  // example in this module's own docstring, and HTTP bodies, MCP text content
+  // and file contents are all the same shape. Reproduced on this branch before
+  // fixing.
+  //
+  // `JSON.stringify` escapes newlines, so nothing inside the observation can
+  // begin a line and no ``` can ever open or close a fence. That is precisely
+  // the property `renderArgsBlock` — the sibling this module is modelled on —
+  // already relies on, and the object branch below had for free.
   if (typeof value === 'string') {
-    return value.length > MAX_OBSERVATION_CHARS
-      ? markTruncated(value.slice(0, MAX_OBSERVATION_CHARS), value.length)
-      : value;
+    const quoted = JSON.stringify(value);
+    return quoted.length > MAX_OBSERVATION_CHARS
+      ? markTruncated(quoted.slice(0, MAX_OBSERVATION_CHARS), quoted.length)
+      : quoted;
   }
   const { text, bounded } = boundedStringify(value, MAX_OBSERVATION_CHARS);
   // `boundedStringify` bounds the WORK, not the result: its budget decrements on
@@ -129,9 +143,16 @@ export function buildWake(
  * than a rule someone has to remember.
  *
  * The banner is the same mitigation `renderArgsBlock`'s is, and carries the same
- * caveat: prompt-level framing is known-insufficient on its own. The load-bearing
- * control is that a watcher may only poll read-classified tools, so the thing
- * producing this text could not have been made to act in the first place.
+ * caveat: prompt-level framing is known-insufficient on its own.
+ *
+ * Be precise about what the read-only tool gate does and does not buy. It bounds
+ * the PROBE — a watcher cannot be made to act by polling — and it is not a bound
+ * on the woken turn, which is an ordinary main-agent turn with the full tool
+ * surface and the session's configured posture. So the controls that actually
+ * stand between an injected instruction and an action are the fence below (a
+ * serialized observation cannot begin a line, so it cannot close the block it
+ * sits in) and `confirmMode`. Claiming the probe gate covers the turn would be
+ * the more comfortable sentence and the wrong one.
  *
  * Here rather than in `user-message.ts`, whose own docstring argues that
  * `renderArgsBlock` stays in `apps/` rather than "putting applet vocabulary into

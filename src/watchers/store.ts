@@ -165,10 +165,17 @@ export class WatcherStore {
   /**
    * Merges `patch` into the record on disk.
    *
-   * Read-modify-write, so it is not atomic against a concurrent writer — but
-   * each record has exactly one owning session, so the only realistic racer is
-   * the same process. Stated rather than discovered, the way `AppletBriefStore`
-   * states its own.
+   * Read-modify-write, and NOT safe against a concurrent writer. The claim that
+   * "each record has exactly one owning session" was wrong on this module's own
+   * terms: `sweep()` and `adoptOrphans()` both write records owned by other
+   * sessions, so cross-session writes are routine rather than hypothetical.
+   *
+   * `known` makes it sharper, not safer: a whole-record overwrite from a
+   * possibly-stale read can silently revert another writer's fields. The
+   * concrete race is session A mid-`pollOne(w)` holding `w`, session B adopting
+   * it, then A finishing and writing its stale `ownerSessionId` back. The window
+   * is one poll and the consequence is a re-adoption on B's next tick, so it is
+   * bounded rather than eliminated — stated here rather than discovered later.
    */
   update(
     id: string,
@@ -220,18 +227,20 @@ export class WatcherStore {
   sweep(now = Date.now(), keepFinishedMs = 24 * 60 * 60 * 1000): number {
     let removed = 0;
     for (const w of this.list()) {
-      const expired = Date.parse(w.expiresAt) <= now;
-      const finishedAt = w.firedAt ? Date.parse(w.firedAt) : null;
-      const staleFinished =
-        w.status !== 'active' && (finishedAt === null || now - finishedAt > keepFinishedMs);
-      if (w.status === 'active' && expired) {
-        this.finish(w.id, 'expired');
+      if (w.status === 'active') {
+        if (Date.parse(w.expiresAt) <= now) this.finish(w.id, 'expired', {}, w);
         continue;
       }
-      if (staleFinished || (w.status !== 'active' && expired)) {
-        this.remove(w.id);
-        removed += 1;
-      }
+      // Age a terminal record from `finishedAt`, and `finishedAt` from the
+      // CHECK time when there is no fire — only `finish(…, 'fired')` sets
+      // `firedAt`, so `cancelled` / `expired` / `failed` all had `null` and were
+      // deleted at the very next `start()` sweep regardless of the retention
+      // window. `failed` is the one that cost: `lastError` is the only
+      // diagnostic that path writes, and it was gone before anyone could read it.
+      const finishedAt = Date.parse(w.firedAt ?? w.lastCheckedAt ?? w.createdAt);
+      if (Number.isFinite(finishedAt) && now - finishedAt <= keepFinishedMs) continue;
+      this.remove(w.id);
+      removed += 1;
     }
     return removed;
   }

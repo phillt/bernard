@@ -278,7 +278,10 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
   const stepObserver: AgentHook = {
     onStepFinish: (payload) => {
       lastStepEndAt = Date.now();
-      stepsCompleted += 1;
+      // NOT `stepsCompleted += 1` — `stepCounter` below owns that now, and it is
+      // composed ahead of this hook. Incrementing here too made `step:end`'s `n`
+      // report 2, 4, 6… and doubled the count in `agent:dispatch:end`/`:error`
+      // whenever debug was on, which is the only time those lines are written.
       if (debug) {
         const stepCache = normalizeUsage(payload.usage, payload.providerMetadata);
         debugLog('step:end', {
@@ -370,11 +373,13 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
   // us a slow failure, a false abort costs the user completed work.
   let lastProgressAt = dispatchStartedAt;
   let inFlightTools = 0;
-  // Whether ANYTHING reached the sink. This is what decides, one layer up,
-  // whether a stall may be retried: `OutputSink` is append-only with no reset,
-  // so re-running a dispatch that already emitted a `text-delta` prints a second
-  // copy beside the first and the answer visibly stutters. Counted here because
-  // this callback is the only place that knows a part was pulled off the stream.
+  // Whether ANY part reached the consumer — deltas, tool calls and tool results
+  // alike, not only `text-delta`. That is deliberately more conservative than
+  // the duplication argument alone would need: a `text-delta` is what visibly
+  // stutters when a dispatch is re-run against an append-only `OutputSink`, but
+  // a `tool-call` already emitted means the model got that far, and re-running
+  // re-executes it. Counted here because this callback is the only place that
+  // knows a part was pulled off the stream.
   let partsSeen = 0;
   const progress: StreamProgress = {
     onPart: (type) => {

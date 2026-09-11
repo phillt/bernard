@@ -472,9 +472,15 @@ export class Agent {
        * the first would make an email body instruction.
        *
        * Typed rather than conventional: `UntrustedData` is minted in exactly two
-       * places and a plain string cannot be assigned here, so the split is a
-       * compile error rather than a rule to remember. Rendered LAST, after the
-       * instruction, under its own banner.
+       * places and a plain string cannot be assigned here, so a caller cannot
+       * pass observed bytes as the instruction by accident.
+       *
+       * Be exact about where that stops. The brand is enforced at THIS boundary;
+       * below it the text is unwrapped and joined into the same user message, so
+       * there is one slot on the wire and the separation from there on is the
+       * banner and the fence, not the type. What the fence rests on is that the
+       * observation is serialized before it is rendered, so it cannot begin a
+       * line and cannot close the block it sits in — see `watchers/wake.ts`.
        */
       data?: UntrustedData;
     },
@@ -548,9 +554,7 @@ export class Agent {
     // into it: `wrapUserMessage` opens the text at position 0 with the user's
     // request, and an observation spliced inside that wrapper would read as part
     // of it. Two paragraphs in one user message, with the banner between them.
-    const withData = options?.data
-      ? `${wrappedInput}\n\n${options.data.text}`
-      : wrappedInput;
+    const withData = options?.data ? `${wrappedInput}\n\n${options.data.text}` : wrappedInput;
     this.history.push(attachTo(withData, images));
 
     // Snapshot the conversation turn position NOW, before the run — the

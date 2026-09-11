@@ -62,8 +62,16 @@ export interface WatcherPollerOptions {
   store: WatcherStore;
   sessionId: string;
   deps: ProbeDeps;
-  /** Called when a watcher fires. Must not throw. */
-  onWake: (wake: Wake) => void;
+  /**
+   * Called when a watcher fires. Must not throw.
+   *
+   * Returns whether the wake was ACCEPTED. A consumer with a bounded queue can
+   * refuse, and refusing must not spend the watcher: it is marked terminal
+   * before delivery (so a wake queued behind a long turn cannot fire twice), so
+   * without a way to say no, one full queue permanently consumes the watcher
+   * the user was waiting on.
+   */
+  onWake: (wake: Wake) => boolean | void;
   /** Test seam; defaults to the wall clock. */
   now?: () => number;
   tickMs?: number;
@@ -109,9 +117,17 @@ export class WatcherPoller {
   /**
    * Claims watchers whose owner is gone.
    *
-   * `kill(pid, 0)` liveness, the idiom `inbox/registry.ts` uses. A stale pid can
-   * only fail to match — it cannot hand this session somebody else's live
-   * watcher, because a live owner's pid is alive by definition.
+   * `kill(pid, 0)` liveness, the idiom `inbox/registry.ts` uses — but NOT its
+   * justification, which inverts here and should not be borrowed. There, a
+   * stale-but-recycled pid means "do not deliver", which is safe. Here it means
+   * "do not adopt", i.e. the watcher silently never fires again. The failure
+   * direction is the opposite one.
+   *
+   * What makes it acceptable is the other half: a LIVE owner's pid is alive by
+   * definition, so this can never take a watcher away from a session that is
+   * still polling it. The residual is a recycled pid making an orphan look
+   * owned — bounded by running this every tick rather than once, so a later tick
+   * catches it once the imposter exits.
    */
   private adoptOrphans(): void {
     for (const w of this.opts.store.orphans()) {
@@ -137,6 +153,11 @@ export class WatcherPoller {
     this.ticking = true;
     try {
       const now = this.now();
+      // Every tick, not only at `start()`. An owner that dies while this session
+      // is running otherwise leaves its watchers in the "reads as active, will
+      // never fire" state until the next restart — precisely the state adoption
+      // exists to remove.
+      this.adoptOrphans();
       const owned = this.opts.store.ownedBy(this.opts.sessionId);
       // Published before the polls rather than after: a probe can take seconds,
       // and the bar should show the count for the tick it is in, not the last.
@@ -226,6 +247,17 @@ export class WatcherPoller {
       w.target.kind === 'time' ? null : { value: result.observation.value },
       new Date(this.now()),
     );
-    this.opts.onWake(wake);
+    // Terminal BEFORE delivery, then restored if the consumer refuses. Marking
+    // after would let a wake sitting behind a long turn fire again on the next
+    // tick; not restoring would spend the watcher on a refusal the user never
+    // got the benefit of — and the watcher is the thing they were waiting on.
+    if (this.opts.onWake(wake) === false) {
+      this.opts.store.update(
+        w.id,
+        { status: 'active', firedAt: undefined, lastCheckedAt: checkedAt },
+        { ...w, status: 'fired', firedAt },
+      );
+      debugLog('watcher:wake-refused', { id: w.id, name: w.name });
+    }
   }
 }

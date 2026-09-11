@@ -106,7 +106,7 @@ import { renderTaskText, type UntrustedData } from '../framework/agents/user-mes
 import { WatcherStore } from '../watchers/store.js';
 import { WatcherPoller } from '../watchers/poller.js';
 import { statFileSync } from '../watchers/probe.js';
-import { describeWatchTarget } from '../watchers/types.js';
+import { describeWatchTarget, MAX_LIFETIME_MS } from '../watchers/types.js';
 import { stableStringify } from '../watchers/extract.js';
 import { formatRelative, parseWhen } from '../watchers/duration.js';
 import {
@@ -1029,7 +1029,7 @@ export function App({
         // tears down every client for the whole session, and the REPL owns that.
         tools: () => (stores.mcp ? stores.mcp.snapshot().tools : {}),
       },
-      onWake: (wake) => {
+      onWake: (wake) =>
         requestTurn({
           text: wake.instruction,
           ...(wake.data ? { data: wake.data } : {}),
@@ -1039,8 +1039,7 @@ export function App({
             name: wake.name,
             reason: wake.reason,
           },
-        });
-      },
+        }).ok,
     });
     poller.start();
     return () => poller.stop();
@@ -1062,6 +1061,29 @@ export function App({
       // it. A sender cannot upgrade itself: this record is written here.
       ...(config.acceptRemotePrompts ? { capabilities: ['notice', 'prompt'] as const } : {}),
       onMessage: (message) => {
+        // ENFORCED on receive, not merely advertised on the record. `send.ts`
+        // filters by capability, but anything that can write
+        // `sessionInboxDir(sessionId)` can drop a message file directly and
+        // bypass the sender entirely — which is the threat model `inbox/types.ts`
+        // states in as many words ("anything that can write the state directory
+        // can write a message file"). Advertising alone meant a session that
+        // never opted in would still run an arbitrary turn for any local writer.
+        //
+        // Degraded to a notice rather than dropped: the text was delivered, the
+        // user should see it, and silently discarding it would make a refused
+        // prompt indistinguishable from one that never arrived.
+        if (message.kind === 'prompt' && !config.acceptRemotePrompts) {
+          push(
+            toNoticeData({
+              ...message,
+              kind: 'notice',
+              text: `${message.text}
+
+(Sent as a prompt, but this session does not accept them. Restart with --accept-remote-prompts to let it run.)`,
+            }),
+          );
+          return;
+        }
         if (message.kind === 'prompt') {
           // Through the queue, never `runAgentTurn` — a prompt arriving mid-turn
           // must not hit `submittingRef` and vanish. #493 requires the mid-turn
@@ -1752,6 +1774,18 @@ export function App({
       }
       if (!instruction) {
         flashToast('Say what to do when you wake: /sleep 2h <what to do>', 'error');
+        return;
+      }
+      // Refuse rather than clamp. `store.create` caps the TTL at
+      // `MAX_LIFETIME_MS`, so `/sleep 30d` was accepted, reported as "Sleeping
+      // 30d — will wake at <date 30 days out>", and then silently expired on day
+      // seven with no notification. A sleep the user believes is set and is not
+      // is the worst outcome this feature has.
+      if (at - Date.now() > MAX_LIFETIME_MS) {
+        flashToast(
+          `A watcher can live at most ${Math.round(MAX_LIFETIME_MS / 86_400_000)} days. Use a cron job for anything longer.`,
+          'error',
+        );
         return;
       }
       try {
@@ -4579,10 +4613,14 @@ export function App({
   /**
    * The one door for a turn that nobody typed.
    *
-   * Runs it now when idle, queues it when busy, and never drops it. Every
-   * non-keystroke producer — a watcher wake, a `say --run` — goes through here
-   * rather than calling `runAgentTurn`, whose `submittingRef` guard would
-   * silently discard it.
+   * Runs it now when idle, queues it when busy. Every non-keystroke producer —
+   * a watcher wake, a `say --run` — goes through here rather than calling
+   * `runAgentTurn`, whose `submittingRef` guard would discard it silently.
+   *
+   * It CAN refuse, when the queue is full, and the boolean is the point: a
+   * watcher marks itself terminal before delivering its wake, so a refusal that
+   * only printed a notice would permanently spend the watcher the user was
+   * waiting on. The caller puts it back.
    */
   function requestTurn(turn: {
     text: string;

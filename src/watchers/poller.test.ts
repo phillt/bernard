@@ -79,6 +79,47 @@ describe('WatcherPoller', () => {
     expect(onWake).toHaveBeenCalledTimes(1);
   });
 
+  it('puts the watcher back when the consumer refuses the wake', async () => {
+    // A watcher is marked terminal BEFORE delivery, so a wake sitting behind a
+    // long turn cannot fire twice. Without a way to refuse, one full turn queue
+    // would permanently spend the watcher the user was waiting on.
+    const w = store.create({
+      name: 'refused',
+      target: { kind: 'file', path: '/watched' },
+      predicate: { kind: 'changed' },
+      instructions: 'react',
+      ownerSessionId: 's1',
+      snapshot: digestOf({ exists: false }),
+    });
+    let now = Date.now() + 120_000;
+    const poller = new WatcherPoller({
+      store,
+      sessionId: 's1',
+      deps: deps({ statFile: () => ({ mtimeMs: 1, size: 2 }) }),
+      onWake: () => false,
+      now: () => now,
+    });
+
+    await poller.tick();
+    const after = store.read(w.id);
+    expect(after?.status).toBe('active');
+    expect(after?.firedAt).toBeUndefined();
+
+    // And it fires again on the next due poll, rather than being lost.
+    const accepted = vi.fn(() => true);
+    now += 120_000;
+    const second = new WatcherPoller({
+      store,
+      sessionId: 's1',
+      deps: deps({ statFile: () => ({ mtimeMs: 1, size: 2 }) }),
+      onWake: accepted,
+      now: () => now,
+    });
+    await second.tick();
+    expect(accepted).toHaveBeenCalledTimes(1);
+    expect(store.read(w.id)?.status).toBe('fired');
+  });
+
   it('is level-triggered: eleven missed polls still fire on the twelfth', async () => {
     // The property the design rests on. Nothing counts polls — the comparison is
     // against the snapshot, so the gap is irrelevant. This is why #400 is not a

@@ -382,6 +382,37 @@ describe('runAgent — mid-stream stall guard', () => {
     });
   });
 
+  it('counts each step exactly once, with debug on', async () => {
+    // Two hooks incremented the same counter: the always-on `stepCounter` and
+    // the debug-gated observer. `step:end`'s `n` reported 2, 4, 6… and the
+    // dispatch-end count was doubled — and only ever under debug, i.e. only in
+    // the sessions where anyone reads it.
+    (globalThis as { __debugForRunnerTest?: boolean }).__debugForRunnerTest = true;
+    try {
+      (generateText as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+        async (opts: { onStepFinish?: (p: unknown) => Promise<void> }) => {
+          const step = {
+            text: '',
+            toolCalls: [],
+            toolResults: [],
+            finishReason: 'stop',
+            usage: {},
+          };
+          await opts.onStepFinish?.(step);
+          await opts.onStepFinish?.(step);
+          return { text: 'done', steps: [], response: { messages: [] }, finishReason: 'stop' };
+        },
+      );
+      await runAgent(makeSpec());
+      const ns = logCalls.filter((c) => c.label === 'step:end').map((c) => c.data.n);
+      expect(ns).toEqual([1, 2]);
+      const end = logCalls.find((c) => c.label === 'agent:dispatch:end');
+      expect(end?.data.steps).toBe(0); // from the result, not the counter
+    } finally {
+      (globalThis as { __debugForRunnerTest?: boolean }).__debugForRunnerTest = false;
+    }
+  });
+
   it('reports output as produced once a step has completed, whatever branded it', async () => {
     // The transport cannot answer this. `stall-guard.ts` mints `producedOutput:
     // false` for a headers stall — true of that one HTTP request, and silent
