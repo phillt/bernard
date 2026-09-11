@@ -211,6 +211,29 @@ export class WatcherPoller {
     }
 
     const verdict = evaluate(w, result.observation);
+    // A watcher that cannot read its own predicate is not watching anything, and
+    // the user believes it is. Counted as a probe failure so it trips
+    // `MAX_PROBE_FAILURES` and stops with a `lastError` naming the path, rather
+    // than polling cleanly forever.
+    if (verdict.unreadable) {
+      const failureCount = w.failureCount + 1;
+      const lastError =
+        w.predicate.kind === 'appeared'
+          ? `idPath "${w.predicate.idPath}" does not name a list of items in the result.`
+          : 'The predicate could not be evaluated against the result.';
+      if (failureCount >= MAX_PROBE_FAILURES) {
+        this.opts.store.finish(
+          w.id,
+          'failed',
+          { failureCount, lastError, lastCheckedAt: checkedAt },
+          w,
+        );
+        debugLog('watcher:unreadable', { id: w.id, name: w.name, lastError });
+        return;
+      }
+      this.opts.store.update(w.id, { failureCount, lastError, lastCheckedAt: checkedAt }, w);
+      return;
+    }
     if (!verdict.fired) {
       this.opts.store.update(
         w.id,

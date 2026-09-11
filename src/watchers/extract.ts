@@ -168,3 +168,40 @@ export function idsAt(value: unknown, idPath: string): string[] | null {
   }
   return ids;
 }
+
+/**
+ * Paths that WOULD work as an `idPath`, given a sample of what the target
+ * returns.
+ *
+ * Exists because the failure it prevents is silent and total: a watcher whose
+ * `idPath` names no list polls cleanly forever and can never fire. Beeper
+ * returns `{items:[{id,…}]}` and the tool's own example said `$.messages.id`, so
+ * a reasonable guess of `$.id` produced three watchers that looked healthy for
+ * an hour and were structurally dead.
+ *
+ * Naming the real alternatives turns that into a self-correcting error. Scans
+ * the root and one level down — deeper is a path a person would not have
+ * guessed wrong in the first place.
+ */
+export function suggestIdPaths(value: unknown): string[] {
+  const out: string[] = [];
+  const idKeysOf = (arr: unknown[]): string[] => {
+    const first = arr.find((x) => x !== null && typeof x === 'object');
+    if (!first) return [];
+    return Object.keys(first as Record<string, unknown>).filter((k) =>
+      /^(id|_id|uuid|key)$/i.test(k),
+    );
+  };
+  const visit = (node: unknown, prefix: string, depth: number): void => {
+    if (depth > 1 || node === null || typeof node !== 'object' || Array.isArray(node)) return;
+    for (const [key, child] of Object.entries(node as Record<string, unknown>)) {
+      if (Array.isArray(child)) {
+        for (const idKey of idKeysOf(child)) out.push(`${prefix}.${key}.${idKey}`);
+      } else {
+        visit(child, `${prefix}.${key}`, depth + 1);
+      }
+    }
+  };
+  visit(value, PATH_PREFIX.slice(0, -1), 0);
+  return out.slice(0, 5);
+}

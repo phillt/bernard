@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { probe, watchableToolRefusal, type ProbeDeps } from './probe.js';
+import { captureBaseline, probe, watchableToolRefusal, type ProbeDeps } from './probe.js';
 import { attachMeta } from '../framework/tools/adapter.js';
 import type { ToolMeta } from '../framework/tools/types.js';
 
@@ -190,5 +190,64 @@ describe('probe — time', () => {
     );
     expect(r).toEqual({ ok: true, observation: { value: null } });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The dead `idPath` (found in use, on Beeper).
+ *
+ * Beeper returns `{items:[{id,…}]}`; the tool's example said `$.messages.id`,
+ * and a reasonable guess of `$.id` produced three watchers that polled cleanly
+ * every 60s for an hour, kept `failureCount: 0`, and could never fire. A
+ * watcher that cannot read its own predicate is the exact silent failure this
+ * feature exists to remove.
+ */
+describe('captureBaseline — a predicate that can never match', () => {
+  const beeper = (value: unknown) =>
+    deps({
+      tools: () => ({
+        t: fakeTool({ kind: 'read' }, async () => ({
+          content: [{ type: 'text', text: JSON.stringify(value) }],
+        })),
+      }),
+    });
+
+  it('refuses an idPath that names no list, instead of defaulting to empty', async () => {
+    const got = await captureBaseline(
+      { kind: 'mcp', tool: 't', args: {} },
+      { kind: 'appeared', idPath: '$.id' },
+      beeper({ items: [{ id: '1073', text: 'hi' }], hasMore: true }),
+    );
+    expect(got.ok).toBe(false);
+    expect((got as { error: string }).error).toMatch(/does not name a list/);
+  });
+
+  it('names a path that would actually work', async () => {
+    // The half that makes it self-correcting: a model that guessed wrong can
+    // fix itself rather than retrying the same guess.
+    const got = await captureBaseline(
+      { kind: 'mcp', tool: 't', args: {} },
+      { kind: 'appeared', idPath: '$.id' },
+      beeper({ items: [{ id: '1073' }], hasMore: true }),
+    );
+    expect((got as { error: string }).error).toMatch(/\$\.items\.id/);
+  });
+
+  it('accepts the correct path against the real Beeper shape', async () => {
+    const got = await captureBaseline(
+      { kind: 'mcp', tool: 't', args: {} },
+      { kind: 'appeared', idPath: '$.items.id' },
+      beeper({ items: [{ id: '1073' }, { id: '1072' }], hasMore: true }),
+    );
+    expect(got).toMatchObject({ ok: true, baselineIds: ['1073', '1072'] });
+  });
+
+  it('says so plainly when nothing in the payload could serve', async () => {
+    const got = await captureBaseline(
+      { kind: 'mcp', tool: 't', args: {} },
+      { kind: 'appeared', idPath: '$.items.id' },
+      beeper({ count: 3, ok: true }),
+    );
+    expect((got as { error: string }).error).toMatch(/no array of objects with an id/);
   });
 });

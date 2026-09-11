@@ -271,7 +271,9 @@ targetKind:
 
 predicate (ignored for time):
   changed  — anything differs from when the watcher was created (default)
-  appeared — a NEW item shows up (needs \`idPath\`, e.g. "$.messages.id"). Use this for "when John replies" — "changed" would also fire when something is deleted.
+  appeared — a NEW item shows up. Use this for "when John replies" — "changed" would also fire when something is deleted.
+             \`idPath\` must name the ARRAY and then the id key: "$.items.id" for a result shaped {items:[{id,...}]}, "$.messages.id" for {messages:[{id,...}]}. NOT "$.id" — that names no list and the watcher could never fire.
+             If you have not seen this tool's output shape, call it once first and read the real key. Guessing is the common way this goes wrong.
   matches  — the result matches \`pattern\` (a regular expression)
 
 The baseline is taken when you create it, so "changed" means "changed since now". Only read-only tools may be watched. Default interval ${DEFAULT_INTERVAL_MS / 1000}s, minimum ${MIN_INTERVAL_MS / 1000}s.`,
@@ -304,7 +306,12 @@ The baseline is taken when you create it, so "changed" means "changed since now"
             .enum(['changed', 'appeared', 'matches'])
             .optional()
             .describe('Default changed'),
-          idPath: z.string().optional().describe('$. path to item ids, for predicate "appeared"'),
+          idPath: z
+            .string()
+            .optional()
+            .describe(
+              'Array path plus id key, e.g. "$.items.id" — must name a LIST, not a single field',
+            ),
           pattern: z.string().optional().describe('Regular expression, for predicate "matches"'),
           intervalSeconds: z.number().optional().describe('How often to check'),
           ttlHours: z.number().optional().describe('Give up after this long'),

@@ -22,7 +22,7 @@ import { statSync } from 'node:fs';
 import { readToolMeta } from '../framework/tools/adapter.js';
 import { isReadOnlyMCPSuffix } from '../risk.js';
 import { digestOf, type Observation } from './evaluate.js';
-import { idsAt } from './extract.js';
+import { idsAt, suggestIdPaths } from './extract.js';
 import { MAX_HTTP_BODY_CHARS, type WatchTarget, type Watcher } from './types.js';
 
 /**
@@ -325,11 +325,28 @@ export async function captureBaseline(
   // unequal to an absent one and every watcher would fire the moment it was made.
   if (predicate.kind === 'changed') out.snapshot = digestOf(obs.value, extract);
   if (predicate.kind === 'appeared') {
-    // `?? []` is right HERE and wrong in `evaluate`: at creation an unreadable
-    // path means "nothing known yet", so the first poll's ids all count as new;
-    // mid-flight it would mean "forget what you knew", which fires a false wake
-    // naming items that were always there.
-    out.baselineIds = idsAt(obs.value, predicate.idPath) ?? [];
+    const ids = idsAt(obs.value, predicate.idPath);
+    // REFUSED, not defaulted. `?? []` looked like the safe reading — "nothing
+    // known yet, so the first poll's ids all count as new" — and it is the
+    // single worst outcome available: the path names no list, so `evaluate` can
+    // never read it either, and the watcher polls cleanly forever without ever
+    // firing. Three real watchers sat in exactly that state.
+    //
+    // The message names paths that WOULD work, read off the payload in hand, so
+    // a model that guessed wrong can correct itself instead of retrying the
+    // same guess.
+    if (ids === null) {
+      const suggestions = suggestIdPaths(obs.value);
+      return {
+        ok: false,
+        error:
+          `idPath "${predicate.idPath}" does not name a list of items in the result.` +
+          (suggestions.length
+            ? ` Try one of: ${suggestions.join(', ')}.`
+            : ' The result contains no array of objects with an id field.'),
+      };
+    }
+    out.baselineIds = ids;
   }
   return out;
 }

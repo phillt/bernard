@@ -32,6 +32,17 @@ export interface Observation {
 /** What a watcher's state should become after a poll, and whether it woke. */
 export interface Evaluation {
   fired: boolean;
+  /**
+   * The predicate could not be evaluated at all — an `idPath` that names no
+   * list, or a pattern that will not compile.
+   *
+   * Distinct from `fired: false`, and the distinction is the whole point: "I
+   * looked and nothing had changed" and "I cannot read this" are the same value
+   * without it, so a watcher pointed at a path that can never match polls
+   * successfully forever and reports nothing. Three real watchers sat in that
+   * state for an hour.
+   */
+  unreadable?: boolean;
   /** Why, in one line, for the wake panel and the log. Present only when fired. */
   reason?: string;
   /** Snapshot to persist for the next poll. */
@@ -120,7 +131,10 @@ function evaluatePredicate(
       // Could not evaluate. Deliberately NOT treated as an empty list: an empty
       // baseline would make every pre-existing item look new on the next poll
       // and fire a false wake naming things that were always there.
-      if (ids === null) return hold();
+      // Not `hold()`: an unreadable path is not "nothing happened", and
+      // reporting it as such is how a watcher becomes permanently inert while
+      // looking healthy.
+      if (ids === null) return { ...hold(), unreadable: true };
       const baseline = watcher.baselineIds ?? [];
       const known = new Set(baseline);
       const fresh = ids.filter((id) => !known.has(id));
@@ -155,7 +169,7 @@ function evaluatePredicate(
         re = new RegExp(predicate.pattern);
       } catch {
         // An unparseable pattern is a broken watcher, not a match.
-        return hold();
+        return { ...hold(), unreadable: true };
       }
       if (!re.test(text)) return hold();
       return { fired: true, reason: `matched /${predicate.pattern}/`, ...carry };
