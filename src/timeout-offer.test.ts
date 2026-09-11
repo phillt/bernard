@@ -86,9 +86,15 @@ describe('the offer itself', () => {
     // way to a twenty-minute SYNCHRONOUS `spawnSync` on Ink's render thread — and
     // a `profile`-scoped acceptance would persist a value
     // `profiles-wizard-data.ts` declares out of range.
-    expect(doubled(30_000)).toBe(60_000);
-    expect(doubled(400_000)).toBe(MAX_SHELL_TIMEOUT_MS);
-    expect(doubled(MAX_SHELL_TIMEOUT_MS)).toBe(MAX_SHELL_TIMEOUT_MS);
+    // The ceiling comes off the budget's own row now, not from a constant baked
+    // into `doubled` — so a second budget cannot silently inherit shell's.
+    const max = OFFERABLE_BUDGETS.shell.maxMs;
+    expect(max).toBe(MAX_SHELL_TIMEOUT_MS);
+    expect(doubled(30_000, max)).toBe(60_000);
+    expect(doubled(400_000, max)).toBe(MAX_SHELL_TIMEOUT_MS);
+    expect(doubled(MAX_SHELL_TIMEOUT_MS, max)).toBe(MAX_SHELL_TIMEOUT_MS);
+    // Independent of shell's: the point of moving it onto the row.
+    expect(doubled(30_000, 45_000)).toBe(45_000);
   });
 
   it('agrees with the bound the settings wizard enforces', () => {

@@ -150,6 +150,55 @@ describe('the offer', () => {
     expect(askUser).toHaveBeenCalledTimes(1);
   });
 
+  // The latch is spent on a real ANSWER, never on a question that did not reach
+  // the user. It used to be claimed at the call site before the ceiling check and
+  // before `askUser` resolved, so all three of these burned the session's one
+  // offer on a prompt nobody saw — and the Esc row is the one that matters: a
+  // user whose command has hung for 50 s and who presses Esc is aborting the
+  // wait, not answering "leave it".
+  it.each([
+    [
+      'Esc',
+      () => vi.fn(async () => ({ cancelled: true, answered: [] })),
+      { shellTimeout: 150 } as Partial<ToolOptions>,
+    ],
+    [
+      'a prompt channel that throws',
+      () =>
+        vi.fn(async () => {
+          throw new Error('overlay gone');
+        }),
+      { shellTimeout: 150 } as Partial<ToolOptions>,
+    ],
+    [
+      'an answer matching no row',
+      () => vi.fn(async () => ({ answers: ['something nobody offered'] })),
+      { shellTimeout: 150 } as Partial<ToolOptions>,
+    ],
+  ])('keeps the offer available after %s', async (_name, makeAskUser, extra) => {
+    const first = makeAskUser();
+    const tool = createShellTool(opts({ ...extra, askUser: first as never }));
+    await tool.execute({ command: SLOW }, {} as never);
+    expect(first).toHaveBeenCalledTimes(1);
+
+    // A second timeout in the same process must still be able to ask.
+    const raiseShellTimeout = vi.fn();
+    const second = vi.fn(async () => ({
+      answers: ['Retry, and use 300ms for the rest of this session'],
+    }));
+    const tool2 = createShellTool(opts({ ...extra, askUser: second as never, raiseShellTimeout }));
+    await tool2.execute({ command: SLOW }, {} as never);
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(raiseShellTimeout).toHaveBeenCalledWith(300);
+  });
+
+  // NOT tested here: that the ceiling check runs before the claim. Reaching the
+  // ceiling means a 600-second budget, and these drive a real child — `sleep 1`
+  // simply succeeds under it, so there is no timeout and no offer path to
+  // observe. A test written that way passes without asserting anything, which is
+  // the failure mode this file has already paid for twice. The arithmetic half is
+  // pinned in `timeout-offer.test.ts` (`doubled(max, max) === max`); the ordering
+  // half needs `offerHigherShellTimeout` to be reachable directly.
   it('reads the budget through getShellTimeout when one is supplied', async () => {
     // The live reader. `shellTimeout` alone is a snapshot that `/options`, a
     // profile switch and `raiseShellTimeout` all leave stale.

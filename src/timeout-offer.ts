@@ -48,7 +48,38 @@ interface OfferableBudget {
   command: string;
   /** Why raising this one is a statement about work rather than about liveness. */
   rationale: string;
+  /**
+   * The ceiling a doubling of THIS budget may not cross.
+   *
+   * On the row rather than baked into {@link doubled}, because the docstring
+   * below promises that adding a row is most of the work of adding a budget —
+   * and a hard-coded shell ceiling made that false in the one direction the type
+   * system could not catch. `settingKey` is a literal union, so a `dispatch` row
+   * would fail to compile until someone decided what it writes; a shared
+   * `Math.min(ms * 2, MAX_SHELL_TIMEOUT_MS)` would have silently handed that row
+   * a 600-second ceiling with no relation to dispatch budgets and no error
+   * anywhere. One of the two was caught and the other was not, which is the
+   * asymmetry this removes.
+   */
+  maxMs: number;
 }
+
+/**
+ * The ceiling a doubling may not cross.
+ *
+ * The step-limit ladder this copies carries TWO bounds — a per-turn expansion
+ * count and `REACT_MAX_STEPS_CEILING` — and only the first was copied. Without
+ * this, a user already sitting at a hand-raised `shellTimeout` can accept their
+ * way to a twenty-minute **synchronous** `spawnSync` on Ink's render thread.
+ *
+ * 600,000 is not invented here: `profiles-wizard-data.ts` already declares
+ * `{kind:'int', min: 1_000, max: 600_000}` for this very setting, so without the
+ * clamp a `profile`-scoped acceptance could persist a value the wizard's own
+ * field would refuse to accept back. Restated rather than imported, because
+ * importing it would give this zero-import leaf an edge to the wizard's data
+ * module; a test pins the two together instead.
+ */
+export const MAX_SHELL_TIMEOUT_MS = 600_000;
 
 /**
  * The budgets that may be offered, and nothing else.
@@ -72,6 +103,7 @@ export const OFFERABLE_BUDGETS: Readonly<
     settingKey: 'shellTimeout',
     command: '/options shell-timeout',
     rationale: 'how long a command is expected to take, which only the user knows',
+    maxMs: MAX_SHELL_TIMEOUT_MS,
   },
 };
 
@@ -113,26 +145,9 @@ interface OfferChoice {
  * tip, which computes `ceil(observed * 1.25 / 1024) * 1024` because it really did
  * observe a count.
  */
-export function doubled(ms: number): number {
-  return Math.min(ms * 2, MAX_SHELL_TIMEOUT_MS);
+export function doubled(ms: number, maxMs: number): number {
+  return Math.min(ms * 2, maxMs);
 }
-
-/**
- * The ceiling a doubling may not cross.
- *
- * The step-limit ladder this copies carries TWO bounds — a per-turn expansion
- * count and `REACT_MAX_STEPS_CEILING` — and only the first was copied. Without
- * this, a user already sitting at a hand-raised `shellTimeout` can accept their
- * way to a twenty-minute **synchronous** `spawnSync` on Ink's render thread.
- *
- * 600,000 is not invented here: `profiles-wizard-data.ts` already declares
- * `{kind:'int', min: 1_000, max: 600_000}` for this very setting, so without the
- * clamp a `profile`-scoped acceptance could persist a value the wizard's own
- * field would refuse to accept back. Restated rather than imported, because
- * importing it would give this zero-import leaf an edge to the wizard's data
- * module; a test pins the two together instead.
- */
-export const MAX_SHELL_TIMEOUT_MS = 600_000;
 
 /**
  * Renders a budget the way a person would say it.
@@ -170,11 +185,36 @@ export function offerChoices(nextMs: number, command: string): OfferChoice[] {
  */
 const asked = new Set<TimeoutBudget>();
 
-/** True the first time only. Marks it asked, so the caller cannot forget to. */
+/**
+ * True the first time only. Marks it asked, so the caller cannot forget to.
+ *
+ * **Claim it at the point of asking, not at the point of deciding to ask**, and
+ * {@link releaseOffer} it on every path where the question did not actually
+ * reach the user. The latch is a guard against a command that times out in a
+ * loop asking five times; it is not a budget of one *attempt* per session. It
+ * used to be spent before the ceiling check and before the user answered, so a
+ * shell already at the ceiling burned the offer on a prompt that was never
+ * shown — and, worse, so did an Esc. Someone whose command has hung for 50 s and
+ * who presses Esc is aborting the wait, not answering "leave it", and the offer
+ * was then gone for the life of the process.
+ *
+ * A `decline` is a real answer and correctly keeps the latch.
+ */
 export function claimOffer(budget: TimeoutBudget): boolean {
   if (!isOfferable(budget) || asked.has(budget)) return false;
   asked.add(budget);
   return true;
+}
+
+/**
+ * Gives back a claim whose question never reached the user.
+ *
+ * Deliberately not a `finally` in the caller: the difference between "asked and
+ * told no" and "never managed to ask" is exactly what the latch has to preserve,
+ * and a `finally` cannot see it.
+ */
+export function releaseOffer(budget: TimeoutBudget): void {
+  asked.delete(budget);
 }
 
 /** Test-only: forget what has been asked. */

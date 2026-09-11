@@ -252,9 +252,25 @@ export const CHEVRON = '❮  ';
  * over-measures a chevroned body by three columns — harmless today, since the
  * width only sizes tables and rules while Ink owns wrapping, and left alone here
  * deliberately rather than folded into a receipt change.
+ *
+ * **`floor` is what separates the two callers, and it is not cosmetic.** The 40
+ * is right for `MarkdownLines`, whose width only sizes tables and horizontal
+ * rules: a floor there keeps a table from collapsing, and Ink wraps the result
+ * anyway. It is wrong for a caller using this as a hard fit budget, because
+ * below 47 columns the floor is LARGER than the space that exists —
+ * `columns: 40` reports 40 against 33 usable — so every receipt row is laid out
+ * for more room than it gets, wraps, and every tail reads as an extra row. That
+ * is the same phantom-row failure as the frozen-width limit recorded in
+ * `clear-args.ts`, except it needs no resize: it bites at push time, on any
+ * terminal narrower than 47 columns. Defaulted `true` so the existing caller is
+ * byte-identical.
  */
-export function markdownBodyWidth(columns: number, opts?: { chevron?: boolean }): number {
-  return Math.max(40, columns - 4 - (opts?.chevron ? CHEVRON.length : 0));
+export function markdownBodyWidth(
+  columns: number,
+  opts?: { chevron?: boolean; floor?: boolean },
+): number {
+  const usable = columns - 4 - (opts?.chevron ? CHEVRON.length : 0);
+  return opts?.floor === false ? Math.max(0, usable) : Math.max(40, usable);
 }
 
 function MarkdownLines({ text, streaming = false }: { text: string; streaming?: boolean }) {

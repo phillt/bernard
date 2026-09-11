@@ -12,6 +12,7 @@ import {
   doubled,
   formatBudget,
   offerChoices,
+  releaseOffer,
   shellTimeoutMessage,
 } from '../timeout-offer.js';
 import { classifyError } from '../error-taxonomy.js';
@@ -166,12 +167,19 @@ async function offerHigherShellTimeout(
   command: string,
   budgetMs: number,
 ): Promise<number | undefined> {
-  const next = doubled(budgetMs);
   // `OFFERABLE_BUDGETS` types `shell` as required, so there is no absent case to
   // guard — the `Partial` that forced one here was generality the type did not
   // actually have.
   const spec = OFFERABLE_BUDGETS.shell;
-  if (next <= budgetMs) return undefined; // already at the ceiling
+  const next = doubled(budgetMs, spec.maxMs);
+  // **Before the claim.** At the ceiling there is nothing to offer, so burning
+  // the session's one offer here would spend it on a prompt that is never shown.
+  if (next <= budgetMs) return undefined;
+  // The claim moved in here from the call site so that it sits at the point of
+  // asking. Everything between here and a real answer releases it again: the
+  // latch exists to stop a command timing out in a loop asking five times, not
+  // to cap the session at one *attempt*.
+  if (!claimOffer('shell')) return undefined;
   const choices = offerChoices(next, spec.command);
   let answer;
   try {
@@ -183,13 +191,27 @@ async function offerHigherShellTimeout(
       },
     ]);
   } catch {
+    releaseOffer('shell');
     return undefined;
   }
-  if (!answer || !('answers' in answer)) return undefined;
+  // Esc lands here — `requestAskUser` resolves `{cancelled: true}`, which has no
+  // `answers`. The user aborted the wait rather than answering "leave it", so
+  // the offer is still owed to them.
+  if (!answer || !('answers' in answer)) {
+    releaseOffer('shell');
+    return undefined;
+  }
   const raw = answer.answers[0];
   const picked = Array.isArray(raw) ? raw[0] : raw;
   const scope = choices.find((c) => c.label === picked)?.scope;
-  if (!scope || scope === 'decline') return undefined;
+  // An answer matching no row is a question that did not get through either.
+  if (!scope) {
+    releaseOffer('shell');
+    return undefined;
+  }
+  // `decline` is a real answer and keeps the latch — that is the whole point of
+  // the row.
+  if (scope === 'decline') return undefined;
 
   // A live bump of the shared config, exactly as the step-limit ladder does it.
   // Through the callback rather than by assigning `options.shellTimeout`, which
@@ -289,7 +311,7 @@ export function createShellTool(options: ToolOptions): BernardTool<ShellArgs, Sh
           // (cron, `bernard script`), where the improved message still lands and
           // the offer is simply skipped.
           let raised: number | undefined;
-          if (options.askUser && claimOffer('shell')) {
+          if (options.askUser) {
             raised = await offerHigherShellTimeout(options, command, budgetMs);
           }
           // **Raised, and handed back — this deliberately does NOT re-run the

@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import stringWidth from 'string-width';
 import {
   parseClearArgs,
   clearResultMessage,
@@ -124,15 +125,39 @@ describe('the receipt', () => {
     // counted neither the indent nor the label, so a long domain name pushed the
     // row past the frame and Ink wrapped it — and a wrapped tail reads as another
     // row, which is worse than no receipt.
+    //
+    // Two things were wrong with this test as first written, and they compounded.
+    // It passed its arguments in the wrong ORDER — `(outcome, false, width)`
+    // against a `(outcome, width, note)` signature — so every iteration measured
+    // `width: false`, which is negative after the indent arithmetic and drops
+    // every row to its label. The loop therefore ran six times and asserted the
+    // same short string against six different bounds, and would have passed with
+    // the fix reverted entirely. And it measured `row.length`, which is UTF-16
+    // code units rather than terminal columns, so it could not see the failure it
+    // is named for on any non-Latin fact.
     const long = [
       { domain: 'user-preferences', fact: 'x'.repeat(400) },
       { domain: 'conversations', fact: 'y'.repeat(400) },
     ];
-    for (const width of [30, 40, 60, 73, 93, 200]) {
-      const out = clearResultMessage({ kind: 'saved', facts: 2, kept: long }, false, width);
-      expect(rowsOf(out).length).toBeGreaterThan(0);
-      for (const row of rowsOf(out)) {
-        expect(row.length, `width ${width}`).toBeLessThanOrEqual(width);
+    // CJK is the case that motivated the column measurement: one ordinary
+    // Japanese fact measured 51 by `.length` and occupied 87 columns.
+    const cjk = [
+      {
+        domain: 'general',
+        fact: 'ユーザーは日本語で会話することを好み、技術文書も日本語で読みたいと述べた',
+      },
+      {
+        domain: 'conversations',
+        fact: '每次部署之前都要先跑一遍完整的测试套件，然后再检查依赖是否有变化',
+      },
+    ];
+    for (const kept of [long, cjk]) {
+      for (const width of [30, 40, 60, 73, 93, 200]) {
+        const out = clearResultMessage({ kind: 'saved', kept }, width);
+        expect(rowsOf(out).length).toBeGreaterThan(0);
+        for (const row of rowsOf(out)) {
+          expect(stringWidth(row), `width ${width}: ${row}`).toBeLessThanOrEqual(width);
+        }
       }
     }
   });
@@ -147,8 +172,11 @@ describe('the receipt', () => {
   });
 
   it('drops the fact rather than crushing it when the frame is tiny', () => {
-    const out = clearResultMessage({ kind: 'saved', facts: 3, kept }, false, 30);
-    for (const row of rowsOf(out)) expect(row.length).toBeLessThanOrEqual(30);
+    // Same argument-order bug as above: this passed `width: false`, which lands
+    // in the label-only branch for the wrong reason, so it asserted the fallback
+    // without ever exercising the width that selects it.
+    const out = clearResultMessage({ kind: 'saved', kept }, 30);
+    for (const row of rowsOf(out)) expect(stringWidth(row)).toBeLessThanOrEqual(30);
     expect(out).toContain('general (2)');
     // The label survives; the fact is what goes.
     expect(out).not.toContain('Subject header');
@@ -165,6 +193,32 @@ describe('the receipt', () => {
     // Otherwise it rides the last listed fact and reads as part of it.
     const lines = render(73, true).split('\n');
     expect(lines[lines.length - 1]).toBe(SAVE_IS_DEFAULT_NOTE);
+  });
+
+  it('names a partial failure on the headline, above the rows it qualifies', () => {
+    // This reached the user as a `flashToast` and nowhere else, on the one change
+    // whose whole argument was that a toast is cleared by the next submit and the
+    // thing worth keeping has to go in the transcript. A partial failure is
+    // exactly the thing worth keeping, and it was the half that stayed in a toast
+    // — so the durable notice recorded a partial failure as an unqualified
+    // success.
+    const out = clearResultMessage({ kind: 'saved', kept, failed: 1 }, 73);
+    expect(out.split('\n')[0]).toBe('Cleared and saved 3 new facts to memory (1 domain failed):');
+    expect(clearResultMessage({ kind: 'saved', kept, failed: 2 }, 73)).toContain(
+      '(2 domains failed)',
+    );
+    // Absent and zero both read as a clean save.
+    expect(clearResultMessage({ kind: 'saved', kept, failed: 0 }, 73)).not.toContain('failed');
+    expect(clearResultMessage({ kind: 'saved', kept }, 73)).not.toContain('failed');
+  });
+
+  it('reports a cancelled save as cancelled, not as an error', () => {
+    // Esc during the extraction is a deliberate act, and reporting the user's own
+    // keystroke back to them as `Cleared, but saving failed: …` reads as a fault
+    // in Bernard. The clear still happened — that is what was asked for.
+    const out = clearResultMessage({ kind: 'cancelled' }, 73);
+    expect(out).toBe('Cleared. Saving was cancelled.');
+    expect(out).not.toContain('failed');
   });
 
   it('says nothing extra when the save added nothing', () => {

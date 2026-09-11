@@ -1267,7 +1267,30 @@ export function App({
         if (history.length < MIN_HISTORY_FOR_FACTS) {
           outcome = { kind: 'too-short' };
         } else {
+          // **Both of `runAgentTurn`'s guards, because this path now holds the
+          // REPL for as long as extraction takes.**
+          //
+          // `submittingRef` is the synchronous double-Enter guard described at
+          // its declaration: `setBusy` schedules a re-render, and an Enter that
+          // lands before `<Prompt disabled={busy}>` sees the flip starts a turn.
+          // That was survivable while the default `/clear` was instantaneous —
+          // the window was one render. Saving by default makes it seconds, and
+          // the tail of this branch then runs `agent.clearHistory()` and
+          // `setStaticItems([])` underneath a live turn, wiping the message the
+          // user just sent along with whatever the turn had accumulated.
+          //
+          // `turnAbortRef` is what makes Esc mean what it looks like it means.
+          // The Esc handler aborts that ref and calls `agent.abort()`; with no
+          // controller registered it aborted `null` and stopped an agent loop
+          // that was not running, so the UI reported an interrupted turn, nothing
+          // was cancelled, and the REPL stayed blocked until the 60 s cap fired.
+          // A bounded freeze is still a freeze, and this is the command people
+          // type reflexively.
+          if (submittingRef.current) return;
+          submittingRef.current = true;
           setBusy(true);
+          const clearAbort = new AbortController();
+          turnAbortRef.current = clearAbort;
           // Counted in the outer scope so the result line can name it. It was
           // local to the RAG block, which is why every path ended in the same
           // `Conversation history cleared.` and a save was indistinguishable from
@@ -1276,16 +1299,24 @@ export function App({
           // count. Collected through `addFacts`' observer because the extraction
           // cannot know which ones were new; that is decided inside the store.
           const keptFacts: SavedFact[] = [];
+          // Outer scope so the durable notice can name it. It used to live inside
+          // the RAG block and reach the user only as a `flashToast` — which is
+          // cleared by the next submit, on the one PR whose argument was that the
+          // thing worth keeping has to go in the transcript. A partial failure is
+          // exactly the thing worth keeping, and it was the half that stayed in a
+          // toast.
+          let failedDomains = 0;
           try {
             const serialized = serializeMessages(history);
             // Route these off-loop /clear --save LLM calls (fact extraction,
             // specialist detection) through the session telemetry sink so they
             // aren't an accounting hole (#session-telemetry).
             const recordSaveUsage = makeUsageRecorder(agent);
-            // Cap fact extraction at 60 s to prevent a hung LLM call from
-            // freezing the REPL. Fails open: timeout → empty domain facts.
-            // AbortSignal.timeout auto-cancels without manual teardown.
-            const extractSignal = AbortSignal.timeout(60_000);
+            // Two ways out, and the 60 s one is the backstop rather than the
+            // answer. `AbortSignal.timeout` bounds a hung LLM call and needs no
+            // teardown; `clearAbort` is what Esc reaches. Composed with
+            // `AbortSignal.any` so neither has to know about the other.
+            const extractSignal = AbortSignal.any([AbortSignal.timeout(60_000), clearAbort.signal]);
             // No prose summary here (#307): `extractDomainFacts` already routes
             // this transcript to RAG, including the `conversations` domain.
             //
@@ -1322,15 +1353,12 @@ export function App({
               // separately was a second source of truth that could disagree — a
               // domain that rejects after storing some facts loses its return
               // value to `Promise.allSettled` while its pushes survive.
-              const failedDomains = results.filter((r) => r.status === 'rejected').length;
+              failedDomains = results.filter((r) => r.status === 'rejected').length;
               if (keptFacts.length > 0) {
                 debugLog('app:clear-save:rag', { storedFacts: keptFacts.length });
               }
               if (failedDomains > 0) {
-                flashToast(
-                  `Warning: ${failedDomains} domain(s) failed to save to RAG memory.`,
-                  'warning',
-                );
+                debugLog('app:clear-save:rag-failed', { failedDomains });
               }
             }
             if (candidateResult) {
@@ -1354,12 +1382,22 @@ export function App({
                 // Silent — candidate storage failure is non-critical
               }
             }
-            outcome = { kind: 'saved', kept: keptFacts };
+            outcome = { kind: 'saved', kept: keptFacts, failed: failedDomains };
           } catch (err: unknown) {
-            const message = err instanceof Error ? err.message : String(err);
-            outcome = { kind: 'failed', message };
+            // A user Esc is not a failure to report as one — they stopped the
+            // wait, and the clear below still happens because that is what they
+            // asked for. Read off the controller rather than the error, since
+            // what surfaces here is whatever the aborted call chose to throw.
+            if (clearAbort.signal.aborted) {
+              outcome = { kind: 'cancelled' };
+            } else {
+              const message = err instanceof Error ? err.message : String(err);
+              outcome = { kind: 'failed', message };
+            }
           } finally {
             setBusy(false);
+            submittingRef.current = false;
+            turnAbortRef.current = null;
           }
         }
       }
@@ -1400,7 +1438,7 @@ export function App({
       pushAssistantNotice(
         clearResultMessage(
           outcome,
-          markdownBodyWidth(columns, { chevron: true }),
+          markdownBodyWidth(columns, { chevron: true, floor: false }),
           plan === 'save-noting-default',
         ),
       );

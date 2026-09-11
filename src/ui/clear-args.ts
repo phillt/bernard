@@ -1,4 +1,5 @@
-import { plural, truncate } from '../text.js';
+import stringWidth from 'string-width';
+import { plural } from '../text.js';
 import { cell } from './overlays/table.js';
 
 /**
@@ -85,6 +86,15 @@ export type SaveOutcome =
   | { kind: 'no-memory' }
   | { kind: 'failed'; message: string }
   /**
+   * The user pressed Esc while the extraction was running.
+   *
+   * Distinct from `failed` because it is not a failure: they stopped waiting,
+   * and reporting their own keystroke back to them as an error message is how a
+   * deliberate action reads as a fault. The clear itself still happens — that is
+   * what was asked for — so this says what did NOT.
+   */
+  | { kind: 'cancelled' }
+  /**
    * `kept` is the ONLY count. An earlier shape carried `facts` beside it — the
    * summed `addFacts` return — and the two can disagree: if one domain rejects
    * after storing some facts, `Promise.allSettled` drops its return value while
@@ -92,7 +102,19 @@ export type SaveOutcome =
    * summing to 3. The pushes are the truth, on a type whose whole purpose is to
    * say what actually happened.
    */
-  | { kind: 'saved'; kept: SavedFact[] };
+  | {
+      kind: 'saved';
+      kept: SavedFact[];
+      /**
+       * Domains whose `addFacts` rejected.
+       *
+       * On the outcome rather than in a toast: a toast is cleared by the next
+       * submit, and "some of what you just saved was lost" is precisely the
+       * thing this type exists to make durable. A partial failure was otherwise
+       * recorded in the transcript as an unqualified success.
+       */
+      failed?: number;
+    };
 
 /** One fact that survived dedup, with the domain it was filed under. */
 export interface SavedFact {
@@ -102,6 +124,49 @@ export interface SavedFact {
 
 /** Below this there is no room for a fact worth reading, so the row drops to its label. */
 const FACT_MIN = 24;
+
+/**
+ * How many terminal columns `s` occupies — not how many UTF-16 code units it is.
+ *
+ * The two are the same only for the Latin-1 subset, and the facts in a receipt
+ * come from the user's own conversation. Measured on this branch at a 73-column
+ * budget, one ordinary Japanese fact measured 51 by `String.length` and occupied
+ * **87** columns: it passed the fit check, wrapped, and its tail rendered as a
+ * row that does not exist — the exact failure the docstring on
+ * {@link receiptLines} says the measurement prevents. Anyone working in Chinese,
+ * Japanese or Korean hit it on their first `/clear`, at any width. Combining
+ * marks under-count the same way East Asian characters over-count.
+ *
+ * `string-width` rather than a local table: this is a Unicode data problem, the
+ * tables move every Unicode release, and the repo already ships the package —
+ * it is what Ink itself measures with. Promoted to a direct dependency at the
+ * same time, since relying on a transitive hoist is how this silently becomes a
+ * resolution error later.
+ */
+const widthOf = (s: string): number => stringWidth(s);
+
+/**
+ * `s` cut to at most `cols` display columns, with `…` marking the cut.
+ *
+ * Deliberately not `text.ts`'s {@link truncate}, which counts and slices code
+ * units — that is right for a byte budget and wrong for a column one, and its
+ * `slice` can also land between a surrogate pair and leave half a character
+ * behind. This walks code POINTS, so a cut never splits one.
+ */
+function fitToWidth(s: string, cols: number): string {
+  if (cols <= 0) return '';
+  if (widthOf(s) <= cols) return s;
+  let out = '';
+  let used = 0;
+  for (const ch of s) {
+    const w = widthOf(ch);
+    // `…` is one column, and it is going on the end.
+    if (used + w > cols - 1) break;
+    out += ch;
+    used += w;
+  }
+  return out.trimEnd() + '…';
+}
 
 /**
  * The per-domain receipt: what Bernard actually took away from the conversation.
@@ -122,10 +187,19 @@ const FACT_MIN = 24;
  * height is bounded by construction with no "…and N more" to maintain, and the
  * count carries what the elision would have said.
  *
- * **Padded with `cell`, not `padEnd`**, which is the combination `preview-lines`
- * already rejected in writing for this exact computation: a label longer than the
- * column pads to nothing and pushes its own fact out of alignment, so the one row
- * that most needed the column is the one that loses it. `cell` truncates first.
+ * **Padded with `cell`, not `padEnd`.** The reason originally given for that —
+ * that a label longer than the column would pad to nothing and push its own fact
+ * out of alignment — cannot happen here: `labelWidth` is the maximum over the
+ * very labels being padded, so `cell`'s truncation branch is unreachable and the
+ * call is exactly `padEnd`. The real reason is that it is the house primitive for
+ * this and costs nothing, and that the hazard becomes reachable the moment anyone
+ * clamps `labelWidth` to a maximum. Stated correctly because the previous version
+ * presented a guarantee as load-bearing when it was true by accident.
+ *
+ * Labels are the one part measured in code units rather than columns, and that is
+ * safe rather than overlooked: a label is `<domain> (<count>)`, and the domain
+ * registry is a closed ASCII set. The fact text is not, which is what
+ * {@link fitToWidth} is for.
  *
  * The alignment survives rendering because `renderMarkdown` sets
  * `reflowText: false` — Ink owns wrapping, so marked-terminal leaves the lines
@@ -134,7 +208,11 @@ const FACT_MIN = 24;
  * as another row.
  *
  * **Known limit: the fit holds only at the width it was pushed at.** Nothing
- * downstream re-measures either. `pushTranscriptMessage` stores an immutable
+ * downstream re-measures either. (The other half of this used to be
+ * `markdownBodyWidth`'s `Math.max(40, …)` floor, which over-reported below 47
+ * columns and made every row wrap at push time with no resize involved. The
+ * caller passes `floor: false` now, so what remains really is only the resize
+ * case.) `pushTranscriptMessage` stores an immutable
  * string in `staticItems`, so unlike every other width-aware surface here — which
  * re-derive at render, `SourcesViewer` from `innerWidth` in a `useMemo`,
  * `MarkdownLines` from `useDimensionsCtx` — this one is frozen. Measured: baked at
@@ -170,8 +248,11 @@ function receiptLines(kept: readonly SavedFact[], width: number): string[] {
   const factWidth = width - 2 - labelWidth - 2;
   return rows.map((r) =>
     factWidth < FACT_MIN
-      ? `  ${r.label}`
-      : `  ${cell(r.label, labelWidth)}  ${truncate(r.fact, factWidth)}`,
+      ? // The label row is fitted too. At a very narrow width the labels alone
+        // can outrun the budget, and an unfitted fallback would wrap exactly like
+        // the row it is the fallback for.
+        `  ${fitToWidth(r.label, width - 2)}`
+      : `  ${cell(r.label, labelWidth)}  ${fitToWidth(r.fact, factWidth)}`,
   );
 }
 
@@ -186,11 +267,17 @@ function headline(outcome: SaveOutcome): string {
       return 'Cleared. Nothing was saved — long-term memory is off (BERNARD_RAG_ENABLED).';
     case 'failed':
       return `Cleared, but saving failed: ${outcome.message}`;
+    case 'cancelled':
+      return 'Cleared. Saving was cancelled.';
     case 'saved': {
       const n = outcome.kept.length;
+      const lost = outcome.failed ?? 0;
+      // Named on the headline rather than appended after the rows, so it is read
+      // before the list it qualifies rather than after it.
+      const caveat = lost > 0 ? ` (${lost} ${plural(lost, 'domain', 'domains')} failed)` : '';
       return n === 0
-        ? 'Cleared and saved — no new facts beyond what memory already held.'
-        : `Cleared and saved ${n} new ${plural(n, 'fact', 'facts')} to memory:`;
+        ? `Cleared and saved — no new facts beyond what memory already held${caveat}.`
+        : `Cleared and saved ${n} new ${plural(n, 'fact', 'facts')} to memory${caveat}:`;
     }
   }
 }

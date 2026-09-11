@@ -767,7 +767,14 @@ describe('<App> /clear', () => {
     process.env.BERNARD_HOME = TMP_HOME;
   });
   afterEach(() => {
+    // `clearAllMocks` resets CALLS and leaves implementations in place, so a
+    // `mockImplementation` set by one test is still live in the next. Harmless
+    // for the `mockResolvedValue` cases, which each set their own — and not
+    // harmless for a promise that never resolves, which silently hangs whatever
+    // runs after it.
     vi.clearAllMocks();
+    mockExtractDomainFacts.mockReset();
+    mockExtractDomainFacts.mockResolvedValue([]);
   });
 
   it('clears the agent + stores with --do-not-save', async () => {
@@ -813,6 +820,50 @@ describe('<App> /clear', () => {
     expect(agentSpy.clearHistory).toHaveBeenCalled();
     unmount();
   });
+
+  it('Esc cancels the save instead of blocking the REPL for 60 s', async () => {
+    // `extractSignal` was a standalone `AbortSignal.timeout(60_000)` with no
+    // controller registered in `turnAbortRef`, so Esc aborted `null`, called
+    // `agent.abort()` on a loop that was not running, and set interrupted state
+    // for a turn that did not exist — while cancelling nothing. The REPL stayed
+    // blocked until extraction returned or the cap fired. A bounded freeze is
+    // still a freeze, and this is the command people type reflexively.
+    let signal: AbortSignal | undefined;
+    mockExtractDomainFacts.mockImplementation(
+      (...args: unknown[]) =>
+        new Promise((_resolve, reject) => {
+          signal = args[3] as AbortSignal;
+          signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        }) as Promise<never>,
+    );
+    const { stdin, lastFrame, unmount } = renderApp(SAVEABLE);
+    await tick();
+    await submit(stdin, '/clear');
+    expect(signal?.aborted).toBe(false);
+    stdin.write(ESC);
+    await tick(40);
+    expect(signal?.aborted).toBe(true);
+    // And it is reported as the deliberate act it was, not as an error.
+    expect(lastFrame() ?? '').toContain('Saving was cancelled');
+    unmount();
+  });
+
+  // NOT tested: that the `/clear` save takes and releases `submittingRef`.
+  //
+  // Both halves resist a test at this level, and the attempts are worth recording
+  // so the next person does not ship one that passes for the wrong reason. The
+  // RACE is sub-render-tick by construction — any test that writes to stdin has
+  // already awaited a tick, so `disabled={busy}` has propagated and the guard is
+  // not what stopped the second Enter; such a test passes with the guard deleted,
+  // measured. The RELEASE cannot be observed either: `/clear` ends in a
+  // `setStaticEpoch` bump that remounts the tree, and under `ink-testing-library`
+  // no turn submits after that remount at any tick count — including after
+  // `/clear --do-not-save`, which never touches the ref. So the harness, not the
+  // guard, is what fails such a test.
+  //
+  // What the fix rests on instead: it is the same two lines `runAgentTurn` takes,
+  // released in the same `finally` that calls `setBusy(false)`, so the pair is
+  // symmetric by inspection.
 
   it('does not spend two model calls when there is nowhere to put the facts', async () => {
     // Measured before this gate existed: ~10 s of blocked REPL and ~98,000 input
