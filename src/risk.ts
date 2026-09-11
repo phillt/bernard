@@ -25,19 +25,75 @@ export type RiskLevel = ToolRisk;
 export type ConfirmThreshold = 'never' | 'high' | 'medium' | 'always';
 
 /**
- * Suffix-based read-only allowlist for MCP tools. Names ending in any of
- * these verbs are treated as safe lookup-style calls. Excludes write verbs
- * like `create`, `update`, `delete`, `send`, `post`.
+ * Verbs that make an MCP tool a lookup-style call.
  *
- * Centralized here so the MCP wrapper (`framework/tools/mcp.ts`) and the
- * reference-resolver lookup pass (`reference-tool-lookup.ts`) agree on the
- * same definition of "read-only MCP tool."
+ * Centralized here so the MCP wrapper (`mcp.ts`), the reference-resolver lookup
+ * pass (`reference-tool-lookup.ts`) and the watcher probe (`watchers/probe.ts`)
+ * agree on one definition of "read-only MCP tool".
  */
-const READONLY_MCP_SUFFIX_RE = /(?:^|_)(search|list|find|get|query|read|lookup)$/i;
+const READ_VERBS = new Set(['search', 'list', 'find', 'get', 'query', 'read', 'lookup']);
 
-/** Returns true when the given MCP tool name ends in a known read-only verb. */
+/**
+ * Verbs that disqualify a name however it is shaped.
+ *
+ * Checked against EVERY segment, and it is what makes matching a leading verb
+ * safe: `get_or_create_chat` leads with a read verb and creates, and
+ * `mark_as_read` ENDS with one while writing. Both are refused here.
+ */
+const WRITE_VERBS = new Set([
+  'create',
+  'update',
+  'delete',
+  'send',
+  'post',
+  'write',
+  'remove',
+  'set',
+  'add',
+  'modify',
+  'patch',
+  'put',
+  'archive',
+  'move',
+  'rename',
+  'upload',
+  'insert',
+  'edit',
+  'mark',
+  'star',
+  'react',
+  'reply',
+  'forward',
+  'clear',
+  'draft',
+]);
+
+/**
+ * Whether an MCP tool name reads rather than writes.
+ *
+ * Matches a read verb at EITHER end, which is the fix: this was end-anchored
+ * only (`/(?:^|_)(search|list|…)$/`), so it recognised `messages_list` and not
+ * `list_messages` — and verb-first naming is at least as common. Beeper's
+ * `list_messages` was therefore classified `kind: 'write'`, which is not a
+ * watcher problem: `mcp.ts` feeds this into every tool's risk tier, so on any
+ * verb-first server EVERY read tool was a medium-risk write — refused outright
+ * under `toolMode: 'read-only'`, prompting under `strict`, and excluded from the
+ * resolver's lookup allowlist.
+ *
+ * It is a loosening, so it is guarded rather than widened: a read verb at either
+ * end, and NO write verb anywhere. The verb set itself is unchanged.
+ *
+ * The namespace is stripped first. Keys are `server_hash__tool` since #413, so
+ * segmenting the whole key would make the first segment the server name and the
+ * leading-verb test would never fire — which is the same reason the original was
+ * anchored rather than free-floating.
+ */
 export function isReadOnlyMCPSuffix(name: string): boolean {
-  return READONLY_MCP_SUFFIX_RE.test(name);
+  const bare = name.includes('__') ? name.slice(name.lastIndexOf('__') + 2) : name;
+  const segments = bare.toLowerCase().split('_').filter(Boolean);
+  if (segments.length === 0) return false;
+  if (segments.some((seg) => WRITE_VERBS.has(seg))) return false;
+  return READ_VERBS.has(segments[0]) || READ_VERBS.has(segments[segments.length - 1]);
 }
 
 /**

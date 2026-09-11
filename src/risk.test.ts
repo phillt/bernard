@@ -233,3 +233,61 @@ describe('shouldBlockInReadOnly', () => {
     expect(shouldBlockInReadOnly(m)).toBe(true);
   });
 });
+
+/**
+ * Verb-first MCP naming (found in use, on Beeper).
+ *
+ * This was end-anchored only, so `messages_list` was a read and
+ * `list_messages` was a WRITE. That is not a watcher problem: `mcp.ts` feeds
+ * this into every tool's risk tier, so on any verb-first server every read tool
+ * was medium-risk — refused under `toolMode: 'read-only'`, prompting under
+ * `strict`, and excluded from the resolver's lookup allowlist.
+ */
+describe('isReadOnlyMCPSuffix — verb position', () => {
+  it('accepts a read verb at either end', () => {
+    for (const n of [
+      'list_messages',
+      'messages_list',
+      'get_chats',
+      'search_messages',
+      'query_threads',
+      'lookup_contact',
+      'read_receipts',
+    ]) {
+      expect(isReadOnlyMCPSuffix(n), n).toBe(true);
+    }
+  });
+
+  it('still refuses writes, wherever the verb sits', () => {
+    for (const n of [
+      'send_message',
+      'message_send',
+      'delete_chat',
+      'update_status',
+      'archive_thread',
+    ]) {
+      expect(isReadOnlyMCPSuffix(n), n).toBe(false);
+    }
+  });
+
+  it('refuses a write verb even when a read verb is also present', () => {
+    // This is what makes matching a leading verb safe rather than reckless.
+    expect(isReadOnlyMCPSuffix('get_or_create_chat')).toBe(false);
+    expect(isReadOnlyMCPSuffix('mark_as_read')).toBe(false);
+    expect(isReadOnlyMCPSuffix('list_and_delete')).toBe(false);
+    expect(isReadOnlyMCPSuffix('search_and_reply')).toBe(false);
+  });
+
+  it('strips the #413 namespace before segmenting', () => {
+    // Keys are `server_hash__tool`; segmenting the whole key makes the first
+    // segment the server name, and the leading-verb test could never fire.
+    expect(isReadOnlyMCPSuffix('beeper_654785__list_messages')).toBe(true);
+    expect(isReadOnlyMCPSuffix('beeper_654785__send_message')).toBe(false);
+  });
+
+  it('is not fooled by a verb appearing inside a word', () => {
+    // Segment matching, not substring: `updates` must not read as `update`.
+    expect(isReadOnlyMCPSuffix('get_message_updates')).toBe(true);
+    expect(isReadOnlyMCPSuffix('listing_details')).toBe(false);
+  });
+});
