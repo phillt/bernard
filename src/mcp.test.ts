@@ -115,16 +115,56 @@ describe('MCPManager reconnection', () => {
 
   describe('outbound argument folding (#mojibake)', () => {
     /**
-     * The asymmetry this closes. The wrapper normalized the RESULT and handed the
-     * ARGS straight through — one parameter position apart — which is how a plain
-     * em dash reached a Gmail MCP server that writes raw UTF-8 into a `Subject:`
-     * header and came back as `Ã¢Â€Â”`. Repair cleans up after a consumer that
-     * mangles our bytes; it cannot stop the next one.
+     * The asymmetry this closes, and why it is **opt-in**. The wrapper normalized
+     * the RESULT and handed the ARGS straight through — one parameter position
+     * apart — which is how a plain em dash reached a Gmail MCP server that writes
+     * raw UTF-8 into a `Subject:` header and came back as `Ã¢Â€Â”`.
+     *
+     * It shipped default-on and the default was reversed: `mcp.ts` has no notion
+     * of argument kind (the schema belongs to the server), and folding a JSON
+     * document, a URL, a path, an XPath, a regex or a selector corrupts it. The
+     * off-by-default case is therefore the one asserted FIRST here, because it is
+     * the behaviour almost every user gets.
      */
     const original = process.env.BERNARD_ASCII_OUTBOUND;
+    beforeEach(() => {
+      process.env.BERNARD_ASCII_OUTBOUND = 'true';
+    });
     afterEach(() => {
       if (original === undefined) delete process.env.BERNARD_ASCII_OUTBOUND;
       else process.env.BERNARD_ASCII_OUTBOUND = original;
+    });
+
+    it('is off unless asked for, so an unflagged argument crosses untouched', async () => {
+      delete process.env.BERNARD_ASCII_OUTBOUND;
+      const executeFn = vi.fn().mockResolvedValue('sent');
+      await setupWithServer('test-server', { send: makeDynamicTool(executeFn) });
+
+      // A selector and a JSON document: the two shapes the fold breaks worst.
+      const args = {
+        selector: 'text=Sign in — it’s free',
+        body: '{"note":"a — b","q":"“x”"}',
+      };
+      await manager.getTools()[mcpToolName('test-server', 'send')].execute(args);
+
+      expect(executeFn).toHaveBeenCalledWith(args);
+    });
+
+    it('corrupts non-prose arguments when it IS enabled, which is why it is opt-in', async () => {
+      // Pinned deliberately. This is not a bug report against the fold — it is
+      // what folding means, and it is the evidence for the default. If someone
+      // narrows the fold to prose-shaped arguments later, this is the test that
+      // should start failing.
+      const executeFn = vi.fn().mockResolvedValue('sent');
+      await setupWithServer('test-server', { send: makeDynamicTool(executeFn) });
+
+      await manager.getTools()[mcpToolName('test-server', 'send')].execute({
+        body: '{"q":"“x”"}',
+      });
+
+      const sent = (executeFn.mock.calls[0][0] as { body: string }).body;
+      expect(sent).toBe('{"q":""x""}');
+      expect(() => JSON.parse(sent)).toThrow();
     });
 
     it('folds typography in the args the server actually receives', async () => {
@@ -150,7 +190,7 @@ describe('MCPManager reconnection', () => {
       expect(executeFn).toHaveBeenCalledWith(args);
     });
 
-    it('can be turned off for genuinely typographic content', async () => {
+    it('stays off when explicitly disabled', async () => {
       process.env.BERNARD_ASCII_OUTBOUND = 'false';
       const executeFn = vi.fn().mockResolvedValue('sent');
       await setupWithServer('test-server', { send: makeDynamicTool(executeFn) });

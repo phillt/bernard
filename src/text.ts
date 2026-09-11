@@ -91,14 +91,29 @@ export function scopeList(patterns: readonly string[]): string {
  * So a candidate is a UTF-8 **lead** character followed by the right number of
  * **continuation** characters — the shape mojibake has and prose does not.
  * `café €5` contains both `é` and `€` and matches nothing, because no lead is
- * followed by a continuation. `â€”` matches. That, plus the two acceptance gates
- * below, is what makes this safe to run on every tool result.
+ * followed by a continuation. `â€”` matches.
  *
- * ## Acceptance, unchanged from the predecessor and still doing real work
+ * ## What actually makes this safe
  *
- * A repair is kept only when it introduces no U+FFFD **and** the string got
- * shorter. Both are needed: reassembly always shrinks, and anything that was not
- * really mojibake fails to form valid UTF-8.
+ * Two guards, and NEITHER is the pair the predecessor had. This section used to
+ * claim the old acceptance gates were "unchanged and still doing real work" —
+ * "a repair is kept only when it introduces no U+FFFD **and** the string got
+ * shorter". Both are gone from the code, and a reader deciding whether it is safe
+ * to widen detection would have been pointed at two guards that cannot catch
+ * anything:
+ *
+ *  - the **U+FFFD** check is subsumed by decoding each candidate with
+ *    `TextDecoder(…, { fatal: true })`, which throws per match instead of
+ *    producing a replacement character to notice afterwards;
+ *  - the **shrink** check is unreachable, because per-match replacement shrinks
+ *    by construction — the shortest candidate is two characters and the longest
+ *    decode is one. It was doing real work only for the predecessor, which
+ *    rebuilt the whole string as one byte stream. A mutation proved it dead.
+ *
+ * What carries the safety now is {@link strongMatches} — a candidate must look
+ * like mojibake and not merely decode like it — and `IMPLAUSIBLE`, which refuses
+ * a decode landing on an unassigned, private-use or surrogate code point. Widen
+ * either of those and this paragraph is the one to re-read.
  *
  * Literal escape un-escaping (`\n`, `\uXXXX`) remains deliberately out of scope —
  * the risk to code, regexes and Windows paths outweighs it.
@@ -225,34 +240,69 @@ function findCandidates(s: string): Candidate[] {
  * adversarial strings were corrupted. A missed repair costs legibility; a false
  * repair costs data, and that asymmetry decides the design.
  *
- * A match is STRONG when one of these holds, and one strong match vouches for
- * the whole string:
+ * **Strength is a property of the MATCH, not of the string**, and getting that
+ * wrong put both pinned corruptions straight back. The gate was originally a
+ * whole-string boolean — one strong match vouched for everything — and the loop
+ * below then replaced every candidate, including the two-character weak ones the
+ * gate exists to protect. Measured:
+ *
+ * ```
+ * in : "Subject: CafÃ© news — from JOSÉ's car"
+ * out: "Subject: Café news — from JOSɒs car"
+ * ```
+ *
+ * `Ã©` is strong by rule 2, which licensed corrupting a name three words away.
+ * The tests pinned `JOSÉ's car` and `«ÉTÉ»` in isolation, which is the one shape
+ * where a whole-string gate works — and mixed is the normal shape for this data:
+ * a thread whose subject went through a broken hop while the body is clean, a
+ * scraped page with one mangled field, an MCP result concatenating two sources.
+ * So a strong match now vouches for ITSELF, and weak candidates are left
+ * byte-identical beside it.
+ *
+ * A match is STRONG when one of these holds:
  *
  *  1. its continuation is a raw C1 code point (U+0080–U+009F) — these never occur
  *     in real text, which is why the predecessor's gate was safe by accident;
- *  2. its lead is `Â` or `Ã`, which between them cover all of Latin-1 Supplement
- *     and most of Latin Extended-A — most real mojibake — and neither precedes a
- *     symbol in legitimate text (`AÇÃO` has `Ã` before an ASCII `O`);
+ *  2. its lead is `Â` or `Ã`, i.e. UTF-8 leads `0xC2`/`0xC3`, which cover
+ *     U+0080–U+00FF — Latin-1 Supplement, and nothing beyond it. Neither precedes
+ *     a symbol in legitimate text (`AÇÃO` has `Ã` before an ASCII `O`);
  *  3. it is three or four characters long: an accented letter followed by two or
  *     three symbols does not occur naturally;
  *  4. three or more matches sit adjacent, which recovers Cyrillic and Greek
  *     mojibake — those produce neither C1 characters nor `Â`/`Ã`. Two is not
- *     enough: `Ø¼Ø½ sizes` is two adjacent matches of perfectly good text.
+ *     enough: `Ø¼Ø½ sizes` is two adjacent matches of perfectly good text. This
+ *     one is a property of the RUN, so it marks every member of a qualifying one.
+ *
+ * **Known gap, stated because the previous wording hid it.** Rule 2 used to claim
+ * `Â`/`Ã` covered "most of Latin Extended-A". They do not: that block is
+ * U+0100–U+017F, whose leads are `0xC4`/`0xC5` → the mojibake characters `Ä` and
+ * `Å`, which no rule matches. So a single Polish, Croatian, Turkish or Hungarian
+ * accented character surrounded by ASCII is found as a candidate, decodes
+ * cleanly, and is left alone — `GdaÅ„sk`, `Ä†evapi`, `Ä°stanbul` and `ErdÅ‘s` all
+ * survive unrepaired. `DvoÅ™Ã¡k` looks like a counterexample and is not: it
+ * repairs through its `Ã¡`, not its `Å™`. Widening rule 2 to those leads is a
+ * real option and a separate decision — it trades this miss against false
+ * positives on `Ä`/`Å` followed by punctuation — and it is not taken here.
  */
-function hasStrongMojibake(s: string, candidates: readonly Candidate[]): boolean {
-  let run = 0;
-  let prevEnd = -1;
-  for (const c of candidates) {
+function strongMatches(s: string, candidates: readonly Candidate[]): boolean[] {
+  const strong = candidates.map((c) => {
     if (c.end - c.start >= 3) return true;
     const cont = s.charCodeAt(c.start + 1);
     if (cont >= 0x80 && cont <= 0x9f) return true;
     const lead = s.charCodeAt(c.start);
-    if (lead === 0x00c2 || lead === 0x00c3) return true;
-    run = c.start === prevEnd ? run + 1 : 1;
-    prevEnd = c.end;
-    if (run >= STRONG_RUN) return true;
+    return lead === 0x00c2 || lead === 0x00c3;
+  });
+  // Rule 4 reads over a run, so it is applied after the per-match rules and marks
+  // the whole run rather than the character that happened to close it.
+  let runStart = 0;
+  for (let i = 0; i <= candidates.length; i++) {
+    const adjacent =
+      i > 0 && i < candidates.length && candidates[i].start === candidates[i - 1].end;
+    if (adjacent) continue;
+    if (i - runStart >= STRONG_RUN) for (let j = runStart; j < i; j++) strong[j] = true;
+    runStart = i;
   }
-  return false;
+  return strong;
 }
 
 /**
@@ -266,11 +316,17 @@ function hasStrongMojibake(s: string, candidates: readonly Candidate[]): boolean
  */
 function repairOnce(s: string): string {
   const candidates = findCandidates(s);
-  if (candidates.length === 0 || !hasStrongMojibake(s, candidates)) return s;
+  if (candidates.length === 0) return s;
+  const strong = strongMatches(s, candidates);
+  if (!strong.some(Boolean)) return s;
 
   let out = '';
   let at = 0;
-  for (const c of candidates) {
+  for (let i = 0; i < candidates.length; i++) {
+    // A weak candidate is skipped, not replaced — so it stays byte-identical and
+    // the slice below carries it through untouched.
+    if (!strong[i]) continue;
+    const c = candidates[i];
     out += s.slice(at, c.start) + c.decoded;
     at = c.end;
   }
@@ -290,6 +346,25 @@ function repairOnce(s: string): string {
  * back several times. Termination does not depend on this — every accepted pass
  * strictly shrinks the string — but a fixed bound means a pathological input
  * cannot spin.
+ *
+ * **The consequence is that `normalizeToolText` is not idempotent past the
+ * bound**, which is worth knowing because three boundaries now call it and
+ * "already normalized" is therefore not a safe assumption anywhere. Measured, by
+ * mangling `"Meeting — notes"` N times and normalizing once:
+ *
+ * ```
+ * depth 1-6: f(x) === f(f(x)), fully repaired
+ * depth 7:   f(x) = "Meeting â€” notes"      f(f(x)) = "Meeting — notes"
+ * depth 8:   f(x) = "Meeting Ã¢â‚¬â€ notes"  f(f(x)) = "Meeting — notes"
+ * ```
+ *
+ * Raising the bound moves the depth at which this starts and does not remove it,
+ * and `if (next === out) break` below already finds the fixed point whenever one
+ * is within reach — the bound only truncates. Left as a bound, because a string
+ * stacked seven deep is a different problem from the one this fixes and a second
+ * pass over the same text costs nothing. Within the bound there is no
+ * oscillation and no growth: 400k random strings drawn from UTF-8 leads,
+ * continuations, CP1252 punctuation and ASCII produced zero of either.
  */
 const MAX_REPAIR_PASSES = 6;
 

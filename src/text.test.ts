@@ -327,6 +327,33 @@ describe('legitimate text is never touched', () => {
     expect(normalizeToolText(input)).toBe(input.normalize('NFC'));
   });
 
+  // **Mixed provenance: one real mojibake sequence beside legitimate text.**
+  //
+  // This is the shape the whole-string gate got wrong, and it is the NORMAL shape
+  // for the data this exists for — a thread whose subject went through a broken
+  // hop while the body is clean, a scraped page with one mangled field, an MCP
+  // result concatenating two sources. Every `keep` half below is a string the
+  // table above already pins in isolation, which is exactly why isolation was not
+  // enough: `Ã©` is strong by rule 2, and a whole-string gate let it license
+  // corrupting a name three words away.
+  it.each([
+    [
+      'a strong match does not license corrupting a weak one',
+      'Subject: CafÃ© news — from JOSÉ’s car',
+      'Subject: Café news — from JOSÉ’s car',
+    ],
+    ['guillemets survive beside a real repair', 'CafÃ© «ÉTÉ»', 'Café «ÉTÉ»'],
+    ['a fraction survives beside a real repair', 'CafÃ© — use 2×½ cup', 'Café — use 2×½ cup'],
+    ['Icelandic survives beside a real repair', 'ÓÐÞ’s CafÃ©', 'ÓÐÞ’s Café'],
+    [
+      'a double-encoded dash does not drag its neighbours in',
+      'Meeting Ã¢Â€Â” notes from JOSÉ’s car',
+      'Meeting — notes from JOSÉ’s car',
+    ],
+  ])('%s', (_label, input, expected) => {
+    expect(normalizeToolText(input)).toBe(expected.normalize('NFC'));
+  });
+
   it('refuses a decode that lands in private use, however strong the match', () => {
     // `î` + two C1 chars is a length-3 match, so the strength gate vouches for it —
     // but `EE 80 80` is U+E000, private use. Structural validity is not the same as
