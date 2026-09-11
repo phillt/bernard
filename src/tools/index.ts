@@ -204,12 +204,12 @@ export async function createTools(
       audience: 'main',
       make: async () => {
         const { createWatcherTool } = await import('./watcher.js');
-        return createWatcherTool({
-          // Create-time validation only — "is this tool read-only?". The POLLER
-          // re-takes the live registry on every probe, because a bag captured
-          // here cannot see a server that reconnected later.
-          tools: () => mcpTools ?? {},
-        });
+        // No `tools` getter: it defaults to the live manager's RAW bag.
+        // Passing `mcpTools` was a bug — under delegation (the default) that
+        // holds `delegate_<server>` and none of the real `server__tool` names,
+        // so every MCP watcher was refused as "not available in this session"
+        // while the poller, reading `snapshot().tools`, could have called it.
+        return createWatcherTool();
       },
     },
     { audience: 'any', make: () => createTimeTools() },

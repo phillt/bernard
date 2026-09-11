@@ -178,3 +178,126 @@ describe('watcher tool', () => {
     expect(new WatcherStore().list()[0].intervalMs).toBeGreaterThanOrEqual(15_000);
   });
 });
+
+/**
+ * The delegated-registry regression (#479 follow-up).
+ *
+ * Observed in a real session: Bernard chose exactly the right tool and shape —
+ * `beeper_…__list_messages` with an `mcp` target — and was told
+ * "No tool named ... is available in this session." He fell back to a blind
+ * `time` watcher, which polls a clock instead of the thing that was asked about.
+ *
+ * The cause was that create-time validation read the registry `createTools` was
+ * HANDED, and with `BERNARD_MCP_DELEGATION` on — the default — that holds
+ * `delegate_<server>` tools and none of the real `server_hash__tool` names. The
+ * poller reads `snapshot().tools`, which is raw. So the two disagreed, and
+ * validation refused a tool the poller could have called.
+ */
+describe('watcher tool — registry agreement', () => {
+  const raw = { beeper_ab12__list_messages: tool('read') };
+  const delegated = { delegate_beeper: tool('write') };
+
+  it('validates against the RAW bag, not the delegated surface', async () => {
+    const out = await run(make(raw), {
+      action: 'create',
+      name: 'kaitlyn reply',
+      instructions: 'read the newest messages and respond',
+      targetKind: 'mcp',
+      tool: 'beeper_ab12__list_messages',
+      predicate: 'appeared',
+      idPath: '$.messages.id',
+    });
+    expect(out).toMatch(/Watching tool beeper_ab12__list_messages/);
+  });
+
+  it('reproduces the failure when handed the delegated bag', async () => {
+    // Guard-the-guard: without this the test above could pass for the wrong
+    // reason (e.g. if the refusal were removed entirely).
+    const out = await run(make(delegated), {
+      action: 'create',
+      name: 'kaitlyn reply',
+      instructions: 'x',
+      targetKind: 'mcp',
+      tool: 'beeper_ab12__list_messages',
+    });
+    expect(out).toMatch(/No tool named/);
+  });
+
+  it('names watchable alternatives instead of leaving the model guessing', async () => {
+    const registry = {
+      beeper_ab12__list_messages: tool('read'),
+      beeper_ab12__read_messages: tool('read'),
+      beeper_ab12__send_message: tool('write'),
+    };
+    const out = await run(make(registry), {
+      action: 'create',
+      name: 'x',
+      instructions: 'y',
+      targetKind: 'mcp',
+      tool: 'beeper_ab12__get_messages',
+    });
+    expect(out).toMatch(/beeper_ab12__list_messages/);
+    // Never suggests something the very next check would refuse.
+    expect(out).not.toMatch(/send_message/);
+  });
+
+  it('points at the real name when a delegate tool was named', async () => {
+    const out = await run(make(delegated), {
+      action: 'create',
+      name: 'x',
+      instructions: 'y',
+      targetKind: 'mcp',
+      tool: 'delegate_beeper',
+    });
+    expect(out).toMatch(/not a read-only tool|delegate_<server>/);
+  });
+});
+
+/**
+ * The WIRING, which the cases above cannot pin.
+ *
+ * They inject their own registry, so they stay green even when `createTools`
+ * hands the watcher the delegated bag — which is precisely the bug that shipped.
+ * Mutation-checked: restoring `tools: () => mcpTools` fails this and nothing
+ * else in the file.
+ */
+describe('createTools wires the watcher to the raw MCP bag', () => {
+  it('accepts a real MCP tool name even when the surface is delegated', async () => {
+    const { setActiveMCPManager } = await import('../mcp.js');
+    const { createTools } = await import('./index.js');
+    const { MemoryStore } = await import('../memory.js');
+
+    const rawName = 'beeper_ab12__list_messages';
+    // The live manager exposes RAW names, exactly as `snapshot()` does.
+    const fakeManager = {
+      snapshot: () => ({ tools: { [rawName]: tool('read') } }),
+    };
+    setActiveMCPManager(fakeManager as never);
+    try {
+      // …while `createTools` is handed the DELEGATED surface, as it is in a real
+      // session with `BERNARD_MCP_DELEGATION` on.
+      const registry = await createTools({} as never, new MemoryStore(), {
+        delegate_beeper: tool('write'),
+      } as never);
+      const watcherTool = registry.watcher as {
+        execute: (a: unknown, o: unknown) => Promise<string>;
+      };
+      const out = await watcherTool.execute(
+        {
+          action: 'create',
+          name: 'kaitlyn reply',
+          instructions: 'read the newest messages and respond',
+          targetKind: 'mcp',
+          tool: rawName,
+          predicate: 'appeared',
+          idPath: '$.messages.id',
+        },
+        { toolCallId: 'c', messages: [] },
+      );
+      expect(out).toMatch(/Watching tool beeper_ab12__list_messages/);
+      expect(out).not.toMatch(/No tool named/);
+    } finally {
+      setActiveMCPManager(null);
+    }
+  });
+});

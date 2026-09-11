@@ -67,8 +67,23 @@ export type ProbeResult = { ok: true; observation: Observation } | { ok: false; 
  * Returns a refusal string, or `null` when allowed — `directInvocableRefusal`'s
  * shape, so a caller reports WHY rather than a bare boolean.
  */
-export function watchableToolRefusal(toolName: string, tool: unknown): string | null {
-  if (!tool) return `No tool named "${toolName}" is available in this session.`;
+export function watchableToolRefusal(
+  toolName: string,
+  tool: unknown,
+  available?: Record<string, unknown>,
+): string | null {
+  if (!tool) {
+    // Name what IS watchable. A bare "not available" leaves a model guessing at
+    // a namespaced key it cannot enumerate — observed once as a fallback to a
+    // blind `time` watcher, which polls a clock instead of the thing asked
+    // about. Suggestions are filtered to read-only, so nothing offered here can
+    // then be refused by the very next check.
+    const near = available ? suggestions(toolName, available) : [];
+    const hint = near.length
+      ? ` Watchable tools with a similar name: ${near.join(', ')}.`
+      : ' Note a watcher needs the real tool name (e.g. `server_ab12__list_messages`), not a `delegate_<server>` tool.';
+    return `No tool named "${toolName}" is available in this session.${hint}`;
+  }
   const meta = readToolMeta(tool);
   // A built-in declares its own kind; an MCP tool is classified from its suffix
   // by `mcp.ts`, which sets `kind: 'read'` for the `*_list` / `*_search` /
@@ -81,6 +96,35 @@ export function watchableToolRefusal(toolName: string, tool: unknown): string | 
     return `Tool "${toolName}" cannot be invoked directly.`;
   }
   return null;
+}
+
+/**
+ * Up to five watchable tools whose names look like what was asked for.
+ *
+ * Matched on the SEGMENTS of a namespaced key — `beeper_ab12__list_messages`
+ * shares `beeper` and `messages` with `beeper_ab12__read_messages` — because the
+ * usual near-miss is the right server and the wrong verb, which a whole-string
+ * distance would score as far apart.
+ */
+function suggestions(wanted: string, available: Record<string, unknown>): string[] {
+  const parts = new Set(
+    wanted
+      .toLowerCase()
+      .split(/[_\W]+/)
+      .filter((p) => p.length > 2),
+  );
+  if (parts.size === 0) return [];
+  const scored: { name: string; score: number }[] = [];
+  for (const [name, tool] of Object.entries(available)) {
+    if (watchableToolRefusal(name, tool) !== null) continue;
+    const theirs = name.toLowerCase().split(/[_\W]+/);
+    const score = theirs.filter((p) => parts.has(p)).length;
+    if (score > 0) scored.push({ name, score });
+  }
+  return scored
+    .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+    .slice(0, 5)
+    .map((s) => s.name);
 }
 
 /** Looks once. Never throws; a failure is a value the caller counts. */
@@ -171,7 +215,7 @@ async function probeMcp(
 ): Promise<ProbeResult> {
   const registry = deps.tools();
   const tool = registry[target.tool];
-  const refusal = watchableToolRefusal(target.tool, tool);
+  const refusal = watchableToolRefusal(target.tool, tool, registry);
   if (refusal) return { ok: false, error: refusal };
 
   const execute = (tool as { execute: (a: unknown, o: unknown) => Promise<unknown> }).execute;

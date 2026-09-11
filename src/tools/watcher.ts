@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { attachActionMeta } from '../framework/tools/adapter.js';
 import { debugLog, getSessionId } from '../logger.js';
+import { getActiveMCPManager } from '../mcp.js';
 import { WatcherStore } from '../watchers/store.js';
 import { captureBaseline } from '../watchers/poller.js';
 import { statFileSync, watchableToolRefusal, type ProbeDeps } from '../watchers/probe.js';
@@ -139,7 +140,8 @@ async function create(deps: WatcherToolDeps, args: Record<string, unknown>): Pro
   // refusal at creation is the only one a model can act on — the division
   // `targetToolsScopeError` already makes against `buildChildTools`.
   if (target.kind === 'mcp') {
-    const refusal = watchableToolRefusal(target.tool, deps.probeDeps.tools()[target.tool]);
+    const registry = deps.probeDeps.tools();
+    const refusal = watchableToolRefusal(target.tool, registry[target.tool], registry);
     if (refusal) return `Error: ${refusal}`;
   }
 
@@ -170,9 +172,7 @@ async function create(deps: WatcherToolDeps, args: Record<string, unknown>): Pro
       ...(baseline.lastModified === undefined ? {} : { lastModified: baseline.lastModified }),
     });
     const every =
-      target.kind === 'time'
-        ? ''
-        : ` Checking every ${Math.round(w.intervalMs / 1000)}s.`;
+      target.kind === 'time' ? '' : ` Checking every ${Math.round(w.intervalMs / 1000)}s.`;
     return `Watching ${describeWatchTarget(target)} — "${w.name}" (id ${w.id}).${every} It will start a turn when it fires, then end.`;
   } catch (err) {
     return `Error: ${err instanceof Error ? err.message : String(err)}`;
@@ -216,14 +216,39 @@ function cancel(deps: WatcherToolDeps, args: Record<string, unknown>): string {
   return `Cancelled "${w.name}".`;
 }
 
+/**
+ * The RAW MCP tool bag, live, read at call time.
+ *
+ * Not the registry `createTools` was handed. With `BERNARD_MCP_DELEGATION` on —
+ * the default — that one holds `delegate_<server>` tools and none of the real
+ * `server_hash__tool` names, so validating a watcher against it refuses every
+ * MCP target that actually works. Observed: a watcher on
+ * `beeper_…__list_messages` was rejected as "not available in this session"
+ * while the poller, which reads `snapshot().tools`, could have called it.
+ *
+ * This is the same reasoning `dispatchToolWrapper` records for assembling
+ * `childTools` from the raw bag: `targetTools` names real MCP tools, and
+ * delegates make those unresolvable.
+ *
+ * Read per call rather than captured, so it agrees with the poller for the same
+ * reason the poller re-takes its own: a captured bag cannot see a server that
+ * reconnected, and `snapshot()` is the single assembler.
+ */
+function liveMcpTools(): Record<string, unknown> {
+  return (getActiveMCPManager()?.snapshot().tools ?? {}) as Record<string, unknown>;
+}
+
 /** Builds the tool. Created watchers bind to the live session. */
-export function createWatcherTool(opts: {
-  tools: () => Record<string, unknown>;
-  sessionId?: () => string;
-}) {
+export function createWatcherTool(
+  opts: { tools?: () => Record<string, unknown>; sessionId?: () => string } = {},
+) {
   const deps: WatcherToolDeps = {
     store: new WatcherStore(),
-    probeDeps: { fetch: globalThis.fetch, statFile: statFileSync, tools: opts.tools },
+    probeDeps: {
+      fetch: globalThis.fetch,
+      statFile: statFileSync,
+      tools: opts.tools ?? liveMcpTools,
+    },
     sessionId: opts.sessionId ?? getSessionId,
   };
 
@@ -249,7 +274,10 @@ The baseline is taken when you create it, so "changed" means "changed since now"
         parameters: z.object({
           action: z.enum(['create', 'list', 'get', 'cancel']).describe('The operation'),
           id: z.string().optional().describe('Watcher id — required by get/cancel'),
-          name: z.string().optional().describe('Short label the user will see — required by create'),
+          name: z
+            .string()
+            .optional()
+            .describe('Short label the user will see — required by create'),
           instructions: z
             .string()
             .optional()
@@ -268,7 +296,10 @@ The baseline is taken when you create it, so "changed" means "changed since now"
           // it, so the honest fix is the name, not an exemption.
           watchPath: z.string().optional().describe('Absolute path, for targetKind "file"'),
           at: z.string().optional().describe('ISO-8601 instant, for targetKind "time"'),
-          predicate: z.enum(['changed', 'appeared', 'matches']).optional().describe('Default changed'),
+          predicate: z
+            .enum(['changed', 'appeared', 'matches'])
+            .optional()
+            .describe('Default changed'),
           idPath: z.string().optional().describe('$. path to item ids, for predicate "appeared"'),
           pattern: z.string().optional().describe('Regular expression, for predicate "matches"'),
           intervalSeconds: z.number().optional().describe('How often to check'),
