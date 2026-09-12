@@ -173,12 +173,16 @@ export async function runWithStallRecovery(
         debugLog('stall:recovery:declined', {
           definitionId: opts.definitionId,
           phase: info.phase,
-          // Named from what actually happened. Every decline used to read
+          // True in both cases, which is the whole fix. It used to read
           // `output-already-emitted`, and for an ephemeral dispatch — which
-          // emits nothing anywhere — that is simply false: what makes it
-          // unsafe is the steps it already ran, tool calls included.
-          reason:
-            info.completedWork === 'steps' ? 'steps-already-executed' : 'output-already-emitted',
+          // emits nothing anywhere — that is simply false: what makes it unsafe
+          // is the steps it already ran, tool calls included. A session log
+          // then carried `provider:stall {producedOutput: false}` beside a
+          // decline claiming output had been emitted, at the same millisecond
+          // for the same event. Which half it was is already recoverable from
+          // the `step:end` rows sharing this `dispatchId`, so the discriminator
+          // did not need to be a field on a shared exported type.
+          reason: 'work-already-done',
         });
         throw err;
       }

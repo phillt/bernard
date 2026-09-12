@@ -31,6 +31,13 @@ function fakeTool(meta: Partial<ToolMeta>, execute: (a: unknown) => Promise<unkn
   );
 }
 
+/** Probe deps whose single tool `t` resolves `result`. */
+const returning = (result: unknown) =>
+  deps({ tools: () => ({ t: fakeTool({ kind: 'read' }, async () => result) }) });
+
+/** The `CallToolResult` envelope every MCP server returns. */
+const textResult = (text: string) => ({ content: [{ type: 'text', text }] });
+
 describe('watchableToolRefusal', () => {
   it('allows a read-classified tool', () => {
     expect(
@@ -204,14 +211,7 @@ describe('probe — time', () => {
  * feature exists to remove.
  */
 describe('captureBaseline — a predicate that can never match', () => {
-  const beeper = (value: unknown) =>
-    deps({
-      tools: () => ({
-        t: fakeTool({ kind: 'read' }, async () => ({
-          content: [{ type: 'text', text: JSON.stringify(value) }],
-        })),
-      }),
-    });
+  const beeper = (value: unknown) => returning(textResult(JSON.stringify(value)));
 
   it('refuses an idPath that names no list, instead of defaulting to empty', async () => {
     const got = await captureBaseline(
@@ -261,11 +261,6 @@ describe('captureBaseline — a predicate that can never match', () => {
  * place this module amplifies a string into an object graph.
  */
 describe('probe — the MCP result ceiling', () => {
-  const returning = (result: unknown) =>
-    deps({ tools: () => ({ t: fakeTool({ kind: 'read' }, async () => result) }) });
-
-  const textResult = (text: string) => ({ content: [{ type: 'text', text }] });
-
   /** A payload whose TEXT is `chars` long and which parses to a real list. */
   function pageOf(chars: number): { content: { type: string; text: string }[] } {
     const filler = 'x'.repeat(Math.max(1, chars - 40));

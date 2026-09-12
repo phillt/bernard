@@ -872,6 +872,27 @@ export function App({
    */
   const turnQueueRef = useRef(new TurnQueue());
   /**
+   * Watchers whose wake is still outstanding — QUEUED OR IN FLIGHT.
+   *
+   * The queue alone cannot answer this, and that is the whole reason this
+   * exists: `drainNextTurn` calls `take()` BEFORE awaiting `runAgentTurn`, so
+   * while a turn is running the queue is empty and a second fire from the same
+   * watcher looks brand new. Measured on a real session, that is exactly the
+   * shape the cascade takes — 02:00:44 fires, the turn starts at 02:01:04,
+   * 02:02:44 fires against an empty queue, and so on for five consecutive
+   * turns over six minutes, each answering a message the previous turn had
+   * already read. A queue-membership test folds none of them.
+   *
+   * So the rule is a fact about the WATCHER, not about queue membership: one
+   * outstanding wake at a time. The second is refused, and the poller's
+   * existing refusal path then does the right thing for free — it `replace`s
+   * the record it was holding, whole, so the baseline is never advanced past
+   * items no turn has acted on. The next poll after the turn fires once,
+   * cumulatively, which is also why this loses nothing where folding two
+   * queued wakes would have dropped the older observation.
+   */
+  const outstandingWakesRef = useRef(new Set<string>());
+  /**
    * Watcher records. One store per session; the poller below drives it.
    *
    * Lazily, because React evaluates a `useRef` ARGUMENT on every render and
@@ -1027,10 +1048,7 @@ export function App({
         //
         // The poller BORROWS this manager and must never close it — `close()`
         // tears down every client for the whole session, and the REPL owns that.
-        // `unshapedTools()`, never `snapshot(…).tools` — the name IS the
-        // contract. A probe result is hashed and id-scanned, never read as
-        // context, so it must not carry the model-context cap; that accessor's
-        // docstring measures what the cap would cost an `appeared` watcher.
+        // `unshapedTools()`, never `snapshot(…).tools` — see its docstring.
         tools: () => stores.mcp?.unshapedTools() ?? {},
       },
       onWake: (wake) =>
@@ -4612,10 +4630,19 @@ export function App({
       {
         key: String(itemKeyRef.current++),
         toolDetails: false,
-        wake: { source: describeSource(next.source, next.coalesced), text: next.text },
+        wake: { source: describeSource(next.source), text: next.text },
       },
     ]);
-    await runAgentTurn(next.text, undefined, next.data ? { data: next.data } : {});
+    try {
+      await runAgentTurn(next.text, undefined, next.data ? { data: next.data } : {});
+    } finally {
+      // Cleared only once the turn is DONE, which is the span the queue cannot
+      // see. In a `finally` because an aborted or failed turn must still let
+      // its watcher wake again.
+      if (next.source.kind === 'watcher') {
+        outstandingWakesRef.current.delete(next.source.watcherId);
+      }
+    }
   }
 
   /**
@@ -4635,6 +4662,18 @@ export function App({
     data?: UntrustedData;
     source: QueuedTurnSource;
   }): EnqueueResult {
+    // One outstanding wake per watcher — see `outstandingWakesRef`. Refused
+    // SILENTLY, unlike the queue-full case below: this is ordinary operation
+    // for a watcher on a live conversation, the poller rewinds and re-fires
+    // cumulatively after the turn, and a panel per suppressed fire would be
+    // the same noise the refusal exists to remove.
+    if (turn.source.kind === 'watcher') {
+      const { watcherId } = turn.source;
+      if (outstandingWakesRef.current.has(watcherId)) {
+        debugLog('watcher:wake-outstanding', { watcherId, name: turn.source.name });
+        return { ok: false };
+      }
+    }
     const queued = turnQueueRef.current.enqueue({
       text: turn.text,
       ...(turn.data ? { data: turn.data } : {}),
@@ -4649,6 +4688,7 @@ export function App({
       );
       return queued;
     }
+    if (turn.source.kind === 'watcher') outstandingWakesRef.current.add(turn.source.watcherId);
     if (!submittingRef.current) setTimeout(() => void drainNextTurn(), 0);
     return queued;
   }

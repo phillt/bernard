@@ -817,27 +817,15 @@ describe('MCPManager result shaping telemetry (#459)', () => {
     manager = new MCPManager();
   });
 
-  /** Connects one server whose single tool returns `result`. */
-  async function connectReturning(result: unknown): Promise<Record<string, any>> {
-    const client = makeMockClient({
-      get_email: makeDynamicTool(vi.fn().mockResolvedValue(result)),
-    });
-    mockCreateMCPClient.mockImplementation(async () => client);
-    vi.spyOn(manager, 'loadConfig').mockReturnValue({
-      mcpServers: { gmail: { url: 'http://gmail' } },
-    });
-    await manager.connect();
-    return manager.getServerTools({ mode: 'cap', maxChars: 800 });
-  }
-
   function cappedLines() {
     return vi.mocked(debugLog).mock.calls.filter(([label]) => label === 'mcp:result:capped');
   }
 
   it('names the server and the tool whose result was cut', async () => {
-    const perServer = await connectReturning({
+    await connectOneReturning(manager, 'gmail', 'get_email', {
       content: [{ type: 'text', text: JSON.stringify({ body: 'x'.repeat(20_000) }) }],
     });
+    const perServer = manager.getServerTools({ mode: 'cap', maxChars: 800 });
     await perServer.gmail[mcpToolName('gmail', 'get_email')].execute({});
 
     const lines = cappedLines();
@@ -852,7 +840,10 @@ describe('MCPManager result shaping telemetry (#459)', () => {
   });
 
   it('says nothing for a result that fit', async () => {
-    const perServer = await connectReturning({ content: [{ type: 'text', text: '{"ok":true}' }] });
+    await connectOneReturning(manager, 'gmail', 'get_email', {
+      content: [{ type: 'text', text: '{"ok":true}' }],
+    });
+    const perServer = manager.getServerTools({ mode: 'cap', maxChars: 800 });
     await perServer.gmail[mcpToolName('gmail', 'get_email')].execute({});
 
     // A pass-through is not a decision worth a line, and it is the overwhelming
@@ -870,6 +861,26 @@ describe('MCPManager result shaping telemetry (#459)', () => {
  * "make them consistent" is a one-line edit with no compile error behind it.
  * These are the tests that stop it.
  */
+/**
+ * Connects one server whose single tool resolves `result`.
+ *
+ * `connectServers` above hard-wires each tool's result to `"${server}:${t}"`,
+ * so a test that cares what came BACK needs this instead.
+ */
+async function connectOneReturning(
+  manager: MCPManager,
+  server: string,
+  tool: string,
+  result: unknown,
+): Promise<void> {
+  const client = makeMockClient({ [tool]: makeDynamicTool(vi.fn().mockResolvedValue(result)) });
+  mockCreateMCPClient.mockImplementation(async () => client);
+  vi.spyOn(manager, 'loadConfig').mockReturnValue({
+    mcpServers: { [server]: { url: `http://${server}` } },
+  });
+  await manager.connect();
+}
+
 describe('MCPManager.unshapedTools — the watcher probe surface (#572)', () => {
   let manager: MCPManager;
 
@@ -896,16 +907,8 @@ describe('MCPManager.unshapedTools — the watcher probe surface (#572)', () => 
     };
   }
 
-  async function connectWithPage(n: number): Promise<void> {
-    const client = makeMockClient({
-      list_messages: makeDynamicTool(vi.fn().mockResolvedValue(messagePage(n))),
-    });
-    mockCreateMCPClient.mockImplementation(async () => client);
-    vi.spyOn(manager, 'loadConfig').mockReturnValue({
-      mcpServers: { beeper: { url: 'http://beeper' } },
-    });
-    await manager.connect();
-  }
+  const connectWithPage = (n: number) =>
+    connectOneReturning(manager, 'beeper', 'list_messages', messagePage(n));
 
   function idsIn(result: unknown): string[] {
     const text = (result as { content: { text: string }[] }).content[0].text;

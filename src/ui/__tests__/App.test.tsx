@@ -2312,6 +2312,38 @@ describe('<App> watcher wakes', () => {
     unmount();
   });
 
+  it('holds one outstanding wake PER watcher, not one globally', async () => {
+    // The dangerous direction of "one outstanding wake per watcher" is
+    // over-refusal: a flag rather than a per-id set would silence every other
+    // watcher for the duration of the first one's turn, and the symptom —
+    // a watcher that just stops waking — is the silent inertness this whole
+    // feature exists to remove. Two due watchers, one slow turn, both fire.
+    const { WatcherStore } = await import('../../watchers/store.js');
+    const { getSessionId } = await import('../../logger.js');
+    const store = new WatcherStore();
+    for (const w of store.list()) store.remove(w.id);
+    for (const name of ['john', 'jane']) {
+      store.create({
+        name,
+        target: { kind: 'time', at: new Date(Date.now() - 1000).toISOString() },
+        predicate: { kind: 'changed' },
+        instructions: `Draft a reply to ${name}.`,
+        ownerSessionId: getSessionId(),
+      });
+    }
+
+    const { unmount, agentSpy } = renderApp();
+    await tick(300);
+    expect(agentSpy.processInput).toHaveBeenCalledTimes(2);
+    const seen = vi
+      .mocked(agentSpy.processInput)
+      .mock.calls.map(([text]) => String(text))
+      .join('\n');
+    expect(seen).toContain('Draft a reply to john.');
+    expect(seen).toContain('Draft a reply to jane.');
+    unmount();
+  });
+
   it('marks the watcher spent so it cannot fire twice', async () => {
     const w = await seedDueWatcher('Draft a reply.');
     const { unmount } = renderApp();

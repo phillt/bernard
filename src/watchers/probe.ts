@@ -266,10 +266,29 @@ async function probeMcp(
 }
 
 /**
+ * The sole text payload of a `CallToolResult` envelope, or `null`.
+ *
+ * One sniff, two readers. The size check and the unwrap below both need "is
+ * this a single text entry", and written twice they had already drifted —
+ * `unwrap` required `only.type === 'text'` and the size check did not, so a
+ * single-entry `{type:'resource', text: <2 MB>}` was refused by one and passed
+ * through untouched by the other. Sharing it makes the ceiling apply to
+ * exactly the population that will be parsed, by construction rather than by
+ * two copies staying in step.
+ */
+function soleTextEntry(result: unknown): string | null {
+  if (!result || typeof result !== 'object') return null;
+  const content = (result as { content?: unknown }).content;
+  if (!Array.isArray(content) || content.length !== 1) return null;
+  const only = content[0] as { type?: unknown; text?: unknown };
+  return only?.type === 'text' && typeof only.text === 'string' ? only.text : null;
+}
+
+/**
  * A refusal when the payload is too large to compare faithfully, or `null`.
  *
  * Measured on the ENCODED text, before {@link unwrap} parses it, and that is
- * both the cheap check and the right one: `only.text.length` is O(1), and the
+ * both the cheap check and the right one: a string length is O(1), and the
  * parse is the one place *we* amplify a string into an object graph. Every
  * other result shape arrived already parsed by the MCP client, so its memory
  * was spent before this module saw it and there is nothing left to refuse.
@@ -280,14 +299,10 @@ async function probeMcp(
  * a model that will otherwise re-create the same watcher against the same tool.
  */
 function oversizeRefusal(result: unknown): string | null {
-  if (!result || typeof result !== 'object') return null;
-  const content = (result as { content?: unknown }).content;
-  if (!Array.isArray(content) || content.length !== 1) return null;
-  const only = content[0] as { text?: unknown };
-  if (typeof only?.text !== 'string') return null;
-  if (only.text.length <= MAX_PROBE_RESULT_CHARS) return null;
+  const text = soleTextEntry(result);
+  if (text === null || text.length <= MAX_PROBE_RESULT_CHARS) return null;
   return (
-    `The tool returned ${only.text.length} characters, over the ${MAX_PROBE_RESULT_CHARS}-character ` +
+    `The tool returned ${text.length} characters, over the ${MAX_PROBE_RESULT_CHARS}-character ` +
     `limit a watcher can compare between polls. Narrow the call — most list tools take a ` +
     `limit or page-size argument — and watch the smaller result.`
   );
@@ -307,16 +322,13 @@ function oversizeRefusal(result: unknown): string | null {
  * choosing between them is not this module's call.
  */
 function unwrap(result: unknown): unknown {
-  if (!result || typeof result !== 'object') return result;
-  const content = (result as { content?: unknown }).content;
-  if (!Array.isArray(content) || content.length !== 1) return result;
-  const only = content[0] as { type?: unknown; text?: unknown };
-  if (only?.type !== 'text' || typeof only.text !== 'string') return result;
+  const text = soleTextEntry(result);
+  if (text === null) return result;
   try {
-    return JSON.parse(only.text);
+    return JSON.parse(text);
   } catch {
     // Plenty of servers return prose. That is a legitimate value to watch.
-    return only.text;
+    return text;
   }
 }
 

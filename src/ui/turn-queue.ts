@@ -60,14 +60,6 @@ export interface QueuedTurn {
   /** The instruction channel. Never contains anything observed. */
   text: string;
   /**
-   * How many later fires were folded into this entry. Absent means one.
-   *
-   * Rendered, because the entry's `reason` describes only the NEWEST
-   * observation — "2 new items" when three arrived across two fires would be a
-   * true sentence about a poll and a false one about the conversation.
-   */
-  coalesced?: number;
-  /**
    * The data channel — see `watchers/wake.ts`.
    *
    * The branded type, not a structural `{ text: string }`. A structural widening
@@ -96,19 +88,17 @@ export const MAX_QUEUED_TURNS = 10;
 export type EnqueueResult = { ok: boolean };
 
 /**
- * The identity of "this is the same standing request, seen again".
+ * A plain FIFO — and deliberately NOT a coalescing one.
  *
- * A watcher has one: its instruction is fixed at creation, so two fires from one
- * watcher are the same job with a newer observation. A `say --run` does NOT —
- * each is a distinct instruction a sender wrote and was told was delivered, and
- * folding two of those together silently drops work somebody asked for.
- */
-function coalesceKey(source: QueuedTurnSource): string | null {
-  return source.kind === 'watcher' ? `watcher:${source.watcherId}` : null;
-}
-
-/**
- * A plain FIFO. Deliberately not a React store: `App` holds it in a ref and
+ * Folding two wakes from one watcher into one entry is the obvious shape and it
+ * fixes almost nothing: `drainNextTurn` calls `take()` before awaiting the
+ * turn, so while a turn runs the queue is EMPTY and a repeat fire has no
+ * sibling to fold into. That is the whole of the measured cascade. "One
+ * outstanding wake per watcher" is a fact about the watcher's lifecycle, so it
+ * lives in `App`'s `outstandingWakesRef`, which can see the in-flight window
+ * this class cannot.
+ *
+ * Deliberately not a React store: `App` holds it in a ref and
  * drains it from `runAgentTurn`'s `finally`, so nothing here needs to notify —
  * and a queue that triggered renders would repaint the transcript on every
  * background arrival.
@@ -118,35 +108,6 @@ export class TurnQueue {
   private seq = 0;
 
   enqueue(turn: Omit<QueuedTurn, 'id' | 'queuedAt'>, now = Date.now()): EnqueueResult {
-    // A watcher that fires again while its own earlier wake is still waiting
-    // SUPERSEDES it rather than queueing a second turn.
-    //
-    // This is the level-triggered design applied one layer up, not a new rule:
-    // a watcher compares current state against a snapshot and never consumes a
-    // stream, so the newest observation IS the truth and an older one queued
-    // behind it describes a conversation that has already moved. Measured on a
-    // real session, without it a live chat produced five consecutive full turns
-    // from one watcher over six minutes — 800-character instruction, ~900k
-    // prompt tokens apiece — each reacting to a message the previous turn had
-    // already read and answered.
-    //
-    // It keeps its PLACE in line, and that is deliberate: the position was
-    // earned when the watcher first fired, and sending it to the back on every
-    // supersede lets a chatty watcher starve itself behind turns that arrived
-    // later. `queuedAt` stays the original for the same reason — the question
-    // it answers is "how long has this been waiting".
-    //
-    // The honest limit, which is the feature's own: anything that scrolled out
-    // of the target's result between the two polls is gone, exactly as
-    // `watchers/types.ts` records for a genuinely transient event.
-    const key = coalesceKey(turn.source);
-    if (key !== null) {
-      const prior = this.items.find((q) => coalesceKey(q.source) === key);
-      if (prior) {
-        Object.assign(prior, turn, { coalesced: (prior.coalesced ?? 1) + 1 });
-        return { ok: true };
-      }
-    }
     // Refuses the NEWEST rather than dropping the oldest, matching
     // `WorkQueue.enqueue`. Dropping the oldest silently discards something
     // already accepted and reported as queued; refusing tells the producer now,
@@ -166,19 +127,11 @@ export class TurnQueue {
   }
 }
 
-/**
- * One line describing where a queued turn came from, for the panel.
- *
- * `coalesced` is named rather than hidden: the `reason` describes the newest
- * poll only, so a folded entry that said just "2 new items" would understate
- * what the turn is about to read — and a user watching one wake answer three
- * fires should be able to see that is what happened.
- */
-export function describeSource(source: QueuedTurnSource, coalesced?: number): string {
-  const folded = coalesced !== undefined && coalesced > 1 ? ` (latest of ${coalesced} fires)` : '';
+/** One line describing where a queued turn came from, for the panel. */
+export function describeSource(source: QueuedTurnSource): string {
   switch (source.kind) {
     case 'watcher':
-      return `watcher "${source.name}" — ${source.reason}${folded}`;
+      return `watcher "${source.name}" — ${source.reason}`;
     case 'remote':
       return `sent by ${source.label}`;
   }

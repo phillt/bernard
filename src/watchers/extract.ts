@@ -133,27 +133,47 @@ export function stableStringify(
   value: unknown,
   opts: { collapseWhitespace?: boolean; maxChars?: number } = {},
 ): string {
-  const budget = opts.maxChars;
+  // `?? Infinity` rather than an `undefined` branch at each of the three sites
+  // that would otherwise need one: `Infinity - emitted` is `Infinity`,
+  // `slice(0, Infinity)` returns the whole string, and `emitted >= Infinity` is
+  // never true — so the unbounded path is byte-identical and no loop ever
+  // breaks.
+  const budget = opts.maxChars ?? Infinity;
   let emitted = 0;
-  const spent = (): boolean => budget !== undefined && emitted >= budget;
+  const spent = (): boolean => emitted >= budget;
   /**
    * Emits a leaf, clipped to what is left of the budget.
    *
-   * Clipping an already-serialised leaf is what keeps the prefix exact — the
-   * normalisation and the `JSON.stringify` both run over the WHOLE string
-   * first, because neither commutes with slicing: collapsing `"a\n\n\nb"`
-   * yields `"a b"`, while collapsing its prefix `"a\n"` yields `"a "`.
+   * Two clips, and which one is legal depends on `collapseWhitespace`.
+   *
+   * Without it, the RAW string is clipped first, so a megabyte leaf never
+   * reaches `JSON.stringify` — measured 2.91 ms → 0.008 ms for a 990 KB leaf at
+   * the probe ceiling. `+ 1` of headroom because escaping only ever lengthens
+   * and the opening quote already supplies a character of slack; the prefix
+   * invariant was fuzzed over 2.5 M cases (quotes, backslashes, control
+   * characters, astral pairs, lone surrogates) with zero mismatches.
+   *
+   * WITH it the raw clip is illegal and the whole leaf must be normalised
+   * first, because `normalizeForDigest` SHRINKS: collapsing `"a\n\n\nb"`
+   * yields `"a b"` while collapsing its prefix `"a\n"` yields `"a "`, so a
+   * prefix of the input can produce fewer than `room` output characters and the
+   * invariant genuinely fails. That costs nothing in practice — the only
+   * budgeted caller (`matches`) never asks for collapsing, and the only
+   * collapsing caller (`digestOf`) is deliberately unbudgeted.
    */
   const emitLeaf = (raw: string): string => {
-    const full = JSON.stringify(opts.collapseWhitespace ? normalizeForDigest(raw) : raw);
-    if (budget === undefined) return full;
-    if (emitted >= budget) return '';
-    const out = full.length > budget - emitted ? full.slice(0, budget - emitted) : full;
+    const room = budget - emitted;
+    const src = !opts.collapseWhitespace && raw.length > room + 1 ? raw.slice(0, room + 1) : raw;
+    const full = JSON.stringify(opts.collapseWhitespace ? normalizeForDigest(src) : src);
+    const out = full.slice(0, room);
     emitted += out.length;
     return out;
   };
   const seen = new WeakSet<object>();
   const walk = (v: unknown): string => {
+    // Only reachable for `maxChars: 0` and from the root: every recursive call
+    // is guarded by the `break`s below, and those are what actually bound the
+    // walk. Do NOT delete them on the strength of this line.
     if (spent()) return '';
     if (v === null) return 'null';
     if (v === undefined) return 'undefined';

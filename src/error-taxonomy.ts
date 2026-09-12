@@ -464,21 +464,12 @@ export interface ProviderStallInfo {
    * The transport mints it meaning "bytes of THIS response reached the
    * consumer", which is all a `fetch` wrapper can know; `runner.ts` then widens
    * it to the dispatch's own answer, since a stall on step 7 is unsafe to
-   * re-issue whether or not anything was printed.
+   * re-issue whether or not anything was printed — for an ephemeral dispatch,
+   * which emits nothing anywhere, the completed STEPS are what make it unsafe.
+   * The name is the transport's; the meaning is the dispatch's, which is why
+   * the decline reason names neither and says `work-already-done`.
    */
   producedOutput: boolean;
-  /**
-   * What that work was, on the dispatch's correction. Absent when the value is
-   * still the transport's own.
-   *
-   * Diagnostics only — recovery declines on `producedOutput` alone. It exists
-   * because the decline log said `output-already-emitted` for every case, and a
-   * non-streaming dispatch emits nothing at all: the session log then carried a
-   * `provider:stall {producedOutput: false}` and a `stall:recovery:declined
-   * {reason: 'output-already-emitted'}` at the same millisecond for the same
-   * event, which is two true lines that read as a contradiction.
-   */
-  completedWork?: 'output' | 'steps';
 }
 
 const PROVIDER_STALL = Symbol.for('bernard.providerStall');

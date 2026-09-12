@@ -208,14 +208,14 @@ async function create(deps: WatcherToolDeps, args: Record<string, unknown>): Pro
   // fire immediately — every watcher would wake the moment it was created.
   const baseline = await captureBaseline(target, predicate, deps.probeDeps);
   if (!baseline.ok) {
-    // No full stop of our own: `idPathRefusal` and every other probe error
-    // already end in one, and appending a second produced
-    // `Try one of: $.items.id.. The watcher was not created.` — which reads
-    // like a typo in the very message whose whole job is to be copied
-    // accurately, since the suggestion it is glued to IS a path and a trailing
-    // dot is a character a path can contain.
-    const detail = baseline.error.replace(/\.$/, '');
-    return `Error: could not read the target to establish a baseline — ${detail}. The watcher was not created.`;
+    // The detail goes on its own LINE rather than being glued into the middle
+    // of our sentence. Gluing produced `Try one of: $.items.id.. The watcher
+    // was not created.`, and trimming the producer's full stop only moved the
+    // guesswork: these messages end in a path as often as in punctuation, and a
+    // trailing dot is a character a path can contain. On its own line nothing
+    // has to guess, and the suggested path is copyable — which is the whole
+    // job of the message.
+    return `Error: could not read the target to establish a baseline. The watcher was not created.\n\n${baseline.error}`;
   }
 
   try {
@@ -295,7 +295,7 @@ function cancel(deps: WatcherToolDeps, args: Record<string, unknown>): string {
  * `server_hash__tool` names, so validating a watcher against it refuses every
  * MCP target that actually works. Observed: a watcher on
  * `beeper_…__list_messages` was rejected as "not available in this session"
- * while the poller, which reads `snapshot().tools`, could have called it.
+ * while the poller, which reads the raw bag, could have called it.
  *
  * This is the same reasoning `dispatchToolWrapper` records for assembling
  * `childTools` from the raw bag: `targetTools` names real MCP tools, and
@@ -305,10 +305,7 @@ function cancel(deps: WatcherToolDeps, args: Record<string, unknown>): string {
  * reason the poller re-takes its own: a captured bag cannot see a server that
  * reconnected, and `snapshot()` is the single assembler.
  *
- * `unshapedTools()` specifically, never `snapshot(…).tools` (#572): the baseline
- * captured here has to describe the same population the poller will later
- * compare against, so both sides take the unshaped surface. That accessor
- * measures what the model-context cap would do to an `appeared` id set.
+ * `unshapedTools()`, never `snapshot(…).tools` (#572) — see its docstring.
  */
 function liveMcpTools(): Record<string, unknown> {
   return getActiveMCPManager()?.unshapedTools() ?? {};

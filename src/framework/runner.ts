@@ -548,15 +548,7 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
     // transport's optimistic value rather than fighting it.
     const stall = providerStallInfo(wrapped);
     if (stall && !stall.producedOutput && (stepsCompleted > 0 || partsSeen > 0)) {
-      markProviderStall(wrapped as Error, {
-        ...stall,
-        producedOutput: true,
-        // Which half made it unsafe, so the decline can say so. `partsSeen`
-        // moves only on the streaming branch, so `steps` is what every
-        // ephemeral dispatch reports — the case the old single message named
-        // wrongly.
-        completedWork: partsSeen > 0 ? 'output' : 'steps',
-      });
+      markProviderStall(wrapped as Error, { ...stall, producedOutput: true });
     }
     debugLog('agent:dispatch:error', {
       dispatchId,

@@ -179,8 +179,6 @@ describe('evaluate — matches and time', () => {
 describe('evaluate — matches is bounded without changing what it sees', () => {
   const w = (pattern: string) =>
     watcher({ target: { kind: 'http', url: 'u' }, predicate: { kind: 'matches', pattern } });
-  const obs = (value: unknown): Observation => ({ value });
-
   it('still sees an element past the 100th when the text fits', () => {
     // THE regression guard. 150 short items serialise well under
     // `MATCH_INPUT_MAX`, so today every one of them is visible to the pattern.

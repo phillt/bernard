@@ -719,10 +719,14 @@ export class MCPManager {
    * the staleness that rule exists to prevent.
    */
   unshapedTools(): Record<string, unknown> {
-    // Through `snapshot()`, not a second `flattenServerTools` call: one
-    // assembler (#305), and the identity of every tool object is shared with
-    // the bag `snapshot()` returns.
-    return this.snapshot().tools;
+    // `getTools()`, not `snapshot().tools`. That is not a second assembler —
+    // it IS the shared `flattenServerTools(getServerTools(…))` derivation, one
+    // level below the three-field bag #305's single-assembler rule is about.
+    // Going through `snapshot()` also built `serverNames` and a full
+    // `makeAliasResolver` index over every tool key plus every delegate name
+    // and discarded both, measured at 0.041 ms of a 0.136 ms call — per
+    // watcher, per tick, for a `resolveAlias` the probe path never reads.
+    return this.getTools();
   }
 
   /**
