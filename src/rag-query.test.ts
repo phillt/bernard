@@ -154,13 +154,14 @@ describe('extractRecentUserTexts — woken turns', () => {
     // Exactly the shape `agent.ts` pushes into history for a woken turn.
     const content = `<user_request>\n[2026-09-12T00:00:00-07:00] ${w.instruction}\n</user_request>\n\n${w.data!.text}`;
 
+    // Exact equality, which is what makes this a real assertion: what used to
+    // reach the query was the `<user_request>` tags, the banner, and ~1 KB of
+    // PINEAPPLE. Three `not.toContain` lines naming those halves stood here and
+    // were deleted — `toEqual` fully determines `got[0]`, so none of them could
+    // fail on a string this one accepts, and their stated "a partial regression
+    // is still a failure" justification was simply false.
     const got = extractRecentUserTexts([{ role: 'user', content }] as CoreMessage[]);
     expect(got).toEqual(['Draft a reply about the ARMA plan.']);
-    // Each half of what used to leak, named separately so a partial regression
-    // is still a failure.
-    expect(got[0]).not.toContain('user_request');
-    expect(got[0]).not.toContain('The block below is what a watcher observed');
-    expect(got[0]).not.toContain('PINEAPPLE');
   });
 
   it('leaves an ordinary typed turn exactly as it was', () => {

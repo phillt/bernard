@@ -202,6 +202,7 @@ export class Agent {
   private policyEngine: PolicyEngine = new DefaultPolicyEngine();
   private lastPolicyResult?: PolicyResult;
   private lastUserInput: string | null = null;
+  private lastUserMessage: CoreMessage | null = null;
   private lastResolvedReferences: ResolvedEntry[] = [];
 
   private ctx: AgentContext;
@@ -317,6 +318,27 @@ export class Agent {
   /** Most recent raw user input. `null` before any turn. Issue #140. */
   getLastUserInput(): string | null {
     return this.lastUserInput;
+  }
+
+  /**
+   * The `role:'user'` message this turn pushed, by identity.
+   *
+   * The REPL needs it to mark a turn as already on screen — a woken turn is
+   * announced by a `WakePanel` before it runs, so the joined instruction-plus-
+   * observation message must not also be painted as a `❯` bubble. Handed back
+   * rather than found, because the alternative is `App` doing index forensics on
+   * this array for a message this method pushed one line earlier: the caller
+   * would have to capture a length, re-read the history, and rely on two
+   * undocumented facts — that the push is synchronous before the first await,
+   * and that there is exactly one of it. Neither is checkable from there, and
+   * the sibling producer (`injectAskUserHistoryMessages`) already RETURNS its
+   * messages for the same WeakSet.
+   *
+   * `null` before any turn, and cleared by `clearHistory` with the other
+   * per-turn snapshots.
+   */
+  getLastUserMessage(): CoreMessage | null {
+    return this.lastUserMessage;
   }
 
   /** Reference-resolver entries from the most recent turn. Issue #140. */
@@ -555,7 +577,9 @@ export class Agent {
     // request, and an observation spliced inside that wrapper would read as part
     // of it. Two paragraphs in one user message, with the banner between them.
     const withData = options?.data ? `${wrappedInput}\n\n${options.data.text}` : wrappedInput;
-    this.history.push(attachTo(withData, images));
+    const userMessage = attachTo(withData, images);
+    this.lastUserMessage = userMessage;
+    this.history.push(userMessage);
 
     // Snapshot the conversation turn position NOW, before the run — the
     // maxTokens-continuation and empty-answer-retry loops in `wrapIterate` push
@@ -1324,6 +1348,7 @@ export class Agent {
     // Drop per-turn snapshots so the Shift+Tab viewer doesn't show prior-
     // session goal / assumptions / sources / verification after a reset.
     this.lastUserInput = null;
+    this.lastUserMessage = null;
     this.lastResolvedReferences = [];
     this.lastSources = [];
     this.lastCitedSources = [];

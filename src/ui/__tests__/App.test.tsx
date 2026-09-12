@@ -192,6 +192,11 @@ function makeAgent(
   };
   return {
     getHistory: () => box.current,
+    // Emulates the real contract: `processInput` records the `role:'user'`
+    // message it pushed, and `App` marks THAT object as already on screen. A
+    // stub whose `processInput` pushes nothing correctly answers null — there is
+    // no message to suppress.
+    getLastUserMessage: () => [...box.current].reverse().find((m) => m.role === 'user') ?? null,
     clearHistory: stubs.clearHistory,
     compactHistory: stubs.compactHistory,
     processInput: stubs.processInput,

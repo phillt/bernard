@@ -4473,10 +4473,6 @@ export function App({
       // turn finishes. When the rewriter substituted the text, pass the
       // original so <UserMessage> displays it (the rewrite is an LLM-only
       // detail) rather than the dispatched version.
-      // Captured BEFORE the push, so the messages this turn adds can be found
-      // by index. `processInput` pushes synchronously (before its first internal
-      // await), which is what makes the scan below possible at all.
-      const historyLenBeforeUserMsg = agent.getHistory().length;
       const inflight = agent.processInput(agentInput, images, resolvedEntries, {
         ragResults,
         recallReconciliation,
@@ -4496,15 +4492,13 @@ export function App({
       // correlates with it, which is what makes it cover a `time` wake (panel
       // rendered, no data block) and a `say --run` prompt alike.
       //
-      // Scanned rather than assumed to be `history[len - 1]`: the surrounding
-      // comments already hedge about what `processInput` pushes synchronously,
-      // and a wrong index here silently suppresses somebody else's message.
-      if (extra?.announced) {
-        const h = agent.getHistory();
-        for (let i = historyLenBeforeUserMsg; i < h.length; i++) {
-          if (h[i].role === 'user') alreadyOnScreenRef.current.add(h[i]);
-        }
-      }
+      // By identity, from the agent that pushed it. The predecessor captured a
+      // history length, re-read the array and scanned the range — forensics on
+      // somebody else's private array for a message it had just created, resting
+      // on two facts stated nowhere in `agent.ts`: that the push is synchronous
+      // before the first await, and that there is exactly one of it.
+      const announced = extra?.announced ? agent.getLastUserMessage() : null;
+      if (announced) alreadyOnScreenRef.current.add(announced);
       commitNewHistory({ rewriteForLastUser: input !== agentInput ? input : undefined });
       // Snapshot history length AFTER the user message push (synchronous) so
       // the ask_user scanner below knows where this turn's tool results begin.

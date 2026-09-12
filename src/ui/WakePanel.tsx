@@ -3,7 +3,7 @@ import { Box, Text } from 'ink';
 import { getThemeColors } from '../theme.js';
 import { formatBytes } from '../output.js';
 import { plural } from '../text.js';
-import { WAKE_EXCERPT_CHARS } from '../watchers/wake.js';
+import { WAKE_EXCERPT_CHARS, type ObservationSummary } from '../watchers/wake.js';
 import { TranscriptPanel } from './TranscriptPanel.js';
 import type { WakeData } from './Thread.js';
 
@@ -54,59 +54,78 @@ import type { WakeData } from './Thread.js';
  */
 export function WakePanel({ data, toolDetails }: { data: WakeData; toolDetails: boolean }) {
   const colors = getThemeColors();
-  const lines = data.instruction.split('\n');
   const obs = data.observation;
+  // Computed only where it is read: the expanded branch takes the instruction
+  // whole and asks nothing about its lines, so scanning them there was work
+  // whose result had no consumer.
+  const collapsed = toolDetails ? null : collapseInstruction(data.instruction);
 
-  // OFF: the first line that says anything. A wake instruction frequently opens
-  // with a blank or a heading rule, and a body whose first row is empty reads as
-  // a panel that failed to render.
-  const firstIdx = lines.findIndex((l) => l.trim().length > 0);
-  const body = toolDetails ? data.instruction : firstIdx === -1 ? '' : lines[firstIdx];
-  const hiddenLines = toolDetails ? 0 : Math.max(0, lines.length - (firstIdx === -1 ? 0 : 1));
-
-  const sizeNote = obs ? `${formatBytes(obs.bytes)} observed` : '';
+  // Keyed on `collapsed` rather than on `toolDetails` so the narrowing is the
+  // type system's rather than a non-null assertion's — they carry the same
+  // information, since `collapsed` is null exactly when `toolDetails` is on.
+  const detail = collapsed ? (
+    // One row, joining whichever halves exist. Both absent — a one-line
+    // instruction on a `time` watcher — and the row is dropped entirely rather
+    // than rendered empty.
+    collapsedNote(collapsed.hidden, obs)
+  ) : obs ? (
+    // The vocabulary of `renderResultSnippet` — `↳`, dim, a two-space
+    // continuation — but not the function: that one is private to `Thread.tsx`
+    // and takes the full text, so reusing it would mean plumbing the whole
+    // observation here for it to re-truncate. The excerpt is already bounded at
+    // the mint.
+    <Box flexDirection="column">
+      <Text dimColor>↳ {obs.excerpt}</Text>
+      <Text dimColor>
+        {'  '}· {sizeNote(obs)}
+        {obs.clipped ? `, showing first ${WAKE_EXCERPT_CHARS}` : ''}
+      </Text>
+    </Box>
+  ) : null;
 
   return (
     <TranscriptPanel
       color={colors.accent}
       title="⏰ Woken"
       meta={` · ${data.source}`}
-      body={body}
-      detail={
-        toolDetails ? (
-          obs ? (
-            // The vocabulary of `renderResultSnippet` — `↳`, dim, a two-space
-            // continuation — but not the function: that one is private to
-            // `Thread.tsx` and takes the full text, so reusing it would mean
-            // plumbing the whole observation here for it to re-truncate. The
-            // excerpt is already bounded at the mint.
-            <Box flexDirection="column">
-              <Text dimColor>↳ {obs.excerpt}</Text>
-              <Text dimColor>
-                {'  '}· {sizeNote}
-                {obs.clipped ? `, showing first ${WAKE_EXCERPT_CHARS}` : ''}
-              </Text>
-            </Box>
-          ) : null
-        ) : (
-          // One row, joining whichever halves exist. Both absent — a one-line
-          // instruction on a `time` watcher — and the row is dropped entirely
-          // rather than rendered empty.
-          collapsedNote(hiddenLines, sizeNote)
-        )
-      }
+      body={collapsed ? collapsed.first : data.instruction}
+      detail={detail}
       hintColor={colors.accent}
       footer="Bernard is acting on this now."
     />
   );
 }
 
-function collapsedNote(hiddenLines: number, sizeNote: string) {
+/**
+ * The first line that says anything, and how many lines that leaves unseen.
+ *
+ * A wake instruction frequently opens with a blank or a heading rule, and a body
+ * whose first row is empty reads as a panel that failed to render — so the body
+ * is the first NON-EMPTY line rather than `lines[0]`.
+ *
+ * No clamp on the subtraction: `split('\n')` always yields at least one element
+ * and the subtrahend is 0 or 1, so it cannot go negative. The `Math.max` this
+ * replaces looked like a guard and could never fire.
+ */
+function collapseInstruction(instruction: string): { first: string; hidden: number } {
+  const lines = instruction.split('\n');
+  const i = lines.findIndex((l) => l.trim().length > 0);
+  return { first: i === -1 ? '' : lines[i], hidden: lines.length - (i === -1 ? 0 : 1) };
+}
+
+function sizeNote(obs: ObservationSummary): string {
+  return `${formatBytes(obs.bytes)} observed`;
+}
+
+function collapsedNote(hiddenLines: number, obs: ObservationSummary | undefined) {
   const parts: string[] = [];
   if (hiddenLines > 0) {
     parts.push(`… ${hiddenLines} more instruction ${plural(hiddenLines, 'line', 'lines')}`);
   }
-  if (sizeNote) parts.push(sizeNote);
+  // `obs` itself rather than a pre-rendered string: an empty string as the
+  // "there was no observation" sentinel meant this had to re-derive a fact the
+  // caller already held.
+  if (obs) parts.push(sizeNote(obs));
   if (parts.length === 0) return null;
   return <Text dimColor>{parts.join(' · ')}</Text>;
 }
