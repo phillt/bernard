@@ -24,7 +24,7 @@ function frameOf(data: WakeData, toolDetails: boolean): string {
   return text;
 }
 
-const OBSERVED = { bytes: 3277, excerpt: 'a ping from Andie', clipped: true };
+const OBSERVED = { bytes: 3277, excerpt: 'a ping from Andie', clipped: true, truncated: false };
 
 describe('WakePanel', () => {
   it('collapses to the first line plus a count and a size', () => {
@@ -47,7 +47,7 @@ describe('WakePanel', () => {
     expect(text).not.toContain('a ping from Andie');
   });
 
-  it('skips leading blank lines when collapsing', () => {
+  it('skips leading blank lines when collapsing, and does not count them', () => {
     // A wake instruction frequently opens with a blank or a heading rule, and a
     // body whose first row is empty reads as a panel that failed to render.
     const text = frameOf(
@@ -55,6 +55,20 @@ describe('WakePanel', () => {
       false,
     );
     expect(text).toContain('the real first line');
+    // ONE line is hidden — `more`. Counting every line but the one shown made
+    // this say three, re-counting the blanks `findIndex` had just skipped for
+    // saying nothing. The case was exercised here before and asserted only on
+    // the body, which is how the count went unnoticed.
+    expect(text).toContain('1 more instruction line');
+    expect(text).not.toContain('3 more instruction lines');
+  });
+
+  it('hides nothing for an instruction that is entirely blank', () => {
+    // Unreachable from the tool schema, and pinned because the arithmetic makes
+    // it the one input where "lines after the one shown" has no shown line to
+    // count from: rows exist, none has content, so there is nothing to promise.
+    const text = frameOf({ source: 'a watcher', instruction: '\n\n  \n' }, false);
+    expect(text).not.toContain('more instruction');
   });
 
   it('omits the count when there is only one line', () => {
@@ -93,6 +107,21 @@ describe('WakePanel', () => {
     // `clipped` is what earns the qualifier: without it the reader cannot tell
     // a whole small observation from the front of a large one.
     expect(text).toContain(`showing first ${WAKE_EXCERPT_CHARS}`);
+  });
+
+  it('says a size is a floor when the observation was itself truncated', () => {
+    // `MAX_OBSERVATION_CHARS` makes `bytes` saturate, so without this a watcher
+    // that read a 2 MB page and one that read a 4 KB one report identically —
+    // on the surface whose whole job is saying how much is held back.
+    const text = frameOf(
+      {
+        source: 'a watcher',
+        instruction: 'x',
+        observation: { ...OBSERVED, bytes: 4096, truncated: true },
+      },
+      false,
+    );
+    expect(text).toContain('at least 4.0 KB observed');
   });
 
   it('drops the qualifier when the excerpt IS the observation', () => {

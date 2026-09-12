@@ -33,7 +33,7 @@
  */
 import { untrustedData } from '../framework/agents/user-message.js';
 import type { UntrustedData } from '../framework/agents/user-message.js';
-import { boundedStringify, markTruncated } from '../framework/tools/redact.js';
+import { boundedStringify, looksTruncated, markTruncated } from '../framework/tools/redact.js';
 import { collapseWhitespace } from './extract.js';
 import { describeWatchTarget, MAX_OBSERVATION_CHARS, type Watcher } from './types.js';
 
@@ -64,8 +64,22 @@ export interface Wake {
  * turn pays for every byte of it. Truncation is MARKED — an observation that
  * stops mid-sentence and says nothing about it invites the model to reason about
  * a message it only half saw.
+ *
+ * `truncated` is returned rather than left in the string for `summariseObservation`
+ * to find, because the panel needs it and the marker sits far past the 200-char
+ * excerpt — so a reader was told "4.0 KB observed" for a 2 MB page with nothing
+ * saying it had been cut, on the one surface whose job is to say how much is
+ * being held back. Recovering it by scanning the output for the marker would be
+ * this module parsing its own prose.
+ *
+ * It is deliberately a FLAG and not the pre-truncation total, which is not
+ * knowable on the branch that matters: `boundedStringify` bounds the WORK, so a
+ * bounded walk never visits the rest of the value and the true size would cost
+ * exactly the traversal the bound exists to refuse (measured 51 ms / 1.5 MB).
+ * Reporting a total available only on the cheap branches would make the panel
+ * quieter precisely when the observation was largest.
  */
-export function renderObservation(value: unknown): string {
+export function renderObservation(value: unknown): { text: string; truncated: boolean } {
   // `boundedStringify`, not `stableStringify(…).slice(…)`. The MCP path applies
   // no cap at probe time, so a server returning a thousand-message page was
   // fully key-sorted and recursively serialised — measured 3.5 ms and ~350 KB —
@@ -92,8 +106,11 @@ export function renderObservation(value: unknown): string {
   if (typeof value === 'string') {
     const quoted = JSON.stringify(value);
     return quoted.length > MAX_OBSERVATION_CHARS
-      ? markTruncated(quoted.slice(0, MAX_OBSERVATION_CHARS), quoted.length)
-      : quoted;
+      ? {
+          text: markTruncated(quoted.slice(0, MAX_OBSERVATION_CHARS), quoted.length),
+          truncated: true,
+        }
+      : { text: quoted, truncated: false };
   }
   const { text, bounded } = boundedStringify(value, MAX_OBSERVATION_CHARS);
   // `boundedStringify` bounds the WORK, not the result: its budget decrements on
@@ -101,8 +118,11 @@ export function renderObservation(value: unknown): string {
   // shape clears neither and overshoots (measured 10,035 chars against a 4,000
   // budget). The final slice is what makes the documented size true — the same
   // pairing `tool:execute:end` uses, and for the same reason.
-  if (!bounded && text.length <= MAX_OBSERVATION_CHARS) return text;
-  return markTruncated(text.slice(0, MAX_OBSERVATION_CHARS), text.length);
+  if (!bounded && text.length <= MAX_OBSERVATION_CHARS) return { text, truncated: false };
+  return {
+    text: markTruncated(text.slice(0, MAX_OBSERVATION_CHARS), text.length),
+    truncated: true,
+  };
 }
 
 /** How much of the observation the transcript may show. */
@@ -127,6 +147,15 @@ export interface ObservationSummary {
   excerpt: string;
   /** Whether `excerpt` is a prefix, which is what licenses "showing first N". */
   clipped: boolean;
+  /**
+   * Whether `bytes` is itself a cap rather than the whole observation.
+   *
+   * Without it the panel saturates silently: an observation of any size past
+   * `MAX_OBSERVATION_CHARS` reports the same ~4 KB, so a watcher that read a 2 MB
+   * page and one that read a 4 KB one are indistinguishable on the surface whose
+   * stated job is saying how much it is holding back.
+   */
+  truncated: boolean;
 }
 
 /**
@@ -138,10 +167,26 @@ export interface ObservationSummary {
  * text off disk, and a hand-edited history file must not be able to smuggle
  * extra rows into a bordered panel.
  */
-export function summariseObservation(rendered: string): ObservationSummary {
+/**
+ * `text.slice(0, n)`, backing off one unit when that would split a surrogate pair.
+ *
+ * The budget counts UTF-16 units, so an astral character straddling the boundary
+ * is cut in half and the `Buffer` round trip below renders the orphan as U+FFFD
+ * — a visible `\uFFFD` at the end of every excerpt unlucky enough to land there.
+ * Reachable on the live path: `JSON.stringify` passes a valid pair through
+ * unescaped, so any emoji in an observed message can do it.
+ */
+function cutAt(text: string, n: number): string {
+  if (text.length <= n) return text;
+  const last = text.charCodeAt(n - 1);
+  return text.slice(0, last >= 0xd800 && last <= 0xdbff ? n - 1 : n);
+}
+
+export function summariseObservation(rendered: string, truncated: boolean): ObservationSummary {
   const flat = collapseWhitespace(rendered);
   return {
     bytes: Buffer.byteLength(rendered, 'utf-8'),
+    truncated,
     // DETACHED, and that is the whole cap rather than a nicety. `String.slice`
     // returns a V8 `SlicedString` — a pointer to its parent, not a copy — so a
     // 200-character excerpt transitively pins all 4 KB of `flat`, on an object
@@ -159,7 +204,7 @@ export function summariseObservation(rendered: string): ObservationSummary {
     // `renderObservation` JSON-escapes and so emits no whitespace at all. Only an
     // explicit copy works. `Buffer` rather than the `(' ' + x).slice(1)` trick
     // because this function already reaches for `Buffer.byteLength` two lines up.
-    excerpt: Buffer.from(flat.slice(0, WAKE_EXCERPT_CHARS), 'utf8').toString(),
+    excerpt: Buffer.from(cutAt(flat, WAKE_EXCERPT_CHARS), 'utf8').toString(),
     clipped: flat.length > WAKE_EXCERPT_CHARS,
   };
 }
@@ -202,7 +247,7 @@ function observationOf(
   watcher: Watcher,
   value: unknown,
 ): { data: UntrustedData; observation: ObservationSummary } {
-  const rendered = renderObservation(value);
+  const { text: rendered, truncated } = renderObservation(value);
   return {
     data: renderObservationBlock(
       // Only reachable for a non-`time` target, since `poller` passes
@@ -211,7 +256,7 @@ function observationOf(
       describeWatchTarget(watcher.target),
       rendered,
     ),
-    observation: summariseObservation(rendered),
+    observation: summariseObservation(rendered, truncated),
   };
 }
 
@@ -297,12 +342,18 @@ export function splitObservationBlock(
   const open = block.indexOf('\n```\n');
   const close = block.lastIndexOf('\n```');
   if (open < 0 || close <= open) return null;
+  const observed = block.slice(open + '\n```\n'.length, close);
   return {
     // `trimEnd` is load-bearing: it removes the `\n\n` join `agent.ts` put
     // between the wrapped instruction and the block, so what remains ends in
     // the profile wrapper's own closing tag again — which is what lets
     // `parseUserMessage`'s trailing-tag branch match on the resume path.
     instruction: text.slice(0, at).trimEnd(),
-    observation: summariseObservation(block.slice(open + '\n```\n'.length, close)),
+    // Required, not defaulted, so a caller states it rather than inheriting
+    // "complete" by omission. The resume path has no bounding step in scope —
+    // the block came off disk — so it reads the marker `markTruncated` wrote,
+    // through that module's own detector. Answering `false` here would be a lie
+    // the recovered text itself contradicts.
+    observation: summariseObservation(observed, looksTruncated(observed)),
   };
 }

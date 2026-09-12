@@ -103,18 +103,36 @@ export function WakePanel({ data, toolDetails }: { data: WakeData; toolDetails: 
  * whose first row is empty reads as a panel that failed to render — so the body
  * is the first NON-EMPTY line rather than `lines[0]`.
  *
- * No clamp on the subtraction: `split('\n')` always yields at least one element
- * and the subtrahend is 0 or 1, so it cannot go negative. The `Math.max` this
- * replaces looked like a guard and could never fire.
+ * `hidden` counts the lines AFTER the one shown, not every line but that one:
+ * the leading blanks were skipped precisely because they say nothing, so
+ * counting them made `"\n\nreal\nmore"` report three hidden lines when one has
+ * content. An instruction that is entirely blank shows nothing and hides
+ * nothing — counting its rows would put "… 3 more instruction lines" under an
+ * empty body.
+ *
+ * No clamp on the subtraction: `i` is a valid index whenever it is not -1, so
+ * `lines.length - 1 - i` cannot go negative.
  */
 function collapseInstruction(instruction: string): { first: string; hidden: number } {
   const lines = instruction.split('\n');
   const i = lines.findIndex((l) => l.trim().length > 0);
-  return { first: i === -1 ? '' : lines[i], hidden: lines.length - (i === -1 ? 0 : 1) };
+  if (i === -1) return { first: '', hidden: 0 };
+  return { first: lines[i], hidden: lines.length - 1 - i };
 }
 
+/**
+ * How much was observed — and whether that number is itself a cap.
+ *
+ * `MAX_OBSERVATION_CHARS` means `bytes` saturates at ~4 KB, so without the
+ * qualifier a watcher that read a 2 MB page and one that read a 4 KB one report
+ * identically on the surface whose job is saying how much is held back. "at
+ * least" rather than a total, because the total is not knowable for a bounded
+ * walk — see `renderObservation`.
+ */
 function sizeNote(obs: ObservationSummary): string {
-  return `${formatBytes(obs.bytes)} observed`;
+  return obs.truncated
+    ? `at least ${formatBytes(obs.bytes)} observed`
+    : `${formatBytes(obs.bytes)} observed`;
 }
 
 function collapsedNote(hiddenLines: number, obs: ObservationSummary | undefined) {
