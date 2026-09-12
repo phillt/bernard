@@ -189,9 +189,7 @@ export function StatusBar({ agent }: StatusBarProps) {
   // the only evidence that anything is running is the wake itself — arriving
   // from nowhere, minutes or hours later.
   if (watching > 0) {
-    groups.push(
-      <HintEntry key="watching" hintKey="watching" label={String(watching)} />,
-    );
+    groups.push(<HintEntry key="watching" hintKey="watching" label={String(watching)} />);
   }
 
   if (stats) {
