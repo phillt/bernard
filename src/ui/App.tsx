@@ -893,6 +893,17 @@ export function App({
    */
   const outstandingWakesRef = useRef(new Set<string>());
   /**
+   * Whether the queue-full notice has already been shown since the queue last
+   * drained.
+   *
+   * Latched, because the refusal is now RETRIED. A refused watcher rewinds and
+   * re-fires every interval, so an unlatched notice repeats every 15-60 s for
+   * as long as the queue stays full — where the pre-queue behaviour was one
+   * notice and a spent watcher. The point is to tell the user once that turns
+   * are backing up, not to narrate each attempt.
+   */
+  const queueFullNoticedRef = useRef(false);
+  /**
    * Watcher records. One store per session; the poller below drives it.
    *
    * Lazily, because React evaluates a `useRef` ARGUMENT on every render and
@@ -4682,12 +4693,17 @@ export function App({
     if (!queued.ok) {
       // Told now, while the producer still has the payload. A watcher has
       // already marked itself fired by this point, so silence here would lose
-      // the one notification it existed to deliver.
-      pushAssistantNotice(
-        `⚠ Could not queue "${turn.text.slice(0, 60)}" — ${MAX_QUEUED_TURNS} turns are already waiting.`,
-      );
+      // the one notification it existed to deliver — but only ONCE per backlog,
+      // since the producer retries every interval.
+      if (!queueFullNoticedRef.current) {
+        queueFullNoticedRef.current = true;
+        pushAssistantNotice(
+          `⚠ Could not queue "${turn.text.slice(0, 60)}" — ${MAX_QUEUED_TURNS} turns are already waiting.`,
+        );
+      }
       return queued;
     }
+    queueFullNoticedRef.current = false;
     if (turn.source.kind === 'watcher') outstandingWakesRef.current.add(turn.source.watcherId);
     if (!submittingRef.current) setTimeout(() => void drainNextTurn(), 0);
     return queued;

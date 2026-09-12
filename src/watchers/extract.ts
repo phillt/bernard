@@ -122,9 +122,12 @@ export function extractPath(value: unknown, path: string): unknown {
  *
  * Bounding here instead keeps the bytes and drops only the work: emission stops
  * once the budget is spent, and both the array and object loops BREAK rather
- * than walking the tail and joining megabytes of separators. Only leaves are
- * counted, so the budget is an under-estimate and the real output runs a little
- * past it — which is the safe direction, since the caller slices anyway.
+ * than walking the tail and joining megabytes of separators. Every token the
+ * walk emits is charged — string leaves, numbers, booleans, the `null` literal
+ * and object KEYS — because a budget that counts only strings does not bound a
+ * document that has none. Structural punctuation (braces, commas, colons) is
+ * not, so the budget stays a slight under-estimate and the real output runs a
+ * little past it, which is the safe direction since the caller slices anyway.
  *
  * Deliberately not applied to `digestOf`: a digest over a prefix is a different
  * digest, and every stored snapshot would be invalidated by turning it on.
@@ -169,20 +172,41 @@ export function stableStringify(
     emitted += out.length;
     return out;
   };
+  /**
+   * Charges an already-final token to the budget and returns it unclipped.
+   *
+   * EVERY token the walk emits has to be charged, not just the string leaves —
+   * a budget that counts only strings does not bound a document that has none.
+   * Measured before this: 40,000 rows of `{id, ts, ok}` (1.55 MB, numeric and
+   * boolean leaves only) never once tripped `spent()`, so neither loop ever
+   * broke and `{maxChars: 4000}` produced the full 1,548,900 characters in 51 ms
+   * — byte-identical to the unbounded walk, and slower for the bookkeeping.
+   * That is precisely the shape `MATCH_INPUT_MAX` exists for.
+   *
+   * Unclipped because these are bounded by construction — a number is at most
+   * ~300 characters and the literals are fixed — so there is nothing to cut and
+   * the prefix stays exact. Charging MORE can only make the budget tighter,
+   * which the invariant already tolerates: it is a documented under-estimate,
+   * and the real output is allowed to run past it.
+   */
+  const charge = (token: string): string => {
+    emitted += token.length;
+    return token;
+  };
   const seen = new WeakSet<object>();
   const walk = (v: unknown): string => {
     // Only reachable for `maxChars: 0` and from the root: every recursive call
     // is guarded by the `break`s below, and those are what actually bound the
     // walk. Do NOT delete them on the strength of this line.
     if (spent()) return '';
-    if (v === null) return 'null';
-    if (v === undefined) return 'undefined';
+    if (v === null) return charge('null');
+    if (v === undefined) return charge('undefined');
     const t = typeof v;
-    if (t === 'number' || t === 'boolean') return String(v);
+    if (t === 'number' || t === 'boolean') return charge(String(v));
     if (t === 'string') return emitLeaf(v as string);
     if (t !== 'object') return emitLeaf(String(v));
     const obj = v as object;
-    if (seen.has(obj)) return '"[circular]"';
+    if (seen.has(obj)) return charge('"[circular]"');
     seen.add(obj);
     try {
       if (Array.isArray(obj)) {
@@ -197,7 +221,10 @@ export function stableStringify(
       const parts: string[] = [];
       for (const k of keys) {
         if (spent()) break;
-        parts.push(`${JSON.stringify(k)}:${walk((obj as Record<string, unknown>)[k])}`);
+        // The KEY is charged too. `{a:1,b:2,…}` with forty thousand keys and no
+        // string values is the same unbounded shape as the numeric one above,
+        // reached through the other half of the pair.
+        parts.push(`${charge(JSON.stringify(k))}:${walk((obj as Record<string, unknown>)[k])}`);
       }
       return `{${parts.join(',')}}`;
     } finally {

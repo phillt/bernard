@@ -243,7 +243,13 @@ async function create(deps: WatcherToolDeps, args: Record<string, unknown>): Pro
     const ending = w.repeating
       ? ` It will start a turn each time it fires and stay armed (up to ${w.maxFires ?? DEFAULT_MAX_FIRES} times) — you do NOT need to recreate it.`
       : ' It will start a turn when it fires, then end.';
-    return `${dupWarning}Watching ${describeWatchTarget(target)} — "${w.name}" (id ${w.id}).${every}${ending}`;
+    // The expiry is STATED, because `ttlHours` is silently clamped to
+    // `MAX_LIFETIME_MS` — so a model asking for 30 days gets 7 and, without
+    // this, could neither tell nor tell the user. `/sleep` refuses an
+    // over-long duration outright, which is right for something a person typed;
+    // clamping is right for a tool argument, but only if it says what it did.
+    const until = ` Expires ${w.expiresAt}.`;
+    return `${dupWarning}Watching ${describeWatchTarget(target)} — "${w.name}" (id ${w.id}).${every}${ending}${until}`;
   } catch (err) {
     return `Error: ${err instanceof Error ? err.message : String(err)}`;
   }

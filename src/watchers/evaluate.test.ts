@@ -261,6 +261,36 @@ describe('stableStringify — the budget preserves the prefix', () => {
     }
   });
 
+  it('bounds a document whose leaves are all NUMBERS', () => {
+    // The budget charged only string leaves, so a numeric payload never
+    // tripped `spent()`, neither loop broke, and `{maxChars: N}` returned the
+    // whole 1.5 MB — byte-identical to the unbounded walk and slower for the
+    // bookkeeping. Exactly the shape `MATCH_INPUT_MAX` exists for.
+    //
+    // A bare nested ARRAY, so there are no keys: charging keys alone would
+    // otherwise bound this and hide a missing charge on the numbers.
+    const nums = Array.from({ length: 5_000 }, (_, i) => [i, i + 1, i + 2]);
+    const full = stableStringify(nums);
+    const bounded = stableStringify(nums, { maxChars: 500 });
+    expect(full.length).toBeGreaterThan(50_000);
+    expect(bounded.length).toBeLessThan(full.length / 10);
+    expect(bounded.slice(0, 500)).toBe(full.slice(0, 500));
+  });
+
+  it('bounds a document that is all KEYS', () => {
+    // The other half of the same hole: a key is emitted straight through
+    // `JSON.stringify(k)` rather than the leaf path. Values are EMPTY objects
+    // so nothing else can be charged — with the key charge removed, this walk
+    // is entirely uncounted.
+    const keys: Record<string, unknown> = {};
+    for (let i = 0; i < 5_000; i++) keys[`key${i}`] = {};
+    const full = stableStringify(keys);
+    const bounded = stableStringify(keys, { maxChars: 500 });
+    expect(full.length).toBeGreaterThan(50_000);
+    expect(bounded.length).toBeLessThan(full.length / 10);
+    expect(bounded.slice(0, 500)).toBe(full.slice(0, 500));
+  });
+
   it('is unbounded when no budget is given', () => {
     // So a default can never be slipped in — every stored `changed` snapshot
     // depends on this walk seeing the whole value.
