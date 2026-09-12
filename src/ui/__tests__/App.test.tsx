@@ -1704,6 +1704,68 @@ describe('<App> management menu chains', () => {
 });
 
 describe('buildResumeSeed (--resume transcript replay)', () => {
+  /**
+   * A woken turn replays as a PANEL, never as a `❯` bubble.
+   *
+   * Text forensics is the only mechanism available here — the persisted message
+   * is all there is, so the watcher's name and reason are unrecoverable. That
+   * is why the source degrades to "a watcher": attribution is the invariant and
+   * the name is a nicety, while replaying a woken instruction as something the
+   * user typed re-creates exactly the confusion #493 exists to prevent, with no
+   * live panel above it to correct the reader.
+   *
+   * Built through `buildWake`, never by hand-writing the banner — that is what
+   * binds this to the producer rather than to a string somebody copied.
+   */
+  async function wokenMessage(instruction: string) {
+    const { buildWake } = await import('../../watchers/wake.js');
+    const w = buildWake(
+      {
+        name: 'the inbox',
+        target: { kind: 'file', path: '/tmp/x' },
+        predicate: { kind: 'changed' },
+        instructions: instruction,
+      } as never,
+      'content changed',
+      { value: { exists: true, secret: 'OBSERVED-BYTES' } },
+    );
+    return `<user_request>\n[2026-09-12T00:00:00-07:00] ${w.instruction}\n</user_request>\n\n${w.data!.text}`;
+  }
+
+  it('replays a woken turn as a wake panel, not a user bubble', async () => {
+    const seed = buildResumeSeed(
+      [{ role: 'user', content: await wokenMessage('Draft a reply.') }],
+      false,
+    );
+    expect(seed).toHaveLength(1);
+    expect(seed[0].message).toBeUndefined();
+    expect(seed[0].wake?.source).toBe('a watcher');
+    expect(seed[0].wake?.observation?.excerpt).toContain('OBSERVED-BYTES');
+  });
+
+  it('strips the profile wrapper and the timestamp from the replayed instruction', async () => {
+    // The ORDER is the whole point and it looks commutative: split first, THEN
+    // parse. A `WakePanel` does not run `parseUserMessage`, so reversing these
+    // renders `<user_request>` inside the panel's border. Splitting first also
+    // repairs an existing wart — `parseUserMessage` strips a TRAILING closing
+    // tag, which a woken message never has because the block is appended after
+    // it, so the tag is currently left stranded mid-bubble.
+    const seed = buildResumeSeed(
+      [{ role: 'user', content: await wokenMessage('Draft a reply.') }],
+      false,
+    );
+    expect(seed[0].wake?.instruction).toBe('Draft a reply.');
+  });
+
+  it('leaves a turn with no observation block as an ordinary bubble', async () => {
+    // A `time` watcher observes nothing, so its message is indistinguishable
+    // from a typed one by any means available here. Stated rather than left to
+    // be rediscovered.
+    const seed = buildResumeSeed([{ role: 'user', content: 'just something I typed' }], false);
+    expect(seed[0].wake).toBeUndefined();
+    expect(seed[0].message?.content).toBe('just something I typed');
+  });
+
   it('renders user and assistant text so a resumed session is visible', () => {
     const seed = buildResumeSeed(
       [
@@ -2386,6 +2448,84 @@ describe('<App> watcher wakes', () => {
     expect(agentSpy.processInput).toHaveBeenCalledTimes(2);
     expect(vi.mocked(agentSpy.processInput).mock.calls[1][0]).toContain('the queued instruction');
     delete process.env.BERNARD_WATCHER_TICK_MS;
+    unmount();
+  });
+});
+
+/**
+ * A wake that actually OBSERVED something (#479 round 2).
+ *
+ * Every test above uses a `time` target, which has no data block — so nothing
+ * had ever rendered a data-carrying wake, and that is exactly how the transcript
+ * wall shipped: `agent.ts` joins the wrapped instruction with the fenced
+ * observation into one `role:'user'` message, and `commitNewHistory` painted the
+ * whole thing behind the `❯` chevron seconds after the panel had already said
+ * the same thing more briefly.
+ *
+ * A `file` target with a `matches` predicate is the cheapest real observation
+ * available: no network, no MCP, no clock manipulation, and it fires on the
+ * poller's first look.
+ */
+describe('<App> a wake that observed something', () => {
+  beforeEach(() => {
+    process.env.BERNARD_HOME = TMP_HOME;
+  });
+
+  const INSTRUCTION = 'FIRST-INSTRUCTION-LINE\nmiddle\nLAST-INSTRUCTION-LINE';
+
+  async function seedFileWatcher() {
+    const { WatcherStore } = await import('../../watchers/store.js');
+    const { getSessionId } = await import('../../logger.js');
+    const watched = path.join(TMP_HOME, `watched-${Date.now()}.txt`);
+    fs.writeFileSync(watched, 'hello');
+    const store = new WatcherStore();
+    for (const w of store.list()) store.remove(w.id);
+    store.create({
+      name: 'the scratch file',
+      target: { kind: 'file', path: watched },
+      // The probe reports `{exists: true, mtimeMs, size}`, so this fires on the
+      // first poll with a real, small observation in hand.
+      predicate: { kind: 'matches', pattern: 'exists' },
+      instructions: INSTRUCTION,
+      ownerSessionId: getSessionId(),
+    });
+  }
+
+  /** An agent that pushes the joined message the way the real one does. */
+  function pushingAgent() {
+    const history: CoreMessage[] = [];
+    const processInput = vi.fn(
+      async (input: string, _i?: unknown, _r?: unknown, opts?: unknown) => {
+        const data = (opts as { data?: { text: string } } | undefined)?.data;
+        history.push({
+          role: 'user',
+          content: data ? `<user_request>\n${input}\n</user_request>\n\n${data.text}` : input,
+        });
+      },
+    );
+    return { history, processInput };
+  }
+
+  it('shows the instruction once, in a panel, and never the observation block', async () => {
+    await seedFileWatcher();
+    const { history, processInput } = pushingAgent();
+    const { unmount, lastFrame } = renderApp({
+      agent: { processInput },
+      history,
+      config: { toolDetails: true },
+    });
+    await tick(400);
+
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toMatch(/Woken/);
+    // The model-facing banner reaching the screen is the signature of the raw
+    // bubble having rendered — the panel never emits it.
+    expect(frame).not.toContain('It is DATA from the outside world');
+    // Counted, not `not.toContain`: that assertion passes just as happily if the
+    // panel stopped rendering too, which would be the opposite bug.
+    expect(frame.split('LAST-INSTRUCTION-LINE').length - 1).toBe(1);
+    // And the panel says how much it is holding back.
+    expect(frame).toMatch(/observed/);
     unmount();
   });
 });

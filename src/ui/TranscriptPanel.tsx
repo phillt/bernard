@@ -21,6 +21,7 @@ export function TranscriptPanel({
   title,
   meta,
   body,
+  detail,
   hint,
   hintColor,
   footer,
@@ -32,6 +33,17 @@ export function TranscriptPanel({
   meta?: string;
   /** Body text; blank lines are preserved as blank rows. */
   body: string;
+  /**
+   * Anything the body needs to be read WITH — rendered directly beneath it and
+   * above the hint.
+   *
+   * Distinct from `children`, which lands below the footer: a disclosure about
+   * the body would then sit under the closing line, reading as an afterthought
+   * about the panel rather than a fact about its content. Kept generic — name
+   * it for the slot, not for one caller's use, or this file grows the variant
+   * switch it exists to avoid.
+   */
+  detail?: ReactNode;
   hint?: string;
   hintColor: string;
   /** Dim closing row, below the hint. */
@@ -54,6 +66,7 @@ export function TranscriptPanel({
           <Text key={i}>{line.length === 0 ? ' ' : line}</Text>
         ))}
       </Box>
+      {detail}
       {hint && (
         <Box marginTop={1}>
           <Text color={hintColor}>→ {hint}</Text>
