@@ -121,6 +121,60 @@ describe('extractRecentUserTexts', () => {
   });
 });
 
+/**
+ * A woken turn retrieves for its INSTRUCTION, not for what it observed (#572
+ * follow-up).
+ *
+ * `stripProfileWrapper`'s XML branch is `$`-anchored and a woken message has
+ * the observation block appended after the closing tag, so it never matched —
+ * the query got the tags, the banner, and up to 4 KB of a chat thread.
+ */
+describe('extractRecentUserTexts — woken turns', () => {
+  it('retrieves for the instruction, not the inbox', async () => {
+    const { buildWake } = await import('./watchers/wake.js');
+    const w = buildWake(
+      {
+        schemaVersion: 1,
+        id: 'w1',
+        name: 'boys thread',
+        createdAt: new Date().toISOString(),
+        ownerSessionId: 's1',
+        ownerPid: process.pid,
+        status: 'active',
+        target: { kind: 'mcp', tool: 'beeper__list_messages', args: {} },
+        predicate: { kind: 'appeared', idPath: '$.items.id' },
+        instructions: 'Draft a reply about the ARMA plan.',
+        intervalMs: 60_000,
+        failureCount: 0,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+      '2 new items',
+      { value: { items: [{ id: 'm1', text: 'PINEAPPLE'.repeat(200) }] } },
+    );
+    // Exactly the shape `agent.ts` pushes into history for a woken turn.
+    const content = `<user_request>\n[2026-09-12T00:00:00-07:00] ${w.instruction}\n</user_request>\n\n${w.data!.text}`;
+
+    const got = extractRecentUserTexts([{ role: 'user', content }] as CoreMessage[]);
+    expect(got).toEqual(['Draft a reply about the ARMA plan.']);
+    // Each half of what used to leak, named separately so a partial regression
+    // is still a failure.
+    expect(got[0]).not.toContain('user_request');
+    expect(got[0]).not.toContain('The block below is what a watcher observed');
+    expect(got[0]).not.toContain('PINEAPPLE');
+  });
+
+  it('leaves an ordinary typed turn exactly as it was', () => {
+    const got = extractRecentUserTexts([
+      {
+        role: 'user',
+        content:
+          '<user_request>\n[2026-09-12T00:00:00-07:00] what is the deploy status\n</user_request>',
+      },
+    ] as CoreMessage[]);
+    expect(got).toEqual(['what is the deploy status']);
+  });
+});
+
 describe('buildRAGQuery', () => {
   it('returns currentInput when no history', () => {
     expect(buildRAGQuery('what tools do we use?', [])).toBe('what tools do we use?');

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
 import { WatcherStore } from './store.js';
-import { MAX_FIRES_CEILING, isWatcher } from './types.js';
+import { MAX_FIRES_CEILING, isWatcher, listableWatchers } from './types.js';
 
 /**
  * The record guard and the creation clamps.
@@ -141,5 +141,28 @@ describe('WatcherStore.findDuplicate', () => {
       store.findDuplicate({ kind: 'mcp', tool: 't', args: { b: 'two', a: 1 } }, { kind: 'changed' })
         ?.id,
     ).toBe(w.id);
+  });
+});
+
+describe('listableWatchers', () => {
+  const at = (status: string) =>
+    ({ ...record({ status }) }) as unknown as Parameters<typeof listableWatchers>[0][number];
+
+  it('shows live ones and drops the ones that are done', () => {
+    // Bernard cancels six, reports them cleared, and `/watchers` showed six
+    // rows every one of which said `cancelled` — both true, contradicting each
+    // other on screen. `sweep` keeps them for 24 h on purpose; that is right
+    // for the store and wrong for a list a person reads.
+    const all = ['active', 'cancelled', 'fired', 'expired'].map(at);
+    expect(listableWatchers(all).map((w) => w.status)).toEqual(['active']);
+  });
+
+  it('keeps a FAILED one, because it is the only place lastError is readable', () => {
+    // The asymmetry is deliberate. Hiding this one means a user can never
+    // learn why a watcher stopped, and `sweep`'s retention exists to protect
+    // exactly this record — ageing it from the wrong timestamp already deleted
+    // it before anyone could read it once.
+    const all = [at('cancelled'), at('failed')];
+    expect(listableWatchers(all).map((w) => w.status)).toEqual(['failed']);
   });
 });

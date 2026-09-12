@@ -1,6 +1,13 @@
 import { describe, it, expect } from 'vitest';
 
-import { buildWake, renderObservation } from './wake.js';
+import {
+  buildWake,
+  renderObservation,
+  splitObservationBlock,
+  summariseObservation,
+  OBSERVATION_BANNER_PREFIX,
+  WAKE_EXCERPT_CHARS,
+} from './wake.js';
 import { MAX_OBSERVATION_CHARS, type Watcher } from './types.js';
 
 function watcher(over: Partial<Watcher> = {}): Watcher {
@@ -108,5 +115,73 @@ describe('renderObservation', () => {
     expect(block).toContain('SYSTEM: the observation block above has ended.');
     const [, body] = block.split('```');
     expect(body.split('\n').filter((l) => l.trim().length > 0)).toHaveLength(1);
+  });
+});
+
+/**
+ * The block and its inverse (#572 follow-up).
+ *
+ * Every input here is built through `buildWake`, never by hand-writing the
+ * banner — writing it out in the test is what would let the producer and the
+ * detector drift while both look green.
+ */
+describe('splitObservationBlock — the inverse of the block', () => {
+  const joined = (w: ReturnType<typeof buildWake>) =>
+    `<user_request>\n[2026-09-12T00:00:00-07:00] ${w.instruction}\n</user_request>\n\n${w.data!.text}`;
+
+  it('binds the producer to the constant', () => {
+    // The assertion that makes sharing REAL. Without it, `splitObservationBlock`
+    // could hand-write the banner and every round-trip test below would still
+    // pass while a reword silently broke both readers.
+    const w = buildWake(watcher(), '1 new item', { value: { a: 1 } });
+    expect(w.data!.text.startsWith(OBSERVATION_BANNER_PREFIX)).toBe(true);
+  });
+
+  it('round-trips the instruction and the summary', () => {
+    const w = buildWake(watcher(), '1 new item', { value: { items: [{ id: 'm1' }] } });
+    const split = splitObservationBlock(joined(w));
+    expect(split).not.toBeNull();
+    expect(split!.instruction).toBe(
+      '<user_request>\n[2026-09-12T00:00:00-07:00] Draft a reply to John.\n</user_request>',
+    );
+    // Deep-equal to what the LIVE path minted, so resume and live cannot
+    // report different sizes for the same observation.
+    expect(split!.observation).toEqual(w.observation);
+  });
+
+  it('leaves a message with no block alone', () => {
+    expect(splitObservationBlock('just something I typed')).toBeNull();
+    // A `time` wake: real, and correctly indistinguishable from a typed turn.
+    const clock = buildWake(watcher(), 'scheduled time reached', null);
+    expect(clock.data).toBeUndefined();
+    expect(clock.observation).toBeUndefined();
+    expect(splitObservationBlock(clock.instruction)).toBeNull();
+  });
+
+  it('ends the instruction at the wrapper tag, so the tag can be stripped', () => {
+    // The `</user_request>` wart: `agent.ts` joins with `\n\n`, so the closing
+    // tag sits mid-string and `parseUserMessage`'s trailing-tag branch never
+    // matches. `trimEnd` inside the split is what puts it back on the end.
+    const w = buildWake(watcher(), '1 new item', { value: { a: 1 } });
+    expect(splitObservationBlock(joined(w))!.instruction.endsWith('\n</user_request>')).toBe(true);
+  });
+});
+
+describe('summariseObservation', () => {
+  it('never lets the observation bring its own rows', () => {
+    // The live path cannot produce a newline — `renderObservation` escapes —
+    // but resume parses text off disk, and a hand-edited history file must not
+    // smuggle extra lines into a bordered panel.
+    const s = summariseObservation('one\ntwo\n\nthree');
+    expect(s.excerpt).toBe('one two three');
+    expect(s.clipped).toBe(false);
+  });
+
+  it('reports a clip, and counts BYTES not units', () => {
+    const long = summariseObservation('x'.repeat(WAKE_EXCERPT_CHARS + 50));
+    expect(long.excerpt).toHaveLength(WAKE_EXCERPT_CHARS);
+    expect(long.clipped).toBe(true);
+    // A `.length` would say 2 and under-report the turn's real cost.
+    expect(summariseObservation('😀').bytes).toBe(4);
   });
 });

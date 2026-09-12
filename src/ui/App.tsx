@@ -106,7 +106,7 @@ import { renderTaskText, type UntrustedData } from '../framework/agents/user-mes
 import { WatcherStore } from '../watchers/store.js';
 import { WatcherPoller } from '../watchers/poller.js';
 import { statFileSync } from '../watchers/probe.js';
-import { describeWatchTarget, MAX_LIFETIME_MS } from '../watchers/types.js';
+import { describeWatchTarget, listableWatchers, MAX_LIFETIME_MS } from '../watchers/types.js';
 import { stableStringify } from '../watchers/extract.js';
 import { formatRelative, parseWhen } from '../watchers/duration.js';
 import {
@@ -1845,7 +1845,12 @@ export function App({
       const store = watcherStoreRef.current;
       let listIndex = 0;
       for (;;) {
-        const all = store.list();
+        // `listableWatchers`, not `store.list()` — the raw reader returns
+        // terminal records for `sweep`'s 24-hour retention window, so a user
+        // who just watched Bernard cancel six of them saw six rows saying
+        // `cancelled`. The tool's `list` action reads through the same helper,
+        // which is what stops the two surfaces answering differently.
+        const all = listableWatchers(store.list());
         if (all.length === 0) {
           flashToast('No watchers. Ask me to watch for something.');
           return;
@@ -1866,7 +1871,10 @@ export function App({
         }));
         const pick = await requestMenu(entries, {
           title: 'Watchers — select one',
-          headerLines: ['A watcher polls, then starts a turn when it fires. One-shot.'],
+          // Was "One-shot.", directly above rows reading `· repeating ×4`.
+          headerLines: [
+            'A watcher polls, then starts a turn when it fires. Repeating ones stay armed.',
+          ],
           initialIndex: listIndex,
         });
         if (pick.cancelled) return;
