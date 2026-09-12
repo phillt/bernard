@@ -2568,3 +2568,87 @@ describe('<App> remote prompts — receive-side enforcement', () => {
     unmount();
   });
 });
+
+/**
+ * A watcher firing WHILE Bernard is answering the previous one.
+ *
+ * The question this answers: a repeating watcher wakes Bernard, and while that
+ * turn is running someone else replies. Is the second reply lost?
+ *
+ * Three mechanisms have to line up, and none of them is obvious:
+ *  - the poller's interval is independent of turn state, so it keeps polling
+ *    while a turn runs (asserted by the second fire happening at all);
+ *  - `requestTurn` queues instead of hitting `submittingRef`, which returns
+ *    SILENTLY and would drop the wake;
+ *  - a repeating watcher advances its baseline at FIRE time, so the second
+ *    message is genuinely new rather than being swallowed into a re-read.
+ */
+describe('<App> a watcher firing mid-turn', () => {
+  beforeEach(() => {
+    process.env.BERNARD_HOME = TMP_HOME;
+  });
+
+  it('queues the second fire and runs it after, losing nothing', async () => {
+    const { WatcherStore } = await import('../../watchers/store.js');
+    const { getSessionId } = await import('../../logger.js');
+    const store = new WatcherStore();
+    for (const w of store.list()) store.remove(w.id);
+
+    const watched = path.join(TMP_HOME, 'thread.txt');
+    fs.writeFileSync(watched, 'first');
+
+    const { digestOf } = await import('../../watchers/evaluate.js');
+    const w = store.create({
+      name: 'the thread',
+      target: { kind: 'file', path: watched },
+      predicate: { kind: 'changed' },
+      instructions: 'reply to the newest message',
+      ownerSessionId: getSessionId(),
+      repeating: true,
+      snapshot: digestOf({ exists: true, mtimeMs: fs.statSync(watched).mtimeMs, size: 5 }),
+    });
+    // Below the 15s floor `create` enforces — this exercises the poll/turn
+    // interaction, not the floor.
+    store.update(w.id, { intervalMs: 40 });
+    process.env.BERNARD_WATCHER_TICK_MS = '20';
+
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let calls = 0;
+    const { unmount, agentSpy } = renderApp({
+      agent: {
+        processInput: vi.fn(async () => {
+          calls += 1;
+          if (calls === 1) await held;
+        }),
+      },
+    });
+
+    try {
+      // First change wakes Bernard; that turn then hangs.
+      await tick(50);
+      fs.writeFileSync(watched, 'second message');
+      await tick(400);
+      expect(agentSpy.processInput).toHaveBeenCalledTimes(1);
+
+      // Someone replies again WHILE the turn is still running.
+      fs.writeFileSync(watched, 'third message arrives mid-turn');
+      await tick(400);
+      // Still one: the running turn must not be disturbed…
+      expect(agentSpy.processInput).toHaveBeenCalledTimes(1);
+      // …and the watcher must still be armed, not spent.
+      expect(store.read(w.id)?.status).toBe('active');
+
+      // Now let the first turn finish.
+      release();
+      await tick(500);
+
+      // The second fire ran. This is the whole question: it was not lost.
+      expect(agentSpy.processInput).toHaveBeenCalledTimes(2);
+      expect(store.read(w.id)?.fireCount).toBeGreaterThanOrEqual(2);
+    } finally {
+      delete process.env.BERNARD_WATCHER_TICK_MS;
+      unmount();
+    }
+  });
+});
