@@ -7,6 +7,8 @@ import { attachMeta, toolToAISDK } from '../framework/tools/adapter.js';
 import { ok, err, type BernardTool } from '../framework/tools/types.js';
 import { clearCache as clearResultCache } from '../framework/tools/result-cache.js';
 import { ProvenanceStore } from '../provenance.js';
+import { runWithDispatchId } from '../framework/dispatch-context.js';
+import { isReadOnlyMCPToolName } from '../risk.js';
 
 vi.mock('../tool-profiles.js', () => ({
   classifyShellCommand: vi.fn((cmd: string) => {
@@ -2140,5 +2142,159 @@ describe('augmentTools', () => {
       expect(lastEnd()!.cached).toBe(true);
       expect(lastEnd()!.resultChars).toBeGreaterThan(0);
     });
+  });
+});
+
+/**
+ * The duplicate-message incident, at the layer that produced it.
+ *
+ * `beeper__send_message` and `beeper__list_messages` were issued in one parallel
+ * step. The read resolved in 12 ms, the write took 571 ms, and the message it
+ * created is stamped 453 ms AFTER the read returned — so the verification could
+ * not have seen it. The agent concluded the send had failed and re-sent
+ * byte-identical; both landed (`1904`, `1905`).
+ *
+ * The unit tests in `write-barrier.test.ts` pin the ordering rule. These pin the
+ * two things only this layer can answer: that MCP tools reach the barrier at all
+ * (they take the LEGACY branch, which is where the duplicate came from), and
+ * that `shouldBlockInReadOnly` really calls `send_message` a write and
+ * `list_messages` a read — which is what decides whether the rule fires.
+ */
+describe('augmentTools orders a verification read behind the write', () => {
+  const opts = { shellTimeout: 30_000, confirmDangerous: vi.fn() };
+
+  // Shaped exactly like the real ones, namespace and all: `isReadOnlyMCPToolName`
+  // strips the `server_hash__` prefix and reads a verb at either end, so the
+  // names are load-bearing rather than decorative.
+  const SEND = 'beeper_654785__send_message';
+  const LIST = 'beeper_654785__list_messages';
+
+  /**
+   * Built the way `mcp.ts` builds one: the kind comes from the real classifier
+   * on the raw name, never hand-set. Hard-coding `kind: 'write'` on both — the
+   * first cut — made the READ a write too, and writes never wait, so the rule
+   * silently did not fire. That is the whole failure mode of a hand-set fixture
+   * here, and deriving it binds this test to the classifier that actually
+   * decides in production.
+   */
+  function mcpTool(name: string, execute: (args: unknown) => Promise<unknown>) {
+    const raw = name.split('__')[1];
+    // `attachMeta`, not a plain `.meta` property: `readToolMeta` reads the
+    // non-enumerable `__bernardMeta` and returns undefined for anything else —
+    // and an undefined meta classifies as a READ, so a hand-hung `.meta` made
+    // the fixture invisible to the gate and the barrier silently inert.
+    return attachMeta(
+      { description: 'mcp', parameters: z.object({}), execute } as never,
+      { name, rawName: raw, kind: isReadOnlyMCPToolName(raw) ? 'read' : 'write' } as never,
+    );
+  }
+
+  it('classifies the pair the way production does', async () => {
+    // The rule cannot fire unless these two disagree, and they disagree only
+    // because `isReadOnlyMCPToolName` reads a verb at either end of the raw
+    // name. If a future edit made `send_message` read-only, every assertion
+    // below would still pass while the incident was fully reproducible.
+    expect(isReadOnlyMCPToolName('beeper_654785__send_message')).toBe(false);
+    expect(isReadOnlyMCPToolName('beeper_654785__list_messages')).toBe(true);
+  });
+
+  it('does not let the read observe pre-write state', async () => {
+    let sent = false;
+    let release!: () => void;
+    const landed = new Promise<void>((r) => (release = r));
+
+    const tools = augmentTools(
+      {
+        [SEND]: mcpTool(SEND, async () => {
+          await landed;
+          sent = true;
+          return { content: [{ type: 'text', text: '/open/19' }], isError: false };
+        }),
+        // Reports what the mailbox held at the moment it ran — which is the
+        // only thing the real `list_messages` does, and the reason the race is
+        // invisible from the result.
+        [LIST]: mcpTool(LIST, async () => ({ observedSent: sent })),
+      } as never,
+      createMockStore() as never,
+      opts as never,
+    );
+
+    await runWithDispatchId('step-1', async () => {
+      const write = tools[SEND].execute!({}, {} as never);
+      const read = tools[LIST].execute!({}, {} as never);
+      await new Promise((r) => setTimeout(r, 0));
+      release();
+      const [, r] = await Promise.all([write, read]);
+      // Before the barrier this was `false` — a read of state from before the
+      // write, which the agent took as proof the send had failed.
+      expect((r as { observedSent: boolean }).observedSent).toBe(true);
+    });
+  });
+
+  it('orders the ENVELOPE branch too, which no MCP tool exercises', async () => {
+    // `augment.ts` has two `execute` wrappers and MCP takes the legacy one, so
+    // every assertion above leaves the migrated-BernardTool path untested — and
+    // a mutation removing its `runOrdered` survived until this existed. Both
+    // wrappers go through one helper precisely so they cannot diverge; this is
+    // what makes that checkable rather than asserted.
+    let done = false;
+    let release!: () => void;
+    const landed = new Promise<void>((r) => (release = r));
+    const envelope = (name: string, kind: 'read' | 'write', run: () => Promise<unknown>) =>
+      toolToAISDK({
+        meta: { name, kind },
+        description: name,
+        parameters: z.object({}),
+        execute: async () => ok(await run()),
+        serializeForModel: (r) => (r.status === 'ok' ? r.result : 'err'),
+      } as never);
+
+    const tools = augmentTools(
+      {
+        w: envelope('w', 'write', async () => {
+          await landed;
+          done = true;
+          return { ok: true };
+        }),
+        r: envelope('r', 'read', async () => ({ observed: done })),
+      } as never,
+      createMockStore() as never,
+      opts as never,
+    );
+
+    await runWithDispatchId('step-3', async () => {
+      const write = tools.w.execute!({}, {} as never);
+      const read = tools.r.execute!({}, {} as never);
+      await new Promise((r) => setTimeout(r, 0));
+      release();
+      const [, got] = await Promise.all([write, read]);
+      expect((got as { observed: boolean }).observed).toBe(true);
+    });
+  });
+
+  it('leaves two reads fully parallel, so the common case pays nothing', async () => {
+    // 6,776 of 6,867 real tool calls involve no in-flight write at all. A rule
+    // that serialized reads against each other would be a throughput
+    // regression on essentially every turn.
+    let inFlight = 0;
+    let peak = 0;
+    const readTool = mcpTool(LIST, async () => {
+      peak = Math.max(peak, ++inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight--;
+      return { ok: true };
+    });
+    const tools = augmentTools(
+      { [LIST]: readTool, beeper_654785__get_chat: readTool } as never,
+      createMockStore() as never,
+      opts as never,
+    );
+    await runWithDispatchId('step-2', async () => {
+      await Promise.all([
+        tools[LIST].execute!({}, {} as never),
+        tools['beeper_654785__get_chat'].execute!({}, {} as never),
+      ]);
+    });
+    expect(peak).toBe(2);
   });
 });

@@ -19,6 +19,7 @@ import { resolveGrant, type ToolNameAliasResolver } from '../permissions/engine.
 import { breadthOptionsFor, type BreadthOption } from '../permissions/breadth.js';
 import { WRITE_PATH_TOOLS } from '../permissions/matchers.js';
 import { checkWritePath } from '../permissions/write-scope.js';
+import { runOrdered } from './write-barrier.js';
 
 /**
  * The wrapper shim prepends `[failure: <category>] <playbook.model>` to
@@ -810,7 +811,15 @@ export function augmentTools(
             debugLog(`augment:${toolName}:start`, undefined);
             debugLog('tool:execute:start', { tool: toolName, args: argsPreview });
             try {
-              envelope = await source.execute(args, execOptions as never);
+              // Ordered against this dispatch's in-flight writes, so a
+              // verification read issued in the same parallel step as the write
+              // it verifies cannot observe pre-write state. `shouldBlockInReadOnly`
+              // is the same predicate the read-only block gate uses, consulted
+              // per call so `memory{action:'read'}` and a read-shaped `shell`
+              // are correctly reads.
+              envelope = await runOrdered(shouldBlockInReadOnly(source.meta, args), () =>
+                source.execute(args, execOptions as never),
+              );
               debugLog(`augment:${toolName}:done`, {
                 ok: envelope.status === 'ok',
               });
@@ -912,7 +921,13 @@ export function augmentTools(
             args: safeSerialize(redactArgs(args, readToolMeta(toolDef)?.sensitiveArgs)),
           });
           try {
-            result = await originalExecute(args, execOptions);
+            // The same ordering as the envelope branch above, through the same
+            // helper. Two copies of this would be two things to keep in step,
+            // and MCP tools take THIS branch — which is where the duplicate
+            // message came from.
+            result = await runOrdered(shouldBlockInReadOnly(readToolMeta(toolDef), args), () =>
+              originalExecute(args, execOptions),
+            );
           } catch (thrown: unknown) {
             debugLog(
               `augment:${toolName}:threw`,
