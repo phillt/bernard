@@ -25,12 +25,20 @@
  *   poller borrows the manager; the REPL owns it.
  */
 import { debugLog } from '../logger.js';
+import { isPidAlive } from '../pid.js';
 import { resetActiveWatcherCount, setActiveWatcherCount } from './active-count.js';
 import { evaluate, type Evaluation } from './evaluate.js';
 import { probe, type ProbeDeps } from './probe.js';
 import { buildWake, type Wake } from './wake.js';
 import type { WatcherStore } from './store.js';
-import { DEFAULT_MAX_FIRES, MAX_PROBE_FAILURES, isDue, isPollable, type Watcher } from './types.js';
+import {
+  DEFAULT_MAX_FIRES,
+  MAX_PROBE_FAILURES,
+  carriedState,
+  isDue,
+  isPollable,
+  type Watcher,
+} from './types.js';
 
 /**
  * How often the loop LOOKS for due watchers — the granularity of the clock, not
@@ -87,17 +95,14 @@ export class WatcherPoller {
   }
 
   start(): void {
-    // Adopt before the first tick: a watcher whose owning session died is one
-    // nobody is polling, and the alternative is a record that exists, reads as
-    // active in `/watchers`, and will never fire again — the silent failure the
-    // whole feature exists to remove.
-    this.adoptOrphans();
     this.opts.store.sweep(this.now());
     // Look immediately, then on the interval — `InboxWatcher.start`'s shape and
     // for the same reason. A watcher adopted from a dead session, or one whose
     // `time` target came due while no session was running, should not wait a
     // full tick to be noticed; the first thing a user does after restarting is
-    // ask why nothing happened.
+    // ask why nothing happened. Adoption is the first thing `tick` does, so
+    // this also covers "adopt before the first poll" without a second sweep of
+    // the directory to do it.
     void this.tick();
     this.timer = setInterval(() => void this.tick(), this.opts.tickMs ?? resolveTickMs());
     this.timer.unref?.();
@@ -128,15 +133,24 @@ export class WatcherPoller {
    * still polling it. The residual is a recycled pid making an orphan look
    * owned — bounded by running this every tick rather than once, so a later tick
    * catches it once the imposter exits.
+   *
+   * Takes the tick's own listing and returns the records it rewrote, rather than
+   * reading the directory itself. It runs on every tick beside the owned-set
+   * scan, so a private read was a second full `readdir` + parse of the same
+   * files milliseconds after the first — for the life of the session.
    */
-  private adoptOrphans(): void {
-    for (const w of this.opts.store.orphans()) {
-      this.opts.store.update(w.id, {
+  private adoptOrphans(all: readonly Watcher[]): Map<string, Watcher> {
+    const adopted = new Map<string, Watcher>();
+    for (const w of all) {
+      if (w.status !== 'active' || isPidAlive(w.ownerPid)) continue;
+      const next = this.opts.store.update(w.id, {
         ownerSessionId: this.opts.sessionId,
         ownerPid: process.pid,
       });
+      if (next) adopted.set(w.id, next);
       debugLog('watcher:adopted', { id: w.id, name: w.name, fromPid: w.ownerPid });
     }
+    return adopted;
   }
 
   /**
@@ -157,8 +171,14 @@ export class WatcherPoller {
       // is running otherwise leaves its watchers in the "reads as active, will
       // never fire" state until the next restart — precisely the state adoption
       // exists to remove.
-      this.adoptOrphans();
-      const owned = this.opts.store.ownedBy(this.opts.sessionId);
+      const all = this.opts.store.list();
+      const adopted = this.adoptOrphans(all);
+      // An adopted record's entry in `all` still names its dead owner, so the
+      // rewritten one replaces it — otherwise a watcher is adopted and then not
+      // polled until the next tick.
+      const owned = all
+        .map((w) => adopted.get(w.id) ?? w)
+        .filter((w) => w.ownerSessionId === this.opts.sessionId);
       // Published before the polls rather than after: a probe can take seconds,
       // and the bar should show the count for the tick it is in, not the last.
       setActiveWatcherCount(owned.filter((w) => isPollable(w, now)).length);
@@ -189,24 +209,7 @@ export class WatcherPoller {
     });
 
     if (!result.ok) {
-      const failureCount = w.failureCount + 1;
-      // A watcher that has been failing all day is not watching anything, and
-      // the user believes it is. It stops rather than retrying forever.
-      if (failureCount >= MAX_PROBE_FAILURES) {
-        this.opts.store.finish(
-          w.id,
-          'failed',
-          { failureCount, lastError: result.error, lastCheckedAt: checkedAt },
-          w,
-        );
-        debugLog('watcher:failed', { id: w.id, name: w.name, error: result.error });
-        return;
-      }
-      this.opts.store.update(
-        w.id,
-        { failureCount, lastError: result.error, lastCheckedAt: checkedAt },
-        w,
-      );
+      this.countFailure(w, result.error, checkedAt, 'watcher:failed');
       return;
     }
 
@@ -214,27 +217,23 @@ export class WatcherPoller {
     // A watcher that cannot read its own predicate is not watching anything, and
     // the user believes it is. Counted as a probe failure so it trips
     // `MAX_PROBE_FAILURES` and stops with a `lastError` naming the path, rather
-    // than polling cleanly forever.
+    // than polling cleanly forever. The reason comes from `evaluate`, the one
+    // place holding both the predicate and the payload it failed against.
     if (verdict.unreadable) {
-      const failureCount = w.failureCount + 1;
-      const lastError =
-        w.predicate.kind === 'appeared'
-          ? `idPath "${w.predicate.idPath}" does not name a list of items in the result.`
-          : 'The predicate could not be evaluated against the result.';
-      if (failureCount >= MAX_PROBE_FAILURES) {
-        this.opts.store.finish(
-          w.id,
-          'failed',
-          { failureCount, lastError, lastCheckedAt: checkedAt },
-          w,
-        );
-        debugLog('watcher:unreadable', { id: w.id, name: w.name, lastError });
-        return;
-      }
-      this.opts.store.update(w.id, { failureCount, lastError, lastCheckedAt: checkedAt }, w);
+      this.countFailure(w, verdict.unreadable, checkedAt, 'watcher:unreadable');
       return;
     }
     if (!verdict.fired) {
+      // A quiet poll rewrites the record byte-identically except for
+      // `lastCheckedAt`, and a repeating watcher does that for its whole life —
+      // measured at 2.6 MB/day for a 20-id record at the 60 s default, 33 MB/day
+      // at 500 ids. `RAGStore` debounces exactly this shape (#533), and it is
+      // deliberately NOT copied here: there the write was 188 ms of
+      // `JSON.stringify` on the turn's critical path, and here it is ~0.05 ms on
+      // a background timer. It would also need real machinery rather than a
+      // timer, because `isDue` reads `lastCheckedAt` off the record — skipping
+      // the write without an in-memory overlay makes every watcher due on every
+      // tick, i.e. polls somebody's server every 5 s instead of every 60.
       this.opts.store.update(
         w.id,
         {
@@ -242,10 +241,7 @@ export class WatcherPoller {
           // Reset on success: five *consecutive* failures is the rule, so a
           // transient blip a week ago must not add to today's.
           failureCount: 0,
-          ...(verdict.snapshot === undefined ? {} : { snapshot: verdict.snapshot }),
-          ...(verdict.baselineIds === undefined ? {} : { baselineIds: verdict.baselineIds }),
-          ...(verdict.etag === undefined ? {} : { etag: verdict.etag }),
-          ...(verdict.lastModified === undefined ? {} : { lastModified: verdict.lastModified }),
+          ...carriedState(verdict),
         },
         w,
       );
@@ -287,27 +283,48 @@ export class WatcherPoller {
     // tick; not restoring would spend the watcher on a refusal the user never
     // got the benefit of — and the watcher is the thing they were waiting on.
     if (this.opts.onWake(wake) === false) {
-      // Put back whichever way it fired. For a repeating watcher that means
-      // rewinding the advanced baseline too — leaving it advanced would mean the
-      // refused items never count as new again.
-      this.opts.store.update(
-        w.id,
-        {
-          status: 'active',
-          firedAt: undefined,
-          lastCheckedAt: checkedAt,
-          ...(w.repeating
-            ? {
-                fireCount: w.fireCount ?? 0,
-                ...(w.snapshot === undefined ? {} : { snapshot: w.snapshot }),
-                ...(w.baselineIds === undefined ? {} : { baselineIds: w.baselineIds }),
-              }
-            : {}),
-        },
-        { ...w, status: 'fired', firedAt },
-      );
+      // Put the record we were HOLDING back, whole. `w` is by construction the
+      // state before any of the fire, so it cannot be an incomplete list of what
+      // to undo — and `lastCheckedAt` is the one field kept, because we really
+      // did look.
+      //
+      // The patch this replaces was correct, and only for a reason nobody should
+      // have to hold in their head: it enumerated five fields, and the other
+      // four came back because `update` merges the patch onto the `known`
+      // record — which was `w` — rather than onto disk. So the enumeration was
+      // redundant rather than wrong, and it read as the thing doing the work.
+      // Delete the `known` argument as an optimisation nobody needs and the
+      // advanced `etag` silently survives a refusal, which sends the next poll's
+      // `If-None-Match` for a body this watcher never acted on.
+      //
+      // `replace`, not `update`, for the same reason: a patch merges, so it can
+      // add and overwrite but never REMOVE, and `firedAt` is a key the fire path
+      // added. Spreading `w` into a patch cannot take it away again.
+      this.opts.store.replace({ ...w, lastCheckedAt: checkedAt });
       debugLog('watcher:wake-refused', { id: w.id, name: w.name });
     }
+  }
+
+  /**
+   * Records a failed poll, and stops the watcher once they stack up.
+   *
+   * One helper rather than the two byte-identical branches this replaces — a
+   * probe that could not run and a predicate that could not be read are the same
+   * bookkeeping, and written twice they are two places to keep in step the day a
+   * sixth field joins the patch.
+   *
+   * A watcher that has been failing all day is not watching anything, and the
+   * user believes it is. It stops rather than retrying forever.
+   */
+  private countFailure(w: Watcher, lastError: string, checkedAt: string, event: string): void {
+    const failureCount = w.failureCount + 1;
+    const patch = { failureCount, lastError, lastCheckedAt: checkedAt };
+    if (failureCount >= MAX_PROBE_FAILURES) {
+      this.opts.store.finish(w.id, 'failed', patch, w);
+      debugLog(event, { id: w.id, name: w.name, error: lastError });
+      return;
+    }
+    this.opts.store.update(w.id, patch, w);
   }
 
   /**
@@ -341,10 +358,7 @@ export class WatcherPoller {
         fireCount,
         lastCheckedAt: checkedAt,
         failureCount: 0,
-        ...(verdict.snapshot === undefined ? {} : { snapshot: verdict.snapshot }),
-        ...(verdict.baselineIds === undefined ? {} : { baselineIds: verdict.baselineIds }),
-        ...(verdict.etag === undefined ? {} : { etag: verdict.etag }),
-        ...(verdict.lastModified === undefined ? {} : { lastModified: verdict.lastModified }),
+        ...carriedState(verdict),
       },
       w,
     );

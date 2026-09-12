@@ -120,6 +120,90 @@ describe('WatcherPoller', () => {
     expect(store.read(w.id)?.status).toBe('fired');
   });
 
+  it('rewinds every field the fire advanced, not the ones somebody remembered', async () => {
+    // Every field, not the five the old hand-written patch happened to name.
+    // Those five were not what made it work: the other four came back because
+    // `update` merges onto the `known` record it is handed, which was this same
+    // held record. A repeating watcher is where the difference would bite —
+    // `rearm` is the path that advances the HTTP validators — so a rewind that
+    // stopped depending on `known` would leave the watcher holding an `etag` for
+    // a body it never acted on, the next poll would send `If-None-Match` and
+    // take the `304`, and the change the user was waiting for would never be
+    // reported. Asserted per field rather than on the mechanism, so it holds
+    // whichever way the rewind is written.
+    const w = store.create({
+      name: 'page',
+      target: { kind: 'http', url: 'https://example.test/page' },
+      predicate: { kind: 'changed' },
+      instructions: 'react',
+      ownerSessionId: 's1',
+      repeating: true,
+      snapshot: digestOf('old'),
+      etag: 'W/"before"',
+    });
+    // A transient blip already on the record, so the reset the fire path applies
+    // is visible as something that has to be put back too.
+    store.update(w.id, { failureCount: 2 });
+
+    const now = Date.now() + 120_000;
+    const poller = new WatcherPoller({
+      store,
+      sessionId: 's1',
+      deps: deps({
+        fetch: (async () =>
+          new Response('new body', { headers: { etag: 'W/"after"' } })) as unknown as typeof fetch,
+      }),
+      onWake: () => false,
+      now: () => now,
+    });
+
+    await poller.tick();
+    const after = store.read(w.id);
+    expect(after?.status).toBe('active');
+    expect(after?.etag).toBe('W/"before"');
+    expect(after?.snapshot).toBe(digestOf('old'));
+    expect(after?.fireCount).toBe(0);
+    expect(after?.failureCount).toBe(2);
+    // The one thing kept from the fire: we really did look.
+    expect(after?.lastCheckedAt).toBe(new Date(now).toISOString());
+  });
+
+  it('names working idPaths when a live poll cannot read the predicate', async () => {
+    // A watcher whose `idPath` names no list polls cleanly forever and can never
+    // fire — the silent-inertness failure. The poll-time message used to be a
+    // second hand-written copy of the creation-time one, minus the suggestions,
+    // so the failure that strands a LIVE watcher was the one told nothing.
+    const payload = { items: [{ id: 'a' }, { id: 'b' }] };
+    const w = store.create({
+      name: 'dead path',
+      target: { kind: 'mcp', tool: 't', args: {} },
+      // `$.messages.id` names nothing in `{items:[…]}` — the exact shape that
+      // stranded three real watchers.
+      predicate: { kind: 'appeared', idPath: '$.messages.id' },
+      instructions: 'react',
+      ownerSessionId: 's1',
+      baselineIds: [],
+    });
+    let now = Date.now();
+    const poller = new WatcherPoller({
+      store,
+      sessionId: 's1',
+      deps: deps({ tools: () => ({ t: readTool(payload) }) }),
+      onWake: vi.fn(),
+      now: () => now,
+    });
+
+    await poller.tick();
+    expect(store.read(w.id)?.lastError).toContain('$.items.id');
+
+    // And it stops rather than polling blind forever.
+    for (let i = 1; i < MAX_PROBE_FAILURES; i++) {
+      now += 120_000;
+      await poller.tick();
+    }
+    expect(store.read(w.id)?.status).toBe('failed');
+  });
+
   it('is level-triggered: eleven missed polls still fire on the twelfth', async () => {
     // The property the design rests on. Nothing counts polls — the comparison is
     // against the snapshot, so the gap is irrelevant. This is why #400 is not a

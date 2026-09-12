@@ -148,6 +148,38 @@ export interface Watcher {
   expiresAt: string;
 }
 
+/**
+ * The four fields a poll carries from one look to the next.
+ *
+ * Named because it was written out as four `...(x === undefined ? {} : {x})`
+ * spreads at five sites — eighteen lines that all have to agree, and that the
+ * day a fifth carried field appears all have to change together. It is also the
+ * one place the set is enumerated, so `carriedState` and this type cannot drift.
+ */
+export interface WatchState {
+  snapshot?: string;
+  baselineIds?: string[];
+  etag?: string;
+  lastModified?: string;
+}
+
+/**
+ * `src`'s carried fields, with the absent ones OMITTED rather than set to
+ * `undefined`.
+ *
+ * Omission is load-bearing at the poller's two call sites: `WatcherStore.update`
+ * merges, so a key present with an `undefined` value overwrites — carrying an
+ * unset `etag` forward would erase the one on disk rather than leave it alone.
+ */
+export function carriedState(src: WatchState): WatchState {
+  const out: WatchState = {};
+  if (src.snapshot !== undefined) out.snapshot = src.snapshot;
+  if (src.baselineIds !== undefined) out.baselineIds = src.baselineIds;
+  if (src.etag !== undefined) out.etag = src.etag;
+  if (src.lastModified !== undefined) out.lastModified = src.lastModified;
+  return out;
+}
+
 /** How many watchers one session may hold. */
 export const MAX_WATCHERS = 10;
 
@@ -181,6 +213,17 @@ export const MAX_PROBE_FAILURES = 5;
  * a runaway stops the same day rather than at `expiresAt` a week later.
  */
 export const DEFAULT_MAX_FIRES = 50;
+
+/**
+ * Ceiling on a caller-supplied `maxFires`.
+ *
+ * `intervalMs` and `ttlMs` are both clamped at creation and this was not, so the
+ * one bound that exists specifically to stop a runaway was the one a model could
+ * set to a million — leaving `expiresAt` a week away as the only real limit. A
+ * ceiling rather than a refusal, matching its two neighbours: an over-large
+ * number is a guess about scale, not a mistake worth failing a create over.
+ */
+export const MAX_FIRES_CEILING = 200;
 
 /**
  * Cap on the observation handed to a woken turn, in CHARACTERS.
@@ -234,8 +277,17 @@ export function isWatcher(v: unknown): v is Watcher {
     typeof w.instructions === 'string' &&
     typeof w.intervalMs === 'number' &&
     typeof w.failureCount === 'number' &&
-    typeof w.expiresAt === 'string'
+    typeof w.expiresAt === 'string' &&
+    // The re-arm arithmetic is `fireCount >= maxFires`, and a comparison
+    // against a string or a NaN is simply `false` — so a hand-edited
+    // `maxFires: "lots"` does not fail, it removes the ceiling.
+    isOptionalNumber(w.fireCount) &&
+    isOptionalNumber(w.maxFires)
   );
+}
+
+function isOptionalNumber(v: unknown): boolean {
+  return v === undefined || (typeof v === 'number' && Number.isFinite(v));
 }
 
 function isWatchTarget(v: unknown): v is WatchTarget {
@@ -267,18 +319,30 @@ function isWatchPredicate(v: unknown): v is WatchPredicate {
     case 'changed':
       return true;
     case 'appeared':
-      return (
-        typeof p.idPath === 'string' &&
-        (p.where === undefined ||
-          (typeof p.where === 'object' &&
-            p.where !== null &&
-            typeof (p.where as { path?: unknown }).path === 'string'))
-      );
+      return typeof p.idPath === 'string' && isWhereClause(p.where);
     case 'matches':
       return typeof p.pattern === 'string';
     default:
       return false;
   }
+}
+
+/**
+ * A `where` narrowing, if present.
+ *
+ * `equals` is checked as well as `path`, which it was not: `idsAt` compares with
+ * `!==`, so a `where` whose `equals` is an object or is missing entirely never
+ * matches anything — the filter excludes every item, the id set is permanently
+ * empty, and the watcher polls cleanly forever without being able to fire. That
+ * is the exact silent-inertness failure `idPathRefusal` exists for, reachable
+ * through the other half of the same predicate.
+ */
+function isWhereClause(v: unknown): boolean {
+  if (v === undefined) return true;
+  if (typeof v !== 'object' || v === null) return false;
+  const w = v as { path?: unknown; equals?: unknown };
+  const t = typeof w.equals;
+  return typeof w.path === 'string' && (t === 'string' || t === 'number' || t === 'boolean');
 }
 
 /** Is this watcher still worth polling? */

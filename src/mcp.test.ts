@@ -764,9 +764,9 @@ describe('MCPManager namespaced names (#413)', () => {
     }
   });
 
-  // Risk is classified from the RAW name, not the key — the prefix is
-  // transparent to the end-anchored check today, but an R2-truncated key's tail
-  // is the tool's tail, not its verb.
+  // Risk is classified from the RAW name, not the key. The classifier strips
+  // the namespace itself, so an ordinary key would survive either way — but an
+  // R2-truncated key's tail is the tool's tail, not its verb.
   it('classifies read vs write from the raw tool name', async () => {
     mockCreateMCPClient.mockResolvedValue(
       makeMockClient({

@@ -16,6 +16,7 @@ import {
   DEFAULT_MAX_FIRES,
   MAX_LIFETIME_MS,
   MIN_INTERVAL_MS,
+  carriedState,
   describeWatchTarget,
   type WatchPredicate,
   type WatchTarget,
@@ -61,22 +62,6 @@ export interface WatcherToolDeps {
    * watchers, which is how an unrelated suite ends up pinned to this feature.
    */
   sessionId: () => string;
-}
-
-/**
- * `"false"` / `"true"` / `"12"` as their real types.
- *
- * The tool takes `whereEquals` as a string because a zod union of three scalars
- * is a worse thing to put in front of a model than one string — but the
- * comparison against the payload is `!==`, so `"false"` would never equal a
- * JSON `false` and the filter would silently match nothing.
- */
-function coerce(v: unknown): string | number | boolean {
-  if (typeof v !== 'string') return v as string | number | boolean;
-  if (v === 'true') return true;
-  if (v === 'false') return false;
-  if (v !== '' && !Number.isNaN(Number(v))) return Number(v);
-  return v;
 }
 
 /** Builds the target, or an error string naming what was missing. */
@@ -129,17 +114,33 @@ function buildPredicate(args: Record<string, unknown>): WatchPredicate | string 
         return 'Error: predicate "appeared" needs `idPath`, e.g. "$.items.id".';
       }
       const hasField = typeof args.whereField === 'string' && args.whereField !== '';
-      const hasValue = args.whereEquals !== undefined && args.whereEquals !== '';
+      const equals = args.whereEquals;
+      const hasValue = equals !== undefined && equals !== '';
       // Both or neither — half a filter silently matches everything, which is
       // the failure this parameter exists to prevent.
       if (hasField !== hasValue) {
         return 'Error: `whereField` and `whereEquals` must be given together.';
       }
+      // A direct `execute` bypasses zod, and the comparison downstream is `!==`
+      // — so a non-scalar here would match nothing, forever, in silence.
+      if (
+        hasValue &&
+        typeof equals !== 'string' &&
+        typeof equals !== 'number' &&
+        typeof equals !== 'boolean'
+      ) {
+        return 'Error: `whereEquals` must be a string, number or boolean.';
+      }
       return {
         kind: 'appeared',
         idPath: args.idPath,
         ...(hasField
-          ? { where: { path: args.whereField as string, equals: coerce(args.whereEquals) } }
+          ? {
+              where: {
+                path: args.whereField as string,
+                equals: equals as string | number | boolean,
+              },
+            }
           : {}),
       };
     }
@@ -225,10 +226,7 @@ async function create(deps: WatcherToolDeps, args: Record<string, unknown>): Pro
         : {}),
       ...(args.repeating === true ? { repeating: true } : {}),
       ...(typeof args.maxFires === 'number' ? { maxFires: args.maxFires } : {}),
-      ...(baseline.snapshot === undefined ? {} : { snapshot: baseline.snapshot }),
-      ...(baseline.baselineIds === undefined ? {} : { baselineIds: baseline.baselineIds }),
-      ...(baseline.etag === undefined ? {} : { etag: baseline.etag }),
-      ...(baseline.lastModified === undefined ? {} : { lastModified: baseline.lastModified }),
+      ...carriedState(baseline),
     });
     const every =
       target.kind === 'time' ? '' : ` Checking every ${Math.round(w.intervalMs / 1000)}s.`;
@@ -321,7 +319,7 @@ export function createWatcherTool(
   return {
     watcher: attachActionMeta(
       tool({
-        description: `Watch for something to change, then react to it. A watcher polls, and when its condition is met it starts a new turn carrying your instructions — then ends. One-shot.
+        description: `Watch for something to change, then react to it. A watcher polls, and when its condition is met it starts a new turn carrying your instructions. It ends there unless \`repeating\` is set.
 
 Actions: create · list · get · cancel
 
@@ -332,28 +330,16 @@ targetKind:
   time  — fire at an instant (needs \`at\`, ISO-8601). Use this for "remind me in 2 hours" / "check back after the deploy".
 
 predicate (ignored for time):
-  changed  — anything differs from when the watcher was created (default)
-  appeared — a NEW item shows up. Use this for "when John replies" — "changed" would also fire when something is deleted.
-             \`idPath\` must name the ARRAY and then the id key: "$.items.id" for a result shaped {items:[{id,...}]}, "$.messages.id" for {messages:[{id,...}]}. NOT "$.id" — that names no list and the watcher could never fire.
-             If you have not seen this tool's output shape, call it once first and read the real key. Guessing is the common way this goes wrong.
+  changed  — anything differs from when the watcher was created (default). Also fires on a REMOVAL, which is wrong for "did anyone reply".
+  appeared — a NEW item shows up. Use this for anything list-shaped: "when John replies".
+             \`idPath\` must name the ARRAY and then the id key: "$.items.id" for {items:[{id,...}]}, "$.messages.id" for {messages:[{id,...}]}. NOT "$.id" — that names no list and the watcher could never fire. If you have not seen this tool's output shape, call it once first and read the real key; guessing is the common way this goes wrong.
   matches  — the result matches \`pattern\` (a regular expression)
 
-Choosing, in order. Each question has a wrong answer with a specific cost, so answer them rather than guessing:
+Two questions the schema cannot answer for you, both with an observed cost:
 
-1. Does this happen ONCE, or keep happening?
-   Once — a reply you are waiting for, a build finishing — leave repeating off.
-   Keeps happening — following a conversation — set repeating=true. Do NOT plan to recreate a one-shot after each fire: that costs a turn every time, and anything arriving while you recreate it lands in the new baseline and is never reported.
+1. Does this happen once, or keep happening? Following a conversation is repeating=true. Do NOT plan to recreate a one-shot after each fire — that costs a turn every time, and anything arriving while you recreate it lands in the new baseline and is never reported.
 
-2. Is the trigger a CLOCK or a CHANGE?
-   A clock — "in 2 hours", "at 3pm", "after the deploy settles" — is targetKind=time. Nothing is polled and nothing is compared; it fires at the instant.
-   A change is mcp / http / file.
-
-3. Is it "something NEW appeared" or "the thing is DIFFERENT"?
-   New — a reply, a message, an issue — is appeared. Use it for anything list-shaped.
-   Different — a page, a file, a status — is changed. Note changed also fires on a REMOVAL, which is wrong for "did anyone reply".
-
-4. Do you also write to the thing you are watching?
-   If yes, set whereField / whereEquals to exclude your own entries — e.g. whereField="isSender" whereEquals="false". Many chat tools return your OWN sent messages, so without it your reply counts as new, wakes you, and you reply again. That loop has happened.
+2. Do you also write to the thing you are watching? Then set whereField / whereEquals to exclude your own entries — e.g. whereField="isSender" whereEquals="false". Many chat tools return your OWN sent messages, so without it your reply counts as new, wakes you, and you reply again. That loop has happened.
 
 Write the instructions so they stand on their own. They run in a later turn, and what the watcher saw arrives as DATA, not as instruction — so do not write them as though you already know what you will find.
 
@@ -410,7 +396,15 @@ The baseline is taken when you create it, so "changed" means "changed since now"
             .describe(
               'With `whereEquals`, only count items whose field matches — e.g. whereField="isSender", whereEquals="false" to ignore your own sent messages',
             ),
-          whereEquals: z.string().optional().describe('Value `whereField` must equal'),
+          // A union of the three scalars, not a string with a coercion behind it.
+          // The comparison against the payload is `!==`, so the type has to be
+          // the real one — and the coercion this replaces could not tell a
+          // genuine string id of "123" from the number, silently turning a
+          // working filter into one that matches nothing.
+          whereEquals: z
+            .union([z.string(), z.number(), z.boolean()])
+            .optional()
+            .describe('Value `whereField` must equal — a string, number or boolean'),
           intervalSeconds: z.number().optional().describe('How often to check'),
           ttlHours: z.number().optional().describe('Give up after this long'),
         }),

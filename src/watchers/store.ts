@@ -24,12 +24,14 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 import { atomicWriteFileSync } from '../fs-utils.js';
-import { isPidAlive } from '../pid.js';
+import { stableStringify } from './extract.js';
 import { WATCHERS_DIR } from '../paths.js';
 import {
   isValidWatcherId,
   isWatcher,
+  MAX_FIRES_CEILING,
   MAX_LIFETIME_MS,
+  carriedState,
   MAX_WATCHERS,
   MIN_INTERVAL_MS,
   DEFAULT_INTERVAL_MS,
@@ -122,27 +124,12 @@ export class WatcherStore {
    */
   findDuplicate(target: Watcher['target'], predicate: Watcher['predicate']): Watcher | null {
     const key = duplicateKey(target, predicate);
+    if (key === null) return null;
     return (
       this.list().find(
         (w) => w.status === 'active' && duplicateKey(w.target, w.predicate) === key,
       ) ?? null
     );
-  }
-
-  /** Watchers this session owns and should be polling. */
-  ownedBy(sessionId: string): Watcher[] {
-    return this.list().filter((w) => w.ownerSessionId === sessionId);
-  }
-
-  /**
-   * Active watchers whose owning session is gone, so this one may adopt them.
-   *
-   * `kill(pid, 0)` liveness, the idiom `inbox/registry.ts` already uses and for
-   * the reason it records: a stale PID can only fail to match, where a stale
-   * port could hand a payload to a stranger.
-   */
-  orphans(): Watcher[] {
-    return this.list().filter((w) => w.status === 'active' && !isPidAlive(w.ownerPid));
   }
 
   /**
@@ -178,11 +165,13 @@ export class WatcherStore {
       failureCount: 0,
       expiresAt: new Date(now + ttl).toISOString(),
       ...(input.repeating ? { repeating: true, fireCount: 0 } : {}),
-      ...(input.maxFires === undefined ? {} : { maxFires: input.maxFires }),
-      ...(input.snapshot === undefined ? {} : { snapshot: input.snapshot }),
-      ...(input.baselineIds === undefined ? {} : { baselineIds: input.baselineIds }),
-      ...(input.etag === undefined ? {} : { etag: input.etag }),
-      ...(input.lastModified === undefined ? {} : { lastModified: input.lastModified }),
+      // Clamped like `intervalMs` and `ttlMs` above, and for the same reason:
+      // every one of the three comes from a model that has no idea what a
+      // reasonable value is.
+      ...(input.maxFires === undefined
+        ? {}
+        : { maxFires: Math.max(1, Math.min(Math.floor(input.maxFires), MAX_FIRES_CEILING)) }),
+      ...carriedState(input),
     };
     this.write(watcher);
     return watcher;
@@ -221,6 +210,25 @@ export class WatcherStore {
     const next = { ...current, ...patch };
     this.write(next);
     return next;
+  }
+
+  /**
+   * Writes `w` back verbatim, replacing whatever is on disk.
+   *
+   * The counterpart to `update`, for the one caller that holds the exact record
+   * it wants restored rather than a description of what to change. A merge
+   * cannot express it: `{...current, ...patch}` can only add or overwrite keys,
+   * so a field the newer state ADDED — `firedAt` — survives a patch built by
+   * spreading the older record. Passing the held record as `known` masks that,
+   * since the merge base is then the old record too — which makes the rewind's
+   * correctness depend on an optional performance argument being present.
+   *
+   * Same last-writer-wins caveat as `update`, and more bluntly: this does not
+   * consult disk at all.
+   */
+  replace(w: Watcher): Watcher {
+    this.write(w);
+    return w;
   }
 
   /** Marks a terminal state. Returns the record, or `null` if it is gone. */
@@ -277,26 +285,32 @@ export class WatcherStore {
 }
 
 /**
- * The identity of "watching the same thing".
+ * The identity of "watching the same thing", or `null` when the kind has no
+ * such identity.
  *
  * Stable rather than clever: the fields are enumerated per target kind so a
  * field added later does not silently widen or narrow the key. `JSON.stringify`
  * over the whole target would be shorter and would also make key ORDER part of
  * the identity, which is a property of how the object was built rather than of
- * what it watches.
+ * what it watches — which is why `stableStringify` does the sorting for `args`.
+ *
+ * **`time` returns `null`, and that is the point of the nullable return.** Two
+ * `time` watchers for the same instant are not duplicates — "remind me at 3pm to
+ * do X" and "…to do Y" are both wanted, and the instruction is exactly what the
+ * key deliberately excludes. This previously spelled that as a `Math.random()`
+ * term, which reads as a key and is not one: it makes an equality function
+ * non-deterministic, so the same record compared against itself is unequal. A
+ * caller that ever holds two keys and compares them — the obvious next use — is
+ * silently wrong, and nothing about the expression says so.
  */
-function duplicateKey(target: Watcher['target'], predicate: Watcher['predicate']): string {
+function duplicateKey(target: Watcher['target'], predicate: Watcher['predicate']): string | null {
+  if (target.kind === 'time') return null;
   const t =
     target.kind === 'mcp'
-      ? `mcp:${target.tool}:${stableArgs(target.args)}:${target.extract ?? ''}`
+      ? `mcp:${target.tool}:${stableStringify(target.args)}:${target.extract ?? ''}`
       : target.kind === 'http'
         ? `http:${target.url}`
-        : target.kind === 'file'
-          ? `file:${target.path}`
-          : // Two `time` watchers for the same instant are not duplicates —
-            // "remind me at 3pm to do X" and "…to do Y" are both wanted, and the
-            // instruction is exactly what the key deliberately excludes.
-            `time:${target.at}:${Math.random()}`;
+        : `file:${target.path}`;
   const p =
     predicate.kind === 'appeared'
       ? `appeared:${predicate.idPath}:${predicate.where?.path ?? ''}=${String(predicate.where?.equals ?? '')}`
@@ -304,11 +318,4 @@ function duplicateKey(target: Watcher['target'], predicate: Watcher['predicate']
         ? `matches:${predicate.pattern}`
         : 'changed';
   return `${t}|${p}`;
-}
-
-function stableArgs(args: Record<string, string | number | boolean>): string {
-  return Object.keys(args)
-    .sort()
-    .map((k) => `${k}=${String(args[k])}`)
-    .join(',');
 }

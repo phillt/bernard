@@ -20,10 +20,12 @@
  *
  * ## Shape: `<sanitizedServer>_<6hex>__<tool>`
  *
- * **Prefix, not suffix**, and that is load-bearing: `isReadOnlyMCPSuffix`
- * (`risk.ts`) is end-anchored, so a prefix is transparent to risk
- * classification while a suffix would silently reclassify every read-only MCP
- * tool as a write — turning on confirm prompts across the board.
+ * **Prefix, not suffix**, and that is load-bearing: `isReadOnlyMCPToolName`
+ * (`risk.ts`) segments the name and matches a read verb at either END, so a
+ * suffix would silently reclassify every read-only MCP tool as a write —
+ * turning on confirm prompts across the board. A prefix would be transparent
+ * even to that, but only because the classifier strips the namespace first,
+ * which is exactly the coupling this note exists to keep visible.
  *
  * **The hash buys stability, not collision-avoidance.** Server names are
  * object keys in `mcp.json` and so are already unique; what is not unique is

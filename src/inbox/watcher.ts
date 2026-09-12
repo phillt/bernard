@@ -168,7 +168,11 @@ export class InboxWatcher {
     for (const message of notices.slice(0, MAX_RENDER_BURST)) this.opts.onMessage(message);
     const extra = notices.length - MAX_RENDER_BURST;
     if (extra > 0) {
-      this.opts.onCoalesced(extra, messages[messages.length - 1].sourceLabel);
+      // The last COALESCED notice, not the last message in the batch. Read from
+      // `messages` it could name a `prompt` — or a notice that was rendered in
+      // full — so "…and 3 more from X" attributed the fold to something the
+      // user could already see, or to something that was never folded at all.
+      this.opts.onCoalesced(extra, notices[notices.length - 1].sourceLabel);
     }
   }
 }

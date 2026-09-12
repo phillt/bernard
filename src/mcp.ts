@@ -13,7 +13,7 @@ import {
   mcpToolName,
 } from './mcp-names.js';
 import { attachMeta } from './framework/tools/adapter.js';
-import { isReadOnlyMCPSuffix } from './risk.js';
+import { isReadOnlyMCPToolName } from './risk.js';
 import type { ToolMeta } from './framework/tools/types.js';
 import { normalizeToolResult, foldTypographyDeep } from './text.js';
 import { shapeMCPResult, type MCPResultShapingConfig } from './mcp-result-shaper.js';
@@ -212,7 +212,7 @@ export interface LiveRegistration {
  * The raw name is retained rather than re-derived from the namespaced key
  * because it cannot always be re-derived — `mcpToolName`'s R2 rung truncates a
  * long tool name through the middle. Risk classification in particular must
- * read the server's own name (`isReadOnlyMCPSuffix` looks for a trailing verb),
+ * read the server's own name (`isReadOnlyMCPToolName` looks for a trailing verb),
  * and `mcp_verify` reports raw names back to the user, so guessing them from
  * the key would be wrong in exactly the cases that are hardest to notice.
  */
@@ -580,14 +580,16 @@ export class MCPManager {
 
         // Risk-based confirmation gate (#144): tag every MCP tool with metadata
         // so the augment layer can route it through `confirmAction` at the right
-        // threshold. Names ending in a read-only verb → `kind: 'read'` (low risk,
-        // never prompts). Everything else → `kind: 'write'` with `sideEffect:
-        // 'local'` (medium risk, prompts only in `strict` mode). Users can
-        // promote a tool to high via a future `mcp.json` override (out of scope).
-        // Classified on the RAW name. The prefix happens to be transparent to
-        // this end-anchored check, but an R2-truncated key is not — its
-        // trailing characters are the tool's tail, not its verb.
-        const isRead = isReadOnlyMCPSuffix(raw);
+        // threshold. A read-only verb at either end and no write verb anywhere →
+        // `kind: 'read'` (low risk, never prompts). Everything else →
+        // `kind: 'write'` with `sideEffect: 'local'` (medium risk, prompts only
+        // in `strict` mode). Users can promote a tool to high via a future
+        // `mcp.json` override (out of scope).
+        // Classified on the RAW name, which is what makes this correct for an
+        // R2-truncated key: that key's trailing characters are the tool's tail,
+        // not its verb, so the namespace strip inside the classifier is not
+        // enough on its own.
+        const isRead = isReadOnlyMCPToolName(raw);
         const meta: ToolMeta = {
           // Kept in lockstep with the registry key: the permission and block
           // gates key on the registry key while `result-cache.ts` keys on

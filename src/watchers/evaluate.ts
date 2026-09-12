@@ -8,8 +8,8 @@
  * so every branch here is testable by passing two values.
  */
 import { sha256Hex } from '../hash.js';
-import { extractPath, idsAt, stableStringify } from './extract.js';
-import type { WatchPredicate, Watcher } from './types.js';
+import { extractPath, idPathRefusal, idsAt, stableStringify } from './extract.js';
+import type { WatchPredicate, WatchState, Watcher } from './types.js';
 
 /** What a probe managed to see. */
 export interface Observation {
@@ -29,27 +29,35 @@ export interface Observation {
   unchanged?: boolean;
 }
 
-/** What a watcher's state should become after a poll, and whether it woke. */
-export interface Evaluation {
+/**
+ * What a watcher's state should become after a poll, and whether it woke.
+ *
+ * The carried half is {@link WatchState}, shared with the baseline capture and
+ * with the store — so "what a poll persists" is one list in one place rather
+ * than four fields restated wherever they are copied.
+ */
+export interface Evaluation extends WatchState {
   fired: boolean;
   /**
-   * The predicate could not be evaluated at all — an `idPath` that names no
-   * list, or a pattern that will not compile.
+   * Why the predicate could not be evaluated at all — an `idPath` that names no
+   * list, or a pattern that will not compile. Absent when it could.
    *
    * Distinct from `fired: false`, and the distinction is the whole point: "I
    * looked and nothing had changed" and "I cannot read this" are the same value
    * without it, so a watcher pointed at a path that can never match polls
    * successfully forever and reports nothing. Three real watchers sat in that
    * state for an hour.
+   *
+   * It carries the REASON rather than a boolean because the reason is knowable
+   * only here — this is the one place holding both the predicate and the payload
+   * it failed against. As a boolean the poller had to re-derive a message from
+   * the predicate alone, which it did by writing `probe.ts`'s sentence out a
+   * second time and dropping the suggestions, i.e. the half that makes the
+   * failure fixable.
    */
-  unreadable?: boolean;
+  unreadable?: string;
   /** Why, in one line, for the wake panel and the log. Present only when fired. */
   reason?: string;
-  /** Snapshot to persist for the next poll. */
-  snapshot?: string;
-  baselineIds?: string[];
-  etag?: string;
-  lastModified?: string;
 }
 
 /**
@@ -134,7 +142,8 @@ function evaluatePredicate(
       // Not `hold()`: an unreadable path is not "nothing happened", and
       // reporting it as such is how a watcher becomes permanently inert while
       // looking healthy.
-      if (ids === null) return { ...hold(), unreadable: true };
+      if (ids === null)
+        return { ...hold(), unreadable: idPathRefusal(predicate.idPath, obs.value) };
       const baseline = watcher.baselineIds ?? [];
       const known = new Set(baseline);
       const fresh = ids.filter((id) => !known.has(id));
@@ -167,9 +176,16 @@ function evaluatePredicate(
       let re: RegExp;
       try {
         re = new RegExp(predicate.pattern);
-      } catch {
-        // An unparseable pattern is a broken watcher, not a match.
-        return { ...hold(), unreadable: true };
+      } catch (err) {
+        // An unparseable pattern is a broken watcher, not a match — and naming
+        // the syntax error is the difference between a model fixing the pattern
+        // and retrying the same one.
+        return {
+          ...hold(),
+          unreadable:
+            `Pattern /${predicate.pattern}/ is not a valid regular expression: ` +
+            (err instanceof Error ? err.message : String(err)),
+        };
       }
       if (!re.test(text)) return hold();
       return { fired: true, reason: `matched /${predicate.pattern}/`, ...carry };

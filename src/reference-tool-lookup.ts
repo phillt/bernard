@@ -3,7 +3,7 @@ import { readToolMeta } from './framework/tools/adapter.js';
 import { debugLog, traceLlm } from './logger.js';
 import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
-import { isReadOnlyMCPSuffix } from './risk.js';
+import { isReadOnlyMCPToolName } from './risk.js';
 import { parseMCPToolName, type ToolNameAliasResolver } from './mcp-names.js';
 import { getCachedLLM, setCachedLLM, type LLMCacheKey } from './llm-cache.js';
 
@@ -46,7 +46,7 @@ const ALWAYS_ALLOWED_BUILTINS = new Set(['web_search', 'web_read']);
  * Returns true when the named tool is safe for the resolver lookup pass.
  *
  * An MCP tool is identified by `__` in its name (the `@ai-sdk/mcp` convention).
- * MCP tools must additionally match {@link isReadOnlyMCPSuffix}. Built-in
+ * MCP tools must additionally match {@link isReadOnlyMCPToolName}. Built-in
  * tools are restricted to {@link ALWAYS_ALLOWED_BUILTINS} unless explicitly
  * extended via `extraAllowed` (sourced from `BERNARD_LOOKUP_TOOLS`).
  */
@@ -63,10 +63,11 @@ export function isAllowedLookupTool(
   if (ALWAYS_ALLOWED_BUILTINS.has(name)) return true;
   const parsed = parseMCPToolName(name);
   if (parsed) {
-    // Classify on the tool half only. The server prefix is not part of the
-    // verb, and `isReadOnlyMCPSuffix` is end-anchored so it would happen to
-    // work either way — but not once a long name is middle-truncated.
-    return isReadOnlyMCPSuffix(parsed.tool);
+    // Classify on the tool half only. `isReadOnlyMCPToolName` strips the
+    // namespace itself, so this is belt-and-braces for the common key — but it
+    // is the whole answer for an R2-truncated key, whose tail is the tool's
+    // tail rather than its verb.
+    return isReadOnlyMCPToolName(parsed.tool);
   }
   return false;
 }

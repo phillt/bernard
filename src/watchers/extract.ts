@@ -183,6 +183,25 @@ export function idsAt(
 }
 
 /**
+ * The one wording for "this `idPath` names no list", used at creation and at
+ * poll time both.
+ *
+ * Written twice before this, byte-identical, in `probe.ts` and `poller.ts` — and
+ * only the creation-time copy named working alternatives, so the failure that
+ * actually strands a live watcher was the one told nothing. Sharing it makes the
+ * suggestions unconditional rather than a property of which call site noticed.
+ */
+export function idPathRefusal(idPath: string, sample: unknown): string {
+  const suggestions = suggestIdPaths(sample);
+  return (
+    `idPath "${idPath}" does not name a list of items in the result.` +
+    (suggestions.length
+      ? ` Try one of: ${suggestions.join(', ')}.`
+      : ' The result contains no array of objects with an id field.')
+  );
+}
+
+/**
  * Paths that WOULD work as an `idPath`, given a sample of what the target
  * returns.
  *

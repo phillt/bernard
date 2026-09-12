@@ -1,4 +1,7 @@
 import type { ToolMeta, ToolRisk } from './framework/tools/types.js';
+// A pure leaf (`node:crypto` only), so this stays free of the MCP manager's
+// graph — the edge `tool-bytes.ts` and `mcp-names.ts` exist to refuse.
+import { parseMCPToolName } from './mcp-names.js';
 
 /**
  * Coarse risk tier for a tool invocation. Drives the unified confirmation
@@ -39,6 +42,16 @@ const READ_VERBS = new Set(['search', 'list', 'find', 'get', 'query', 'read', 'l
  * Checked against EVERY segment, and it is what makes matching a leading verb
  * safe: `get_or_create_chat` leads with a read verb and creates, and
  * `mark_as_read` ENDS with one while writing. Both are refused here.
+ *
+ * **Its job is much narrower than the list makes it look**, and stating the
+ * bound is what stops it growing to sixty entries: a name with no read verb at
+ * either end is already refused, so this only ever decides names that CO-OCCUR
+ * a write verb with a read verb at an end. Do not treat it as a general
+ * vocabulary of writes.
+ *
+ * It is also a stop-gap. #570 replaces the guessing entirely with MCP's own
+ * `readOnlyHint`, at which point this is the fallback for unannotated servers
+ * rather than the primary answer.
  */
 const WRITE_VERBS = new Set([
   'create',
@@ -71,6 +84,11 @@ const WRITE_VERBS = new Set([
 /**
  * Whether an MCP tool name reads rather than writes.
  *
+ * Renamed from `isReadOnlyMCPSuffix`: it has not tested a suffix since the
+ * verb-first fix, and four call sites plus CLAUDE.md were still citing
+ * end-anchoring as load-bearing reasoning. A name that describes a mechanism the
+ * function no longer has is the same defect as a comment that outran the code.
+ *
  * Matches a read verb at EITHER end, which is the fix: this was end-anchored
  * only (`/(?:^|_)(search|list|…)$/`), so it recognised `messages_list` and not
  * `list_messages` — and verb-first naming is at least as common. Beeper's
@@ -88,10 +106,16 @@ const WRITE_VERBS = new Set([
  * leading-verb test would never fire — which is the same reason the original was
  * anchored rather than free-floating.
  */
-export function isReadOnlyMCPSuffix(name: string): boolean {
-  const bare = name.includes('__') ? name.slice(name.lastIndexOf('__') + 2) : name;
+export function isReadOnlyMCPToolName(name: string): boolean {
+  // `parseMCPToolName`, not a local strip. The inline version split on the LAST
+  // `__` while the shared one splits on the FIRST, and they disagree for any
+  // tool whose own name contains `__` — a server exporting `get__foo` came out
+  // as `foo`, no read verb, classified a WRITE. That is the exact bug class this
+  // function was just changed to fix, reintroduced one branch over. The server
+  // segment is sanitized and cannot contain `__`; the tool half can, which is
+  // why first-match is the correct rule and why it lives in one place.
+  const bare = parseMCPToolName(name)?.tool ?? name;
   const segments = bare.toLowerCase().split('_').filter(Boolean);
-  if (segments.length === 0) return false;
   if (segments.some((seg) => WRITE_VERBS.has(seg))) return false;
   return READ_VERBS.has(segments[0]) || READ_VERBS.has(segments[segments.length - 1]);
 }

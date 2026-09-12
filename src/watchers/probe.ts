@@ -20,10 +20,16 @@
 import { statSync } from 'node:fs';
 
 import { readToolMeta } from '../framework/tools/adapter.js';
-import { isReadOnlyMCPSuffix } from '../risk.js';
+import { isReadOnlyMCPToolName } from '../risk.js';
 import { digestOf, type Observation } from './evaluate.js';
-import { idsAt, suggestIdPaths } from './extract.js';
-import { MAX_HTTP_BODY_CHARS, type WatchTarget, type Watcher } from './types.js';
+import { idPathRefusal, idsAt } from './extract.js';
+import {
+  MAX_HTTP_BODY_CHARS,
+  carriedState,
+  type WatchState,
+  type WatchTarget,
+  type Watcher,
+} from './types.js';
 
 /**
  * The production `statFile`, kept here rather than at the call site so the UI
@@ -60,7 +66,7 @@ export type ProbeResult = { ok: true; observation: Observation } | { ok: false; 
  *
  * Read-classified only. A watcher runs unattended and repeatedly, so a write
  * target would be a way to make something happen 1,440 times a day with nobody
- * looking. `isReadOnlyMCPSuffix` is the same gate `reference-tool-lookup.ts`
+ * looking. `isReadOnlyMCPToolName` is the same gate `reference-tool-lookup.ts`
  * uses to decide what an unattended lookup may call, and reusing it means there
  * is one answer to "what is safe to call without a person" rather than two that
  * can drift.
@@ -90,7 +96,7 @@ export function watchableToolRefusal(
   // by `mcp.ts`, which sets `kind: 'read'` for the `*_list` / `*_search` /
   // `*_get` family. Accept either statement of the same fact.
   const declaredRead = meta?.kind === 'read';
-  if (!declaredRead && !isReadOnlyMCPSuffix(meta?.rawName ?? toolName)) {
+  if (!declaredRead && !isReadOnlyMCPToolName(meta?.rawName ?? toolName)) {
     return `Tool "${toolName}" is not a read-only tool, so a watcher cannot poll it.`;
   }
   if (typeof (tool as { execute?: unknown }).execute !== 'function') {
@@ -296,10 +302,7 @@ export async function captureBaseline(
   target: Watcher['target'],
   predicate: Watcher['predicate'],
   deps: ProbeDeps,
-): Promise<
-  | { ok: true; snapshot?: string; baselineIds?: string[]; etag?: string; lastModified?: string }
-  | { ok: false; error: string }
-> {
+): Promise<({ ok: true } & WatchState) | { ok: false; error: string }> {
   // A `time` target has nothing to baseline against.
   if (target.kind === 'time') return { ok: true };
 
@@ -308,17 +311,7 @@ export async function captureBaseline(
 
   const obs = result.observation;
   const extract = target.kind === 'mcp' ? target.extract : undefined;
-  const out: {
-    ok: true;
-    snapshot?: string;
-    baselineIds?: string[];
-    etag?: string;
-    lastModified?: string;
-  } = {
-    ok: true,
-    ...(obs.etag === undefined ? {} : { etag: obs.etag }),
-    ...(obs.lastModified === undefined ? {} : { lastModified: obs.lastModified }),
-  };
+  const out: { ok: true } & WatchState = { ok: true, ...carriedState(obs) };
 
   // Captured at CREATION, which is what makes "tell me when this changes" mean
   // what it says. Deferred to the first poll, a real digest would compare
@@ -335,17 +328,7 @@ export async function captureBaseline(
     // The message names paths that WOULD work, read off the payload in hand, so
     // a model that guessed wrong can correct itself instead of retrying the
     // same guess.
-    if (ids === null) {
-      const suggestions = suggestIdPaths(obs.value);
-      return {
-        ok: false,
-        error:
-          `idPath "${predicate.idPath}" does not name a list of items in the result.` +
-          (suggestions.length
-            ? ` Try one of: ${suggestions.join(', ')}.`
-            : ' The result contains no array of objects with an id field.'),
-      };
-    }
+    if (ids === null) return { ok: false, error: idPathRefusal(predicate.idPath, obs.value) };
     out.baselineIds = ids;
   }
   return out;
