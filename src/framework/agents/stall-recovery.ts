@@ -173,7 +173,12 @@ export async function runWithStallRecovery(
         debugLog('stall:recovery:declined', {
           definitionId: opts.definitionId,
           phase: info.phase,
-          reason: 'output-already-emitted',
+          // Named from what actually happened. Every decline used to read
+          // `output-already-emitted`, and for an ephemeral dispatch — which
+          // emits nothing anywhere — that is simply false: what makes it
+          // unsafe is the steps it already ran, tool calls included.
+          reason:
+            info.completedWork === 'steps' ? 'steps-already-executed' : 'output-already-emitted',
         });
         throw err;
       }

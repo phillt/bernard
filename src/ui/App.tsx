@@ -4608,7 +4608,7 @@ export function App({
       {
         key: String(itemKeyRef.current++),
         toolDetails: false,
-        wake: { source: describeSource(next.source), text: next.text },
+        wake: { source: describeSource(next.source, next.coalesced), text: next.text },
       },
     ]);
     await runAgentTurn(next.text, undefined, next.data ? { data: next.data } : {});

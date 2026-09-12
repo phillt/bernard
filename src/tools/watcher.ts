@@ -208,7 +208,14 @@ async function create(deps: WatcherToolDeps, args: Record<string, unknown>): Pro
   // fire immediately — every watcher would wake the moment it was created.
   const baseline = await captureBaseline(target, predicate, deps.probeDeps);
   if (!baseline.ok) {
-    return `Error: could not read the target to establish a baseline — ${baseline.error}. The watcher was not created.`;
+    // No full stop of our own: `idPathRefusal` and every other probe error
+    // already end in one, and appending a second produced
+    // `Try one of: $.items.id.. The watcher was not created.` — which reads
+    // like a typo in the very message whose whole job is to be copied
+    // accurately, since the suggestion it is glued to IS a path and a trailing
+    // dot is a character a path can contain.
+    const detail = baseline.error.replace(/\.$/, '');
+    return `Error: could not read the target to establish a baseline — ${detail}. The watcher was not created.`;
   }
 
   try {
