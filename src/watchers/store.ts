@@ -108,6 +108,27 @@ export class WatcherStore {
     }
   }
 
+  /**
+   * An active watcher already looking at the same thing, if there is one.
+   *
+   * Keyed on target + predicate — NOT the name, which is free text a model
+   * invents fresh each time, and not `instructions`, which is the thing that
+   * legitimately differs between two watchers on one chat.
+   *
+   * It matters more since watchers can repeat: a one-shot duplicate fires twice
+   * and is done, while two repeating watchers on the same chat wake the session
+   * twice for every message, indefinitely, and nothing in the transcript says
+   * why. Six watchers were created on one chat in a single observed session.
+   */
+  findDuplicate(target: Watcher['target'], predicate: Watcher['predicate']): Watcher | null {
+    const key = duplicateKey(target, predicate);
+    return (
+      this.list().find(
+        (w) => w.status === 'active' && duplicateKey(w.target, w.predicate) === key,
+      ) ?? null
+    );
+  }
+
   /** Watchers this session owns and should be polling. */
   ownedBy(sessionId: string): Watcher[] {
     return this.list().filter((w) => w.ownerSessionId === sessionId);
@@ -253,4 +274,41 @@ export class WatcherStore {
   private write(w: Watcher): void {
     atomicWriteFileSync(this.file(w.id), JSON.stringify(w, null, 2), { mode: 0o600 });
   }
+}
+
+/**
+ * The identity of "watching the same thing".
+ *
+ * Stable rather than clever: the fields are enumerated per target kind so a
+ * field added later does not silently widen or narrow the key. `JSON.stringify`
+ * over the whole target would be shorter and would also make key ORDER part of
+ * the identity, which is a property of how the object was built rather than of
+ * what it watches.
+ */
+function duplicateKey(target: Watcher['target'], predicate: Watcher['predicate']): string {
+  const t =
+    target.kind === 'mcp'
+      ? `mcp:${target.tool}:${stableArgs(target.args)}:${target.extract ?? ''}`
+      : target.kind === 'http'
+        ? `http:${target.url}`
+        : target.kind === 'file'
+          ? `file:${target.path}`
+          : // Two `time` watchers for the same instant are not duplicates —
+            // "remind me at 3pm to do X" and "…to do Y" are both wanted, and the
+            // instruction is exactly what the key deliberately excludes.
+            `time:${target.at}:${Math.random()}`;
+  const p =
+    predicate.kind === 'appeared'
+      ? `appeared:${predicate.idPath}:${predicate.where?.path ?? ''}=${String(predicate.where?.equals ?? '')}`
+      : predicate.kind === 'matches'
+        ? `matches:${predicate.pattern}`
+        : 'changed';
+  return `${t}|${p}`;
+}
+
+function stableArgs(args: Record<string, string | number | boolean>): string {
+  return Object.keys(args)
+    .sort()
+    .map((k) => `${k}=${String(args[k])}`)
+    .join(',');
 }

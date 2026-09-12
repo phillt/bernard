@@ -180,6 +180,28 @@ async function create(deps: WatcherToolDeps, args: Record<string, unknown>): Pro
     if (refusal) return `Error: ${refusal}`;
   }
 
+  // Already watching this? Two outcomes, and the split is the point.
+  //
+  // An EXACT duplicate — same target, same predicate, same instructions — is a
+  // no-op, so it is refused and the existing id handed back. Creating it would
+  // wake the session twice for every message, and with `repeating` that is
+  // indefinite rather than once.
+  //
+  // Same target with DIFFERENT instructions is legitimate — "tell me when John
+  // replies about dinner" and "tell me if anyone mentions the deploy" can
+  // reasonably watch one chat — so that one is created, with a warning naming
+  // the other. Refusing it would make the second thing unexpressible.
+  const existing = deps.store.findDuplicate(target, predicate);
+  const sameInstructions =
+    existing !== null && existing.instructions.trim() === args.instructions.trim();
+  if (existing && sameInstructions) {
+    return (
+      `Already watching this — "${existing.name}" (id ${existing.id}` +
+      `${existing.repeating ? ', repeating' : ''}) is active with the same target and the same instructions. ` +
+      `Not creating a second one. Cancel that id first if you want to change it.`
+    );
+  }
+
   // The baseline is taken NOW, before the record exists. Deferred to the first
   // poll, a `changed` watcher would compare a real digest against nothing and
   // fire immediately — every watcher would wake the moment it was created.
@@ -210,10 +232,13 @@ async function create(deps: WatcherToolDeps, args: Record<string, unknown>): Pro
     });
     const every =
       target.kind === 'time' ? '' : ` Checking every ${Math.round(w.intervalMs / 1000)}s.`;
+    const dupWarning = existing
+      ? `Note: "${existing.name}" (id ${existing.id}) is already watching the same thing with different instructions. Both will now wake you. Cancel one if that is not what you meant.\n`
+      : '';
     const ending = w.repeating
       ? ` It will start a turn each time it fires and stay armed (up to ${w.maxFires ?? DEFAULT_MAX_FIRES} times) — you do NOT need to recreate it.`
       : ' It will start a turn when it fires, then end.';
-    return `Watching ${describeWatchTarget(target)} — "${w.name}" (id ${w.id}).${every}${ending}`;
+    return `${dupWarning}Watching ${describeWatchTarget(target)} — "${w.name}" (id ${w.id}).${every}${ending}`;
   } catch (err) {
     return `Error: ${err instanceof Error ? err.message : String(err)}`;
   }
@@ -313,9 +338,24 @@ predicate (ignored for time):
              If you have not seen this tool's output shape, call it once first and read the real key. Guessing is the common way this goes wrong.
   matches  — the result matches \`pattern\` (a regular expression)
 
-To FOLLOW a conversation, set repeating=true. A one-shot watcher means recreating it after every reply, which costs a turn each time and loses anything that arrives while you are recreating it — a repeating watcher advances its own baseline in the same poll that fired, so there is no gap.
+Choosing, in order. Each question has a wrong answer with a specific cost, so answer them rather than guessing:
 
-If you are watching a chat you also send to, set whereField="isSender" whereEquals="false". Many chat tools return your OWN messages, so without it your reply counts as a new item and wakes you again — a loop.
+1. Does this happen ONCE, or keep happening?
+   Once — a reply you are waiting for, a build finishing — leave repeating off.
+   Keeps happening — following a conversation — set repeating=true. Do NOT plan to recreate a one-shot after each fire: that costs a turn every time, and anything arriving while you recreate it lands in the new baseline and is never reported.
+
+2. Is the trigger a CLOCK or a CHANGE?
+   A clock — "in 2 hours", "at 3pm", "after the deploy settles" — is targetKind=time. Nothing is polled and nothing is compared; it fires at the instant.
+   A change is mcp / http / file.
+
+3. Is it "something NEW appeared" or "the thing is DIFFERENT"?
+   New — a reply, a message, an issue — is appeared. Use it for anything list-shaped.
+   Different — a page, a file, a status — is changed. Note changed also fires on a REMOVAL, which is wrong for "did anyone reply".
+
+4. Do you also write to the thing you are watching?
+   If yes, set whereField / whereEquals to exclude your own entries — e.g. whereField="isSender" whereEquals="false". Many chat tools return your OWN sent messages, so without it your reply counts as new, wakes you, and you reply again. That loop has happened.
+
+Write the instructions so they stand on their own. They run in a later turn, and what the watcher saw arrives as DATA, not as instruction — so do not write them as though you already know what you will find.
 
 The baseline is taken when you create it, so "changed" means "changed since now". Only read-only tools may be watched. Default interval ${DEFAULT_INTERVAL_MS / 1000}s, minimum ${MIN_INTERVAL_MS / 1000}s.`,
         parameters: z.object({

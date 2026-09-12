@@ -301,3 +301,95 @@ describe('createTools wires the watcher to the raw MCP bag', () => {
     }
   });
 });
+
+/**
+ * Duplicate detection.
+ *
+ * It matters more now that watchers repeat: a one-shot duplicate fires twice
+ * and is done, while two repeating watchers on one chat wake the session twice
+ * for every message, indefinitely, with nothing in the transcript saying why.
+ * Six watchers were created on a single chat in one observed session.
+ */
+describe('watcher tool — duplicates', () => {
+  const listTool = () => ({
+    t: tool('read', { items: [{ id: '1', isSender: false }] }),
+  });
+
+  const create = (over: Record<string, unknown> = {}) => ({
+    action: 'create',
+    name: 'chat',
+    instructions: 'read the newest messages and respond',
+    targetKind: 'mcp',
+    tool: 't',
+    predicate: 'appeared',
+    idPath: '$.items.id',
+    ...over,
+  });
+
+  it('refuses an exact duplicate and hands back the existing id', async () => {
+    const t = make(listTool());
+    const first = await run(t, create());
+    expect(first).toMatch(/Watching tool t/);
+    const id = new WatcherStore().list()[0].id;
+
+    const second = await run(t, create());
+    expect(second).toMatch(/Already watching this/);
+    expect(second).toContain(id);
+    // And it really did not create one.
+    expect(new WatcherStore().list()).toHaveLength(1);
+  });
+
+  it('allows a second watcher with different instructions, but warns', async () => {
+    // "tell me when John replies about dinner" and "tell me if anyone mentions
+    // the deploy" can reasonably watch one chat. Refusing would make the second
+    // unexpressible.
+    const t = make(listTool());
+    await run(t, create());
+    const second = await run(t, create({ instructions: 'something else entirely' }));
+    expect(second).toMatch(/already watching the same thing with different instructions/);
+    expect(second).toMatch(/Watching tool t/);
+    expect(new WatcherStore().list()).toHaveLength(2);
+  });
+
+  it('does not treat a different target or predicate as a duplicate', async () => {
+    const t = make(listTool());
+    await run(t, create({ toolArgs: JSON.stringify({ chatID: '22' }) }));
+    const other = await run(t, create({ toolArgs: JSON.stringify({ chatID: '29' }) }));
+    expect(other).not.toMatch(/Already watching/);
+
+    const filtered = await run(
+      t,
+      create({
+        toolArgs: JSON.stringify({ chatID: '22' }),
+        whereField: 'isSender',
+        whereEquals: 'false',
+      }),
+    );
+    expect(filtered).not.toMatch(/Already watching/);
+  });
+
+  it('ignores a cancelled watcher when checking', async () => {
+    // A spent watcher is not competing for anything.
+    const t = make(listTool());
+    await run(t, create());
+    const id = new WatcherStore().list()[0].id;
+    await run(t, { action: 'cancel', id });
+    expect(await run(t, create())).toMatch(/Watching tool t/);
+  });
+
+  it('does not call two time watchers at the same instant duplicates', async () => {
+    // "remind me at 3pm to do X" and "…to do Y" are both wanted, and the
+    // instruction is exactly what the duplicate key excludes.
+    const t = make();
+    const at = new Date(Date.now() + 3_600_000).toISOString();
+    await run(t, { action: 'create', name: 'a', instructions: 'do X', targetKind: 'time', at });
+    const b = await run(t, {
+      action: 'create',
+      name: 'b',
+      instructions: 'do Y',
+      targetKind: 'time',
+      at,
+    });
+    expect(b).not.toMatch(/Already watching/);
+  });
+});
