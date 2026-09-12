@@ -249,9 +249,17 @@ describe('MCPManager reconnection', () => {
     expect(result).toBe('reconnected-result');
     expect(failExecute).toHaveBeenCalledTimes(1);
     expect(successExecute).toHaveBeenCalledTimes(1);
-    expect(mockPrintInfo).toHaveBeenCalledWith(
-      'MCP tool "myTool" failed, reconnecting to "test-server"...',
-    );
+    // The debug log, and deliberately NOT stdout. This runs while Ink owns the
+    // screen — in full-screen it owns the alternate buffer — so a `printInfo`
+    // here lands at the cursor, corrupts the live frame, and is painted over on
+    // the next render: the line least likely to be read. It also fires between
+    // turns now that a watcher poll calls MCP tools (#479), where there is no
+    // turn output to hide behind.
+    expect(debugLog).toHaveBeenCalledWith('mcp:tool-retry', {
+      tool: 'myTool',
+      server: 'test-server',
+    });
+    expect(mockPrintInfo).not.toHaveBeenCalledWith(expect.stringContaining('reconnecting'));
   });
 
   it('surfaces original error when reconnection fails', async () => {
@@ -756,9 +764,9 @@ describe('MCPManager namespaced names (#413)', () => {
     }
   });
 
-  // Risk is classified from the RAW name, not the key — the prefix is
-  // transparent to the end-anchored check today, but an R2-truncated key's tail
-  // is the tool's tail, not its verb.
+  // Risk is classified from the RAW name, not the key. The classifier strips
+  // the namespace itself, so an ordinary key would survive either way — but an
+  // R2-truncated key's tail is the tool's tail, not its verb.
   it('classifies read vs write from the raw tool name', async () => {
     mockCreateMCPClient.mockResolvedValue(
       makeMockClient({
@@ -809,27 +817,15 @@ describe('MCPManager result shaping telemetry (#459)', () => {
     manager = new MCPManager();
   });
 
-  /** Connects one server whose single tool returns `result`. */
-  async function connectReturning(result: unknown): Promise<Record<string, any>> {
-    const client = makeMockClient({
-      get_email: makeDynamicTool(vi.fn().mockResolvedValue(result)),
-    });
-    mockCreateMCPClient.mockImplementation(async () => client);
-    vi.spyOn(manager, 'loadConfig').mockReturnValue({
-      mcpServers: { gmail: { url: 'http://gmail' } },
-    });
-    await manager.connect();
-    return manager.getServerTools({ mode: 'cap', maxChars: 800 });
-  }
-
   function cappedLines() {
     return vi.mocked(debugLog).mock.calls.filter(([label]) => label === 'mcp:result:capped');
   }
 
   it('names the server and the tool whose result was cut', async () => {
-    const perServer = await connectReturning({
+    await connectOneReturning(manager, 'gmail', 'get_email', {
       content: [{ type: 'text', text: JSON.stringify({ body: 'x'.repeat(20_000) }) }],
     });
+    const perServer = manager.getServerTools({ mode: 'cap', maxChars: 800 });
     await perServer.gmail[mcpToolName('gmail', 'get_email')].execute({});
 
     const lines = cappedLines();
@@ -844,11 +840,113 @@ describe('MCPManager result shaping telemetry (#459)', () => {
   });
 
   it('says nothing for a result that fit', async () => {
-    const perServer = await connectReturning({ content: [{ type: 'text', text: '{"ok":true}' }] });
+    await connectOneReturning(manager, 'gmail', 'get_email', {
+      content: [{ type: 'text', text: '{"ok":true}' }],
+    });
+    const perServer = manager.getServerTools({ mode: 'cap', maxChars: 800 });
     await perServer.gmail[mcpToolName('gmail', 'get_email')].execute({});
 
     // A pass-through is not a decision worth a line, and it is the overwhelming
     // majority of calls.
     expect(cappedLines()).toHaveLength(0);
+  });
+});
+
+/**
+ * The probe path is unshaped ON PURPOSE (#572).
+ *
+ * `snapshot(shaping?)` treats absence as pass-through, so the two watcher call
+ * sites were already correct — by saying nothing. `index.ts` and `headless.ts`
+ * DO pass a config, which makes the bare calls read as an oversight, and
+ * "make them consistent" is a one-line edit with no compile error behind it.
+ * These are the tests that stop it.
+ */
+/**
+ * Connects one server whose single tool resolves `result`.
+ *
+ * `connectServers` above hard-wires each tool's result to `"${server}:${t}"`,
+ * so a test that cares what came BACK needs this instead.
+ */
+async function connectOneReturning(
+  manager: MCPManager,
+  server: string,
+  tool: string,
+  result: unknown,
+): Promise<void> {
+  const client = makeMockClient({ [tool]: makeDynamicTool(vi.fn().mockResolvedValue(result)) });
+  mockCreateMCPClient.mockImplementation(async () => client);
+  vi.spyOn(manager, 'loadConfig').mockReturnValue({
+    mcpServers: { [server]: { url: `http://${server}` } },
+  });
+  await manager.connect();
+}
+
+describe('MCPManager.unshapedTools — the watcher probe surface (#572)', () => {
+  let manager: MCPManager;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    manager = new MCPManager();
+  });
+
+  /** A chat page: many small objects, each with an id — the `appeared` shape. */
+  function messagePage(n: number): unknown {
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            items: Array.from({ length: n }, (_, i) => ({
+              id: `m${i}`,
+              isSender: false,
+              text: 'x'.repeat(500),
+            })),
+          }),
+        },
+      ],
+    };
+  }
+
+  const connectWithPage = (n: number) =>
+    connectOneReturning(manager, 'beeper', 'list_messages', messagePage(n));
+
+  function idsIn(result: unknown): string[] {
+    const text = (result as { content: { text: string }[] }).content[0].text;
+    return (JSON.parse(text) as { items: { id: string }[] }).items
+      .filter((it) => typeof it?.id === 'string')
+      .map((it) => it.id);
+  }
+
+  it('keeps every id, where the shaped bag saturates the set', async () => {
+    // PAIRED, and that is what makes it non-vacuous: the first half proves
+    // shaping really does cut this payload, so the second half cannot pass
+    // because shaping quietly became a no-op.
+    await connectWithPage(60);
+    const key = mcpToolName('beeper', 'list_messages');
+
+    const shaped = await manager.snapshot({ mode: 'cap', maxChars: 8000 }).tools[key].execute({});
+    // `capArray` drops from the BACK, so the id set saturates around a dozen
+    // however large the page is — 20 items yields 12, 100 items yields 12.
+    expect(idsIn(shaped).length).toBeLessThan(20);
+
+    const unshaped = await (
+      manager.unshapedTools()[key] as { execute: (a: unknown) => Promise<unknown> }
+    ).execute({});
+    expect(idsIn(unshaped)).toHaveLength(60);
+  });
+
+  it('is the bag `snapshot()` derives, not a second assembler', async () => {
+    // `snapshot()` is the single assembler (#305) and an accessor that rebuilt
+    // the flat bag itself is how the two drift — a key present in one and
+    // missing from the other is the #305 failure, one door over.
+    //
+    // Key sets, not object identity: every call REBUILDS the registry (that is
+    // the "never a cached bag" rule), so even two `snapshot()` calls hand back
+    // different objects.
+    await connectWithPage(2);
+    expect(Object.keys(manager.unshapedTools()).sort()).toEqual(
+      Object.keys(manager.snapshot().tools).sort(),
+    );
+    expect(Object.keys(manager.unshapedTools())).toContain(mcpToolName('beeper', 'list_messages'));
   });
 });

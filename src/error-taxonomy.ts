@@ -394,9 +394,107 @@ export function isDispatchCancellation(err: unknown): boolean {
   // Bounded rather than `while (cause)`: an error chain is attacker-adjacent
   // input (providers and MCP servers build these) and a cycle would hang the
   // catch handler. Eight is far past any real nesting here.
-  for (let e: Error | undefined = err, depth = 0; e && depth < 8; depth++) {
-    if (e.name === 'AbortError' || e.name === DISPATCH_ABORT_NAME) return true;
-    e = e.cause instanceof Error ? e.cause : undefined;
+  return (
+    findInCauseChain(err, (e) =>
+      e.name === 'AbortError' || e.name === DISPATCH_ABORT_NAME ? true : null,
+    ) ?? false
+  );
+}
+
+/**
+ * The first non-null `f(e)` over `err` and its `cause` chain, outermost first.
+ *
+ * One walk, because the bound and the reason for it were stated twice in this
+ * file with two different termination spellings. Bounded rather than
+ * `while (cause)`: an error chain is attacker-adjacent input — providers and MCP
+ * servers build these — and a cycle would hang whichever catch handler called
+ * it. Eight is far past any real nesting here.
+ */
+function findInCauseChain<T>(err: unknown, f: (e: Error) => T | null): T | null {
+  for (let e: unknown = err, depth = 0; e instanceof Error && depth < 8; depth++) {
+    const hit = f(e);
+    if (hit !== null) return hit;
+    e = e.cause;
   }
-  return false;
+  return null;
+}
+
+/**
+ * A provider stall, and whether it is safe to re-issue the request (#302/#325).
+ *
+ * Two different guards detect "the provider stopped talking", one layer apart,
+ * and a recovery loop needs to treat them identically:
+ *
+ *  - `phase: 'headers'` — `providers/stall-guard.ts`. The POST was accepted and
+ *    no response headers arrived within the budget. Nothing was consumed.
+ *  - `phase: 'body'` — the same module, one step later. Headers arrived and then
+ *    the response body stopped delivering chunks. Measured between chunks, not
+ *    from request start, so a model generating steadily for minutes never trips
+ *    it.
+ *  - `phase: 'stream'` — the runner's mid-stream watchdog, which spans the
+ *    several HTTP requests one `fullStream` is assembled from and so can see a
+ *    silence no single request can.
+ *
+ * `producedOutput` is the half that decides recoverability, and it is a fact
+ * about the SINK, not about the error. `OutputSink` is `append`-only — there is
+ * deliberately no reset, since the framework layer is not allowed to know what
+ * a consumer buffers — so once a `text-delta` has been appended, re-running the
+ * dispatch appends a second copy beside the first and the user watches the
+ * answer stutter. A stall that produced nothing is invisible to re-run, which
+ * is also the shape the failure actually takes: the observed incident aborted
+ * at `stepsCompleted: 0` with zero parts, because a provider that goes quiet
+ * usually does so before saying anything.
+ *
+ * It also carries the accounting argument: with no step finished, no hook ran,
+ * so nothing was recorded that a retry could double-count. (The dead attempt's
+ * prompt tokens WERE billed by the provider and are not recorded anywhere —
+ * a known under-count, small next to the cache-read rate, and the alternative
+ * is inventing a usage row for a call that produced no usage report.)
+ *
+ * Carried as a property rather than a name because the NAME slot is already
+ * spoken for on the stream side: a mid-stream stall must keep
+ * {@link DISPATCH_ABORT_NAME} so {@link isDispatchCancellation} still unwinds
+ * it at the five dispatch boundaries when recovery gives up.
+ */
+export interface ProviderStallInfo {
+  phase: 'headers' | 'body' | 'stream';
+  /**
+   * Whether re-issuing would repeat work the dispatch has already done.
+   *
+   * The transport mints it meaning "bytes of THIS response reached the
+   * consumer", which is all a `fetch` wrapper can know; `runner.ts` then widens
+   * it to the dispatch's own answer, since a stall on step 7 is unsafe to
+   * re-issue whether or not anything was printed — for an ephemeral dispatch,
+   * which emits nothing anywhere, the completed STEPS are what make it unsafe.
+   * The name is the transport's; the meaning is the dispatch's, which is why
+   * the decline reason names neither and says `work-already-done`.
+   */
+  producedOutput: boolean;
+}
+
+const PROVIDER_STALL = Symbol.for('bernard.providerStall');
+
+/** Brand `err` as a provider stall. Returns the same error, for `throw mark(...)`. */
+export function markProviderStall<E extends Error>(err: E, info: ProviderStallInfo): E {
+  Object.defineProperty(err, PROVIDER_STALL, {
+    value: info,
+    enumerable: false,
+    configurable: true,
+  });
+  return err;
+}
+
+/**
+ * The stall info on `err`, or `null`.
+ *
+ * Walks `cause` for {@link isDispatchCancellation}'s reason and with its bound:
+ * the AI SDK rewraps a throw out of `fetch` (a `headers` stall surfaces through
+ * `streamText` inside an `APICallError`), so the brand is never on the outermost
+ * error by the time a caller sees it.
+ */
+export function providerStallInfo(err: unknown): ProviderStallInfo | null {
+  return findInCauseChain(
+    err,
+    (e) => (e as { [PROVIDER_STALL]?: ProviderStallInfo })[PROVIDER_STALL] ?? null,
+  );
 }

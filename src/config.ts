@@ -328,6 +328,21 @@ export interface BernardConfig {
    * `fullScreen` is off. Env-only toggle (not profile-scoped).
    */
   mouse: boolean;
+  /**
+   * Whether this session accepts `bernard say --run` — a message from another
+   * local process that RUNS as a turn rather than being shown (#493).
+   *
+   * Off by default, and that default is the feature. Anything that can write the
+   * state directory can write a message file, so a notice is safe by
+   * construction: the text has no path to the model. A prompt gives that up
+   * deliberately, so the decision is the user's, made once at startup, and a
+   * sender cannot upgrade itself — the capability is written by the session.
+   *
+   * Env/flag only, not profile-scoped: a setting that quietly persists into
+   * every future session is the wrong shape for one that widens an instruction
+   * boundary.
+   */
+  acceptRemotePrompts: boolean;
 }
 
 const DEFAULT_PROVIDER = 'anthropic';
@@ -1182,6 +1197,10 @@ export function loadConfig(overrides?: {
   const mouse = !(
     process.env.BERNARD_DISABLE_MOUSE === 'true' || process.env.BERNARD_DISABLE_MOUSE === '1'
   );
+  // #493. Opt-in per session, never per message.
+  const acceptRemotePrompts =
+    process.env.BERNARD_ACCEPT_REMOTE_PROMPTS === 'true' ||
+    process.env.BERNARD_ACCEPT_REMOTE_PROMPTS === '1';
   const theme = prefs.theme || 'bernard';
 
   // Tri-state coordinator mode (#167). Precedence: explicit pref >
@@ -1469,6 +1488,7 @@ export function loadConfig(overrides?: {
     specialistRecall,
     fullScreen,
     mouse,
+    acceptRemotePrompts,
   };
 
   validateConfig(config);

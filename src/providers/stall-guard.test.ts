@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { classifyError } from '../error-taxonomy.js';
+import { classifyError, providerStallInfo } from '../error-taxonomy.js';
 import {
   stallGuardedFetch,
+  withStallBudget,
   DEFAULT_STALL_TIMEOUT_MS,
   resolveStallTimeoutMs,
 } from './stall-guard.js';
@@ -191,5 +192,213 @@ describe('provider request counting (#308)', () => {
     const guarded = stallGuardedFetch(() => 20, stalledFetch());
     await rejectionOf(guarded('https://api.example/v1/messages'));
     expect(getProviderRequestCount()).toBe(1);
+  });
+});
+
+/**
+ * A fetch whose body delivers `chunks` at `gapMs` intervals, then either closes
+ * or goes silent forever. Headers land immediately — the shape of every case
+ * below, since body inactivity is by definition something that happens after
+ * the header budget has already been satisfied and cleared.
+ */
+function bodyFetch(chunks: string[], gapMs: number, thenSilent: boolean): typeof fetch {
+  return ((_input: RequestInfo | URL, init?: RequestInit) => {
+    const signal = init?.signal;
+    const stream = new ReadableStream<Uint8Array>({
+      async start(c) {
+        // A real `fetch` binds the body to `init.signal`; a double that ignores
+        // it cannot exercise the caller-abort path at all — it passes by
+        // hanging, which is how a meaningless assertion gets written.
+        const onAbort = (): void => {
+          try {
+            c.error(signal?.reason ?? new DOMException('Aborted', 'AbortError'));
+          } catch {
+            /* already closed */
+          }
+        };
+        if (signal?.aborted) return onAbort();
+        signal?.addEventListener('abort', onAbort, { once: true });
+        for (const chunk of chunks) {
+          await new Promise((r) => setTimeout(r, gapMs));
+          if (signal?.aborted) return;
+          c.enqueue(new TextEncoder().encode(chunk));
+        }
+        if (thenSilent) await new Promise(() => {});
+        c.close();
+      },
+    });
+    return Promise.resolve(new Response(stream, { status: 200 }));
+  }) as unknown as typeof fetch;
+}
+
+describe('body-inactivity guard (#350)', () => {
+  /**
+   * THE REGRESSION CASE. The budget this replaces was an `AbortSignal.timeout`
+   * passed as `init.signal`, which stays bound for the whole response lifetime
+   * and so was a hard deadline on the body. Real traffic came within 4.5 s of
+   * it — a step measured 85,447 ms returning 1,295 bytes, i.e. a reasoning
+   * model working correctly.
+   *
+   * Six chunks 40 ms apart is 240 ms of body against a 100 ms budget: a
+   * deadline kills it, an INACTIVITY clock never trips because every chunk
+   * restamps it. That difference is the entire fix, so it is asserted first.
+   */
+  it('does not kill a body that keeps delivering, past the budget', async () => {
+    const guarded = stallGuardedFetch(
+      () => 1_000,
+      bodyFetch(['a', 'b', 'c', 'd', 'e', 'f'], 40, false),
+      () => 100,
+    );
+    const res = await guarded('https://api.x.ai/v1/x');
+    await expect(res.text()).resolves.toBe('abcdef');
+  });
+
+  /**
+   * THE LEAK ITSELF. The header budget used to be an `AbortSignal.timeout`
+   * handed to `fetch` as `init.signal`, and a signal given to `fetch` stays
+   * bound for the whole response lifetime — so the first-byte timer went on
+   * running and killed the BODY at the header budget.
+   *
+   * The condition needs all three of: a SHORT header budget, headers that beat
+   * it, and a body that then legitimately outlives it. Every other test here
+   * uses a generous header budget and finishes well inside it, so none of them
+   * reproduces it — verified by mutation: deleting the `clearTimeout` left the
+   * rest of this file entirely green.
+   */
+  it('does not apply the header budget to the body once headers have arrived', async () => {
+    const guarded = stallGuardedFetch(
+      () => 50, // header budget: headers land at ~5 ms, body runs ~240 ms
+      bodyFetch(['a', 'b', 'c', 'd', 'e', 'f'], 40, false),
+      () => 500,
+    );
+    const res = await guarded('https://api.x.ai/v1/x');
+    await expect(res.text()).resolves.toBe('abcdef');
+  });
+
+  it('kills a body that goes silent, as a stall the UI will show', async () => {
+    const guarded = stallGuardedFetch(
+      () => 1_000,
+      bodyFetch(['a'], 5, true),
+      () => 60,
+    );
+    const res = await guarded('https://api.x.ai/v1/x');
+    const err = await rejectionOf(res.text());
+
+    expect(err.message).toMatch(/timed out/i);
+    // Same three properties the header stall is pinned on: not an AbortError
+    // (the REPL renders nothing for those), not a TypeError (that shape is what
+    // the AI SDK retries, which would multiply with our own loop), and it earns
+    // the `timeout` category with no new vocabulary.
+    expect(err.name).not.toBe('AbortError');
+    expect(err).not.toBeInstanceOf(TypeError);
+    expect(classifyError({ message: err.message }).category).toBe('timeout');
+  });
+
+  it('reports whether the body had produced anything, which decides retryability', async () => {
+    const silentFromTheStart = stallGuardedFetch(
+      () => 1_000,
+      bodyFetch([], 5, true),
+      () => 60,
+    );
+    const none = await rejectionOf((await silentFromTheStart('https://x/1')).text());
+    expect(providerStallInfo(none)).toEqual({ phase: 'body', producedOutput: false });
+
+    // A chunk that reached the SDK may already have become a `text-delta` on
+    // the user's screen, and `OutputSink` has no reset — so any chunk at all
+    // makes this unsafe to re-issue.
+    const spokeThenDied = stallGuardedFetch(
+      () => 1_000,
+      bodyFetch(['hello'], 5, true),
+      () => 60,
+    );
+    const some = await rejectionOf((await spokeThenDied('https://x/2')).text());
+    expect(providerStallInfo(some)).toEqual({ phase: 'body', producedOutput: true });
+  });
+
+  it('leaves the response cloneable', async () => {
+    // #350 names this as the risk of re-wrapping a body in a TransformStream.
+    // The AI SDK clones responses, so breaking it would break every provider
+    // call rather than only a stalled one.
+    const guarded = stallGuardedFetch(
+      () => 1_000,
+      bodyFetch(['x', 'y'], 1, false),
+      () => 500,
+    );
+    const res = await guarded('https://api.x.ai/v1/x');
+    const copy = res.clone();
+    await expect(res.text()).resolves.toBe('xy');
+    await expect(copy.text()).resolves.toBe('xy');
+  });
+
+  it('keeps a caller abort during the body reading as a caller abort', async () => {
+    // The guard composes the caller's signal in via `AbortSignal.any`, which is
+    // what keeps Esc reaching the socket mid-body. If that were dropped when
+    // the header timer was cleared, Esc would stop working the moment headers
+    // arrived.
+    const ctrl = new AbortController();
+    const guarded = stallGuardedFetch(
+      () => 1_000,
+      bodyFetch(['a'], 5, true),
+      () => 5_000,
+    );
+    const res = await guarded('https://api.x.ai/v1/x', { signal: ctrl.signal });
+    setTimeout(() => ctrl.abort(), 20);
+    const err = await rejectionOf(res.text());
+    expect(err.message).not.toMatch(/timed out/i);
+  });
+
+  it('is disabled by an explicit 0, like its sibling budget', async () => {
+    const guarded = stallGuardedFetch(
+      () => 1_000,
+      bodyFetch(['a'], 5, true),
+      () => 0,
+    );
+    const res = await guarded('https://api.x.ai/v1/x');
+    const raced = await Promise.race([
+      res.text().then(() => 'finished'),
+      new Promise((r) => setTimeout(() => r('still-running'), 200)),
+    ]);
+    expect(raced).toBe('still-running');
+  });
+});
+
+describe('withStallBudget', () => {
+  it('shortens a budget', async () => {
+    // 1000 ms configured, 30 ms override: the request must die on the override.
+    const err = await rejectionOf(
+      withStallBudget(30, () => stallGuardedFetch(() => 1_000, stalledFetch())('https://x/1')),
+    );
+    expect(err.message).toMatch(/timed out/i);
+  });
+
+  it('cannot lengthen one', async () => {
+    // 20 ms configured, 5000 ms override. If the override won, this would hang
+    // and the race would report 'still-running'. It must NOT — a mechanism that
+    // can lengthen a liveness budget from inside a retry can defeat the guard.
+    const raced = await withStallBudget(5_000, () =>
+      Promise.race([
+        rejectionOf(stallGuardedFetch(() => 20, stalledFetch())('https://x/1')).then(
+          (e) => e.message,
+        ),
+        new Promise<string>((r) => setTimeout(() => r('still-running'), 300)),
+      ]),
+    );
+    expect(raced).toMatch(/timed out/i);
+  });
+
+  it('cannot re-enable a disabled guard', async () => {
+    // `BERNARD_PROVIDER_STALL_TIMEOUT_MS=0` is a real off switch and an
+    // override must not quietly undo it.
+    const raced = await withStallBudget(20, () =>
+      Promise.race([
+        stallGuardedFetch(
+          () => 0,
+          stalledFetch(),
+          () => 0,
+        )('https://x/1').then(() => 'finished'),
+        new Promise<string>((r) => setTimeout(() => r('still-running'), 200)),
+      ]),
+    );
+    expect(raced).toBe('still-running');
   });
 });

@@ -124,9 +124,15 @@ vi.mock('../../mcp.js', () => ({
   addMCPUrlServer: vi.fn(),
 }));
 
-vi.mock('../../logger.js', () => ({
-  debugLog: vi.fn(),
-}));
+// Spread the real module rather than enumerating one export. A hand-written
+// partial mock silently asserts "nothing under `createTools` uses any other
+// logger export", which is not a property this suite is about — and when it
+// stops holding, the failure lands here rather than on whatever added the
+// import. `runner.test.ts` uses the same `importActual` spread for this reason.
+vi.mock('../../logger.js', async () => {
+  const actual = await vi.importActual<typeof import('../../logger.js')>('../../logger.js');
+  return { ...actual, debugLog: vi.fn() };
+});
 
 // Minimal ToolProfileStore stand-in for `augmentTools`. The wrapper only
 // touches the store on tool execution; meta inspection at registry

@@ -22,6 +22,7 @@ import { renderMarkdown } from './markdown.js';
 import { useDimensionsCtx } from './DimensionsContext.js';
 import { ErrorPanel } from './ErrorPanel.js';
 import { NoticePanel } from './NoticePanel.js';
+import { WakePanel } from './WakePanel.js';
 import type { NoticeData } from './notice.js';
 import type { ErrorPanelData } from './error-format.js';
 import type { MessageStore, StreamEvent } from './message-store.js';
@@ -62,6 +63,24 @@ export interface StaticItem {
    * instruction-source boundary is structural rather than a policy.
    */
   notice?: NoticeData;
+  /**
+   * When set, this item announces a turn that nobody typed (#479/#493) — a
+   * watcher firing, a queued follow-up, a `bernard say --run`.
+   *
+   * Rendered BEFORE the turn it introduces, so the transcript records where the
+   * instruction came from at the point a reader would otherwise assume they
+   * typed it. UI transcript only, like {@link notice}: the panel is attribution,
+   * and the instruction itself reaches the model through the turn.
+   */
+  wake?: WakeData;
+}
+
+/** What a `WakePanel` shows. */
+export interface WakeData {
+  /** Where the turn came from, already phrased — see `describeSource`. */
+  source: string;
+  /** The instruction that is about to run. Never anything observed. */
+  text: string;
 }
 
 interface ThreadProps {
@@ -498,6 +517,7 @@ export function StaticItemView({
 }) {
   if (item.error) return <ErrorPanel data={item.error} />;
   if (item.notice) return <NoticePanel data={item.notice} />;
+  if (item.wake) return <WakePanel data={item.wake} />;
   // The component, not a render prop: a closure would throw away the narrowing
   // this line just did, forcing a `message!` at both call sites — an assertion
   // a later reordering of this ladder could silently invalidate.

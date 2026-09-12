@@ -25,6 +25,14 @@ export interface SayOptions {
   wait?: boolean;
   timeout?: number;
   list?: boolean;
+  /**
+   * Run the message as a turn instead of showing it (#493).
+   *
+   * Reaches only a session started with `--accept-remote-prompts`; against any
+   * other it fails loudly rather than degrading to a notice, which is the whole
+   * reason `kind` is on the wire and `capabilities` on the session record.
+   */
+  run?: boolean;
 }
 
 /** Exit codes, so a caller can tell "nowhere to send" from "it broke". */
@@ -51,6 +59,10 @@ const REASON_EXIT: Record<SendReason, number> = {
   empty: SAY_EXIT.usage,
   'too-large': SAY_EXIT.usage,
   'inbox-full': SAY_EXIT.usage,
+  // `noSession` rather than `usage`: from the sender's side this IS "there is
+  // nobody to send to". The command was well-formed; the fix is on the
+  // receiving end, and the message below says which end.
+  'not-accepted': SAY_EXIT.noSession,
 };
 
 const REASON_MESSAGE: Record<SendReason, (opts: SayOptions) => string> = {
@@ -60,6 +72,12 @@ const REASON_MESSAGE: Record<SendReason, (opts: SayOptions) => string> = {
   empty: () => 'Nothing to say once stripped.',
   'too-large': () => 'That message is too long.',
   'inbox-full': () => 'That session has too many undelivered messages already.',
+  // Deliberately distinguished from 'No Bernard session is running': telling
+  // someone staring at a running REPL that nothing is running sends them after
+  // the wrong problem entirely.
+  'not-accepted': () =>
+    'A Bernard session is running, but it does not accept prompts.\n' +
+    'Restart it with --accept-remote-prompts, or send without --run to deliver a notice.',
 };
 
 export async function sayCommand(text: string, opts: SayOptions = {}): Promise<number> {
@@ -83,6 +101,7 @@ export async function sayCommand(text: string, opts: SayOptions = {}): Promise<n
   const result = sendToSessions({
     text,
     source: { kind: 'cli', label: opts.source ?? 'cli' },
+    ...(opts.run ? { kind: 'prompt' as const } : {}),
     ...(opts.hint ? { hint: opts.hint } : {}),
     ...(opts.session
       ? { target: { sessionId: opts.session } }

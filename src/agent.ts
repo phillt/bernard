@@ -45,7 +45,7 @@ import {
   applyStickiness,
 } from './rag-query.js';
 import { timestampUserMessage } from './tools/datetime.js';
-import { attachTo } from './framework/agents/user-message.js';
+import { attachTo, type UntrustedData } from './framework/agents/user-message.js';
 import { type ImageAttachment, IMAGE_TOKEN_ESTIMATE } from './image.js';
 import { PlanStore } from './plan-store.js';
 import { type ResolvedEntry } from './reference-resolver.js';
@@ -461,6 +461,28 @@ export class Agent {
       recallReconciliation?: string;
       memoryPriority?: string[];
       originalInput?: string;
+      /**
+       * Untrusted bytes from the outside world, kept OUT of the instruction
+       * slot (#479).
+       *
+       * The main agent's turn input has always been one string, which is fine
+       * while the only author is the person typing. A woken turn has two
+       * authors: the session wrote `userInput` when it created the watcher, and
+       * the world wrote whatever the watcher then saw. Folding the second into
+       * the first would make an email body instruction.
+       *
+       * Typed rather than conventional: `UntrustedData` is minted in exactly two
+       * places and a plain string cannot be assigned here, so a caller cannot
+       * pass observed bytes as the instruction by accident.
+       *
+       * Be exact about where that stops. The brand is enforced at THIS boundary;
+       * below it the text is unwrapped and joined into the same user message, so
+       * there is one slot on the wire and the separation from there on is the
+       * banner and the fence, not the type. What the fence rests on is that the
+       * observation is serialized before it is rendered, so it cannot begin a
+       * line and cannot close the block it sits in — see `watchers/wake.ts`.
+       */
+      data?: UntrustedData;
     },
   ): Promise<void> {
     const turnStartedAt = Date.now();
@@ -528,7 +550,12 @@ export class Agent {
     // here and duplicated in the framework, which encoded the SDK's image-part
     // shape in two files — and this is the one consumer whose messages
     // PERSIST, so an SDK bump would have silently missed it.
-    this.history.push(attachTo(wrappedInput, images));
+    // The data channel is appended AFTER the wrapped instruction, never merged
+    // into it: `wrapUserMessage` opens the text at position 0 with the user's
+    // request, and an observation spliced inside that wrapper would read as part
+    // of it. Two paragraphs in one user message, with the banner between them.
+    const withData = options?.data ? `${wrappedInput}\n\n${options.data.text}` : wrappedInput;
+    this.history.push(attachTo(withData, images));
 
     // Snapshot the conversation turn position NOW, before the run — the
     // maxTokens-continuation and empty-answer-retry loops in `wrapIterate` push

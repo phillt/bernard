@@ -18,6 +18,7 @@ vi.mock('../../logger.js', async () => {
 });
 
 import { runAgent, type AgentSpec } from '../runner.js';
+import { providerStallInfo, DISPATCH_ABORT_NAME } from '../../error-taxonomy.js';
 import type { AgentHook } from '../hooks/types.js';
 import { generateText, streamText } from 'ai';
 
@@ -71,16 +72,27 @@ describe('runAgent', () => {
     expect(args.experimental_repairToolCall).toBe(repair);
   });
 
-  it('omits onStepFinish entirely when no hooks are passed (critic shape)', async () => {
+  /**
+   * These two used to assert `onStepFinish` was UNDEFINED for a hook-less
+   * dispatch. That contract was given up deliberately: the runner now always
+   * composes a step COUNTER, because `stepsCompleted` is read by stall recovery
+   * to decide whether re-running a dispatch would re-execute tool calls that
+   * already ran — and a retry that re-sends six completed steps' worth of writes
+   * must not depend on whether someone set BERNARD_DEBUG.
+   *
+   * What the tests are really protecting is that the runner does not disturb a
+   * caller's hooks, which is asserted directly below and is unchanged.
+   */
+  it('always attaches a step counter, even with no caller hooks (critic shape)', async () => {
     await runAgent(makeSpec());
     const args = (generateText as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(args.onStepFinish).toBeUndefined();
+    expect(typeof args.onStepFinish).toBe('function');
   });
 
-  it('omits onStepFinish when all hooks lack the observer (e.g. repair-only)', async () => {
+  it('attaches the counter alongside hooks that lack an observer (repair-only)', async () => {
     await runAgent(makeSpec({ hooks: [{}, {}] }));
     const args = (generateText as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(args.onStepFinish).toBeUndefined();
+    expect(typeof args.onStepFinish).toBe('function');
   });
 
   it('composes hook onStepFinish callbacks in declaration order', async () => {
@@ -338,6 +350,134 @@ describe('runAgent — mid-stream stall guard', () => {
         new Promise<string>((r) => setTimeout(() => r('still-running'), 400)),
       ]);
       expect(race).toBe('still-running');
+    });
+  });
+
+  /**
+   * The half of the stall report that recovery actually acts on. `OutputSink`
+   * is append-only with no reset, so re-issuing a dispatch that already emitted
+   * a `text-delta` prints a second copy beside the first — `producedOutput` is
+   * what stops that, and it is a fact only this layer can observe.
+   */
+  it('reports that nothing reached the sink when the stream was silent from the start', async () => {
+    (streamText as unknown as ReturnType<typeof vi.fn>).mockReturnValue(makeStalledStream([]));
+    await withStallBudget('60', async () => {
+      const err = await runAgent(makeSpec({ useStreaming: true })).catch((e: unknown) => e);
+      // The observed incident's exact shape: headers, then nothing at all.
+      expect(providerStallInfo(err)).toEqual({ phase: 'stream', producedOutput: false });
+      // The brand rides ALONGSIDE the name rather than replacing it — once
+      // recovery gives up, the five dispatch boundaries still need the name to
+      // unwind instead of handing the model a stall dressed as a tool result.
+      expect((err as Error).name).toBe(DISPATCH_ABORT_NAME);
+    });
+  });
+
+  it('reports that output was produced when parts flowed before the silence', async () => {
+    (streamText as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeStalledStream([{ type: 'text-delta', textDelta: 'hi' }]),
+    );
+    await withStallBudget('60', async () => {
+      const err = await runAgent(makeSpec({ useStreaming: true })).catch((e: unknown) => e);
+      expect(providerStallInfo(err)).toEqual({ phase: 'stream', producedOutput: true });
+    });
+  });
+
+  it('counts each step exactly once, with debug on', async () => {
+    // Two hooks incremented the same counter: the always-on `stepCounter` and
+    // the debug-gated observer. `step:end`'s `n` reported 2, 4, 6… and the
+    // dispatch-end count was doubled — and only ever under debug, i.e. only in
+    // the sessions where anyone reads it.
+    (globalThis as { __debugForRunnerTest?: boolean }).__debugForRunnerTest = true;
+    try {
+      (generateText as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+        async (opts: { onStepFinish?: (p: unknown) => Promise<void> }) => {
+          const step = {
+            text: '',
+            toolCalls: [],
+            toolResults: [],
+            finishReason: 'stop',
+            usage: {},
+          };
+          await opts.onStepFinish?.(step);
+          await opts.onStepFinish?.(step);
+          return { text: 'done', steps: [], response: { messages: [] }, finishReason: 'stop' };
+        },
+      );
+      await runAgent(makeSpec());
+      const ns = logCalls.filter((c) => c.label === 'step:end').map((c) => c.data.n);
+      expect(ns).toEqual([1, 2]);
+      const end = logCalls.find((c) => c.label === 'agent:dispatch:end');
+      expect(end?.data.steps).toBe(0); // from the result, not the counter
+    } finally {
+      (globalThis as { __debugForRunnerTest?: boolean }).__debugForRunnerTest = false;
+    }
+  });
+
+  it('reports output as produced once a step has completed, whatever branded it', async () => {
+    // The transport cannot answer this. `stall-guard.ts` mints `producedOutput:
+    // false` for a headers stall — true of that one HTTP request, and silent
+    // about the dispatch — and `partsSeen` moves only on the streaming branch.
+    // Left uncorrected, a sub-agent that stalled on step 7 is re-run from step
+    // 1, re-executing six steps of tool calls including writes.
+    const { markProviderStall } = await import('../../error-taxonomy.js');
+    (generateText as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      async (opts: { onStepFinish?: (p: unknown) => Promise<void> }) => {
+        await opts.onStepFinish?.({
+          text: 'partial',
+          toolCalls: [],
+          toolResults: [],
+          finishReason: 'tool-calls',
+          usage: {},
+        });
+        throw markProviderStall(new Error('Provider timed out — no headers.'), {
+          phase: 'headers',
+          producedOutput: false,
+        });
+      },
+    );
+    const err = await runAgent(makeSpec()).catch((e: unknown) => e);
+    expect(providerStallInfo(err)?.producedOutput).toBe(true);
+  });
+
+  it('does not brand a dispatch timeout, which must never be retried', async () => {
+    // `BERNARD_DISPATCH_TIMEOUT_MS` is a wall clock the operator set. Silently
+    // re-issuing past it would defeat exactly what they asked for, so only the
+    // STALL arm brands — a mutation that brands both arms fails here.
+    (generateText as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (opts: { abortSignal?: AbortSignal }) =>
+        new Promise((_r, reject) => {
+          opts.abortSignal?.addEventListener('abort', () =>
+            reject(new DOMException('Aborted', 'AbortError')),
+          );
+        }),
+    );
+    const prev = process.env.BERNARD_DISPATCH_TIMEOUT_MS;
+    process.env.BERNARD_DISPATCH_TIMEOUT_MS = '20';
+    try {
+      const err = await runAgent(makeSpec()).catch((e: unknown) => e);
+      expect((err as Error).message).toMatch(/Dispatch timed out/);
+      expect(providerStallInfo(err)).toBeNull();
+    } finally {
+      if (prev === undefined) delete process.env.BERNARD_DISPATCH_TIMEOUT_MS;
+      else process.env.BERNARD_DISPATCH_TIMEOUT_MS = prev;
+    }
+  });
+
+  it('lets a caller shorten the stall budget, and never lengthen it', async () => {
+    (streamText as unknown as ReturnType<typeof vi.fn>).mockReturnValue(makeStalledStream([]));
+    // Configured 5000 ms, caller asks for 60 ms: the short one must win, or a
+    // retry would sit on the full budget and the three-attempt loop would be a
+    // six-minute wait.
+    await withStallBudget('5000', async () => {
+      await expect(runAgent(makeSpec({ useStreaming: true, stallTimeoutMs: 60 }))).rejects.toThrow(
+        /no data received/,
+      );
+    });
+    // Configured 60 ms, caller asks for 5000 ms: the short one must STILL win.
+    await withStallBudget('60', async () => {
+      await expect(
+        runAgent(makeSpec({ useStreaming: true, stallTimeoutMs: 5000 })),
+      ).rejects.toThrow(/no data received/);
     });
   });
 

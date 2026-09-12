@@ -1,7 +1,7 @@
 import type { Tool } from 'ai';
 import type { BernardTool, ToolMeta, ToolResult } from './types.js';
 import { isToolResult } from './types.js';
-import { isReadOnlyMCPSuffix } from '../../risk.js';
+import { isReadOnlyMCPToolName } from '../../risk.js';
 import { normalizeToolResult } from '../../text.js';
 import { detectResultFailure } from '../../tool-result-shape.js';
 
@@ -26,9 +26,9 @@ import { detectResultFailure } from '../../tool-result-shape.js';
  *
  * Pass the AI-SDK MCP `Tool` (already reconnect-wrapped by `MCPManager.getTools`)
  * plus the originating server name. The default `kind` is derived from the
- * tool's name suffix (`isReadOnlyMCPSuffix`): names ending in
- * `search|list|find|get|query|read|lookup` are treated as `read`; everything
- * else is treated as `write`. This drives the risk-based confirmation gate
+ * tool's own verbs (`isReadOnlyMCPToolName`): a name carrying
+ * `search|list|find|get|query|read|lookup` at either end, and no write verb
+ * anywhere, is treated as `read`; everything else is treated as `write`. This drives the risk-based confirmation gate
  * (#144) so write-style MCP tools (Gmail send, Calendar create, etc.) are
  * surfaceable without per-tool config. Callers can still override with
  * `metaOverride` when they know better than the heuristic.
@@ -43,7 +43,7 @@ export function wrapMCPTool(
   // prompts); everything else → kind 'write' with sideEffect 'local' (medium
   // risk, prompts only in strict mode). 'external-api' would imply high risk
   // out of the box; we leave that opt-in to follow-up `mcp.json` overrides.
-  const inferredKind: ToolMeta['kind'] = isReadOnlyMCPSuffix(name) ? 'read' : 'write';
+  const inferredKind: ToolMeta['kind'] = isReadOnlyMCPToolName(name) ? 'read' : 'write';
   const meta: ToolMeta = {
     name,
     kind: inferredKind,

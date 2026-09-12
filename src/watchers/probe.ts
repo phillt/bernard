@@ -1,0 +1,378 @@
+/**
+ * @module watchers/probe
+ *
+ * Looking once at whatever a watcher watches. **No model is involved.**
+ *
+ * That is the economic premise of the whole feature: a 60 s watcher polls 1,440
+ * times a day, and dispatching an agent to answer "nothing changed" is the shape
+ * this must not take — `CronJob.prompt` runs a full agent per fire, which was
+ * measured at ~49k prompt tokens. A probe is a fetch, a `stat`, or one tool
+ * call. The agent runs only once, when the predicate actually fires.
+ *
+ * Every dependency is injected — `fetch`, the filesystem, the tool registry —
+ * the idiom `voice-service.ts` uses for the same reason: otherwise the tests
+ * need a network, a real MCP server, and a built `dist/`.
+ */
+// Named import, not `import fs from 'node:fs'`. Several suites replace
+// `node:fs` with a partial mock of named functions and no `default` export, and
+// a default import fails at MODULE LOAD against those — taking down suites that
+// have nothing to do with watchers.
+import { statSync } from 'node:fs';
+
+import { readToolMeta } from '../framework/tools/adapter.js';
+import { isReadOnlyMCPToolName } from '../risk.js';
+import { digestOf, type Observation } from './evaluate.js';
+import { idPathRefusal, idsAt } from './extract.js';
+import {
+  MAX_HTTP_BODY_CHARS,
+  MAX_PROBE_RESULT_CHARS,
+  carriedState,
+  type WatchState,
+  type WatchTarget,
+  type Watcher,
+} from './types.js';
+
+/**
+ * The production `statFile`, kept here rather than at the call site so the UI
+ * layer does not acquire a `node:fs` import to describe a probe it does not
+ * perform. Injected in tests; this is simply the default.
+ */
+export function statFileSync(p: string): { mtimeMs: number; size: number } | null {
+  try {
+    const st = statSync(p);
+    return { mtimeMs: st.mtimeMs, size: st.size };
+  } catch {
+    // Absent, unreadable, or a path we may not traverse. All three are
+    // "nothing to see", which `probeFile` turns into an observation rather than
+    // a failure — see there for why that distinction matters.
+    return null;
+  }
+}
+
+/** Hard cap on one probe, so a hung server cannot wedge the poll loop. */
+export const PROBE_TIMEOUT_MS = 10_000;
+
+/** Everything the probe reaches the world through. */
+export interface ProbeDeps {
+  fetch: typeof fetch;
+  statFile: (p: string) => { mtimeMs: number; size: number } | null;
+  /** The live tool registry, re-taken per poll — never a cached bag. */
+  tools: () => Record<string, unknown>;
+}
+
+export type ProbeResult = { ok: true; observation: Observation } | { ok: false; error: string };
+
+/**
+ * Whether a watcher may name this tool.
+ *
+ * Read-classified only. A watcher runs unattended and repeatedly, so a write
+ * target would be a way to make something happen 1,440 times a day with nobody
+ * looking. `isReadOnlyMCPToolName` is the same gate `reference-tool-lookup.ts`
+ * uses to decide what an unattended lookup may call, and reusing it means there
+ * is one answer to "what is safe to call without a person" rather than two that
+ * can drift.
+ *
+ * Returns a refusal string, or `null` when allowed — `directInvocableRefusal`'s
+ * shape, so a caller reports WHY rather than a bare boolean.
+ */
+export function watchableToolRefusal(
+  toolName: string,
+  tool: unknown,
+  available?: Record<string, unknown>,
+): string | null {
+  if (!tool) {
+    // Name what IS watchable. A bare "not available" leaves a model guessing at
+    // a namespaced key it cannot enumerate — observed once as a fallback to a
+    // blind `time` watcher, which polls a clock instead of the thing asked
+    // about. Suggestions are filtered to read-only, so nothing offered here can
+    // then be refused by the very next check.
+    const near = available ? suggestions(toolName, available) : [];
+    const hint = near.length
+      ? ` Watchable tools with a similar name: ${near.join(', ')}.`
+      : ' Note a watcher needs the real tool name (e.g. `server_ab12__list_messages`), not a `delegate_<server>` tool.';
+    return `No tool named "${toolName}" is available in this session.${hint}`;
+  }
+  const meta = readToolMeta(tool);
+  // A built-in declares its own kind; an MCP tool is classified from its suffix
+  // by `mcp.ts`, which sets `kind: 'read'` for the `*_list` / `*_search` /
+  // `*_get` family. Accept either statement of the same fact.
+  const declaredRead = meta?.kind === 'read';
+  if (!declaredRead && !isReadOnlyMCPToolName(meta?.rawName ?? toolName)) {
+    return `Tool "${toolName}" is not a read-only tool, so a watcher cannot poll it.`;
+  }
+  if (typeof (tool as { execute?: unknown }).execute !== 'function') {
+    return `Tool "${toolName}" cannot be invoked directly.`;
+  }
+  return null;
+}
+
+/**
+ * Up to five watchable tools whose names look like what was asked for.
+ *
+ * Matched on the SEGMENTS of a namespaced key — `beeper_ab12__list_messages`
+ * shares `beeper` and `messages` with `beeper_ab12__read_messages` — because the
+ * usual near-miss is the right server and the wrong verb, which a whole-string
+ * distance would score as far apart.
+ */
+function suggestions(wanted: string, available: Record<string, unknown>): string[] {
+  const parts = new Set(
+    wanted
+      .toLowerCase()
+      .split(/[_\W]+/)
+      .filter((p) => p.length > 2),
+  );
+  if (parts.size === 0) return [];
+  const scored: { name: string; score: number }[] = [];
+  for (const [name, tool] of Object.entries(available)) {
+    if (watchableToolRefusal(name, tool) !== null) continue;
+    const theirs = name.toLowerCase().split(/[_\W]+/);
+    const score = theirs.filter((p) => parts.has(p)).length;
+    if (score > 0) scored.push({ name, score });
+  }
+  return scored
+    .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+    .slice(0, 5)
+    .map((s) => s.name);
+}
+
+/** Looks once. Never throws; a failure is a value the caller counts. */
+/** Carried-forward state a probe can use to ask a cheaper question. */
+export interface ProbeContext {
+  /** From the last poll, so an HTTP probe can send a conditional request. */
+  etag?: string;
+  lastModified?: string;
+}
+
+/** Looks once. Never throws; a failure is a value the caller counts. */
+export async function probe(
+  target: WatchTarget,
+  deps: ProbeDeps,
+  ctx: ProbeContext = {},
+): Promise<ProbeResult> {
+  switch (target.kind) {
+    // Nothing to look at: `isDue` is the whole predicate, and `evaluate` fires
+    // on arrival. Probing here would be a call with no question.
+    case 'time':
+      return { ok: true, observation: { value: null } };
+    case 'file':
+      return probeFile(target.path, deps);
+    case 'http':
+      return probeHttp(target, deps, ctx);
+    case 'mcp':
+      return probeMcp(target, deps);
+  }
+}
+
+function probeFile(p: string, deps: ProbeDeps): ProbeResult {
+  const st = deps.statFile(p);
+  // Absence is an OBSERVATION, not an error — "tell me when this file appears"
+  // is a real thing to want, and reporting it as a failure would tick the
+  // failure counter until the watcher gave up waiting for the thing it was
+  // watching for.
+  if (!st) return { ok: true, observation: { value: { exists: false } } };
+  return { ok: true, observation: { value: { exists: true, mtimeMs: st.mtimeMs, size: st.size } } };
+}
+
+async function probeHttp(
+  target: Extract<WatchTarget, { kind: 'http' }>,
+  deps: ProbeDeps,
+  ctx: ProbeContext,
+): Promise<ProbeResult> {
+  try {
+    const res = await deps.fetch(target.url, {
+      // Conditional request: when the server honours it a `304` costs no body
+      // and answers the question outright. A `304` is safe to act on because
+      // acting costs nothing — but a `200` is NOT proof of change, which is why
+      // the body is still digested by `evaluate`.
+      //
+      // `If-None-Match` wins over `If-Modified-Since` when a server sees both,
+      // an entity tag being the stronger signal, so sending both is free.
+      headers: conditionalHeaders(ctx),
+      // A real deadline. `ProbeContext` used to carry a `signal` that NO caller
+      // ever populated, so this was `undefined` and an HTTP probe had no bound
+      // at all — one unresponsive host would hold a poll slot indefinitely,
+      // while the MCP path was bounded by its own race. A dead field that reads
+      // as cancellation support is worse than none.
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      redirect: 'follow',
+    });
+    if (res.status === 304) {
+      return { ok: true, observation: { value: null, unchanged: true } };
+    }
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const body = await res.text();
+    return {
+      ok: true,
+      observation: {
+        value: body.slice(0, MAX_HTTP_BODY_CHARS),
+        etag: res.headers.get('etag') ?? undefined,
+        lastModified: res.headers.get('last-modified') ?? undefined,
+      },
+    };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+function conditionalHeaders(ctx: ProbeContext): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (ctx.etag) headers['if-none-match'] = ctx.etag;
+  if (ctx.lastModified) headers['if-modified-since'] = ctx.lastModified;
+  return headers;
+}
+
+async function probeMcp(
+  target: Extract<WatchTarget, { kind: 'mcp' }>,
+  deps: ProbeDeps,
+): Promise<ProbeResult> {
+  const registry = deps.tools();
+  const tool = registry[target.tool];
+  const refusal = watchableToolRefusal(target.tool, tool, registry);
+  if (refusal) return { ok: false, error: refusal };
+
+  const execute = (tool as { execute: (a: unknown, o: unknown) => Promise<unknown> }).execute;
+  try {
+    // A hard race, not just the signal: many MCP tools ignore `abortSignal`
+    // entirely, which is the reason `reference-tool-lookup.ts` wraps its own
+    // call the same way. Without it one unresponsive server stalls every other
+    // watcher behind it.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        execute(target.args, {
+          toolCallId: `watch-${Date.now()}`,
+          messages: [],
+          abortSignal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+        }),
+        new Promise<never>((_r, reject) => {
+          timer = setTimeout(() => reject(new Error('probe timed out')), PROBE_TIMEOUT_MS);
+          timer.unref?.();
+        }),
+      ]);
+      const oversize = oversizeRefusal(result);
+      if (oversize) return { ok: false, error: oversize };
+      return { ok: true, observation: { value: unwrap(result) } };
+    } finally {
+      // Every other hand-rolled race in the tree clears its timer in a `finally`
+      // — `reference-tool-lookup`, `mcp`, `cron/scheduler`, `runner` (twice).
+      // Without it each probe leaves a live 10 s timer that later rejects an
+      // already-settled promise; `unref` keeps that from holding the process
+      // open but does not stop it firing.
+      if (timer) clearTimeout(timer);
+    }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * The sole text payload of a `CallToolResult` envelope, or `null`.
+ *
+ * One sniff, two readers. The size check and the unwrap below both need "is
+ * this a single text entry", and written twice they had already drifted —
+ * `unwrap` required `only.type === 'text'` and the size check did not, so a
+ * single-entry `{type:'resource', text: <2 MB>}` was refused by one and passed
+ * through untouched by the other. Sharing it makes the ceiling apply to
+ * exactly the population that will be parsed, by construction rather than by
+ * two copies staying in step.
+ */
+function soleTextEntry(result: unknown): string | null {
+  if (!result || typeof result !== 'object') return null;
+  const content = (result as { content?: unknown }).content;
+  if (!Array.isArray(content) || content.length !== 1) return null;
+  const only = content[0] as { type?: unknown; text?: unknown };
+  return only?.type === 'text' && typeof only.text === 'string' ? only.text : null;
+}
+
+/**
+ * A refusal when the payload is too large to compare faithfully, or `null`.
+ *
+ * Measured on the ENCODED text, before {@link unwrap} parses it, and that is
+ * both the cheap check and the right one: a string length is O(1), and the
+ * parse is the one place *we* amplify a string into an object graph. Every
+ * other result shape arrived already parsed by the MCP client, so its memory
+ * was spent before this module saw it and there is nothing left to refuse.
+ *
+ * `probeHttp` bounds by slicing; this cannot — see
+ * {@link MAX_PROBE_RESULT_CHARS} for why a slice is worse than a refusal here.
+ * The message names the size, the ceiling and the remedy, because the caller is
+ * a model that will otherwise re-create the same watcher against the same tool.
+ */
+function oversizeRefusal(result: unknown): string | null {
+  const text = soleTextEntry(result);
+  if (text === null || text.length <= MAX_PROBE_RESULT_CHARS) return null;
+  return (
+    `The tool returned ${text.length} characters, over the ${MAX_PROBE_RESULT_CHARS}-character ` +
+    `limit a watcher can compare between polls. Narrow the call — most list tools take a ` +
+    `limit or page-size argument — and watch the smaller result.`
+  );
+}
+
+/**
+ * Unwraps the `CallToolResult` envelope so a path like `$.messages.id` means
+ * what its author expects.
+ *
+ * An MCP result is `{content: [{type:'text', text:'<json>'}]}` — the payload is
+ * JSON encoded as a STRING inside the envelope, so without this every watcher
+ * path would have to start `$.content[0].text` and then could not traverse into
+ * it at all. The same shape `mcp-result-shaper.ts` had to learn to unwrap (#458)
+ * after a Gmail read silently lost its `Cc` header to a front-slice.
+ *
+ * Only a single text entry is unwrapped: several entries are several values, and
+ * choosing between them is not this module's call.
+ */
+function unwrap(result: unknown): unknown {
+  const text = soleTextEntry(result);
+  if (text === null) return result;
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Plenty of servers return prose. That is a legitimate value to watch.
+    return text;
+  }
+}
+
+/**
+ * The baseline a watcher must carry before its first poll.
+ *
+ * Here rather than in `poller.ts`, which never called it: its only caller is
+ * `tools/watcher.ts`, which was importing the whole `WatcherPoller` class — and
+ * transitively `active-count`, `wake` and the store — to reach one function that
+ * only looks once. It also made `poller.ts` import `digestOf` and `idsAt` for
+ * nothing else.
+ */
+export async function captureBaseline(
+  target: Watcher['target'],
+  predicate: Watcher['predicate'],
+  deps: ProbeDeps,
+): Promise<({ ok: true } & WatchState) | { ok: false; error: string }> {
+  // A `time` target has nothing to baseline against.
+  if (target.kind === 'time') return { ok: true };
+
+  const result = await probe(target, deps);
+  if (!result.ok) return { ok: false, error: result.error };
+
+  const obs = result.observation;
+  const extract = target.kind === 'mcp' ? target.extract : undefined;
+  const out: { ok: true } & WatchState = { ok: true, ...carriedState(obs) };
+
+  // Captured at CREATION, which is what makes "tell me when this changes" mean
+  // what it says. Deferred to the first poll, a real digest would compare
+  // unequal to an absent one and every watcher would fire the moment it was made.
+  if (predicate.kind === 'changed') out.snapshot = digestOf(obs.value, extract);
+  if (predicate.kind === 'appeared') {
+    const ids = idsAt(obs.value, predicate.idPath, predicate.where);
+    // REFUSED, not defaulted. `?? []` looked like the safe reading — "nothing
+    // known yet, so the first poll's ids all count as new" — and it is the
+    // single worst outcome available: the path names no list, so `evaluate` can
+    // never read it either, and the watcher polls cleanly forever without ever
+    // firing. Three real watchers sat in exactly that state.
+    //
+    // The message names paths that WOULD work, read off the payload in hand, so
+    // a model that guessed wrong can correct itself instead of retrying the
+    // same guess.
+    if (ids === null) return { ok: false, error: idPathRefusal(predicate.idPath, obs.value) };
+    out.baselineIds = ids;
+  }
+  return out;
+}

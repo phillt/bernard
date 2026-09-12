@@ -191,6 +191,27 @@ export async function createTools(
         };
       },
     },
+    // Watchers are a main-agent concern for the same reason cron is, and one
+    // more: a watcher wakes the session that created it, and a dispatched worker
+    // has no session to wake — one created inside a sub-agent would be orphaned
+    // at birth. The poller that drives these lives in `<App>`.
+    //
+    // Byte-stable despite closing over the session: the tool's DESCRIPTION and
+    // SCHEMA are constants, and only `sessionId` and the MCP bag it validates
+    // against are captured — both session-scoped, neither turn-scoped. The
+    // prompt-cache invariant this file opens with is about bytes, not closures.
+    {
+      audience: 'main',
+      make: async () => {
+        const { createWatcherTool } = await import('./watcher.js');
+        // No `tools` getter: it defaults to the live manager's RAW bag.
+        // Passing `mcpTools` was a bug — under delegation (the default) that
+        // holds `delegate_<server>` and none of the real `server__tool` names,
+        // so every MCP watcher was refused as "not available in this session"
+        // while the poller, reading the raw bag, could have called it.
+        return createWatcherTool();
+      },
+    },
     { audience: 'any', make: () => createTimeTools() },
     // `'main'`, not `'any'`, and that was measured: as `'any'` it added 839
     // bytes to the worker tool block — full-rate input on every step of every

@@ -102,7 +102,20 @@ import {
 } from '../image.js';
 import { runDefinition } from '../framework/agents/run.js';
 import { taskDefinition, type TaskInput } from '../framework/agents/task.js';
-import { renderTaskText } from '../framework/agents/user-message.js';
+import { renderTaskText, type UntrustedData } from '../framework/agents/user-message.js';
+import { WatcherStore } from '../watchers/store.js';
+import { WatcherPoller } from '../watchers/poller.js';
+import { statFileSync } from '../watchers/probe.js';
+import { describeWatchTarget, MAX_LIFETIME_MS } from '../watchers/types.js';
+import { stableStringify } from '../watchers/extract.js';
+import { formatRelative, parseWhen } from '../watchers/duration.js';
+import {
+  TurnQueue,
+  MAX_QUEUED_TURNS,
+  describeSource,
+  type EnqueueResult,
+  type QueuedTurnSource,
+} from './turn-queue.js';
 import type { CoreMessage } from 'ai';
 import {
   resolveMainModel,
@@ -852,6 +865,59 @@ export function App({
   // Synchronous guard against double-Enter: setBusy schedules a re-render but
   // a second submit can land before Prompt sees `disabled={busy}` flip.
   const submittingRef = useRef(false);
+  /**
+   * Turns waiting for the current one. A ref, not state: it is drained from
+   * `runAgentTurn`'s `finally` and nothing renders from it directly, so making
+   * it state would repaint the transcript on every background arrival.
+   */
+  const turnQueueRef = useRef(new TurnQueue());
+  /**
+   * Watchers whose wake is still outstanding — QUEUED OR IN FLIGHT.
+   *
+   * The queue alone cannot answer this, and that is the whole reason this
+   * exists: `drainNextTurn` calls `take()` BEFORE awaiting `runAgentTurn`, so
+   * while a turn is running the queue is empty and a second fire from the same
+   * watcher looks brand new. Measured on a real session, that is exactly the
+   * shape the cascade takes — 02:00:44 fires, the turn starts at 02:01:04,
+   * 02:02:44 fires against an empty queue, and so on for five consecutive
+   * turns over six minutes, each answering a message the previous turn had
+   * already read. A queue-membership test folds none of them.
+   *
+   * So the rule is a fact about the WATCHER, not about queue membership: one
+   * outstanding wake at a time. The second is refused, and the poller's
+   * existing refusal path then does the right thing for free — it `replace`s
+   * the record it was holding, whole, so the baseline is never advanced past
+   * items no turn has acted on. The next poll after the turn fires once,
+   * cumulatively, which is also why this loses nothing where folding two
+   * queued wakes would have dropped the older observation.
+   */
+  const outstandingWakesRef = useRef(new Set<string>());
+  /**
+   * Whether the queue-full notice has already been shown since the queue last
+   * drained.
+   *
+   * Latched, because the refusal is now RETRIED. A refused watcher rewinds and
+   * re-fires every interval, so an unlatched notice repeats every 15-60 s for
+   * as long as the queue stays full — where the pre-queue behaviour was one
+   * notice and a spent watcher. The point is to tell the user once that turns
+   * are backing up, not to narrate each attempt.
+   */
+  const queueFullNoticedRef = useRef(false);
+  /**
+   * Watcher records. One store per session; the poller below drives it.
+   *
+   * Lazily, because React evaluates a `useRef` ARGUMENT on every render and
+   * throws all but the first away — and `WatcherStore`'s constructor is a
+   * `mkdirSync`. That was one `mkdir(2)` per render (measured 2.18 µs), on a
+   * surface that re-renders on `busy`, `staticItems`, toasts and every
+   * streaming delta, against Ink's 32 ms frame budget.
+   */
+  const watcherStoreLazy = useRef<WatcherStore | null>(null);
+  const watcherStoreRef = {
+    get current(): WatcherStore {
+      return (watcherStoreLazy.current ??= new WatcherStore());
+    },
+  };
   // Turn-level abort controller. Esc aborts this controller (cancels the
   // pre-turn pipeline) AND calls agent.abort() (cancels the agent loop once
   // it's started). Reset to null in runAgentTurn's finally block.
@@ -963,6 +1029,57 @@ export function App({
    * Registered here rather than in `src/index.ts` before `render()`: a mount
    * that threw would otherwise advertise a session that can never drain.
    */
+  /**
+   * Watchers (#479/#201).
+   *
+   * Structurally the sibling of the inbox watcher above, and deliberately NOT
+   * the cron daemon: this reuses the session's already-connected `MCPManager`,
+   * where cron reconnects MCP per job run at a measured 1.1-1.6 s — a cost a
+   * 60 s poll cannot pay. It also means watchers never touch cron's scheduler,
+   * so cron's silent dropping of fires during OS sleep (#400) is not a
+   * prerequisite for any of this.
+   *
+   * The one thing that differs from the inbox above, and it is the whole
+   * feature: a wake DOES start a turn. It goes through `requestTurn` rather
+   * than `runAgentTurn`, so a wake arriving mid-turn queues instead of hitting
+   * `submittingRef` and vanishing.
+   */
+  useEffect(() => {
+    const poller = new WatcherPoller({
+      store: watcherStoreRef.current,
+      sessionId: getSessionId(),
+      deps: {
+        fetch: globalThis.fetch,
+        statFile: statFileSync,
+        // A GETTER, re-taken every poll, never a cached bag. `MCPManager.
+        // snapshot()` is the single assembler for a reason: handing the flat
+        // `tools` object around without `serverTools` is the #305 regression
+        // that silently zeroed every `delegate_<server>`, and a captured bag
+        // also cannot see a server that has since reconnected.
+        //
+        // The poller BORROWS this manager and must never close it — `close()`
+        // tears down every client for the whole session, and the REPL owns that.
+        // `unshapedTools()`, never `snapshot(…).tools` — see its docstring.
+        tools: () => stores.mcp?.unshapedTools() ?? {},
+      },
+      onWake: (wake) =>
+        requestTurn({
+          text: wake.instruction,
+          ...(wake.data ? { data: wake.data } : {}),
+          source: {
+            kind: 'watcher',
+            watcherId: wake.watcherId,
+            name: wake.name,
+            reason: wake.reason,
+          },
+        }).ok,
+    });
+    poller.start();
+    return () => poller.stop();
+    // Mount-once, like the inbox watcher: the poller reads the store and the
+    // manager through refs and getters, so nothing here goes stale.
+  }, []);
+
   useEffect(() => {
     const push = (notice: NoticeData) =>
       setStaticItems((prev) => [
@@ -971,7 +1088,48 @@ export function App({
       ]);
     const watcher = new InboxWatcher({
       sessionId: getSessionId(),
-      onMessage: (message) => push(toNoticeData(message)),
+      // Advertised only when the session was started with the opt-in (#493), so
+      // a plain REPL keeps the original guarantee and a `prompt` sent to it is
+      // refused at the SENDER rather than arriving somewhere that would not run
+      // it. A sender cannot upgrade itself: this record is written here.
+      ...(config.acceptRemotePrompts ? { capabilities: ['notice', 'prompt'] as const } : {}),
+      onMessage: (message) => {
+        // ENFORCED on receive, not merely advertised on the record. `send.ts`
+        // filters by capability, but anything that can write
+        // `sessionInboxDir(sessionId)` can drop a message file directly and
+        // bypass the sender entirely — which is the threat model `inbox/types.ts`
+        // states in as many words ("anything that can write the state directory
+        // can write a message file"). Advertising alone meant a session that
+        // never opted in would still run an arbitrary turn for any local writer.
+        //
+        // Degraded to a notice rather than dropped: the text was delivered, the
+        // user should see it, and silently discarding it would make a refused
+        // prompt indistinguishable from one that never arrived.
+        if (message.kind === 'prompt' && !config.acceptRemotePrompts) {
+          push(
+            toNoticeData({
+              ...message,
+              kind: 'notice',
+              text: `${message.text}
+
+(Sent as a prompt, but this session does not accept them. Restart with --accept-remote-prompts to let it run.)`,
+            }),
+          );
+          return;
+        }
+        if (message.kind === 'prompt') {
+          // Through the queue, never `runAgentTurn` — a prompt arriving mid-turn
+          // must not hit `submittingRef` and vanish. #493 requires the mid-turn
+          // answer to be #200's or #202's rather than a third rule; this is
+          // #202's: a new top-level request, run after the current turn.
+          requestTurn({
+            text: message.text,
+            source: { kind: 'remote', label: message.sourceLabel },
+          });
+          return;
+        }
+        push(toNoticeData(message));
+      },
       onCoalesced: (count, label) => push(coalescedNotice(count, label)),
     });
     watcher.start();
@@ -1625,6 +1783,126 @@ export function App({
       return;
     }
 
+    if (startsWithCmd(text, '/sleep')) {
+      // #201, and it is a `time` watcher underneath rather than a second
+      // mechanism: "wake me at T and do X" is the same suspend/resume as "wake
+      // me when X changes", with a clock as the trigger instead of a probe.
+      // Every durable-execution runtime models it that way — Inngest's
+      // `sleepUntil` beside `waitForEvent`, Temporal's timers beside signals.
+      const rest = text.slice('/sleep'.length).trim();
+      const sep = rest.search(/\s(?=[^\s])/);
+      // The first token (or `until <time>`) is the when; the remainder is the
+      // instruction. `until 3pm do the thing` needs two tokens for the when.
+      const untilMatch = /^until\s+\S+/i.exec(rest);
+      const whenText = untilMatch ? untilMatch[0] : sep === -1 ? rest : rest.slice(0, sep);
+      const instruction = rest.slice(whenText.length).trim();
+      if (!whenText) {
+        flashToast('Usage: /sleep 2h <what to do>  ·  /sleep until 15:30 <what to do>', 'error');
+        return;
+      }
+      const at = parseWhen(whenText);
+      if (at === null) {
+        flashToast(`Could not read "${whenText}" as a time. Try 2h, 90m, or until 15:30.`, 'error');
+        return;
+      }
+      if (!instruction) {
+        flashToast('Say what to do when you wake: /sleep 2h <what to do>', 'error');
+        return;
+      }
+      // Refuse rather than clamp. `store.create` caps the TTL at
+      // `MAX_LIFETIME_MS`, so `/sleep 30d` was accepted, reported as "Sleeping
+      // 30d — will wake at <date 30 days out>", and then silently expired on day
+      // seven with no notification. A sleep the user believes is set and is not
+      // is the worst outcome this feature has.
+      if (at - Date.now() > MAX_LIFETIME_MS) {
+        flashToast(
+          `A watcher can live at most ${Math.round(MAX_LIFETIME_MS / 86_400_000)} days. Use a cron job for anything longer.`,
+          'error',
+        );
+        return;
+      }
+      try {
+        const w = watcherStoreRef.current.create({
+          name: `sleep — ${truncate(instruction.replace(/\s+/g, ' '), 40)}`,
+          target: { kind: 'time', at: new Date(at).toISOString() },
+          predicate: { kind: 'changed' },
+          instructions: instruction,
+          ownerSessionId: getSessionId(),
+          // A sleep must outlive its own wake-up by a margin, or a session
+          // closed over the weekend loses it to the sweep before it fires.
+          ttlMs: at - Date.now() + 86_400_000,
+        });
+        flashToast(
+          `Sleeping ${formatRelative(at - Date.now())} — will wake at ${new Date(at).toLocaleTimeString()}. (${w.id.slice(0, 8)})`,
+          'success',
+        );
+      } catch (err) {
+        flashToast(err instanceof Error ? err.message : String(err), 'error');
+      }
+      return;
+    }
+    if (is(text, '/watchers')) {
+      const store = watcherStoreRef.current;
+      let listIndex = 0;
+      for (;;) {
+        const all = store.list();
+        if (all.length === 0) {
+          flashToast('No watchers. Ask me to watch for something.');
+          return;
+        }
+        const entries: MenuEntry[] = all.map((w) => ({
+          label: w.name,
+          // A repeating watcher that has fired four times and is still armed
+          // reads as identical to a one-shot that has never fired, without this.
+          annotation: w.repeating
+            ? `${w.status} · repeating${w.fireCount ? ` ×${w.fireCount}` : ''}`
+            : w.status,
+          description: `${describeWatchTarget(w.target)}${
+            w.lastCheckedAt
+              ? ` — last checked ${new Date(w.lastCheckedAt).toLocaleTimeString()}`
+              : ''
+          }`,
+          value: w.id,
+        }));
+        const pick = await requestMenu(entries, {
+          title: 'Watchers — select one',
+          headerLines: ['A watcher polls, then starts a turn when it fires. One-shot.'],
+          initialIndex: listIndex,
+        });
+        if (pick.cancelled) return;
+        listIndex = pick.index;
+        // `entries` is 1:1 with `all` in order, so the index IS the lookup —
+        // the Map was rebuilt every iteration to answer a question the index
+        // already answers.
+        const w = all[pick.index];
+        if (!w) continue;
+        const action = await requestMenu(
+          [
+            // Branch on `value`, never the label: the list menu directly above
+            // already does, and a copy edit to a display string must not change
+            // control flow.
+            ...(w.status === 'active' ? [{ label: 'Cancel this watcher', value: 'cancel' }] : []),
+            { label: 'Remove from the list', value: 'remove' },
+            { label: 'Back', value: 'back' },
+          ],
+          {
+            title: `"${w.name}" — ${w.status}`,
+            // The instructions, because they are the thing a user most needs to
+            // check before deciding whether to keep it: this is what Bernard
+            // will be told to do, unattended, when it fires.
+            headerLines: [`Will do: ${truncate(w.instructions.replace(/\s+/g, ' '), 160)}`],
+          },
+        );
+        if (action.cancelled || action.item.value === 'back') continue;
+        if (action.item.value === 'cancel') {
+          store.finish(w.id, 'cancelled');
+          flashToast(`Cancelled "${w.name}".`, 'success');
+          continue;
+        }
+        store.remove(w.id);
+        flashToast(`Removed "${w.name}".`, 'success');
+      }
+    }
     if (is(text, '/cron')) {
       const store = new CronStore();
       // Start/stop the daemon to match whether any job is enabled — mirrors the
@@ -4096,9 +4374,19 @@ export function App({
     });
   }
 
-  async function runAgentTurn(input: string, images?: ImageAttachment[]): Promise<void> {
+  async function runAgentTurn(
+    input: string,
+    images?: ImageAttachment[],
+    extra?: { data?: UntrustedData },
+  ): Promise<void> {
     // Drop a second Enter that arrives before the busy re-render has propagated
     // to <Prompt disabled={busy}>. Without this, two turns can run concurrently.
+    //
+    // This guard is right for a keystroke and WRONG for anything else: it
+    // returns silently, so a turn nobody typed simply vanishes. A watcher that
+    // fired mid-turn would have marked itself spent and told the user nothing.
+    // Non-keystroke producers therefore never call this directly — they go
+    // through `requestTurn`, which queues instead of dropping.
     if (submittingRef.current) return;
     submittingRef.current = true;
     // Clear the previous turn's stream events so the in-flight
@@ -4136,6 +4424,9 @@ export function App({
         recallReconciliation,
         memoryPriority,
         originalInput: input,
+        // The data channel (#479). Untrusted bytes a watcher observed, kept out
+        // of the instruction slot by their type rather than by convention.
+        ...(extra?.data ? { data: extra.data } : {}),
       });
       commitNewHistory({ rewriteForLastUser: input !== agentInput ? input : undefined });
       // Snapshot history length AFTER the user message push (synchronous) so
@@ -4318,7 +4609,104 @@ export function App({
           },
         ]);
       }
+      // Drain one queued turn (#202/#479). LAST in the finally, after
+      // `submittingRef` is released and the transcript is committed, or the
+      // drained turn would hit the very re-entrancy guard it was queued to
+      // avoid. Deferred to a macrotask so this turn's React batch paints first
+      // — otherwise a queued turn's output can commit into the same frame and
+      // the two runs read as one.
+      //
+      // One at a time, recursively: each drained turn drains the next from its
+      // own finally, so the queue empties in order and a turn that throws still
+      // lets its successor run.
+      if (turnQueueRef.current.size > 0) {
+        setTimeout(() => void drainNextTurn(), 0);
+      }
     }
+  }
+
+  /**
+   * Runs the next queued turn, announcing where it came from first.
+   *
+   * The panel is rendered BEFORE the turn starts, per #493: a turn nobody typed
+   * must say so, and it must not be able to look like the user typed it. The
+   * `❯`/`❮` chevrons stay reserved for the two real voices.
+   */
+  async function drainNextTurn(): Promise<void> {
+    if (submittingRef.current) return;
+    const next = turnQueueRef.current.take();
+    if (!next) return;
+    setStaticItems((prev) => [
+      ...prev,
+      {
+        key: String(itemKeyRef.current++),
+        toolDetails: false,
+        wake: { source: describeSource(next.source), text: next.text },
+      },
+    ]);
+    try {
+      await runAgentTurn(next.text, undefined, next.data ? { data: next.data } : {});
+    } finally {
+      // Cleared only once the turn is DONE, which is the span the queue cannot
+      // see. In a `finally` because an aborted or failed turn must still let
+      // its watcher wake again.
+      if (next.source.kind === 'watcher') {
+        outstandingWakesRef.current.delete(next.source.watcherId);
+      }
+    }
+  }
+
+  /**
+   * The one door for a turn that nobody typed.
+   *
+   * Runs it now when idle, queues it when busy. Every non-keystroke producer —
+   * a watcher wake, a `say --run` — goes through here rather than calling
+   * `runAgentTurn`, whose `submittingRef` guard would discard it silently.
+   *
+   * It CAN refuse, when the queue is full, and the boolean is the point: a
+   * watcher marks itself terminal before delivering its wake, so a refusal that
+   * only printed a notice would permanently spend the watcher the user was
+   * waiting on. The caller puts it back.
+   */
+  function requestTurn(turn: {
+    text: string;
+    data?: UntrustedData;
+    source: QueuedTurnSource;
+  }): EnqueueResult {
+    // One outstanding wake per watcher — see `outstandingWakesRef`. Refused
+    // SILENTLY, unlike the queue-full case below: this is ordinary operation
+    // for a watcher on a live conversation, the poller rewinds and re-fires
+    // cumulatively after the turn, and a panel per suppressed fire would be
+    // the same noise the refusal exists to remove.
+    if (turn.source.kind === 'watcher') {
+      const { watcherId } = turn.source;
+      if (outstandingWakesRef.current.has(watcherId)) {
+        debugLog('watcher:wake-outstanding', { watcherId, name: turn.source.name });
+        return { ok: false };
+      }
+    }
+    const queued = turnQueueRef.current.enqueue({
+      text: turn.text,
+      ...(turn.data ? { data: turn.data } : {}),
+      source: turn.source,
+    });
+    if (!queued.ok) {
+      // Told now, while the producer still has the payload. A watcher has
+      // already marked itself fired by this point, so silence here would lose
+      // the one notification it existed to deliver — but only ONCE per backlog,
+      // since the producer retries every interval.
+      if (!queueFullNoticedRef.current) {
+        queueFullNoticedRef.current = true;
+        pushAssistantNotice(
+          `⚠ Could not queue "${turn.text.slice(0, 60)}" — ${MAX_QUEUED_TURNS} turns are already waiting.`,
+        );
+      }
+      return queued;
+    }
+    queueFullNoticedRef.current = false;
+    if (turn.source.kind === 'watcher') outstandingWakesRef.current.add(turn.source.watcherId);
+    if (!submittingRef.current) setTimeout(() => void drainNextTurn(), 0);
+    return queued;
   }
 
   // Execute a saved routine: tasks (`task-` prefix) run single-shot via
@@ -6252,19 +6640,15 @@ async function runLineupEditorInk(
 }
 
 /**
- * Sort-keys-first JSON so `{a:1,b:2}` and `{b:2,a:1}` produce the same string.
- * Keeps the confirm-allow session memo stable across re-renders that reshuffle
- * object key order.
+ * djb2 over the stable-JSON form.
+ *
+ * The sort-keys-first stringify used to be a private copy here. It had already
+ * drifted from the one in `watchers/extract.ts` — `undefined` serialised as
+ * `'null'` in one and `'undefined'` in the other, and this copy had no cycle
+ * guard, surviving only because the `catch` below turns the resulting
+ * `RangeError` into a fallback. Two functions with one name and one job giving
+ * different answers is the drift this repo keeps writing down.
  */
-function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
-  const obj = value as Record<string, unknown>;
-  const keys = Object.keys(obj).sort();
-  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(',')}}`;
-}
-
-/** djb2 over the stable-JSON form. */
 function stableHash(value: unknown): string {
   let json: string;
   try {

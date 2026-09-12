@@ -2,7 +2,12 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { atomicWriteFileSync } from '../fs-utils.js';
 import { SESSIONS_DIR, sessionInboxDir, sessionRecordPath } from '../paths.js';
-import { isSessionRecord, type InboxKind, type SessionRecord } from './types.js';
+import {
+  isSessionRecord,
+  DEFAULT_CAPABILITIES,
+  type InboxKind,
+  type SessionRecord,
+} from './types.js';
 import { isPidAlive } from '../pid.js';
 
 /**
@@ -46,7 +51,7 @@ export function registerSession(opts: {
     startedAt: Date.now(),
     cwd: process.cwd(),
     inboxDir,
-    capabilities: opts.capabilities ?? ['notice'],
+    capabilities: opts.capabilities ?? DEFAULT_CAPABILITIES,
   };
   atomicWriteFileSync(sessionRecordPath(opts.sessionId), JSON.stringify(record, null, 2), {
     mode: 0o600,

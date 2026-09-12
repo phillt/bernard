@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { ToolMeta } from './framework/tools/types.js';
-import { isReadOnlyMCPSuffix, riskFromMeta, shouldBlockInReadOnly, shouldConfirm } from './risk.js';
+import {
+  isReadOnlyMCPToolName,
+  riskFromMeta,
+  shouldBlockInReadOnly,
+  shouldConfirm,
+} from './risk.js';
 
-describe('isReadOnlyMCPSuffix', () => {
+describe('isReadOnlyMCPToolName', () => {
   it.each([
     'gmail_search',
     'gmail_list',
@@ -14,7 +19,7 @@ describe('isReadOnlyMCPSuffix', () => {
     'SEARCH',
     'people_Lookup',
   ])('treats %s as read-only', (name) => {
-    expect(isReadOnlyMCPSuffix(name)).toBe(true);
+    expect(isReadOnlyMCPToolName(name)).toBe(true);
   });
 
   it.each([
@@ -26,7 +31,7 @@ describe('isReadOnlyMCPSuffix', () => {
     'searching', // suffix must be a full word, not substring
     'reader', // ditto — `read` is not a suffix here
   ])('treats %s as write/unknown', (name) => {
-    expect(isReadOnlyMCPSuffix(name)).toBe(false);
+    expect(isReadOnlyMCPToolName(name)).toBe(false);
   });
 });
 
@@ -231,5 +236,74 @@ describe('shouldBlockInReadOnly', () => {
   it('without args, isWriteAction is not consulted and static kind wins', () => {
     const m = meta({ kind: 'write', isWriteAction: () => false });
     expect(shouldBlockInReadOnly(m)).toBe(true);
+  });
+});
+
+/**
+ * Verb-first MCP naming (found in use, on Beeper).
+ *
+ * This was end-anchored only, so `messages_list` was a read and
+ * `list_messages` was a WRITE. That is not a watcher problem: `mcp.ts` feeds
+ * this into every tool's risk tier, so on any verb-first server every read tool
+ * was medium-risk — refused under `toolMode: 'read-only'`, prompting under
+ * `strict`, and excluded from the resolver's lookup allowlist.
+ */
+describe('isReadOnlyMCPToolName — verb position', () => {
+  it('accepts a read verb at either end', () => {
+    for (const n of [
+      'list_messages',
+      'messages_list',
+      'get_chats',
+      'search_messages',
+      'query_threads',
+      'lookup_contact',
+      'read_receipts',
+    ]) {
+      expect(isReadOnlyMCPToolName(n), n).toBe(true);
+    }
+  });
+
+  it('still refuses writes, wherever the verb sits', () => {
+    for (const n of [
+      'send_message',
+      'message_send',
+      'delete_chat',
+      'update_status',
+      'archive_thread',
+    ]) {
+      expect(isReadOnlyMCPToolName(n), n).toBe(false);
+    }
+  });
+
+  it('refuses a write verb even when a read verb is also present', () => {
+    // This is what makes matching a leading verb safe rather than reckless.
+    expect(isReadOnlyMCPToolName('get_or_create_chat')).toBe(false);
+    expect(isReadOnlyMCPToolName('mark_as_read')).toBe(false);
+    expect(isReadOnlyMCPToolName('list_and_delete')).toBe(false);
+    expect(isReadOnlyMCPToolName('search_and_reply')).toBe(false);
+  });
+
+  it('strips the #413 namespace before segmenting', () => {
+    // Keys are `server_hash__tool`; segmenting the whole key makes the first
+    // segment the server name, and the leading-verb test could never fire.
+    expect(isReadOnlyMCPToolName('beeper_654785__list_messages')).toBe(true);
+    expect(isReadOnlyMCPToolName('beeper_654785__send_message')).toBe(false);
+  });
+
+  it('splits the namespace on the FIRST `__`, not the last', () => {
+    // The inline strip this replaced used `lastIndexOf('__')`, so a server
+    // exporting `get__foo` came out as `foo` — no read verb, classified a
+    // WRITE. That is the exact bug class the verb-position fix above exists
+    // for, reintroduced one branch over, which is why the split lives in
+    // `parseMCPToolName` and is not re-derived here. The server segment is
+    // sanitized and cannot contain `__`; the tool half can.
+    expect(isReadOnlyMCPToolName('beeper_654785__get__foo')).toBe(true);
+    expect(isReadOnlyMCPToolName('beeper_654785__send__foo')).toBe(false);
+  });
+
+  it('is not fooled by a verb appearing inside a word', () => {
+    // Segment matching, not substring: `updates` must not read as `update`.
+    expect(isReadOnlyMCPToolName('get_message_updates')).toBe(true);
+    expect(isReadOnlyMCPToolName('listing_details')).toBe(false);
   });
 });

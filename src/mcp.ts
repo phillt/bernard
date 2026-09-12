@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import { createMCPClient, type MCPClient } from '@ai-sdk/mcp';
 import { Experimental_StdioMCPTransport } from '@ai-sdk/mcp/mcp-stdio';
 import { jsonSchema } from 'ai';
-import { printInfo, printError } from './output.js';
+import { printError } from './output.js';
 import { MCP_CONFIG_PATH as CONFIG_PATH } from './paths.js';
 import { debugLog, openSessionSidecarFd } from './logger.js';
 import {
@@ -13,7 +13,7 @@ import {
   mcpToolName,
 } from './mcp-names.js';
 import { attachMeta } from './framework/tools/adapter.js';
-import { isReadOnlyMCPSuffix } from './risk.js';
+import { isReadOnlyMCPToolName } from './risk.js';
 import type { ToolMeta } from './framework/tools/types.js';
 import { normalizeToolResult, foldTypographyDeep } from './text.js';
 import { shapeMCPResult, type MCPResultShapingConfig } from './mcp-result-shaper.js';
@@ -212,7 +212,7 @@ export interface LiveRegistration {
  * The raw name is retained rather than re-derived from the namespaced key
  * because it cannot always be re-derived — `mcpToolName`'s R2 rung truncates a
  * long tool name through the middle. Risk classification in particular must
- * read the server's own name (`isReadOnlyMCPSuffix` looks for a trailing verb),
+ * read the server's own name (`isReadOnlyMCPToolName` looks for a trailing verb),
  * and `mcp_verify` reports raw names back to the user, so guessing them from
  * the key would be wrong in exactly the cases that are hardest to notice.
  */
@@ -553,9 +553,19 @@ export class MCPManager {
               const result = await originalExecute(outbound);
               return shape(normalizeToolResult(result), serverName, raw);
             } catch (error) {
-              // The RAW name: this line is for the user, and the raw name is
-              // the one they see in the server's own docs and in `mcp_verify`.
-              printInfo(`MCP tool "${raw}" failed, reconnecting to "${serverName}"...`);
+              // `debugLog`, NOT `printInfo`. This runs while Ink owns the
+              // screen — in full-screen mode it owns the alternate buffer
+              // outright — and a raw stdout write lands at the cursor, corrupts
+              // the current frame, and is painted over on Ink's next ~32 ms
+              // render. So the line least likely to be READ is the one written
+              // straight to the terminal; the same hazard `index.ts` works
+              // around by deferring `cleanup()` until after teardown.
+              //
+              // Pre-existing, and it became much likelier when a background
+              // watcher poll started calling MCP tools between turns rather
+              // than only inside one (#479). The RAW name is kept: it is the
+              // one a user sees in the server's own docs and in `mcp_verify`.
+              debugLog('mcp:tool-retry', { tool: raw, server: serverName });
               const reconnected = await this.reconnectServer(serverName);
               const fresh = this.serverTools.get(serverName)?.[name];
               if (reconnected && fresh) {
@@ -570,14 +580,16 @@ export class MCPManager {
 
         // Risk-based confirmation gate (#144): tag every MCP tool with metadata
         // so the augment layer can route it through `confirmAction` at the right
-        // threshold. Names ending in a read-only verb → `kind: 'read'` (low risk,
-        // never prompts). Everything else → `kind: 'write'` with `sideEffect:
-        // 'local'` (medium risk, prompts only in `strict` mode). Users can
-        // promote a tool to high via a future `mcp.json` override (out of scope).
-        // Classified on the RAW name. The prefix happens to be transparent to
-        // this end-anchored check, but an R2-truncated key is not — its
-        // trailing characters are the tool's tail, not its verb.
-        const isRead = isReadOnlyMCPSuffix(raw);
+        // threshold. A read-only verb at either end and no write verb anywhere →
+        // `kind: 'read'` (low risk, never prompts). Everything else →
+        // `kind: 'write'` with `sideEffect: 'local'` (medium risk, prompts only
+        // in `strict` mode). Users can promote a tool to high via a future
+        // `mcp.json` override (out of scope).
+        // Classified on the RAW name, which is what makes this correct for an
+        // R2-truncated key: that key's trailing characters are the tool's tail,
+        // not its verb, so the namespace strip inside the classifier is not
+        // enough on its own.
+        const isRead = isReadOnlyMCPToolName(raw);
         const meta: ToolMeta = {
           // Kept in lockstep with the registry key: the permission and block
           // gates key on the registry key while `result-cache.ts` keys on
@@ -664,6 +676,57 @@ export class MCPManager {
         ...this.getConnectedServerNames().map((s) => `delegate_${mcpServerSegment(s)}`),
       ]),
     };
+  }
+
+  /**
+   * The tool bag a caller gets when the result will NOT enter a model's
+   * context: the same surface `snapshot()` builds, deliberately unshaped.
+   *
+   * Named for the property rather than for the watcher, which is its only
+   * consumer today — a consumer-named accessor invites a second one the moment
+   * a second caller appears, and then there are two ways to say one thing.
+   *
+   * It exists to turn an omission into a statement. `snapshot`'s
+   * `shaping` is optional and absence means pass-through, so the two probe call
+   * sites were already correct — by saying nothing. `index.ts` and
+   * `headless.ts` do pass a config, which makes the bare calls read as an
+   * oversight, and "make them consistent" is a one-line edit with no compile
+   * error and no failing test behind it.
+   *
+   * What that edit would cost, measured against the real shaper at its real
+   * 8,000-char default on a chat-message payload: `capArray` drops from the
+   * BACK, so an `appeared` watcher's id set **saturates at about twelve ids
+   * however large the conversation is** — 10 items yields 10, 20 yields 12,
+   * 100 yields 12. A 30-message chat baselines at 13; a 20-message burst
+   * between two polls then reports 13 new items and loses 7 **permanently**,
+   * because the baseline advances to the 13 that survived and the rest can
+   * never re-enter the window. It looks healthy throughout.
+   *
+   * Shaping is right for a result entering a model's context, which is what it
+   * was built for — a probe result is hashed for `changed`, scanned for ids by
+   * `appeared`, and reaches a turn only as a separately-bounded excerpt
+   * ({@link MAX_OBSERVATION_CHARS}). It is never read as context, so the cap
+   * buys nothing and costs fidelity. The probe's own ceiling is
+   * `MAX_PROBE_RESULT_CHARS`, which refuses rather than truncating.
+   *
+   * **This must never grow a parameter.** The name is the contract; a
+   * `shaping?` here would be the same silent hole one level up.
+   *
+   * It rebuilds the whole converted registry per call, like every other
+   * accessor here — ten watchers means ten rebuilds per poll cycle. That is
+   * #305's "never a cached bag" rule and it is cheap at these cadences; a
+   * per-tick memo is the obvious optimisation and would reintroduce exactly
+   * the staleness that rule exists to prevent.
+   */
+  unshapedTools(): Record<string, unknown> {
+    // `getTools()`, not `snapshot().tools`. That is not a second assembler —
+    // it IS the shared `flattenServerTools(getServerTools(…))` derivation, one
+    // level below the three-field bag #305's single-assembler rule is about.
+    // Going through `snapshot()` also built `serverNames` and a full
+    // `makeAliasResolver` index over every tool key plus every delegate name
+    // and discarded both, measured at 0.041 ms of a 0.136 ms call — per
+    // watcher, per tick, for a `resolveAlias` the probe path never reads.
+    return this.getTools();
   }
 
   /**

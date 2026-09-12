@@ -108,7 +108,20 @@ type BrandHolds = string extends UntrustedData
 const _untrustedDataIsNominal: BrandHolds = true;
 void _untrustedDataIsNominal;
 
-/** Mints an {@link UntrustedData}. Called by `renderArgsBlock` and nothing else. */
+/**
+ * Mints an {@link UntrustedData}. Two renderers call it and nothing else:
+ * `renderArgsBlock` in `apps/invocation.ts` (an applet caller's arguments) and
+ * `renderObservationBlock` in `watchers/wake.ts` (what a watcher saw). Both live
+ * with their own feature, for the reason below.
+ *
+ * Deliberately still exported rather than made private when the second renderer
+ * arrived. Privacy would be a speed bump, not the guarantee: the control is the
+ * TYPE — a plain string cannot be assigned to a `data` field and a hand-rolled
+ * `{ text }` literal cannot either — and any module can write `as UntrustedData`
+ * whatever this file exports. Making it private would instead have meant moving
+ * `renderArgsBlock` out of `apps/invocation.ts`, putting applet vocabulary into
+ * the framework's message module to buy a property it does not actually hold.
+ */
 export function untrustedData(text: string): UntrustedData {
   return { text } as UntrustedData;
 }

@@ -195,8 +195,18 @@ program
     '--no-voice-normalize',
     'Speak the literal response text instead of a natural spoken rendering (#432)',
   )
+  .option(
+    '--accept-remote-prompts',
+    'Let `bernard say --run` start turns in this session. Off by default: any local process that can write the state directory could then put instructions in front of the agent',
+  )
   .action(async (opts) => {
     try {
+      // Through the environment rather than a `loadConfig` override, because
+      // `loadConfig` is called from places that never see these flags (the
+      // detached exit worker, `applyProfileToConfig` on a profile switch) and a
+      // session that silently stopped accepting prompts mid-run would be worse
+      // than one that never did. Set before anything reads config.
+      if (opts.acceptRemotePrompts) process.env.BERNARD_ACCEPT_REMOTE_PROMPTS = 'true';
       // Detect a fresh install BEFORE any module touches preferences/profiles
       // so we can decide whether to offer the onboarding wizard later. Both
       // `profiles.json` and the legacy `preferences.json` must be absent to
@@ -1225,6 +1235,10 @@ program
   .option('--no-wait', 'Exit as soon as it is written; do not confirm pickup')
   .option('--timeout <ms>', 'How long to wait for pickup')
   .option('--list', 'List live sessions and exit')
+  .option(
+    '--run',
+    'Run the message as a turn instead of showing it. Only reaches a session started with --accept-remote-prompts',
+  )
   .action(
     async (
       text: string[] | undefined,
@@ -1237,6 +1251,7 @@ program
         wait?: boolean;
         timeout?: string;
         list?: boolean;
+        run?: boolean;
       },
     ) => {
       const { sayCommand } = await import('./say-cli.js');
