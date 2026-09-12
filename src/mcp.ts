@@ -679,6 +679,53 @@ export class MCPManager {
   }
 
   /**
+   * The tool bag a caller gets when the result will NOT enter a model's
+   * context: the same surface `snapshot()` builds, deliberately unshaped.
+   *
+   * Named for the property rather than for the watcher, which is its only
+   * consumer today — a consumer-named accessor invites a second one the moment
+   * a second caller appears, and then there are two ways to say one thing.
+   *
+   * It exists to turn an omission into a statement. `snapshot`'s
+   * `shaping` is optional and absence means pass-through, so the two probe call
+   * sites were already correct — by saying nothing. `index.ts` and
+   * `headless.ts` do pass a config, which makes the bare calls read as an
+   * oversight, and "make them consistent" is a one-line edit with no compile
+   * error and no failing test behind it.
+   *
+   * What that edit would cost, measured against the real shaper at its real
+   * 8,000-char default on a chat-message payload: `capArray` drops from the
+   * BACK, so an `appeared` watcher's id set **saturates at about twelve ids
+   * however large the conversation is** — 10 items yields 10, 20 yields 12,
+   * 100 yields 12. A 30-message chat baselines at 13; a 20-message burst
+   * between two polls then reports 13 new items and loses 7 **permanently**,
+   * because the baseline advances to the 13 that survived and the rest can
+   * never re-enter the window. It looks healthy throughout.
+   *
+   * Shaping is right for a result entering a model's context, which is what it
+   * was built for — a probe result is hashed for `changed`, scanned for ids by
+   * `appeared`, and reaches a turn only as a separately-bounded excerpt
+   * ({@link MAX_OBSERVATION_CHARS}). It is never read as context, so the cap
+   * buys nothing and costs fidelity. The probe's own ceiling is
+   * `MAX_PROBE_RESULT_CHARS`, which refuses rather than truncating.
+   *
+   * **This must never grow a parameter.** The name is the contract; a
+   * `shaping?` here would be the same silent hole one level up.
+   *
+   * It rebuilds the whole converted registry per call, like every other
+   * accessor here — ten watchers means ten rebuilds per poll cycle. That is
+   * #305's "never a cached bag" rule and it is cheap at these cadences; a
+   * per-tick memo is the obvious optimisation and would reintroduce exactly
+   * the staleness that rule exists to prevent.
+   */
+  unshapedTools(): Record<string, unknown> {
+    // Through `snapshot()`, not a second `flattenServerTools` call: one
+    // assembler (#305), and the identity of every tool object is shared with
+    // the bag `snapshot()` returns.
+    return this.snapshot().tools;
+  }
+
+  /**
    * Reconciles a fresh {@link verifyMCPServer} probe against the tools actually
    * wired into THIS running session. A probe spawns the server in isolation, so
    * it reports the server's own health — which says nothing about whether the

@@ -1027,7 +1027,11 @@ export function App({
         //
         // The poller BORROWS this manager and must never close it — `close()`
         // tears down every client for the whole session, and the REPL owns that.
-        tools: () => (stores.mcp ? stores.mcp.snapshot().tools : {}),
+        // `unshapedTools()`, never `snapshot(…).tools` — the name IS the
+        // contract. A probe result is hashed and id-scanned, never read as
+        // context, so it must not carry the model-context cap; that accessor's
+        // docstring measures what the cap would cost an `appeared` watcher.
+        tools: () => stores.mcp?.unshapedTools() ?? {},
       },
       onWake: (wake) =>
         requestTurn({

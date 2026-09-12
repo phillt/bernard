@@ -268,9 +268,11 @@ describe('createTools wires the watcher to the raw MCP bag', () => {
     const { MemoryStore } = await import('../memory.js');
 
     const rawName = 'beeper_ab12__list_messages';
-    // The live manager exposes RAW names, exactly as `snapshot()` does.
+    // The live manager exposes RAW names, exactly as `unshapedTools()` does —
+    // and ONLY that method, so a call site reaching for `snapshot()` instead
+    // fails here rather than silently taking the model-context cap (#572).
     const fakeManager = {
-      snapshot: () => ({ tools: { [rawName]: tool('read') } }),
+      unshapedTools: () => ({ [rawName]: tool('read') }),
     };
     setActiveMCPManager(fakeManager as never);
     try {

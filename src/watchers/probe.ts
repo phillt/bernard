@@ -25,6 +25,7 @@ import { digestOf, type Observation } from './evaluate.js';
 import { idPathRefusal, idsAt } from './extract.js';
 import {
   MAX_HTTP_BODY_CHARS,
+  MAX_PROBE_RESULT_CHARS,
   carriedState,
   type WatchState,
   type WatchTarget,
@@ -248,6 +249,8 @@ async function probeMcp(
           timer.unref?.();
         }),
       ]);
+      const oversize = oversizeRefusal(result);
+      if (oversize) return { ok: false, error: oversize };
       return { ok: true, observation: { value: unwrap(result) } };
     } finally {
       // Every other hand-rolled race in the tree clears its timer in a `finally`
@@ -260,6 +263,34 @@ async function probeMcp(
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+/**
+ * A refusal when the payload is too large to compare faithfully, or `null`.
+ *
+ * Measured on the ENCODED text, before {@link unwrap} parses it, and that is
+ * both the cheap check and the right one: `only.text.length` is O(1), and the
+ * parse is the one place *we* amplify a string into an object graph. Every
+ * other result shape arrived already parsed by the MCP client, so its memory
+ * was spent before this module saw it and there is nothing left to refuse.
+ *
+ * `probeHttp` bounds by slicing; this cannot — see
+ * {@link MAX_PROBE_RESULT_CHARS} for why a slice is worse than a refusal here.
+ * The message names the size, the ceiling and the remedy, because the caller is
+ * a model that will otherwise re-create the same watcher against the same tool.
+ */
+function oversizeRefusal(result: unknown): string | null {
+  if (!result || typeof result !== 'object') return null;
+  const content = (result as { content?: unknown }).content;
+  if (!Array.isArray(content) || content.length !== 1) return null;
+  const only = content[0] as { text?: unknown };
+  if (typeof only?.text !== 'string') return null;
+  if (only.text.length <= MAX_PROBE_RESULT_CHARS) return null;
+  return (
+    `The tool returned ${only.text.length} characters, over the ${MAX_PROBE_RESULT_CHARS}-character ` +
+    `limit a watcher can compare between polls. Narrow the call — most list tools take a ` +
+    `limit or page-size argument — and watch the smaller result.`
+  );
 }
 
 /**

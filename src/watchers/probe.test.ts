@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { captureBaseline, probe, watchableToolRefusal, type ProbeDeps } from './probe.js';
 import { attachMeta } from '../framework/tools/adapter.js';
 import type { ToolMeta } from '../framework/tools/types.js';
+import { MAX_PROBE_RESULT_CHARS } from './types.js';
 
 /**
  * Every dependency is injected, so none of this needs a network, an MCP server
@@ -249,5 +250,96 @@ describe('captureBaseline — a predicate that can never match', () => {
       beeper({ count: 3, ok: true }),
     );
     expect((got as { error: string }).error).toMatch(/no array of objects with an id/);
+  });
+});
+
+/**
+ * The probe's own ceiling (#572).
+ *
+ * `probeHttp` has bounded its body since it was written; `probeMcp` had
+ * nothing, and `unwrap` runs `JSON.parse` on arbitrary server text — the one
+ * place this module amplifies a string into an object graph.
+ */
+describe('probe — the MCP result ceiling', () => {
+  const returning = (result: unknown) =>
+    deps({ tools: () => ({ t: fakeTool({ kind: 'read' }, async () => result) }) });
+
+  const textResult = (text: string) => ({ content: [{ type: 'text', text }] });
+
+  /** A payload whose TEXT is `chars` long and which parses to a real list. */
+  function pageOf(chars: number): { content: { type: string; text: string }[] } {
+    const filler = 'x'.repeat(Math.max(1, chars - 40));
+    return textResult(JSON.stringify({ items: [{ id: 'a', text: filler }] }));
+  }
+
+  it('accepts a payload at the ceiling', async () => {
+    const at = pageOf(MAX_PROBE_RESULT_CHARS);
+    expect(at.content[0].text.length).toBeLessThanOrEqual(MAX_PROBE_RESULT_CHARS);
+    const got = await probe({ kind: 'mcp', tool: 't', args: {} }, returning(at));
+    expect(got.ok).toBe(true);
+  });
+
+  it('refuses past it, naming the size and the remedy', async () => {
+    const got = await probe(
+      { kind: 'mcp', tool: 't', args: {} },
+      returning(pageOf(MAX_PROBE_RESULT_CHARS + 5_000)),
+    );
+    expect(got.ok).toBe(false);
+    const err = (got as { error: string }).error;
+    expect(err).toMatch(String(MAX_PROBE_RESULT_CHARS));
+    // Actionable, because the caller is a model that will otherwise recreate
+    // the same watcher against the same tool.
+    expect(err).toMatch(/limit or page-size/);
+  });
+
+  it('refuses BEFORE parsing, not after', async () => {
+    // The payload is oversized AND not valid JSON. `unwrap`'s catch treats
+    // unparseable text as prose and returns `ok: true`, so a refusal here is
+    // proof the early return fired and `JSON.parse` never ran on 1 MB.
+    const got = await probe(
+      { kind: 'mcp', tool: 't', args: {} },
+      returning(textResult('not json '.repeat(MAX_PROBE_RESULT_CHARS / 4))),
+    );
+    expect(got.ok).toBe(false);
+  });
+
+  it('leaves the shapes it cannot measure cheaply alone', async () => {
+    // Deliberate non-goal, pinned so nobody "completes" the bound with a
+    // `stableStringify` size check — which would pay the whole cost this
+    // exists to avoid, on every poll, to discover a number.
+    //
+    // A multi-entry `content` and an already-structured result both arrive
+    // parsed by the MCP client, so their memory is spent before this module
+    // sees them and there is nothing left to refuse.
+    const big = 'x'.repeat(MAX_PROBE_RESULT_CHARS + 5_000);
+    const multi = await probe(
+      { kind: 'mcp', tool: 't', args: {} },
+      returning({
+        content: [
+          { type: 'text', text: big },
+          { type: 'text', text: 'b' },
+        ],
+      }),
+    );
+    expect(multi.ok).toBe(true);
+
+    const structured = await probe(
+      { kind: 'mcp', tool: 't', args: {} },
+      returning({ items: [{ id: 'a', text: big }] }),
+    );
+    expect(structured.ok).toBe(true);
+  });
+
+  it('refuses at CREATION too, where the model can still act on it', async () => {
+    // `captureBaseline` runs the same `probe`, so the ceiling reaches the
+    // authoring model immediately rather than surfacing an hour later as a
+    // watcher that stopped after `MAX_PROBE_FAILURES`.
+    const got = await captureBaseline(
+      { kind: 'mcp', tool: 't', args: {} },
+      { kind: 'appeared', idPath: '$.items.id' },
+      returning(pageOf(MAX_PROBE_RESULT_CHARS + 5_000)),
+    );
+    expect(got.ok).toBe(false);
+    expect((got as { error: string }).error).toMatch(/limit or page-size/);
   });
 });

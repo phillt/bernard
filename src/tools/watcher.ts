@@ -304,9 +304,14 @@ function cancel(deps: WatcherToolDeps, args: Record<string, unknown>): string {
  * Read per call rather than captured, so it agrees with the poller for the same
  * reason the poller re-takes its own: a captured bag cannot see a server that
  * reconnected, and `snapshot()` is the single assembler.
+ *
+ * `unshapedTools()` specifically, never `snapshot(…).tools` (#572): the baseline
+ * captured here has to describe the same population the poller will later
+ * compare against, so both sides take the unshaped surface. That accessor
+ * measures what the model-context cap would do to an `appeared` id set.
  */
 function liveMcpTools(): Record<string, unknown> {
-  return (getActiveMCPManager()?.snapshot().tools ?? {}) as Record<string, unknown>;
+  return getActiveMCPManager()?.unshapedTools() ?? {};
 }
 
 /** Builds the tool. Created watchers bind to the live session. */

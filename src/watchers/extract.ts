@@ -101,28 +101,85 @@ export function extractPath(value: unknown, path: string): unknown {
  *
  * Cycles cannot occur on a `JSON.parse` result, but a `file`/`http` probe builds
  * its own object, so the seen-set stays.
+ *
+ * ## `maxChars` bounds the WORK and never moves a byte
+ *
+ * Opt-in, and the invariant is the whole contract:
+ *
+ * ```
+ * stableStringify(v, {maxChars: N}).slice(0, N) === stableStringify(v).slice(0, N)
+ * ```
+ *
+ * It exists for `matches`, which serialised the entire value and then kept
+ * 4 KB of it — measured at 61 ms for a 12 MB payload. That is the anti-pattern
+ * `renderObservation` was already fixed for, but its fix is NOT reusable here:
+ * `boundedStringify` walks with `JSON.stringify`'s replacer and so does not
+ * SORT KEYS, which is the one thing this function exists to do. Concretely, for
+ * `{zebra:'MATCHME', alpha:'a'.repeat(5000), …}` the first 4,000 characters
+ * contain `MATCHME` under `boundedStringify` and do not under this — so
+ * swapping it in flips a live `matches` watcher, in either direction, while
+ * looking like an optimisation.
+ *
+ * Bounding here instead keeps the bytes and drops only the work: emission stops
+ * once the budget is spent, and both the array and object loops BREAK rather
+ * than walking the tail and joining megabytes of separators. Only leaves are
+ * counted, so the budget is an under-estimate and the real output runs a little
+ * past it — which is the safe direction, since the caller slices anyway.
+ *
+ * Deliberately not applied to `digestOf`: a digest over a prefix is a different
+ * digest, and every stored snapshot would be invalidated by turning it on.
  */
 export function stableStringify(
   value: unknown,
-  opts: { collapseWhitespace?: boolean } = {},
+  opts: { collapseWhitespace?: boolean; maxChars?: number } = {},
 ): string {
+  const budget = opts.maxChars;
+  let emitted = 0;
+  const spent = (): boolean => budget !== undefined && emitted >= budget;
+  /**
+   * Emits a leaf, clipped to what is left of the budget.
+   *
+   * Clipping an already-serialised leaf is what keeps the prefix exact — the
+   * normalisation and the `JSON.stringify` both run over the WHOLE string
+   * first, because neither commutes with slicing: collapsing `"a\n\n\nb"`
+   * yields `"a b"`, while collapsing its prefix `"a\n"` yields `"a "`.
+   */
+  const emitLeaf = (raw: string): string => {
+    const full = JSON.stringify(opts.collapseWhitespace ? normalizeForDigest(raw) : raw);
+    if (budget === undefined) return full;
+    if (emitted >= budget) return '';
+    const out = full.length > budget - emitted ? full.slice(0, budget - emitted) : full;
+    emitted += out.length;
+    return out;
+  };
   const seen = new WeakSet<object>();
-  const text = (v: string): string =>
-    JSON.stringify(opts.collapseWhitespace ? normalizeForDigest(v) : v);
   const walk = (v: unknown): string => {
+    if (spent()) return '';
     if (v === null) return 'null';
     if (v === undefined) return 'undefined';
     const t = typeof v;
     if (t === 'number' || t === 'boolean') return String(v);
-    if (t === 'string') return text(v as string);
-    if (t !== 'object') return text(String(v));
+    if (t === 'string') return emitLeaf(v as string);
+    if (t !== 'object') return emitLeaf(String(v));
     const obj = v as object;
     if (seen.has(obj)) return '"[circular]"';
     seen.add(obj);
     try {
-      if (Array.isArray(obj)) return `[${obj.map(walk).join(',')}]`;
+      if (Array.isArray(obj)) {
+        const parts: string[] = [];
+        for (const item of obj) {
+          if (spent()) break;
+          parts.push(walk(item));
+        }
+        return `[${parts.join(',')}]`;
+      }
       const keys = Object.keys(obj as Record<string, unknown>).sort();
-      return `{${keys.map((k) => `${JSON.stringify(k)}:${walk((obj as Record<string, unknown>)[k])}`).join(',')}}`;
+      const parts: string[] = [];
+      for (const k of keys) {
+        if (spent()) break;
+        parts.push(`${JSON.stringify(k)}:${walk((obj as Record<string, unknown>)[k])}`);
+      }
+      return `{${parts.join(',')}}`;
     } finally {
       seen.delete(obj);
     }

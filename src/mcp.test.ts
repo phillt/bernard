@@ -860,3 +860,90 @@ describe('MCPManager result shaping telemetry (#459)', () => {
     expect(cappedLines()).toHaveLength(0);
   });
 });
+
+/**
+ * The probe path is unshaped ON PURPOSE (#572).
+ *
+ * `snapshot(shaping?)` treats absence as pass-through, so the two watcher call
+ * sites were already correct — by saying nothing. `index.ts` and `headless.ts`
+ * DO pass a config, which makes the bare calls read as an oversight, and
+ * "make them consistent" is a one-line edit with no compile error behind it.
+ * These are the tests that stop it.
+ */
+describe('MCPManager.unshapedTools — the watcher probe surface (#572)', () => {
+  let manager: MCPManager;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    manager = new MCPManager();
+  });
+
+  /** A chat page: many small objects, each with an id — the `appeared` shape. */
+  function messagePage(n: number): unknown {
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            items: Array.from({ length: n }, (_, i) => ({
+              id: `m${i}`,
+              isSender: false,
+              text: 'x'.repeat(500),
+            })),
+          }),
+        },
+      ],
+    };
+  }
+
+  async function connectWithPage(n: number): Promise<void> {
+    const client = makeMockClient({
+      list_messages: makeDynamicTool(vi.fn().mockResolvedValue(messagePage(n))),
+    });
+    mockCreateMCPClient.mockImplementation(async () => client);
+    vi.spyOn(manager, 'loadConfig').mockReturnValue({
+      mcpServers: { beeper: { url: 'http://beeper' } },
+    });
+    await manager.connect();
+  }
+
+  function idsIn(result: unknown): string[] {
+    const text = (result as { content: { text: string }[] }).content[0].text;
+    return (JSON.parse(text) as { items: { id: string }[] }).items
+      .filter((it) => typeof it?.id === 'string')
+      .map((it) => it.id);
+  }
+
+  it('keeps every id, where the shaped bag saturates the set', async () => {
+    // PAIRED, and that is what makes it non-vacuous: the first half proves
+    // shaping really does cut this payload, so the second half cannot pass
+    // because shaping quietly became a no-op.
+    await connectWithPage(60);
+    const key = mcpToolName('beeper', 'list_messages');
+
+    const shaped = await manager.snapshot({ mode: 'cap', maxChars: 8000 }).tools[key].execute({});
+    // `capArray` drops from the BACK, so the id set saturates around a dozen
+    // however large the page is — 20 items yields 12, 100 items yields 12.
+    expect(idsIn(shaped).length).toBeLessThan(20);
+
+    const unshaped = await (
+      manager.unshapedTools()[key] as { execute: (a: unknown) => Promise<unknown> }
+    ).execute({});
+    expect(idsIn(unshaped)).toHaveLength(60);
+  });
+
+  it('is the bag `snapshot()` derives, not a second assembler', async () => {
+    // `snapshot()` is the single assembler (#305) and an accessor that rebuilt
+    // the flat bag itself is how the two drift — a key present in one and
+    // missing from the other is the #305 failure, one door over.
+    //
+    // Key sets, not object identity: every call REBUILDS the registry (that is
+    // the "never a cached bag" rule), so even two `snapshot()` calls hand back
+    // different objects.
+    await connectWithPage(2);
+    expect(Object.keys(manager.unshapedTools()).sort()).toEqual(
+      Object.keys(manager.snapshot().tools).sort(),
+    );
+    expect(Object.keys(manager.unshapedTools())).toContain(mcpToolName('beeper', 'list_messages'));
+  });
+});

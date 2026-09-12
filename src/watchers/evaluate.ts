@@ -67,9 +67,19 @@ export interface Evaluation extends WatchState {
  * 4 KB of context is not the shape this predicate is for, and the cap is what
  * keeps a pathological pattern from holding the poll loop.
  */
-const MATCH_INPUT_MAX = 4_000;
+export const MATCH_INPUT_MAX = 4_000;
 
-/** The digest a `changed` comparison is made against. */
+/**
+ * The digest a `changed` comparison is made against.
+ *
+ * Deliberately UNBOUNDED, and it must stay that way however tempting symmetry
+ * with `matches` below looks: a digest over a bounded prefix makes every change
+ * past that prefix invisible, so a `changed` watcher would poll cleanly forever
+ * and never fire — the silent inertness this whole module is built to refuse.
+ * What bounds this path is the probe's own ceiling
+ * ({@link MAX_PROBE_RESULT_CHARS}), which refuses a payload rather than
+ * shortening one. A test pins it.
+ */
 export function digestOf(value: unknown, extract?: string): string {
   const target = extract ? extractPath(value, extract) : value;
   return sha256Hex(stableStringify(target, { collapseWhitespace: true }));
@@ -161,11 +171,22 @@ function evaluatePredicate(
 
     case 'matches': {
       const target = extract ? extractPath(obs.value, extract) : obs.value;
-      const full = typeof target === 'string' ? target : stableStringify(target);
+      // The budget goes INTO the serialiser rather than onto its output. The
+      // previous form built the whole string and then kept 4 KB of it —
+      // measured 61 ms for a 12 MB payload, to throw away 99.97% of the work —
+      // which is exactly what `renderObservation` was fixed for. `maxChars`
+      // preserves the prefix byte for byte, so no live `matches` watcher
+      // changes verdict; `boundedStringify` would NOT, because it does not sort
+      // keys. See `stableStringify`.
+      const full =
+        typeof target === 'string'
+          ? target
+          : stableStringify(target, { maxChars: MATCH_INPUT_MAX });
       // Bounded before it reaches the pattern. Both sides here are hostile-ish:
-      // the pattern is model-authored free text and the input is up to
-      // `MAX_HTTP_BODY_CHARS` of whatever a server returned, so a catastrophically
-      // backtracking pattern would wedge the poll loop — and the poller is not
+      // the pattern is model-authored free text and the input is whatever a
+      // server returned — up to `MAX_HTTP_BODY_CHARS` on the http path and
+      // `MAX_PROBE_RESULT_CHARS` on the mcp one — so a catastrophically
+      // backtracking pattern would wedge the poll loop, and the poller is not
       // tied to `turnAbortRef`, so Esc does not reach it. The `try` below covers
       // a syntax error, which is a different failure.
       //

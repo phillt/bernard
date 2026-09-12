@@ -244,6 +244,29 @@ export const MAX_OBSERVATION_CHARS = 4_000;
  */
 export const MAX_HTTP_BODY_CHARS = 16_000;
 
+/**
+ * Ceiling on an MCP probe result, in CHARACTERS of the payload text.
+ *
+ * A safety valve, not a policy, and the numbers are why: across 265 real
+ * results on the tool watchers actually poll, the median is 13.5 KB, the 95th
+ * percentile 32 KB and the largest 72 KB — so this is roughly fourteen times
+ * anything observed and should never fire in ordinary use.
+ *
+ * **It REFUSES where {@link MAX_HTTP_BODY_CHARS} truncates**, and that
+ * asymmetry is the point rather than an inconsistency. An HTTP body is text:
+ * slicing it yields a shorter text that still digests deterministically. An MCP
+ * payload is JSON encoded as a string, so slicing it yields something
+ * `JSON.parse` rejects — the probe would silently degrade to hashing a
+ * truncated string, and an `appeared` watcher would find no list and go inert.
+ * Truncating the PARSED value is no better: dropping array elements drops ids,
+ * which is the same silent inertness `idPathRefusal` exists to eliminate.
+ *
+ * So a payload too large to compare faithfully is a probe FAILURE, which
+ * {@link MAX_PROBE_FAILURES} turns into a stopped watcher carrying a
+ * `lastError` somebody can read — the feature's own refuse-don't-repair rule.
+ */
+export const MAX_PROBE_RESULT_CHARS = 1_000_000;
+
 /** Watcher ids are minted by us; a hand-edited file is refused, never repaired. */
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
