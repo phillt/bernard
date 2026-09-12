@@ -368,6 +368,32 @@ function isWhereClause(v: unknown): boolean {
   return typeof w.path === 'string' && (t === 'string' || t === 'number' || t === 'boolean');
 }
 
+/**
+ * The watchers a LISTING should show — live ones, plus ones that need attention.
+ *
+ * `WatcherStore.list()` is the raw reader and returns terminal records too,
+ * because `sweep()` deliberately keeps a finished one for 24 hours. That is
+ * right for the store and wrong for a list a person reads: Bernard cancels six
+ * watchers, reports them cleared, and `/watchers` then shows six rows every one
+ * of which says `cancelled`. Both statements are true and they contradict each
+ * other on screen.
+ *
+ * `cancelled`, `fired` and `expired` are done and carry nothing to read, so
+ * they go. **`failed` stays**, and that asymmetry is the point: `lastError` is
+ * the only diagnostic that path writes, hiding it means a user can never learn
+ * why a watcher stopped, and `sweep`'s retention window exists specifically to
+ * protect it — ageing a `failed` record from the wrong timestamp deleted it
+ * before anyone could read it once already. So the rule is "live, or needs
+ * attention", and a failed row reads as a problem rather than as litter.
+ *
+ * Here rather than at each surface because `/watchers` and the `watcher` tool
+ * both answer "what watchers do I have?", and two copies of that answer is how
+ * they come to disagree — which is the bug this exists to fix, one level up.
+ */
+export function listableWatchers(all: readonly Watcher[]): Watcher[] {
+  return all.filter((w) => w.status === 'active' || w.status === 'failed');
+}
+
 /** Is this watcher still worth polling? */
 export function isPollable(w: Watcher, now: number): boolean {
   if (w.status !== 'active') return false;

@@ -19,6 +19,8 @@ import { resolveGrant, type ToolNameAliasResolver } from '../permissions/engine.
 import { breadthOptionsFor, type BreadthOption } from '../permissions/breadth.js';
 import { WRITE_PATH_TOOLS } from '../permissions/matchers.js';
 import { checkWritePath } from '../permissions/write-scope.js';
+import { runOrdered } from './write-barrier.js';
+import { duplicateWriteRefusal, recordWriteSuccess } from './duplicate-guard.js';
 
 /**
  * The wrapper shim prepends `[failure: <category>] <playbook.model>` to
@@ -804,13 +806,37 @@ export function augmentTools(
               }
               debugLog(`cache:tool:miss`, { tool: toolName });
             }
+            // Same gate as the legacy branch below, through the same module —
+            // MCP takes that one, so without this the envelope path would be
+            // the untested half again.
+            const envIsWrite = shouldBlockInReadOnly(source.meta, args);
+            const envArgsJson = safeSerialize(args);
+            if (envIsWrite) {
+              const dup = duplicateWriteRefusal(toolName, envArgsJson);
+              if (dup) {
+                return source.serializeForModel({
+                  status: 'error',
+                  // `denied`, not a new type: the model's next turn already
+                  // branches on this, and what happened IS a refusal to act.
+                  error: { type: 'denied', message: dup },
+                });
+              }
+            }
             let envelope: ToolResult<unknown>;
             const execStartedAt = Date.now();
             const argsPreview = safeSerialize(redactArgs(args, source.meta?.sensitiveArgs));
             debugLog(`augment:${toolName}:start`, undefined);
             debugLog('tool:execute:start', { tool: toolName, args: argsPreview });
             try {
-              envelope = await source.execute(args, execOptions as never);
+              // Ordered against this dispatch's in-flight writes, so a
+              // verification read issued in the same parallel step as the write
+              // it verifies cannot observe pre-write state. `shouldBlockInReadOnly`
+              // is the same predicate the read-only block gate uses, consulted
+              // per call so `memory{action:'read'}` and a read-shaped `shell`
+              // are correctly reads.
+              envelope = await runOrdered(shouldBlockInReadOnly(source.meta, args), () =>
+                source.execute(args, execOptions as never),
+              );
               debugLog(`augment:${toolName}:done`, {
                 ok: envelope.status === 'ok',
               });
@@ -873,6 +899,7 @@ export function augmentTools(
             // the model can cite it for verified claims. Errored / denied /
             // cancelled envelopes never become evidence.
             if (envelope.status === 'ok') {
+              if (envIsWrite) recordWriteSuccess(toolName, envArgsJson);
               const previewSrc =
                 typeof serialized === 'string' ? serialized : safeSerialize(serialized);
               registerEvidence(toolName, args, source.meta, previewSrc);
@@ -905,6 +932,15 @@ export function augmentTools(
           if (!(await runGate(toolName, args, toolDef, execOptions, gates.grant))) {
             return CANCELLED_LEGACY_RESULT;
           }
+          // A write that already succeeded with these exact arguments is
+          // refused once (#575). Reads are never gated: 138 of 187 adjacent
+          // identical calls in the corpus are reads, and repeating one is free.
+          const legacyIsWrite = shouldBlockInReadOnly(readToolMeta(toolDef), args);
+          const legacyArgsJson = safeSerialize(args);
+          if (legacyIsWrite) {
+            const dup = duplicateWriteRefusal(toolName, legacyArgsJson);
+            if (dup) return { output: dup, is_error: true };
+          }
           let result: unknown;
           const execStartedAt = Date.now();
           debugLog('tool:execute:start', {
@@ -912,7 +948,13 @@ export function augmentTools(
             args: safeSerialize(redactArgs(args, readToolMeta(toolDef)?.sensitiveArgs)),
           });
           try {
-            result = await originalExecute(args, execOptions);
+            // The same ordering as the envelope branch above, through the same
+            // helper. Two copies of this would be two things to keep in step,
+            // and MCP tools take THIS branch — which is where the duplicate
+            // message came from.
+            result = await runOrdered(shouldBlockInReadOnly(readToolMeta(toolDef), args), () =>
+              originalExecute(args, execOptions),
+            );
           } catch (thrown: unknown) {
             debugLog(
               `augment:${toolName}:threw`,
@@ -963,6 +1005,10 @@ export function augmentTools(
             });
           }
           if (!looksLikeError) {
+            // Successes only. A failed write that is retried is the retry
+            // working as intended; gating it would turn a transient failure
+            // into a permanent one.
+            if (legacyIsWrite) recordWriteSuccess(toolName, legacyArgsJson);
             const previewSrc =
               typeof capturedResult === 'string' ? capturedResult : safeSerialize(capturedResult);
             registerEvidence(toolName, args, meta, previewSrc);

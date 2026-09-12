@@ -106,7 +106,8 @@ import { renderTaskText, type UntrustedData } from '../framework/agents/user-mes
 import { WatcherStore } from '../watchers/store.js';
 import { WatcherPoller } from '../watchers/poller.js';
 import { statFileSync } from '../watchers/probe.js';
-import { describeWatchTarget, MAX_LIFETIME_MS } from '../watchers/types.js';
+import { splitObservationBlock, type ObservationSummary } from '../watchers/wake.js';
+import { describeWatchTarget, listableWatchers, MAX_LIFETIME_MS } from '../watchers/types.js';
 import { stableStringify } from '../watchers/extract.js';
 import { formatRelative, parseWhen } from '../watchers/duration.js';
 import {
@@ -180,6 +181,7 @@ import {
   REWRITE_ICON,
   formatDuration,
   markdownBodyWidth,
+  parseUserMessage,
   type StaticItem,
 } from './Thread.js';
 import { TranscriptViewport } from './TranscriptViewport.js';
@@ -581,6 +583,40 @@ export function buildResumeSeed(history: CoreMessage[], toolDetails: boolean): S
     if (message.role !== 'user' && message.role !== 'assistant') continue;
     const text = extractText(message)?.trim();
     if (!text || isSessionScaffolding(text)) continue;
+    // A woken turn replays as a panel, not as a `❯` bubble. Text forensics is
+    // the only mechanism available — the persisted message is all there is, so
+    // the watcher's name and reason are unrecoverable and the source degrades
+    // to "a watcher". Attribution is the invariant; the name is a nicety, and
+    // replaying a woken instruction as something the user typed re-creates
+    // exactly the confusion #493 exists to prevent, with no live panel above it
+    // to correct the reader.
+    //
+    // ORDER IS MANDATORY and looks commutative: split first, THEN parse. The
+    // persisted text still carries the profile wrapper and the `[ISO]` stamp,
+    // and a `WakePanel` does not run `parseUserMessage` — so reversing these
+    // renders `<user_request>` inside the panel's border. Splitting first also
+    // repairs an existing wart: `parseUserMessage` strips a TRAILING
+    // `\n</user_request>`, which a woken turn never has because the block is
+    // appended after it, so the closing tag is currently left stranded
+    // mid-bubble.
+    //
+    // A `time` wake replays as an ordinary bubble — a clock observes nothing,
+    // so its message is indistinguishable from a typed one here. By the same
+    // token a user who pastes the banner themselves gets a panel on resume
+    // only; the live path never parses, it carries the summary from the mint.
+    const split = message.role === 'user' ? splitObservationBlock(text) : null;
+    if (split) {
+      items.push({
+        key: `resume-${items.length}`,
+        toolDetails,
+        wake: {
+          source: 'a watcher',
+          instruction: truncate(parseUserMessage(split.instruction).body, RESUME_REPLAY_MAX_CHARS),
+          observation: split.observation,
+        },
+      });
+      continue;
+    }
     items.push({
       key: `resume-${items.length}`,
       message: { role: message.role, content: truncate(text, RESUME_REPLAY_MAX_CHARS) },
@@ -770,14 +806,23 @@ export function App({
   // emitted items. A counter never repeats.
   const itemKeyRef = useRef(0);
   /**
-   * `ask_user` answers already shown, so the turn-end commit does not repeat them.
+   * History messages the transcript has ALREADY shown, so the turn-end commit
+   * does not repeat them.
    *
-   * They are rendered at answer time by `requestAskUser` and injected into
-   * history afterwards for the model; both are wanted, and only one may be
-   * visible. A WeakSet keyed on the message object needs no clearing and
-   * cannot outlive the history that holds it.
+   * Two producers, one rule. `ask_user` answers are rendered at answer time by
+   * `requestAskUser` and injected into history afterwards for the model; both
+   * are wanted, and only one may be visible. A woken turn's instruction is
+   * rendered by `WakePanel` before the turn starts, and `agent.ts` then joins
+   * it with the observation block into one `role:'user'` message — so without
+   * this the transcript painted the whole thing a second time, seconds later,
+   * behind the `❯` chevron that is supposed to mean the user typed it.
+   *
+   * One set rather than two, because "already on screen" is one concept and a
+   * second WeakSet beside it would be two spellings of one rule. Keyed on the
+   * message object: needs no clearing and cannot outlive the history that
+   * holds it.
    */
-  const askUserRenderedRef = useRef<WeakSet<CoreMessage>>(new WeakSet());
+  const alreadyOnScreenRef = useRef<WeakSet<CoreMessage>>(new WeakSet());
   /**
    * Transcript keys the `ask_user` echo pushed during the current turn.
    *
@@ -1066,6 +1111,7 @@ export function App({
         requestTurn({
           text: wake.instruction,
           ...(wake.data ? { data: wake.data } : {}),
+          ...(wake.observation ? { observation: wake.observation } : {}),
           source: {
             kind: 'watcher',
             watcherId: wake.watcherId,
@@ -1845,7 +1891,12 @@ export function App({
       const store = watcherStoreRef.current;
       let listIndex = 0;
       for (;;) {
-        const all = store.list();
+        // `listableWatchers`, not `store.list()` — the raw reader returns
+        // terminal records for `sweep`'s 24-hour retention window, so a user
+        // who just watched Bernard cancel six of them saw six rows saying
+        // `cancelled`. The tool's `list` action reads through the same helper,
+        // which is what stops the two surfaces answering differently.
+        const all = listableWatchers(store.list());
         if (all.length === 0) {
           flashToast('No watchers. Ask me to watch for something.');
           return;
@@ -1866,7 +1917,10 @@ export function App({
         }));
         const pick = await requestMenu(entries, {
           title: 'Watchers — select one',
-          headerLines: ['A watcher polls, then starts a turn when it fires. One-shot.'],
+          // Was "One-shot.", directly above rows reading `· repeating ×4`.
+          headerLines: [
+            'A watcher polls, then starts a turn when it fires. Repeating ones stay armed.',
+          ],
           initialIndex: listIndex,
         });
         if (pick.cancelled) return;
@@ -4292,7 +4346,7 @@ export function App({
       // Already on screen: `requestAskUser` echoed it when the answer was
       // given, and the injector added it to history afterwards so the model
       // sees it next turn. The cursor still advances past it below.
-      if (askUserRenderedRef.current.has(message)) continue;
+      if (alreadyOnScreenRef.current.has(message)) continue;
       appended.push({
         key: String(itemKeyRef.current++),
         message,
@@ -4377,7 +4431,7 @@ export function App({
   async function runAgentTurn(
     input: string,
     images?: ImageAttachment[],
-    extra?: { data?: UntrustedData },
+    extra?: { data?: UntrustedData; announced?: boolean },
   ): Promise<void> {
     // Drop a second Enter that arrives before the busy re-render has propagated
     // to <Prompt disabled={busy}>. Without this, two turns can run concurrently.
@@ -4428,6 +4482,23 @@ export function App({
         // of the instruction slot by their type rather than by convention.
         ...(extra?.data ? { data: extra.data } : {}),
       });
+      // A turn whose provenance is already on screen must not also be painted
+      // as a user bubble. `drainNextTurn` renders a `WakePanel` immediately
+      // before this, and `agent.ts` joins the instruction with the observation
+      // block into one `role:'user'` message — so the transcript would show the
+      // whole wall again, behind a `❯` that says the user typed it.
+      //
+      // Keyed on the RENDER that happened rather than on a text feature that
+      // correlates with it, which is what makes it cover a `time` wake (panel
+      // rendered, no data block) and a `say --run` prompt alike.
+      //
+      // By identity, from the agent that pushed it. The predecessor captured a
+      // history length, re-read the array and scanned the range — forensics on
+      // somebody else's private array for a message it had just created, resting
+      // on two facts stated nowhere in `agent.ts`: that the push is synchronous
+      // before the first await, and that there is exactly one of it.
+      const announced = extra?.announced ? agent.getLastUserMessage() : null;
+      if (announced) alreadyOnScreenRef.current.add(announced);
       commitNewHistory({ rewriteForLastUser: input !== agentInput ? input : undefined });
       // Snapshot history length AFTER the user message push (synchronous) so
       // the ask_user scanner below knows where this turn's tool results begin.
@@ -4465,7 +4536,7 @@ export function App({
           historyLenAfterUserMsg,
           askUserInjectedIds,
         )) {
-          askUserRenderedRef.current.add(m);
+          alreadyOnScreenRef.current.add(m);
         }
       }
       turnCompleted = !controller.signal.aborted;
@@ -4640,12 +4711,25 @@ export function App({
       ...prev,
       {
         key: String(itemKeyRef.current++),
-        toolDetails: false,
-        wake: { source: describeSource(next.source), text: next.text },
+        // The field was REQUIRED and hard-coded `false`, four lines from a
+        // sibling item passing the real setting. A required field carrying a
+        // hard-coded lie is worse than an absent one.
+        toolDetails: config.toolDetails,
+        wake: {
+          source: describeSource(next.source),
+          instruction: next.text,
+          ...(next.observation ? { observation: next.observation } : {}),
+        },
       },
     ]);
     try {
-      await runAgentTurn(next.text, undefined, next.data ? { data: next.data } : {});
+      // `announced: true` for EVERY queued turn, not only data-carrying wakes:
+      // the panel above was pushed unconditionally, so the provenance really is
+      // on screen whether or not there was anything to observe.
+      await runAgentTurn(next.text, undefined, {
+        announced: true,
+        ...(next.data ? { data: next.data } : {}),
+      });
     } finally {
       // Cleared only once the turn is DONE, which is the span the queue cannot
       // see. In a `finally` because an aborted or failed turn must still let
@@ -4671,6 +4755,7 @@ export function App({
   function requestTurn(turn: {
     text: string;
     data?: UntrustedData;
+    observation?: ObservationSummary;
     source: QueuedTurnSource;
   }): EnqueueResult {
     // One outstanding wake per watcher — see `outstandingWakesRef`. Refused
@@ -4688,6 +4773,7 @@ export function App({
     const queued = turnQueueRef.current.enqueue({
       text: turn.text,
       ...(turn.data ? { data: turn.data } : {}),
+      ...(turn.observation ? { observation: turn.observation } : {}),
       source: turn.source,
     });
     if (!queued.ok) {

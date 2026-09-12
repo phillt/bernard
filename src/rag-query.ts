@@ -4,6 +4,7 @@ import type { RAGSearchResult } from './rag.js';
 import { DEFAULT_TOP_K_PER_DOMAIN, DEFAULT_MAX_RESULTS } from './rag.js';
 import { stripTimestamp } from './tools/datetime.js';
 import { isBoundaryNotice } from './session-markers.js';
+import { splitObservationBlock } from './watchers/wake.js';
 
 /** Number of recent user messages (beyond the current input) to include in the RAG query. */
 export const DEFAULT_WINDOW_SIZE = 2;
@@ -46,7 +47,23 @@ export function extractRecentUserTexts(
     // Skip system-injected boundary messages
     if (isBoundaryNotice(text)) continue;
 
-    texts.push(stripTimestamp(stripProfileWrapper(text)));
+    // The observation comes off FIRST, and the order is not cosmetic.
+    //
+    // `agent.ts` joins a woken turn as `wrappedInstruction + "\n\n" + block`,
+    // so the profile wrapper's closing tag sits mid-string and
+    // `stripProfileWrapper`'s `$`-anchored regex never matches — the query got
+    // the tags, the banner and up to 4 KB of somebody's inbox. (The
+    // `# Request` branch uses `startsWith`, so the other profiles leaked the
+    // observation too, just not the tags.) Split first and the remainder ends
+    // in the closing tag again, so the existing regex matches correctly and
+    // needs no widening: the ordering was the cause, the anchor only the
+    // symptom.
+    //
+    // What the query then retrieves for is the INSTRUCTION, which is the right
+    // signal — retrieving against a JSON dump of a chat thread is close to
+    // retrieving against noise.
+    const body = splitObservationBlock(text)?.instruction ?? text;
+    texts.push(stripTimestamp(stripProfileWrapper(body)));
   }
 
   // Reverse to chronological order (oldest first)

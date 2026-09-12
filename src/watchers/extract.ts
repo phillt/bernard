@@ -157,7 +157,7 @@ export function stableStringify(
    * characters, astral pairs, lone surrogates) with zero mismatches.
    *
    * WITH it the raw clip is illegal and the whole leaf must be normalised
-   * first, because `normalizeForDigest` SHRINKS: collapsing `"a\n\n\nb"`
+   * first, because `collapseWhitespace` SHRINKS: collapsing `"a\n\n\nb"`
    * yields `"a b"` while collapsing its prefix `"a\n"` yields `"a "`, so a
    * prefix of the input can produce fewer than `room` output characters and the
    * invariant genuinely fails. That costs nothing in practice — the only
@@ -167,7 +167,7 @@ export function stableStringify(
   const emitLeaf = (raw: string): string => {
     const room = budget - emitted;
     const src = !opts.collapseWhitespace && raw.length > room + 1 ? raw.slice(0, room + 1) : raw;
-    const full = JSON.stringify(opts.collapseWhitespace ? normalizeForDigest(src) : src);
+    const full = JSON.stringify(opts.collapseWhitespace ? collapseWhitespace(src) : src);
     const out = full.slice(0, room);
     emitted += out.length;
     return out;
@@ -235,14 +235,22 @@ export function stableStringify(
 }
 
 /**
- * Collapses whitespace before digesting.
+ * Every run of whitespace becomes one space, and the ends are trimmed.
  *
- * Web pages and tool output rewrap and re-indent without changing meaning, and
- * an un-normalised digest turns every one of those into a wake. This is the same
- * point the HTTP caching literature makes about weak validators: insignificant
- * whitespace should not cause validator churn.
+ * Named for the OPERATION rather than for either caller, because the watcher
+ * package has two and their reasons differ. `digestOf` needs it so that a page
+ * which rewraps or re-indents without changing meaning does not read as changed
+ * — the point the HTTP caching literature makes about weak validators, that
+ * insignificant whitespace should not cause validator churn. `wake.ts`'s
+ * `summariseObservation` needs it so a newline cannot smuggle an extra row into
+ * a bordered panel.
+ *
+ * One rule rather than two copies: they describe the SAME bytes — the digest
+ * decides whether a `changed` predicate fires, the excerpt decides what the
+ * panel then says about it — so a change to one that missed the other would make
+ * the panel describe a string the digest never saw.
  */
-export function normalizeForDigest(text: string): string {
+export function collapseWhitespace(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
 

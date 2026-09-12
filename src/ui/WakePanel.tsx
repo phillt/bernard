@@ -1,4 +1,9 @@
+import { Box, Text } from 'ink';
+
 import { getThemeColors } from '../theme.js';
+import { formatBytes } from '../output.js';
+import { plural } from '../text.js';
+import { WAKE_EXCERPT_CHARS, type ObservationSummary } from '../watchers/wake.js';
 import { TranscriptPanel } from './TranscriptPanel.js';
 import type { WakeData } from './Thread.js';
 
@@ -24,20 +29,121 @@ import type { WakeData } from './Thread.js';
  * this", because acting on it costs a turn the reader must choose to spend. This
  * one is the turn. Saying so is what stops a reader assuming the same.
  *
- * `text` is the instruction only. Whatever the watcher observed travels in the
- * turn's data channel and is deliberately not shown here — it can be megabytes
- * of somebody's inbox, and the panel's job is attribution, not disclosure.
+ * ## What it shows of the observation, and why it is never the observation
+ *
+ * This panel is now the ONLY render of a wake — `App.tsx` suppresses the
+ * duplicate user bubble that used to paint the instruction and the whole fenced
+ * observation into the transcript seconds later.
+ *
+ * So the rule the old docstring stated — the observation is "deliberately not
+ * shown here" — holds in the form that matters and no longer in the form it was
+ * written: the panel says how much was observed, and at `toolDetails` on, up to
+ * {@link WAKE_EXCERPT_CHARS} characters of it. What it must never hold is the
+ * payload itself. `WakeData.observation` is an {@link ObservationSummary},
+ * capped at the mint in `summariseObservation`, because this item lives in an
+ * append-only array for the whole session and the thing it describes can be
+ * megabytes of somebody's inbox.
+ *
+ * ## Detail level
+ *
+ * `toolDetails` is the same boolean that decides how much of a tool call the
+ * transcript shows, applied to the same question one layer over: how much of
+ * what Bernard is acting on does the reader want on screen. There is no wake-
+ * specific setting, deliberately — a second knob for one surface is two places
+ * to reason about the same preference.
  */
-export function WakePanel({ data }: { data: WakeData }) {
+export function WakePanel({ data, toolDetails }: { data: WakeData; toolDetails: boolean }) {
   const colors = getThemeColors();
+  const obs = data.observation;
+  // Computed only where it is read: the expanded branch takes the instruction
+  // whole and asks nothing about its lines, so scanning them there was work
+  // whose result had no consumer.
+  const collapsed = toolDetails ? null : collapseInstruction(data.instruction);
+
+  // Keyed on `collapsed` rather than on `toolDetails` so the narrowing is the
+  // type system's rather than a non-null assertion's — they carry the same
+  // information, since `collapsed` is null exactly when `toolDetails` is on.
+  const detail = collapsed ? (
+    // One row, joining whichever halves exist. Both absent — a one-line
+    // instruction on a `time` watcher — and the row is dropped entirely rather
+    // than rendered empty.
+    collapsedNote(collapsed.hidden, obs)
+  ) : obs ? (
+    // The vocabulary of `renderResultSnippet` — `↳`, dim, a two-space
+    // continuation — but not the function: that one is private to `Thread.tsx`
+    // and takes the full text, so reusing it would mean plumbing the whole
+    // observation here for it to re-truncate. The excerpt is already bounded at
+    // the mint.
+    <Box flexDirection="column">
+      <Text dimColor>↳ {obs.excerpt}</Text>
+      <Text dimColor>
+        {'  '}· {sizeNote(obs)}
+        {obs.clipped ? `, showing first ${WAKE_EXCERPT_CHARS}` : ''}
+      </Text>
+    </Box>
+  ) : null;
+
   return (
     <TranscriptPanel
       color={colors.accent}
       title="⏰ Woken"
       meta={` · ${data.source}`}
-      body={data.text}
+      body={collapsed ? collapsed.first : data.instruction}
+      detail={detail}
       hintColor={colors.accent}
       footer="Bernard is acting on this now."
     />
   );
+}
+
+/**
+ * The first line that says anything, and how many lines that leaves unseen.
+ *
+ * A wake instruction frequently opens with a blank or a heading rule, and a body
+ * whose first row is empty reads as a panel that failed to render — so the body
+ * is the first NON-EMPTY line rather than `lines[0]`.
+ *
+ * `hidden` counts the lines AFTER the one shown, not every line but that one:
+ * the leading blanks were skipped precisely because they say nothing, so
+ * counting them made `"\n\nreal\nmore"` report three hidden lines when one has
+ * content. An instruction that is entirely blank shows nothing and hides
+ * nothing — counting its rows would put "… 3 more instruction lines" under an
+ * empty body.
+ *
+ * No clamp on the subtraction: `i` is a valid index whenever it is not -1, so
+ * `lines.length - 1 - i` cannot go negative.
+ */
+function collapseInstruction(instruction: string): { first: string; hidden: number } {
+  const lines = instruction.split('\n');
+  const i = lines.findIndex((l) => l.trim().length > 0);
+  if (i === -1) return { first: '', hidden: 0 };
+  return { first: lines[i], hidden: lines.length - 1 - i };
+}
+
+/**
+ * How much was observed — and whether that number is itself a cap.
+ *
+ * `MAX_OBSERVATION_CHARS` means `bytes` saturates at ~4 KB, so without the
+ * qualifier a watcher that read a 2 MB page and one that read a 4 KB one report
+ * identically on the surface whose job is saying how much is held back. "at
+ * least" rather than a total, because the total is not knowable for a bounded
+ * walk — see `renderObservation`.
+ */
+function sizeNote(obs: ObservationSummary): string {
+  return obs.truncated
+    ? `at least ${formatBytes(obs.bytes)} observed`
+    : `${formatBytes(obs.bytes)} observed`;
+}
+
+function collapsedNote(hiddenLines: number, obs: ObservationSummary | undefined) {
+  const parts: string[] = [];
+  if (hiddenLines > 0) {
+    parts.push(`… ${hiddenLines} more instruction ${plural(hiddenLines, 'line', 'lines')}`);
+  }
+  // `obs` itself rather than a pre-rendered string: an empty string as the
+  // "there was no observation" sentinel meant this had to re-derive a fact the
+  // caller already held.
+  if (obs) parts.push(sizeNote(obs));
+  if (parts.length === 0) return null;
+  return <Text dimColor>{parts.join(' · ')}</Text>;
 }

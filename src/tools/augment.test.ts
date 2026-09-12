@@ -6,7 +6,10 @@ import { augmentTools } from './augment.js';
 import { attachMeta, toolToAISDK } from '../framework/tools/adapter.js';
 import { ok, err, type BernardTool } from '../framework/tools/types.js';
 import { clearCache as clearResultCache } from '../framework/tools/result-cache.js';
+import { __resetDuplicateGuard } from './duplicate-guard.js';
 import { ProvenanceStore } from '../provenance.js';
+import { runWithDispatchId } from '../framework/dispatch-context.js';
+import { isReadOnlyMCPToolName } from '../risk.js';
 
 vi.mock('../tool-profiles.js', () => ({
   classifyShellCommand: vi.fn((cmd: string) => {
@@ -63,6 +66,10 @@ describe('augmentTools', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Session-scoped module state, like the result cache above it: without the
+    // reset one test's successful write gates the next test's identical call,
+    // and the failure lands on whichever permission test happens to run after.
+    __resetDuplicateGuard();
     store = createMockStore();
     vi.mocked(detectToolError).mockReturnValue({ isError: false });
   });
@@ -937,8 +944,12 @@ describe('augmentTools', () => {
         { t },
         { profileStore: store, toolMode: 'read-only', blockAction },
       );
-      await augmented.t.execute({}, {});
-      await augmented.t.execute({}, {});
+      // Distinct args, because the subject here is the PERMISSION gate and
+      // identical ones would additionally trip the duplicate-write gate (#575) —
+      // which refuses a repeated successful write once. Two gates firing on one
+      // call would make this assert a verdict neither of them owns alone.
+      await augmented.t.execute({ n: 1 }, {});
+      await augmented.t.execute({ n: 2 }, {});
       expect(blockAction).toHaveBeenCalledTimes(2);
       expect(execute).toHaveBeenCalledTimes(2);
     });
@@ -951,8 +962,9 @@ describe('augmentTools', () => {
         { alpha, beta },
         { profileStore: store, toolMode: 'read-only', blockAction },
       );
-      await augmented.alpha.execute({}, {});
-      await augmented.alpha.execute({}, {});
+      // Distinct args on the repeated tool, for the reason above.
+      await augmented.alpha.execute({ n: 1 }, {});
+      await augmented.alpha.execute({ n: 2 }, {});
       await augmented.beta.execute({}, {});
       // alpha prompts once (then allowlisted), beta prompts once.
       expect(blockAction).toHaveBeenCalledTimes(2);
@@ -1108,7 +1120,12 @@ describe('augmentTools', () => {
           sessionToolAllowlist: shared,
         },
       );
-      await outerAug.t.execute({}, {});
+      // Distinct args across the two dispatches, because the duplicate-write
+      // gate (#575) is deliberately SESSION-scoped — a parent and a nested
+      // wrapper issuing the identical write is precisely the shape it exists to
+      // catch, and it would otherwise refuse the inner call here. The subject of
+      // this test is the shared allowlist.
+      await outerAug.t.execute({ n: 1 }, {});
       expect(blockAction).toHaveBeenCalledTimes(1);
       expect(e1).toHaveBeenCalledTimes(1);
       // Simulate a nested augmentTools call (sub-agent / wrapper). Same
@@ -1122,7 +1139,7 @@ describe('augmentTools', () => {
           sessionToolAllowlist: shared,
         },
       );
-      await innerAug.t.execute({}, {});
+      await innerAug.t.execute({ n: 2 }, {});
       expect(blockAction).toHaveBeenCalledTimes(1);
       expect(e2).toHaveBeenCalledTimes(1);
     });
@@ -2140,5 +2157,296 @@ describe('augmentTools', () => {
       expect(lastEnd()!.cached).toBe(true);
       expect(lastEnd()!.resultChars).toBeGreaterThan(0);
     });
+  });
+});
+
+/**
+ * The duplicate-message incident, at the layer that produced it.
+ *
+ * `beeper__send_message` and `beeper__list_messages` were issued in one parallel
+ * step. The read resolved in 12 ms, the write took 571 ms, and the message it
+ * created is stamped 453 ms AFTER the read returned — so the verification could
+ * not have seen it. The agent concluded the send had failed and re-sent
+ * byte-identical; both landed (`1904`, `1905`).
+ *
+ * The unit tests in `write-barrier.test.ts` pin the ordering rule. These pin the
+ * two things only this layer can answer: that MCP tools reach the barrier at all
+ * (they take the LEGACY branch, which is where the duplicate came from), and
+ * that `shouldBlockInReadOnly` really calls `send_message` a write and
+ * `list_messages` a read — which is what decides whether the rule fires.
+ */
+describe('augmentTools orders a verification read behind the write', () => {
+  const opts = { shellTimeout: 30_000, confirmDangerous: vi.fn() };
+
+  // Shaped exactly like the real ones, namespace and all: `isReadOnlyMCPToolName`
+  // strips the `server_hash__` prefix and reads a verb at either end, so the
+  // names are load-bearing rather than decorative.
+  const SEND = 'beeper_654785__send_message';
+  const LIST = 'beeper_654785__list_messages';
+
+  /**
+   * Built the way `mcp.ts` builds one: the kind comes from the real classifier
+   * on the raw name, never hand-set. Hard-coding `kind: 'write'` on both — the
+   * first cut — made the READ a write too, and writes never wait, so the rule
+   * silently did not fire. That is the whole failure mode of a hand-set fixture
+   * here, and deriving it binds this test to the classifier that actually
+   * decides in production.
+   */
+  function mcpTool(name: string, execute: (args: unknown) => Promise<unknown>) {
+    const raw = name.split('__')[1];
+    // `attachMeta`, not a plain `.meta` property: `readToolMeta` reads the
+    // non-enumerable `__bernardMeta` and returns undefined for anything else —
+    // and an undefined meta classifies as a READ, so a hand-hung `.meta` made
+    // the fixture invisible to the gate and the barrier silently inert.
+    return attachMeta(
+      { description: 'mcp', parameters: z.object({}), execute } as never,
+      { name, rawName: raw, kind: isReadOnlyMCPToolName(raw) ? 'read' : 'write' } as never,
+    );
+  }
+
+  it('classifies the pair the way production does', async () => {
+    // The rule cannot fire unless these two disagree, and they disagree only
+    // because `isReadOnlyMCPToolName` reads a verb at either end of the raw
+    // name. If a future edit made `send_message` read-only, every assertion
+    // below would still pass while the incident was fully reproducible.
+    expect(isReadOnlyMCPToolName('beeper_654785__send_message')).toBe(false);
+    expect(isReadOnlyMCPToolName('beeper_654785__list_messages')).toBe(true);
+  });
+
+  it('does not let the read observe pre-write state', async () => {
+    let sent = false;
+    let release!: () => void;
+    const landed = new Promise<void>((r) => (release = r));
+
+    const tools = augmentTools(
+      {
+        [SEND]: mcpTool(SEND, async () => {
+          await landed;
+          sent = true;
+          return { content: [{ type: 'text', text: '/open/19' }], isError: false };
+        }),
+        // Reports what the mailbox held at the moment it ran — which is the
+        // only thing the real `list_messages` does, and the reason the race is
+        // invisible from the result.
+        [LIST]: mcpTool(LIST, async () => ({ observedSent: sent })),
+      } as never,
+      createMockStore() as never,
+      opts as never,
+    );
+
+    await runWithDispatchId('step-1', async () => {
+      const write = tools[SEND].execute!({}, {} as never);
+      const read = tools[LIST].execute!({}, {} as never);
+      await new Promise((r) => setTimeout(r, 0));
+      release();
+      const [, r] = await Promise.all([write, read]);
+      // Before the barrier this was `false` — a read of state from before the
+      // write, which the agent took as proof the send had failed.
+      expect((r as { observedSent: boolean }).observedSent).toBe(true);
+    });
+  });
+
+  it('orders the ENVELOPE branch too, which no MCP tool exercises', async () => {
+    // `augment.ts` has two `execute` wrappers and MCP takes the legacy one, so
+    // every assertion above leaves the migrated-BernardTool path untested — and
+    // a mutation removing its `runOrdered` survived until this existed. Both
+    // wrappers go through one helper precisely so they cannot diverge; this is
+    // what makes that checkable rather than asserted.
+    let done = false;
+    let release!: () => void;
+    const landed = new Promise<void>((r) => (release = r));
+    const envelope = (name: string, kind: 'read' | 'write', run: () => Promise<unknown>) =>
+      toolToAISDK({
+        meta: { name, kind },
+        description: name,
+        parameters: z.object({}),
+        execute: async () => ok(await run()),
+        serializeForModel: (r) => (r.status === 'ok' ? r.result : 'err'),
+      } as never);
+
+    const tools = augmentTools(
+      {
+        w: envelope('w', 'write', async () => {
+          await landed;
+          done = true;
+          return { ok: true };
+        }),
+        r: envelope('r', 'read', async () => ({ observed: done })),
+      } as never,
+      createMockStore() as never,
+      opts as never,
+    );
+
+    await runWithDispatchId('step-3', async () => {
+      const write = tools.w.execute!({}, {} as never);
+      const read = tools.r.execute!({}, {} as never);
+      await new Promise((r) => setTimeout(r, 0));
+      release();
+      const [, got] = await Promise.all([write, read]);
+      expect((got as { observed: boolean }).observed).toBe(true);
+    });
+  });
+
+  it('leaves two reads fully parallel, so the common case pays nothing', async () => {
+    // 6,776 of 6,867 real tool calls involve no in-flight write at all. A rule
+    // that serialized reads against each other would be a throughput
+    // regression on essentially every turn.
+    let inFlight = 0;
+    let peak = 0;
+    const readTool = mcpTool(LIST, async () => {
+      peak = Math.max(peak, ++inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight--;
+      return { ok: true };
+    });
+    const tools = augmentTools(
+      { [LIST]: readTool, beeper_654785__get_chat: readTool } as never,
+      createMockStore() as never,
+      opts as never,
+    );
+    await runWithDispatchId('step-2', async () => {
+      await Promise.all([
+        tools[LIST].execute!({}, {} as never),
+        tools['beeper_654785__get_chat'].execute!({}, {} as never),
+      ]);
+    });
+    expect(peak).toBe(2);
+  });
+});
+
+/**
+ * The duplicate-write gate at the layer that produced the incident (#575).
+ *
+ * Bernard sent the same text to Dom three times. The first send returned
+ * `"**Open the chat in Beeper**: /open/29"` — no id, no success field — and the
+ * model re-sent byte-identical with no read anywhere in between, so the write
+ * barrier had nothing to order. These pin the two things only this layer
+ * answers: that a real MCP write reaches the gate at all (it takes the LEGACY
+ * branch), and that a read is never gated.
+ */
+describe('augmentTools refuses a repeated successful write', () => {
+  // Its own reset: the gate is SESSION-scoped module state and this is a
+  // sibling describe, so the one inside `describe('augmentTools')` does not
+  // reach it. Without this the previous case's successful send leaks forward
+  // and the failure lands on whichever test happens to run next — which is
+  // exactly how it landed on the failed-write case here.
+  beforeEach(__resetDuplicateGuard);
+
+  const opts = { shellTimeout: 30_000, confirmDangerous: vi.fn() };
+  const SEND = 'beeper_654785__send_message';
+  const LIST = 'beeper_654785__list_messages';
+  const TEXT = { chatID: '29', text: 'Nice try, Dom.' };
+
+  function mcpTool(name: string, execute: (args: unknown) => Promise<unknown>) {
+    const raw = name.split('__')[1];
+    return attachMeta(
+      { description: 'mcp', parameters: z.object({}), execute } as never,
+      {
+        name,
+        rawName: raw,
+        kind: isReadOnlyMCPToolName(raw) ? 'read' : 'write',
+      } as never,
+    );
+  }
+
+  it('runs once, refuses the identical repeat, then runs it when re-issued', async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: 'text', text: '/open/29' }],
+      isError: false,
+    }));
+    const tools = augmentTools(
+      { [SEND]: mcpTool(SEND, execute) } as never,
+      createMockStore() as never,
+      opts as never,
+    );
+
+    await tools[SEND].execute!(TEXT, {} as never);
+    expect(execute).toHaveBeenCalledTimes(1);
+
+    // The blind re-send. Before the gate this was a second message.
+    const refused = await tools[SEND].execute!(TEXT, {} as never);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect((refused as { output: string }).output).toMatch(/already SUCCEEDED/);
+
+    // Re-issuing is how the model says "yes, on purpose" — no UI, so it works
+    // headless where there is nobody to ask.
+    await tools[SEND].execute!(TEXT, {} as never);
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it('gates the ENVELOPE branch too, which no MCP tool exercises', async () => {
+    // `augment.ts` has two `execute` wrappers and MCP takes the legacy one, so
+    // every other case here leaves the migrated-BernardTool path untested — and
+    // a mutation disabling its gate survived until this existed. Same gap the
+    // write barrier had, one commit earlier.
+    const execute = vi.fn(async () => ok({ sent: true }));
+    const tool = toolToAISDK({
+      meta: { name: 'w', kind: 'write' },
+      description: 'w',
+      parameters: z.object({}),
+      execute,
+      serializeForModel: (r) => (r.status === 'ok' ? r.result : `Error: ${r.error.message}`),
+    } as never);
+    const tools = augmentTools({ w: tool } as never, createMockStore() as never, opts as never);
+    await tools.w.execute!({ x: 1 }, {} as never);
+    const refused = await tools.w.execute!({ x: 1 }, {} as never);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(String(refused)).toMatch(/already SUCCEEDED/);
+  });
+
+  it('never gates a read, however many times it repeats', async () => {
+    // 138 of 187 adjacent identical calls in the corpus are reads — `shell`
+    // re-running a test, a snapshot polling for change. Gating those would fire
+    // constantly to catch nothing.
+    const execute = vi.fn(async () => ({ items: [] }));
+    const tools = augmentTools(
+      { [LIST]: mcpTool(LIST, execute) } as never,
+      createMockStore() as never,
+      opts as never,
+    );
+    for (let i = 0; i < 4; i++) await tools[LIST].execute!({ chatID: '29' }, {} as never);
+    expect(execute).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not gate a repeat after a FAILED write', async () => {
+    // The retry is the point. Only successes are recorded, and `augment.ts`'s
+    // own failure detection — which reads MCP's `isError` — is the authority on
+    // which is which, rather than a second guess at it here.
+    const execute = vi.fn(async () => ({
+      content: [{ type: 'text', text: 'rate limited' }],
+      isError: true,
+    }));
+    const tools = augmentTools(
+      { [SEND]: mcpTool(SEND, execute) } as never,
+      createMockStore() as never,
+      opts as never,
+    );
+    await tools[SEND].execute!(TEXT, {} as never);
+    await tools[SEND].execute!(TEXT, {} as never);
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it('gates across dispatches, which is where the third Dom send came from', async () => {
+    // That one was raised by a NEW delegate after the previous had already
+    // reported success, so a per-dispatch memory would have seen a first call
+    // each time and passed all three.
+    const execute = vi.fn(async () => ({
+      content: [{ type: 'text', text: 'ok' }],
+      isError: false,
+    }));
+    const outer = augmentTools(
+      { [SEND]: mcpTool(SEND, execute) } as never,
+      createMockStore() as never,
+      opts as never,
+    );
+    const inner = augmentTools(
+      { [SEND]: mcpTool(SEND, execute) } as never,
+      createMockStore() as never,
+      opts as never,
+    );
+    await runWithDispatchId('parent', () => outer[SEND].execute!(TEXT, {} as never));
+    const refused = await runWithDispatchId('child', () => inner[SEND].execute!(TEXT, {} as never));
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect((refused as { output: string }).output).toMatch(/already SUCCEEDED/);
   });
 });
