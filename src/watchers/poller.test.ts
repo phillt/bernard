@@ -346,3 +346,202 @@ describe('captureBaseline', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Repeating watchers (#479 follow-up, from use).
+ *
+ * One-shot forced the agent to recreate a watcher after every fire — observed
+ * six times on one chat. That costs a turn each time and, worse, leaves a GAP:
+ * the new baseline is captured in a later turn, so anything that arrived in
+ * between is already present and is never reported. Replies were lost in it.
+ */
+describe('WatcherPoller — repeating', () => {
+  function chat(ids: string[]) {
+    return deps({
+      tools: () => ({
+        t: readTool({
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ items: ids.map((id) => ({ id, mine: false })) }),
+            },
+          ],
+        }),
+      }),
+    });
+  }
+
+  it('fires repeatedly and stays armed, advancing its own baseline', async () => {
+    const w = store.create({
+      name: 'chat',
+      target: { kind: 'mcp', tool: 't', args: {} },
+      predicate: { kind: 'appeared', idPath: '$.items.id' },
+      instructions: 'react',
+      ownerSessionId: 's1',
+      repeating: true,
+      baselineIds: ['1'],
+    });
+    const onWake = vi.fn(() => true);
+    let now = Date.now();
+    const poll = (d: ProbeDeps) =>
+      new WatcherPoller({ store, sessionId: 's1', deps: d, onWake, now: () => now });
+
+    now += 120_000;
+    await poll(chat(['2', '1'])).tick();
+    expect(onWake).toHaveBeenCalledTimes(1);
+    expect(store.read(w.id)?.status).toBe('active');
+    expect(store.read(w.id)?.fireCount).toBe(1);
+
+    // The second reply must fire too — this is what one-shot could not do.
+    now += 120_000;
+    await poll(chat(['3', '2', '1'])).tick();
+    expect(onWake).toHaveBeenCalledTimes(2);
+    expect(store.read(w.id)?.fireCount).toBe(2);
+
+    // And an unchanged poll must NOT fire, or it would loop on itself.
+    now += 120_000;
+    await poll(chat(['3', '2', '1'])).tick();
+    expect(onWake).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves no gap: the baseline advances in the poll that fired', async () => {
+    // The re-arm gap in one assertion. Advancing from a LATER read would take
+    // '3' into the baseline as already-seen and never report it.
+    const w = store.create({
+      name: 'chat',
+      target: { kind: 'mcp', tool: 't', args: {} },
+      predicate: { kind: 'appeared', idPath: '$.items.id' },
+      instructions: 'react',
+      ownerSessionId: 's1',
+      repeating: true,
+      baselineIds: ['1'],
+    });
+    let now = Date.now() + 120_000;
+    const onWake = vi.fn(() => true);
+    await new WatcherPoller({
+      store,
+      sessionId: 's1',
+      deps: chat(['2', '1']),
+      onWake,
+      now: () => now,
+    }).tick();
+    expect(store.read(w.id)?.baselineIds).toEqual(['2', '1']);
+
+    now += 120_000;
+    await new WatcherPoller({
+      store,
+      sessionId: 's1',
+      deps: chat(['3', '2', '1']),
+      onWake,
+      now: () => now,
+    }).tick();
+    expect(onWake).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops itself at maxFires rather than running away', async () => {
+    const w = store.create({
+      name: 'chat',
+      target: { kind: 'mcp', tool: 't', args: {} },
+      predicate: { kind: 'appeared', idPath: '$.items.id' },
+      instructions: 'react',
+      ownerSessionId: 's1',
+      repeating: true,
+      maxFires: 2,
+      baselineIds: [],
+    });
+    let now = Date.now();
+    const onWake = vi.fn(() => true);
+    for (const ids of [['1'], ['2', '1'], ['3', '2', '1']]) {
+      now += 120_000;
+      await new WatcherPoller({
+        store,
+        sessionId: 's1',
+        deps: chat(ids),
+        onWake,
+        now: () => now,
+      }).tick();
+    }
+    expect(store.read(w.id)?.status).toBe('fired');
+    expect(onWake).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not advance the baseline when the wake is refused', async () => {
+    const w = store.create({
+      name: 'chat',
+      target: { kind: 'mcp', tool: 't', args: {} },
+      predicate: { kind: 'appeared', idPath: '$.items.id' },
+      instructions: 'react',
+      ownerSessionId: 's1',
+      repeating: true,
+      baselineIds: ['1'],
+    });
+    const now = Date.now() + 120_000;
+    await new WatcherPoller({
+      store,
+      sessionId: 's1',
+      deps: chat(['2', '1']),
+      onWake: () => false,
+      now: () => now,
+    }).tick();
+    // Rewound: leaving it advanced would mean '2' never counts as new again.
+    expect(store.read(w.id)?.baselineIds).toEqual(['1']);
+    expect(store.read(w.id)?.fireCount ?? 0).toBe(0);
+    expect(store.read(w.id)?.status).toBe('active');
+  });
+});
+
+describe('appeared — the where filter', () => {
+  it('ignores items the filter excludes, so your own reply cannot wake you', async () => {
+    // Beeper returns your OWN sent messages (isSender: true). Without this a
+    // watcher on a chat fires on Bernard's reply, which prompts another reply.
+    const mixed = (items: { id: string; isSender: boolean }[]) =>
+      deps({
+        tools: () => ({
+          t: readTool({ content: [{ type: 'text', text: JSON.stringify({ items }) }] }),
+        }),
+      });
+    const w = store.create({
+      name: 'chat',
+      target: { kind: 'mcp', tool: 't', args: {} },
+      predicate: {
+        kind: 'appeared',
+        idPath: '$.items.id',
+        where: { path: 'isSender', equals: false },
+      },
+      instructions: 'react',
+      ownerSessionId: 's1',
+      repeating: true,
+      baselineIds: ['1'],
+    });
+    const onWake = vi.fn(() => true);
+    let now = Date.now() + 120_000;
+
+    // Bernard's own message arrives: must NOT fire.
+    await new WatcherPoller({
+      store,
+      sessionId: 's1',
+      deps: mixed([
+        { id: '2', isSender: true },
+        { id: '1', isSender: false },
+      ]),
+      onWake,
+      now: () => now,
+    }).tick();
+    expect(onWake).not.toHaveBeenCalled();
+
+    // Someone else replies: must fire.
+    now += 120_000;
+    await new WatcherPoller({
+      store,
+      sessionId: 's1',
+      deps: mixed([
+        { id: '3', isSender: false },
+        { id: '2', isSender: true },
+        { id: '1', isSender: false },
+      ]),
+      onWake,
+      now: () => now,
+    }).tick();
+    expect(onWake).toHaveBeenCalledTimes(1);
+  });
+});

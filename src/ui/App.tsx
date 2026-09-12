@@ -1819,7 +1819,11 @@ export function App({
         }
         const entries: MenuEntry[] = all.map((w) => ({
           label: w.name,
-          annotation: w.status,
+          // A repeating watcher that has fired four times and is still armed
+          // reads as identical to a one-shot that has never fired, without this.
+          annotation: w.repeating
+            ? `${w.status} · repeating${w.fireCount ? ` ×${w.fireCount}` : ''}`
+            : w.status,
           description: `${describeWatchTarget(w.target)}${
             w.lastCheckedAt
               ? ` — last checked ${new Date(w.lastCheckedAt).toLocaleTimeString()}`

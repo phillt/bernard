@@ -13,6 +13,7 @@ import {
 } from '../watchers/probe.js';
 import {
   DEFAULT_INTERVAL_MS,
+  DEFAULT_MAX_FIRES,
   MAX_LIFETIME_MS,
   MIN_INTERVAL_MS,
   describeWatchTarget,
@@ -62,6 +63,22 @@ export interface WatcherToolDeps {
   sessionId: () => string;
 }
 
+/**
+ * `"false"` / `"true"` / `"12"` as their real types.
+ *
+ * The tool takes `whereEquals` as a string because a zod union of three scalars
+ * is a worse thing to put in front of a model than one string — but the
+ * comparison against the payload is `!==`, so `"false"` would never equal a
+ * JSON `false` and the filter would silently match nothing.
+ */
+function coerce(v: unknown): string | number | boolean {
+  if (typeof v !== 'string') return v as string | number | boolean;
+  if (v === 'true') return true;
+  if (v === 'false') return false;
+  if (v !== '' && !Number.isNaN(Number(v))) return Number(v);
+  return v;
+}
+
 /** Builds the target, or an error string naming what was missing. */
 function buildTarget(args: Record<string, unknown>): WatchTarget | string {
   const kind = args.targetKind as string;
@@ -107,11 +124,25 @@ function buildPredicate(args: Record<string, unknown>): WatchPredicate | string 
   switch (kind) {
     case 'changed':
       return { kind: 'changed' };
-    case 'appeared':
+    case 'appeared': {
       if (typeof args.idPath !== 'string') {
-        return 'Error: predicate "appeared" needs `idPath`, e.g. "$.messages.id".';
+        return 'Error: predicate "appeared" needs `idPath`, e.g. "$.items.id".';
       }
-      return { kind: 'appeared', idPath: args.idPath };
+      const hasField = typeof args.whereField === 'string' && args.whereField !== '';
+      const hasValue = args.whereEquals !== undefined && args.whereEquals !== '';
+      // Both or neither — half a filter silently matches everything, which is
+      // the failure this parameter exists to prevent.
+      if (hasField !== hasValue) {
+        return 'Error: `whereField` and `whereEquals` must be given together.';
+      }
+      return {
+        kind: 'appeared',
+        idPath: args.idPath,
+        ...(hasField
+          ? { where: { path: args.whereField as string, equals: coerce(args.whereEquals) } }
+          : {}),
+      };
+    }
     case 'matches':
       if (typeof args.pattern !== 'string') {
         return 'Error: predicate "matches" needs `pattern`.';
@@ -170,6 +201,8 @@ async function create(deps: WatcherToolDeps, args: Record<string, unknown>): Pro
       ...(typeof args.ttlHours === 'number'
         ? { ttlMs: Math.min(args.ttlHours * 3_600_000, MAX_LIFETIME_MS) }
         : {}),
+      ...(args.repeating === true ? { repeating: true } : {}),
+      ...(typeof args.maxFires === 'number' ? { maxFires: args.maxFires } : {}),
       ...(baseline.snapshot === undefined ? {} : { snapshot: baseline.snapshot }),
       ...(baseline.baselineIds === undefined ? {} : { baselineIds: baseline.baselineIds }),
       ...(baseline.etag === undefined ? {} : { etag: baseline.etag }),
@@ -177,7 +210,10 @@ async function create(deps: WatcherToolDeps, args: Record<string, unknown>): Pro
     });
     const every =
       target.kind === 'time' ? '' : ` Checking every ${Math.round(w.intervalMs / 1000)}s.`;
-    return `Watching ${describeWatchTarget(target)} — "${w.name}" (id ${w.id}).${every} It will start a turn when it fires, then end.`;
+    const ending = w.repeating
+      ? ` It will start a turn each time it fires and stay armed (up to ${w.maxFires ?? DEFAULT_MAX_FIRES} times) — you do NOT need to recreate it.`
+      : ' It will start a turn when it fires, then end.';
+    return `Watching ${describeWatchTarget(target)} — "${w.name}" (id ${w.id}).${every}${ending}`;
   } catch (err) {
     return `Error: ${err instanceof Error ? err.message : String(err)}`;
   }
@@ -189,7 +225,8 @@ function list(deps: WatcherToolDeps): string {
   return all
     .map((w) => {
       const when = w.lastCheckedAt ? ` · last checked ${w.lastCheckedAt}` : '';
-      return `${w.id} · ${w.status} · "${w.name}" · ${describeWatchTarget(w.target)}${when}`;
+      const mode = w.repeating ? ` · repeating (fired ${w.fireCount ?? 0}x)` : '';
+      return `${w.id} · ${w.status}${mode} · "${w.name}" · ${describeWatchTarget(w.target)}${when}`;
     })
     .join('\n');
 }
@@ -276,6 +313,10 @@ predicate (ignored for time):
              If you have not seen this tool's output shape, call it once first and read the real key. Guessing is the common way this goes wrong.
   matches  — the result matches \`pattern\` (a regular expression)
 
+To FOLLOW a conversation, set repeating=true. A one-shot watcher means recreating it after every reply, which costs a turn each time and loses anything that arrives while you are recreating it — a repeating watcher advances its own baseline in the same poll that fired, so there is no gap.
+
+If you are watching a chat you also send to, set whereField="isSender" whereEquals="false". Many chat tools return your OWN messages, so without it your reply counts as a new item and wakes you again — a loop.
+
 The baseline is taken when you create it, so "changed" means "changed since now". Only read-only tools may be watched. Default interval ${DEFAULT_INTERVAL_MS / 1000}s, minimum ${MIN_INTERVAL_MS / 1000}s.`,
         parameters: z.object({
           action: z.enum(['create', 'list', 'get', 'cancel']).describe('The operation'),
@@ -313,6 +354,23 @@ The baseline is taken when you create it, so "changed" means "changed since now"
               'Array path plus id key, e.g. "$.items.id" — must name a LIST, not a single field',
             ),
           pattern: z.string().optional().describe('Regular expression, for predicate "matches"'),
+          repeating: z
+            .boolean()
+            .optional()
+            .describe(
+              'Stay armed and fire every time the condition recurs, instead of ending after one fire. Use this to follow a conversation — recreating a one-shot watcher after each reply loses anything that arrives while you are recreating it.',
+            ),
+          maxFires: z
+            .number()
+            .optional()
+            .describe('Stop a repeating watcher after this many fires'),
+          whereField: z
+            .string()
+            .optional()
+            .describe(
+              'With `whereEquals`, only count items whose field matches — e.g. whereField="isSender", whereEquals="false" to ignore your own sent messages',
+            ),
+          whereEquals: z.string().optional().describe('Value `whereField` must equal'),
           intervalSeconds: z.number().optional().describe('How often to check'),
           ttlHours: z.number().optional().describe('Give up after this long'),
         }),

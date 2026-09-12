@@ -127,7 +127,7 @@ function evaluatePredicate(
     }
 
     case 'appeared': {
-      const ids = idsAt(obs.value, predicate.idPath);
+      const ids = idsAt(obs.value, predicate.idPath, predicate.where);
       // Could not evaluate. Deliberately NOT treated as an empty list: an empty
       // baseline would make every pre-existing item look new on the next poll
       // and fire a false wake naming things that were always there.

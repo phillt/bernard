@@ -26,11 +26,11 @@
  */
 import { debugLog } from '../logger.js';
 import { resetActiveWatcherCount, setActiveWatcherCount } from './active-count.js';
-import { evaluate } from './evaluate.js';
+import { evaluate, type Evaluation } from './evaluate.js';
 import { probe, type ProbeDeps } from './probe.js';
 import { buildWake, type Wake } from './wake.js';
 import type { WatcherStore } from './store.js';
-import { MAX_PROBE_FAILURES, isDue, isPollable, type Watcher } from './types.js';
+import { DEFAULT_MAX_FIRES, MAX_PROBE_FAILURES, isDue, isPollable, type Watcher } from './types.js';
 
 /**
  * How often the loop LOOKS for due watchers — the granularity of the clock, not
@@ -256,13 +256,25 @@ export class WatcherPoller {
     // a watcher left active in the meantime would fire again on the next tick —
     // the user asked to be told once.
     const firedAt = new Date(this.now()).toISOString();
-    this.opts.store.finish(
-      w.id,
-      'fired',
-      { firedAt, lastCheckedAt: checkedAt, failureCount: 0 },
-      w,
-    );
-    debugLog('watcher:fired', { id: w.id, name: w.name, reason: verdict.reason });
+    if (w.repeating) {
+      // Advance and stay armed, in THIS pass. Note the ordering difference from
+      // the one-shot path: there is no window in which a repeating watcher is
+      // terminal, because it never becomes terminal.
+      this.rearm(w, verdict, checkedAt);
+    } else {
+      this.opts.store.finish(
+        w.id,
+        'fired',
+        { firedAt, lastCheckedAt: checkedAt, failureCount: 0 },
+        w,
+      );
+    }
+    debugLog('watcher:fired', {
+      id: w.id,
+      name: w.name,
+      reason: verdict.reason,
+      repeating: w.repeating === true,
+    });
 
     const wake = buildWake(
       w,
@@ -275,12 +287,66 @@ export class WatcherPoller {
     // tick; not restoring would spend the watcher on a refusal the user never
     // got the benefit of — and the watcher is the thing they were waiting on.
     if (this.opts.onWake(wake) === false) {
+      // Put back whichever way it fired. For a repeating watcher that means
+      // rewinding the advanced baseline too — leaving it advanced would mean the
+      // refused items never count as new again.
       this.opts.store.update(
         w.id,
-        { status: 'active', firedAt: undefined, lastCheckedAt: checkedAt },
+        {
+          status: 'active',
+          firedAt: undefined,
+          lastCheckedAt: checkedAt,
+          ...(w.repeating
+            ? {
+                fireCount: w.fireCount ?? 0,
+                ...(w.snapshot === undefined ? {} : { snapshot: w.snapshot }),
+                ...(w.baselineIds === undefined ? {} : { baselineIds: w.baselineIds }),
+              }
+            : {}),
+        },
         { ...w, status: 'fired', firedAt },
       );
       debugLog('watcher:wake-refused', { id: w.id, name: w.name });
     }
+  }
+
+  /**
+   * Re-arms a repeating watcher, in the same pass that fired it.
+   *
+   * The baseline advances to the ids THIS poll saw, which is what removes the
+   * gap: re-arming from a later turn re-reads the target, so anything arriving
+   * in between is already present and is silently swallowed into the new
+   * baseline. Observed in use — replies landed in that window, across six
+   * hand-made re-arms.
+   */
+  private rearm(w: Watcher, verdict: Evaluation, checkedAt: string): void {
+    const fireCount = (w.fireCount ?? 0) + 1;
+    const maxFires = w.maxFires ?? DEFAULT_MAX_FIRES;
+    if (fireCount >= maxFires) {
+      // Stops rather than continuing quietly: a repeating watcher is the one
+      // shape here that can run away, and the user should find it finished with
+      // a reason rather than still going.
+      this.opts.store.finish(
+        w.id,
+        'fired',
+        { fireCount, firedAt: new Date(this.now()).toISOString(), lastCheckedAt: checkedAt },
+        w,
+      );
+      debugLog('watcher:max-fires', { id: w.id, name: w.name, fireCount });
+      return;
+    }
+    this.opts.store.update(
+      w.id,
+      {
+        fireCount,
+        lastCheckedAt: checkedAt,
+        failureCount: 0,
+        ...(verdict.snapshot === undefined ? {} : { snapshot: verdict.snapshot }),
+        ...(verdict.baselineIds === undefined ? {} : { baselineIds: verdict.baselineIds }),
+        ...(verdict.etag === undefined ? {} : { etag: verdict.etag }),
+        ...(verdict.lastModified === undefined ? {} : { lastModified: verdict.lastModified }),
+      },
+      w,
+    );
   }
 }

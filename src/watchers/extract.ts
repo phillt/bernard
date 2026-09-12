@@ -143,7 +143,8 @@ export function normalizeForDigest(text: string): string {
 }
 
 /**
- * Every id at `idPath` within `value`, for an `appeared` predicate.
+ * Every id at `idPath` within `value`, for an `appeared` predicate, optionally
+ * narrowed by `where`.
  *
  * Takes the ARRAY the path names and reads each element's id, so
  * `$.messages[].id` is expressed as `idPath: '$.messages'` plus a trailing key —
@@ -151,7 +152,11 @@ export function normalizeForDigest(text: string): string {
  * caller must treat as "cannot evaluate" rather than "nothing is there": an
  * empty set would make every existing item look new on the next poll.
  */
-export function idsAt(value: unknown, idPath: string): string[] | null {
+export function idsAt(
+  value: unknown,
+  idPath: string,
+  where?: { path: string; equals: string | number | boolean },
+): string[] | null {
   // `$.messages.id` → list at `$.messages`, id key `id`.
   const lastDot = idPath.lastIndexOf('.');
   if (lastDot <= PATH_PREFIX.length - 1) return null;
@@ -163,6 +168,14 @@ export function idsAt(value: unknown, idPath: string): string[] | null {
   const ids: string[] = [];
   for (const item of list) {
     if (item === null || typeof item !== 'object') continue;
+    // The filter runs BEFORE the id is taken, and the same call is used to
+    // capture the baseline — so the two sets always describe the same
+    // population. Filtering only at compare time would make every excluded item
+    // look new on every poll, forever.
+    if (where !== undefined) {
+      const field = (item as Record<string, unknown>)[where.path];
+      if (field !== where.equals) continue;
+    }
     const raw = (item as Record<string, unknown>)[idKey];
     if (typeof raw === 'string' || typeof raw === 'number') ids.push(String(raw));
   }

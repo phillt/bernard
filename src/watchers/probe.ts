@@ -325,7 +325,7 @@ export async function captureBaseline(
   // unequal to an absent one and every watcher would fire the moment it was made.
   if (predicate.kind === 'changed') out.snapshot = digestOf(obs.value, extract);
   if (predicate.kind === 'appeared') {
-    const ids = idsAt(obs.value, predicate.idPath);
+    const ids = idsAt(obs.value, predicate.idPath, predicate.where);
     // REFUSED, not defaulted. `?? []` looked like the safe reading — "nothing
     // known yet, so the first poll's ids all count as new" — and it is the
     // single worst outcome available: the path names no list, so `evaluate` can

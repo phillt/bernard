@@ -63,8 +63,23 @@ export type WatchPredicate =
    * The one that expresses *"tell me when John replies"* correctly. `changed`
    * would also fire when an item is REMOVED, and `exists` would fire instantly
    * against a mailbox that already has a matching message.
+   *
+   * `where` narrows WHICH items count, and it is what makes watching a
+   * conversation you also speak in possible at all. Beeper's `list_messages`
+   * returns your own sent messages (`isSender: true`), so without it a watcher
+   * on a chat fires on Bernard's own reply, which prompts another reply — an
+   * observed loop, six re-arms deep. `where: {path:'isSender', equals:false}`
+   * says "only things I did not send".
+   *
+   * Applied identically when the baseline is captured and when it is compared,
+   * or the two sets would not correspond and every filtered item would read as
+   * new forever.
    */
-  | { kind: 'appeared'; idPath: string }
+  | {
+      kind: 'appeared';
+      idPath: string;
+      where?: { path: string; equals: string | number | boolean };
+    }
   /** The extracted text matches. */
   | { kind: 'matches'; pattern: string };
 
@@ -93,6 +108,29 @@ export interface Watcher {
    * here. See `wake.ts`.
    */
   instructions: string;
+  /**
+   * Whether this watcher re-arms itself instead of ending on the first fire.
+   *
+   * A conversation needs this. One-shot means the agent must create a fresh
+   * watcher after every wake, which costs a turn each time and — the part that
+   * actually loses messages — leaves a GAP: anything arriving between the fire
+   * and the re-create is already present when the new baseline is captured, so
+   * it is never reported. Observed in use; replies landed in that window.
+   *
+   * A repeating watcher advances its baseline to the ids seen in the same poll
+   * that fired, so the window does not exist.
+   */
+  repeating?: boolean;
+  /** How many times it has fired. Only meaningful when {@link repeating}. */
+  fireCount?: number;
+  /**
+   * Ceiling on fires before a repeating watcher stops on its own.
+   *
+   * A repeating watcher is the one shape here that can run away — each fire
+   * starts a turn, and a chat that is actively moving can fire every interval.
+   * `expiresAt` bounds it in time; this bounds it in work.
+   */
+  maxFires?: number;
   /** Digest of the extracted value when the watcher was created, or after a poll. */
   snapshot?: string;
   /** Baseline id set for an `appeared` predicate. */
@@ -135,6 +173,14 @@ export const MAX_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
  * silent-failure shape the whole feature exists to remove.
  */
 export const MAX_PROBE_FAILURES = 5;
+
+/**
+ * Default ceiling on fires for a repeating watcher.
+ *
+ * Sized so a busy conversation runs for hours without the user re-arming, while
+ * a runaway stops the same day rather than at `expiresAt` a week later.
+ */
+export const DEFAULT_MAX_FIRES = 50;
 
 /**
  * Cap on the observation handed to a woken turn, in CHARACTERS.
@@ -221,7 +267,13 @@ function isWatchPredicate(v: unknown): v is WatchPredicate {
     case 'changed':
       return true;
     case 'appeared':
-      return typeof p.idPath === 'string';
+      return (
+        typeof p.idPath === 'string' &&
+        (p.where === undefined ||
+          (typeof p.where === 'object' &&
+            p.where !== null &&
+            typeof (p.where as { path?: unknown }).path === 'string'))
+      );
     case 'matches':
       return typeof p.pattern === 'string';
     default:

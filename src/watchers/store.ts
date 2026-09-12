@@ -47,6 +47,9 @@ export interface CreateWatcherInput {
   ownerSessionId: string;
   intervalMs?: number;
   ttlMs?: number;
+  /** Stay armed and fire repeatedly — see {@link Watcher.repeating}. */
+  repeating?: boolean;
+  maxFires?: number;
   /** Baseline captured by the caller BEFORE creating. See `create`. */
   snapshot?: string;
   baselineIds?: string[];
@@ -153,6 +156,8 @@ export class WatcherStore {
       intervalMs: Math.max(input.intervalMs ?? DEFAULT_INTERVAL_MS, MIN_INTERVAL_MS),
       failureCount: 0,
       expiresAt: new Date(now + ttl).toISOString(),
+      ...(input.repeating ? { repeating: true, fireCount: 0 } : {}),
+      ...(input.maxFires === undefined ? {} : { maxFires: input.maxFires }),
       ...(input.snapshot === undefined ? {} : { snapshot: input.snapshot }),
       ...(input.baselineIds === undefined ? {} : { baselineIds: input.baselineIds }),
       ...(input.etag === undefined ? {} : { etag: input.etag }),
