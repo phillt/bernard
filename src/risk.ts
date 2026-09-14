@@ -179,15 +179,20 @@ export function shouldConfirm(risk: RiskLevel, threshold: ConfirmThreshold | und
  * already get `kind: 'write'` by default via `wrapMCPTool()` so unclassified
  * MCP writes still trip this gate.
  *
- * **Three callers now, and they agree today for a reason worth stating.** The
- * read-only block gate (#179) asks "may this run"; `write-barrier.ts` asks
- * "could a read observe a difference"; `duplicate-guard.ts` asks "is repeating
- * this harmful". All three reduce to "does it mutate", which is why one
+ * **Two callers now, and they agree for a reason worth stating.** The read-only
+ * block gate (#179) asks "may this run"; `write-barrier.ts` asks "could a read
+ * observe a difference". Both reduce to "does it mutate", which is why one
  * predicate serves them — the #513 lesson that `risk.ts` already owns the
- * answer. They diverge at IDEMPOTENCY, which the duplicate gate really wants
- * and no tool declares yet (#570). So a future refinement made for permission
- * reasons — classifying an unchanged-hash `file_write` as a read, say — would
- * silently move the other two. Name them here rather than let that be found.
+ * answer. A future refinement made for permission reasons would silently move
+ * the barrier too, so it is named here rather than left to be found.
+ *
+ * A third caller was tried and withdrawn, and the reason bounds what this
+ * predicate can be asked (#575). A duplicate-write gate wanted "is repeating
+ * this harmful", which is IDEMPOTENCY rather than mutation — and measured
+ * against real logs the substitution is not close: of 46 adjacent identical
+ * `shell` repeats, this predicate calls 44 of them writes, including
+ * `ls -l … | cat` and `grep -nE …`, because `primaryShellCommand` returns null
+ * for any compound line. Do not reach for this to answer that question.
  *
  * When `meta.isWriteAction` is set, it overrides the static `kind` check for
  * this specific invocation — so `memory({action:'read'})` falls through even

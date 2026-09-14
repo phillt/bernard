@@ -712,6 +712,59 @@ Profile switching mid-session calls `applyProfileToConfig(config)` (`src/config.
 - Per-turn execution-strategy selection (#167): `config.coordinatorMode` is tri-state (`on | off | auto`, default `auto`). The Policy Engine's `strategyPolicy` (`src/policy/strategy.ts`) short-circuits on `on`/`off` and delegates to the **Qualifier** (`src/qualifier/`) on `auto`. `DefaultQualifier` is rule-based with feature extractors grounded in LLM-routing research (`src/qualifier/signals.ts`: tool-invocation verbs from Topaz/MoMA, multi-step phrasing + numbered lists from RouteLLM, token tiers from RouterArena/RouterBench, question count from FrugalGPT, Bloom's-Taxonomy levels from RouterArena). The decision tree escalates on multi-step language, tool-keyword + complexity, 2+ sub-questions, or Apply/Analyze/Evaluate Bloom levels; otherwise defaults to Normal (FrugalGPT-style "try the cheap path first" cascade). `isReactEffective` (`src/policy/effective.ts`) is the single source of truth for "is React active right now" — main-agent tool-set assembly (`framework/agents/main.ts`) gates `evaluate` on the same value the strategy uses, so qualifier decisions never drift from the wired tool surface. **`plan` is exposed in every mode** (not just ReAct) because tool membership must stay session-stable for the prompt cache. Enforcement is a separate axis, and since #303 it is **split**: _reconciliation_ (a plan that exists must reach a terminal state) runs on the main agent in **any** mode via `PlanReconcileStrategy`, while _plan creation_ stays coordinator-only — nagging a trivial Normal turn into planning is cost with no benefit. Both call the same `enforcePlan` helper (`framework/strategies/plan-enforcement.ts`), and the two wrappers are gated on opposite polarity of `isReactEffective`, so exactly one enforcement pass can run per turn. Before the split a Normal turn could record a plan, render it in the plan panel, and abandon it — two turns in one observed session did. `aborted` / `stepLimitHit` still suppress enforcement in every mode. Scope is main-only via `BuildStrategyOpts.enforcePlanReconcile`; specialist sites don't set it. **The qualifier's `hasMultiStepLanguage` recognises a bare `then`/`next` sequencer** (#385), not just the `and then` bigram or `first … then` — `X, then Y` is an ordinary two-step phrasing that previously matched nothing and routed real multi-step work to Normal. Conditional clauses (`if X then Y`) are stripped first, since they carry tool verbs and would otherwise escalate. Telemetry: `debugLog('policy:decide', …)` records the decision + reason map every turn, plus the qualifier's raw `signals` feature map — `reason` names the branch that won, `signals` names what was live when it did, which is the difference between diagnosing a misclassification from the log and reconstructing it from source; `debugLog('qualifier:outcome', …)` adds `{strategyId, reason, steps, hitStepLimit, coordinatorMode}` at per-turn stats flush.
 - Dangerous-command safelist: shell commands whose target path starts with `BERNARD_TMP_PREFIX` (an internal constant exported from `src/tools/shell.ts`, equal to `path.join(os.tmpdir(), 'bernard-')` — not a user-facing env var) and contain no shell metacharacters skip the confirmation menu. Intentionally narrow so Bernard's own scratch-script cleanup doesn't pop a prompt; arbitrary `rm` still confirms.
 
+## Code review on a PR posts to the PR
+
+A review whose findings live only in the conversation is a review nobody can act
+on twice. `/address-pr-reviews` drives a PR to done by reading **review threads**
+— inline diff comments carrying `path`, `line` and `isResolved`, fetched through
+GraphQL because REST cannot say which are still open — plus top-level issue
+comments. Findings reported as prose in a transcript appear in neither, so the
+two halves of the workflow cannot meet: nothing to reply to, nothing to resolve,
+and no record on the PR of what was raised or why it was dismissed.
+
+So when a review runs against a PR, it **posts**. Use `ReportFindings` when the
+host provides it; when it does not — it is frequently absent, which is what
+started this — fall back to the API rather than to prose:
+
+```bash
+read -r OWNER REPO < <(gh repo view --json owner,name -q '.owner.login + " " + .name')
+gh api "repos/$OWNER/$REPO/pulls/$NUM/reviews" --input - <<'JSON'
+{
+  "event": "COMMENT",
+  "body": "<one paragraph: what was reviewed, and the headline>",
+  "comments": [
+    { "path": "src/tools/augment.ts", "line": 641, "side": "RIGHT",
+      "body": "**high** — one-sentence defect.\n\nConcrete failure: inputs → wrong result." }
+  ]
+}
+JSON
+```
+
+Rules that make the output usable rather than merely present:
+
+- **One comment per finding, anchored to the line it is about.** That is what
+  makes it a resolvable thread. A wall of findings in the review body is the
+  prose problem with extra steps.
+- **`event: "COMMENT"`**, never `APPROVE` or `REQUEST_CHANGES`, unless the user
+  asked for a verdict. A review agent blocking its own author's PR is a state
+  nobody asked for.
+- **`line` must be a line the diff touches on the `RIGHT` side**, or GitHub
+  rejects the whole review with a 422 — losing every comment in the batch, not
+  just the bad one. A finding about code the diff did not change has no anchor;
+  put those in the body and say which file they are about.
+- **Lead each comment with a severity** and follow it with a concrete failure —
+  inputs, and the wrong output they produce. "Consider extracting this" is not
+  reviewable; "`npm test` classifies as a write, so the second identical run is
+  refused with a message asserting the result is unchanged" is.
+- **Post only what survived verification.** A finding that did not reproduce
+  costs the author the same read as one that did, and teaches them to skim.
+- **Say what was checked and found clean**, briefly, in the body. A reviewer that
+  only ever lists problems cannot be distinguished from one that stopped early.
+
+The same contract is what makes `/address-pr-reviews` able to finish: it replies
+to each thread with what it did and resolves it, so the PR ends carrying the
+argument rather than just the diff.
+
 ## Evals
 
 There are **two** eval mechanisms, and which one a question belongs to is decided by whether answering it costs an API call.
@@ -902,24 +955,10 @@ Measured across 81 real session logs (6,867 tool calls): **91** reads started wh
 - **Per dispatch, never global.** `withSlot` allows four concurrent dispatches and each MCP delegation adds another, so one shared set would make a sub-agent's write block an unrelated sibling's read — serializing work that never raced. A `Set` rather than one chained promise, so a settled write stops being waited on instead of pinning every later read behind the longest write the dispatch ever ran.
 - **`isWrite` comes from `shouldBlockInReadOnly`**, the same predicate the read-only block gate uses — consulted per call, so `memory{action:'read'}` and a read-shaped `shell` are correctly reads, and MCP is decided by `isReadOnlyMCPToolName` where `mcp.ts` assigns the meta. Deriving it a second time here is how two answers to one question drift. It inherits that function's fail-open on missing meta: an unclassified tool reads as a read and never registers, which is the status quo rather than a regression.
 - **Known limit, and the one way this quietly does nothing.** A write registers when its `execute` is invoked, so a read only sees it if the write appears FIRST in the step's tool calls. Accepted on evidence rather than faith: all 91 observed overlaps are write-then-read, which is what "verify what I just did" looks like. The fix for read-first is a macrotask yield on every read so siblings can register — a cost on every tool call in the product for a shape never once observed.
+- **A duplicate-write gate was built beside this and WITHDRAWN, and the reason bounds what the barrier can be paired with (#575).** It refused an identical write that had already succeeded, keyed on `shouldBlockInReadOnly` — and that predicate answers MUTATION where the gate needed IDEMPOTENCY. Measured against the real logs the substitution is not close: of 46 adjacent identical `shell` repeats, **44 classify as writes**, including `ls -l … | cat` and `grep -nE …`, because `primaryShellCommand` returns null for any compound line. So it would have fired ~44 times on that corpus to catch 2 duplicate sends; told the model "its result is unchanged" when an edit had changed it; and — since a confirmed call re-arms the gate — refused every OTHER identical call rather than once. Module-global state additionally gave the cron daemon and the applet host alternating refusals with nobody watching. **The error worth not repeating is the measurement, not the idea**: the population was counted with a hand-classification of tool names rather than with the predicate that shipped, so the justification and the code disagreed about what a "write" is.
 - **Both `execute` wrappers go through the one helper**, and that is checkable rather than asserted: MCP takes the LEGACY branch (which is where the duplicate came from), so a test covering only MCP leaves the envelope branch untested — a mutation removing its `runOrdered` survived until an envelope-branch case existed.
 - **Test fixtures must use `attachMeta`.** `readToolMeta` reads the non-enumerable `__bernardMeta` and returns `undefined` for anything else, and an undefined meta classifies as a READ — so a hand-hung `.meta` property makes a fixture invisible to the gate and the barrier silently inert. The MCP fixture also derives its kind through the real `isReadOnlyMCPToolName` rather than hand-setting it: hard-coding `kind: 'write'` on both tools made the READ a write too, and writes never wait.
 - **Not fixed here, and tracked in #575**: the result shape that started it. `send_message` answers `"**Open the chat in Beeper**: /open/19"` — no message id, no success field — so "did it send?" is unanswerable from the result, which is what pushed the agent into verifying by reading at all.
-
-## A write that already succeeded is not repeated silently
-
-**src/tools/duplicate-guard.ts** (#575) — the half the write barrier cannot reach. Of the identical write pairs across 81 session logs, **45** had a read between them (the barrier's population) and **58** had **no read at all**: the model wrote, got a result that said nothing, and re-issued blind. Ordering cannot help, because the second call was never checking the first.
-
-- **The Dom incident is that shape.** `send_message` at `21:18:02.647` returned `"**Open the chat in Beeper**: /open/29"` — no id, no success field — then `focus_app`, then an identical `send_message` at `21:18:06.357` with no read anywhere between. Three messages were sent in total.
-- **The message says the earlier call SUCCEEDED, and that is the half that decides whether this works.** A model that re-issues is one that believes the first call failed; "an identical call was made" confirms what it already thinks and it retries anyway. The fact it was missing — and could not get from the result — is that the call worked.
-- **Successes only.** A failed write that is retried is the retry working as intended; gating it would turn a transient failure into a permanent one. `augment.ts`'s own failure detection is the authority on which is which, rather than a second guess here.
-- **Refuses, never prompts.** Returned as a tool result, so it works where there is nobody to ask — cron, `bernard script`, applet actions. Re-issuing IS the confirmation: the model says "yes, on purpose" by doing it, at one round trip and no UI. The warning is then CLEARED rather than re-armed, or the next identical call is refused on the strength of a success the model has already been told about and deliberately repeated — an endless alternation rather than a gate.
-- **Session-scoped, not per-dispatch.** The third Dom send came from a NEW delegate dispatch raised after the previous one had reported success, so a per-dispatch memory would have seen a first call each time and passed all three. This is the one place it deliberately diverges from `write-barrier.ts`, which is per-dispatch for the opposite reason.
-- **Writes only, and repetition alone is the wrong signal.** **138 of 187** adjacent identical calls in the corpus are reads — `shell` re-running a test, `file_read_lines` after an edit, a snapshot polling for change — all correct, all would prompt. Among writes every observed repeat is unwanted: duplicate sends, duplicate `calendar_create_event`, and a `calendar_update_event` loop that re-applied the same body six times at ~1.8 s intervals. Idempotency would make the calendar case provably harmless rather than merely wasteful and MCP exposes `idempotentHint` for it, but that is unread today (#570), so declaring the field now would be a lie on disk.
-- **The window is 300 s**, from the data rather than from taste: of 103 repeated-write pairs, 96 fall within 30 s, 98 within 60 s and **102 within 300 s**; the straggler is 93 minutes apart, which is a separate decision rather than a retry. Generous on purpose — a false fire costs one round trip, a miss costs a duplicate somebody receives.
-- **Existing permission tests had to gain distinct args**, and that is the feature rather than a cost: several called the same write twice with `{}` to exercise the block gate, which now trips this one too. A test whose subject is one gate must not have a second gate answering for it.
-- **The gate is module state and leaks across tests.** `__resetDuplicateGuard()` belongs in every `beforeEach` that touches a write — including sibling `describe` blocks, since a reset in one does not reach another. Without it the failure lands on whichever test happens to run next, which is exactly where it first landed.
-- **`keyOf`'s separator is `\0` written as an ESCAPE.** It is the right separator — it cannot occur in a tool name or in `JSON.stringify` output — but typed raw it is an invisible control character that survives prettier and eslint unnoticed. One shipped that way here and was caught only because a mutation anchor failed to match; there is a second literal NUL still in the tree at `inbox/send.ts`'s `dedupeKey`.
 
 ## Verdicts and Step Limits
 

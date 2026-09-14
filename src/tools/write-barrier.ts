@@ -45,6 +45,23 @@
  * write that hangs forever already hangs the step, so waiting on it adds no new
  * way to get stuck.
  *
+ * ## A third known limit: it does not reach across `delegate_<server>`
+ *
+ * `BERNARD_MCP_DELEGATION` defaults ON, so the main agent's only door to MCP is
+ * `delegate_<server>` — declared `kind: 'read'` deliberately, to avoid
+ * double-prompting — and each delegation runs under its own dispatch id. So two
+ * delegate calls issued in one parallel step register no write at the parent and
+ * are keyed separately, which means `delegate_beeper("send X")` beside
+ * `delegate_beeper("check the last messages")` reproduces exactly the race this
+ * module exists for, on the product's DEFAULT configuration.
+ *
+ * What is covered is the race INSIDE one delegation — which is where the
+ * measured incident happened, since the helper issued `send_message` and
+ * `list_messages` in one step of its own dispatch. Closing the outer case means
+ * either classifying a delegate by what it was asked to do (the task is prose)
+ * or ordering at the parent on something other than write-ness; neither is a
+ * small change, and neither should be guessed at.
+ *
  * ## A second known limit: the gates run outside the ordering
  *
  * `runOrdered` wraps the tool's `execute`, not the whole augmented call — so a

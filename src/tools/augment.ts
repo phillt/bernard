@@ -20,7 +20,6 @@ import { breadthOptionsFor, type BreadthOption } from '../permissions/breadth.js
 import { WRITE_PATH_TOOLS } from '../permissions/matchers.js';
 import { checkWritePath } from '../permissions/write-scope.js';
 import { runOrdered } from './write-barrier.js';
-import { duplicateWriteRefusal, recordWriteSuccess } from './duplicate-guard.js';
 
 /**
  * The wrapper shim prepends `[failure: <category>] <playbook.model>` to
@@ -613,10 +612,10 @@ export function augmentTools(
     toolDef: any,
   ): { refusal: string } | { grant: 'allow' | 'ask'; isWrite: boolean; argsJson: string } => {
     // Resolved once and handed back, for the reason the grant already is. Both
-    // were being recomputed by their consumers — `isWrite` twice per call
-    // (a second `isReadOnlyShellInvocation` parse of the command line for
-    // `shell`), `argsJson` twice — and `write-barrier.ts` states the real cost:
-    // two expressions answering one question is how they drift apart.
+    // were being recomputed by their consumers — `isWrite` twice per call (a
+    // second `isReadOnlyShellInvocation` parse of the command line for `shell`),
+    // `argsJson` twice — and `write-barrier.ts` states the cost: two expressions
+    // answering one question is how they drift apart.
     const isWrite = shouldBlockInReadOnly(readToolMeta(toolDef), args);
     const argsJson = fullArgsJson(args);
     const grant = resolveProfileGrant(toolName, args);
@@ -630,17 +629,6 @@ export function augmentTools(
     }
     const outOfScope = runWriteScopeGate(toolName, args);
     if (outOfScope) return { refusal: outOfScope };
-    // Here rather than as a stanza at each of the two `execute` wrappers (#575).
-    // This helper exists precisely because "a gate only SOME call sites run is
-    // the shape that let the write-scope gate ship unwired" — and a duplicate
-    // refusal written twice is that shape, with the envelope copy being the one
-    // nothing exercises. It lands AHEAD of the block and confirm gates, which is
-    // the same ordering the write-scope gate already takes: a call that is going
-    // to be refused should not first cost the user a prompt.
-    if (isWrite) {
-      const duplicate = duplicateWriteRefusal(toolName, argsJson);
-      if (duplicate) return { refusal: duplicate };
-    }
     return { grant, isWrite, argsJson };
   };
 
@@ -890,7 +878,11 @@ export function augmentTools(
             }
 
             const profileKey = resolveProfileKey(toolName, args);
-            const argsSnippet = safeSerialize(args);
+            // The string the gates already built, sliced — not a second full
+            // serialization of the same object. The legacy branch below takes
+            // the same value for the same reason; missing one of the two is how
+            // "one serialization per call" stops being true silently.
+            const argsSnippet = gates.argsJson.slice(0, 300);
             const errSnippet =
               envelope.status === 'error'
                 ? `${envelope.error.message}${envelope.error.snippet ? `\n${envelope.error.snippet}` : ''}`.slice(
@@ -919,7 +911,6 @@ export function augmentTools(
             // the model can cite it for verified claims. Errored / denied /
             // cancelled envelopes never become evidence.
             if (envelope.status === 'ok') {
-              if (gates.isWrite) recordWriteSuccess(toolName, gates.argsJson);
               const previewSrc =
                 typeof serialized === 'string' ? serialized : safeSerialize(serialized);
               registerEvidence(toolName, args, source.meta, previewSrc);
@@ -1019,10 +1010,6 @@ export function augmentTools(
             });
           }
           if (!looksLikeError) {
-            // Successes only. A failed write that is retried is the retry
-            // working as intended; gating it would turn a transient failure
-            // into a permanent one.
-            if (gates.isWrite) recordWriteSuccess(toolName, gates.argsJson);
             const previewSrc =
               typeof capturedResult === 'string' ? capturedResult : safeSerialize(capturedResult);
             registerEvidence(toolName, args, meta, previewSrc);

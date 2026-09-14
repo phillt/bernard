@@ -11,12 +11,6 @@ export function truncate(s: string, max: number): string {
 }
 
 /**
- * `n === 1 ? one : many`. Trivial, but it was being written inline in 14+
- * renderers with three different spellings, and two more copies landed in a
- * single changeset before this existed. Same rationale as {@link truncate}:
- * one spelling beats fourteen drifting ones.
- */
-/**
  * The largest index <= `n` that does not split a surrogate pair.
  *
  * A budget counted in UTF-16 units can land between the halves of an astral
@@ -40,6 +34,12 @@ export function safeCutIndex(text: string, n: number): number {
   return last >= 0xd800 && last <= 0xdbff ? n - 1 : n;
 }
 
+/**
+ * `n === 1 ? one : many`. Trivial, but it was being written inline in 14+
+ * renderers with three different spellings, and two more copies landed in a
+ * single changeset before this existed. Same rationale as {@link truncate}:
+ * one spelling beats fourteen drifting ones.
+ */
 export function plural(n: number, one: string, many: string): string {
   return n === 1 ? one : many;
 }
