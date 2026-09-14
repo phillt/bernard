@@ -542,18 +542,37 @@ Keys for custom providers are stored in `keys.json` (same path as built-ins) and
 
 `config.modelMode` (#170) tiers the (provider, model) used by each LLM call site within the active provider's model lineup. Four presets:
 
-- `off` (default) — every site uses `config.provider`/`config.model`. Legacy behavior, zero overhead.
+- `off` — every site uses `config.provider`/`config.model`. Legacy behavior, zero overhead. **Not the default** — `DEFAULT_MODEL_MODE` (`src/config.ts:377`) is `balanced`, and this line said otherwise until #447. Worth stating because the difference decides blast radius: under `balanced` the lineup's `premium` slot is what every main-agent turn resolves to, so a bad slot is the live path for every install rather than an opt-in.
 - `optimize-tokens` — aggressive cost-saving. Main uses **mid**, every sub-agent/wrapper/router site uses **cheap**.
-- `balanced` — main **premium**; specialist/tool-wrapper/compressor **mid**; rewriter/reference-resolver/reference-lookup/recall-filter/specialist-detector **cheap**.
+- `balanced` (**default**) — main **premium**; specialist/tool-wrapper/compressor **mid**; rewriter/reference-resolver/reference-lookup/recall-filter/specialist-detector **cheap**.
 - `optimize-performance` — every site uses **premium**.
 
-Per-provider tier → model mapping (in `src/model-policy.ts`):
+Per-provider tier → model mapping — `DEFAULT_TIERS` in `src/lineups.ts`, which is
+what seeds a lineup and what `config.ts` derives `FALLBACK_PROVIDER_MODELS` from:
 
-| Provider  | premium                 | mid                        | cheap                     |
-| --------- | ----------------------- | -------------------------- | ------------------------- |
-| anthropic | claude-opus-4-6         | claude-sonnet-4-5-20250929 | claude-haiku-4-5-20251001 |
-| openai    | gpt-5.2                 | gpt-4.1                    | gpt-4.1-mini              |
-| xai       | grok-4-1-fast-reasoning | grok-4-fast-non-reasoning  | grok-3-mini               |
+| Provider  | premium       | mid             | cheap                     |
+| --------- | ------------- | --------------- | ------------------------- |
+| anthropic | claude-opus-5 | claude-sonnet-5 | claude-haiku-4-5-20251001 |
+| openai    | gpt-5.5       | gpt-5.2         | gpt-5.4-nano              |
+| xai       | grok-4.6      | grok-4.3        | grok-4-1-fast-reasoning   |
+
+**This table is curated, and it used to be derived (#447).** Seeding ranked the
+Vercel AI Gateway catalog by output price and took the extremes, which is unsound
+for choosing ids to hand a _direct_ provider SDK: the gateway serves models the
+provider's own API does not, and price extremes are where those live. It seeded
+Anthropic's premium as `claude-opus-4` — retired, still listing its legacy
+$75/MTok price, therefore top of the sort, and not dispatchable — so with
+`balanced` mapping `main → orchestrator → premium`, every turn of every fresh
+install failed. `deriveTiers` is kept, and only to _recognise_ such a seed so
+`repairBuiltinLineups` can rewrite it; do not restore it as a producer.
+
+**Catalog membership is not a dispatchability check, in either direction**, which
+is the trap when editing rows above. Probed: `grok-3-mini` dispatches and is in no
+catalog snapshot; `grok-4.1-fast-reasoning` is in the snapshot and returns
+`not_found`. Only `bernard validate-lineup <id>` answers the question. Note also
+that xAI id punctuation varies **by family** — `grok-4.6` and
+`grok-4-1-fast-reasoning` are both correct — so the two comments in
+`providers/catalog.ts` that generalise about xAI dots are both wrong.
 
 Custom providers fall back to `config.model` for every site (no tier mapping). Invocation-level overrides and per-specialist `provider`/`model` records always win over the policy. When `modelMode !== 'off'` and a specialist is created with **neither** an explicit provider/model **nor** a `role`, the policy-resolved `specialist`-tier model is persisted onto the new record so later mode changes don't silently re-tier it.
 

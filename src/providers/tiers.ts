@@ -1,13 +1,24 @@
 /**
  * @module providers/tiers
  *
- * Derive the three lineup tiers (`premium`, `mid`, `cheap`) from a list of
- * catalog entries for a single provider, using output-price quantiles with a
- * recency tie-break.
+ * Derive three lineup tiers (`premium`, `mid`, `cheap`) from a single
+ * provider's catalog entries, by output-price quantile with a recency
+ * tie-break.
  *
- * Used by `seedDefaultLineups()` when a fresh install (or a built-in provider
- * with no existing lineup) needs sensible defaults — the user can still
- * override any slot through the `/models` lineup editor.
+ * **This no longer PRODUCES a seed. It only RECOGNISES one.** Until #447 this
+ * was what `seedForProvider` used, and ranking a *gateway* catalog by price is
+ * unsound as a way to choose ids for a *direct* provider SDK: price extremes are
+ * where non-servable models live. It seeded Anthropic's premium as
+ * `claude-opus-4` — retired, still listing its legacy $75/MTok price, therefore
+ * top of the sort, and not dispatchable. Seeding now comes from the curated
+ * `DEFAULT_TIERS` in `src/lineups.ts`; the full argument lives there.
+ *
+ * What survives is the one thing this function is still good at: reproducing
+ * exactly what the old seeder wrote. `repairBuiltinLineups` compares a stored
+ * lineup against this output to decide whether it is an untouched machine seed
+ * that may be safely rewritten. So do not "fix" the ranking — a change here does
+ * not improve any default, it only makes repair stop recognising the installs it
+ * exists to repair.
  */
 
 import type { ModelCatalogEntry } from './catalog.js';

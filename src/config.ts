@@ -19,7 +19,7 @@ import {
   type ToolPermissions,
   sanitizePermissionRules,
 } from './tool-permissions.js';
-import { FALLBACK_TIERS } from './lineups.js';
+import { DEFAULT_TIERS } from './lineups.js';
 import { DEFAULT_MCP_RESULT_MAX_CHARS } from './mcp-result-shaper.js';
 
 /** Resolved runtime configuration for a Bernard session. */
@@ -859,20 +859,31 @@ export function getProviderKeyStatus(): Array<{
  * vendored snapshot). The dynamic `PROVIDER_MODELS` proxy below consults the
  * catalog first and falls back to these.
  *
- * Derived from `FALLBACK_TIERS` (src/lineups.ts) — the single source of truth
- * for offline-fallback model names — so the two tables can't drift. Only the
- * *ordering* is owned here: the first entry is the `getDefaultModel` fallback,
- * and anthropic deliberately leads with the mid tier (sonnet) rather than
- * premium so the offline default stays the cheaper everyday model.
+ * Derived from `DEFAULT_TIERS` (src/lineups.ts) — the single source of truth
+ * for built-in model names, and since #447 also what seeds a lineup — so the
+ * two tables can't drift. Only the *ordering* is owned here: the first entry is
+ * the `getDefaultModel` fallback, and anthropic deliberately leads with the mid
+ * tier (sonnet) rather than premium so the default stays the cheaper everyday
+ * model.
+ *
+ * **That ordering governs the OFFLINE path only**, which is the exception
+ * rather than the rule. Whenever a catalog is present — the normal case, since
+ * a snapshot ships — `modelsForBuiltin` sorts it by release date and
+ * `getDefaultModel` takes `[0]`, so the default is the newest model the gateway
+ * lists and this list is not consulted at all. Unsound in principle for the
+ * reason #447 documents at `DEFAULT_TIERS`, but not the same exposure: a
+ * retired model keeps its old price, so a price-descending sort pulls it toward
+ * the head while a recency sort pushes it away. None of the four ids on
+ * `DEAD_SEEDED_MODELS` is at the head of a recency sort.
  */
 const FALLBACK_PROVIDER_MODELS: Record<BuiltinProvider, string[]> = {
   anthropic: [
-    FALLBACK_TIERS.anthropic.mid,
-    FALLBACK_TIERS.anthropic.premium,
-    FALLBACK_TIERS.anthropic.cheap,
+    DEFAULT_TIERS.anthropic.mid,
+    DEFAULT_TIERS.anthropic.premium,
+    DEFAULT_TIERS.anthropic.cheap,
   ],
-  openai: [FALLBACK_TIERS.openai.premium, FALLBACK_TIERS.openai.mid, FALLBACK_TIERS.openai.cheap],
-  xai: [FALLBACK_TIERS.xai.premium, FALLBACK_TIERS.xai.mid, FALLBACK_TIERS.xai.cheap],
+  openai: [DEFAULT_TIERS.openai.premium, DEFAULT_TIERS.openai.mid, DEFAULT_TIERS.openai.cheap],
+  xai: [DEFAULT_TIERS.xai.premium, DEFAULT_TIERS.xai.mid, DEFAULT_TIERS.xai.cheap],
 };
 
 function modelsForBuiltin(provider: BuiltinProvider): string[] {

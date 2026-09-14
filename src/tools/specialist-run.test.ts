@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { DEFAULT_TIERS } from '../lineups.js';
 import type { BernardConfig } from '../config.js';
 import type { ToolOptions } from './types.js';
 
@@ -505,7 +506,7 @@ describe('specialist-run tool', () => {
       expect(mockGetModel).toHaveBeenCalledWith(expect.anything(), 'openai', 'gpt-4o-mini');
     });
 
-    it('falls back to global config when no overrides', async () => {
+    it('resolves through the seeded lineup when no override is given', async () => {
       mockGenerateText.mockResolvedValue({ text: 'Done' });
       vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
 
@@ -517,10 +518,16 @@ describe('specialist-run tool', () => {
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
       );
 
+      // NB: this is the seeded lineup's **mid** tier, not `config.model` — the
+      // suite mocks `node:fs` so the catalog reads empty and `loadLineups`
+      // seeds from `DEFAULT_TIERS`. The two used to be the same literal by
+      // coincidence, which is what made the test name read as if `config.model`
+      // were the thing under test. Named rather than hardcoded so a table edit
+      // cannot break three unrelated suites again (#447).
       expect(mockGetModel).toHaveBeenCalledWith(
         expect.anything(),
         'anthropic',
-        'claude-sonnet-4-5-20250929',
+        DEFAULT_TIERS.anthropic.mid,
       );
     });
 
