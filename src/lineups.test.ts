@@ -227,6 +227,56 @@ describe('lineups store', () => {
       expect(m.consumeLineupRepairReport()?.ids).toContain('xai');
     });
 
+    // A lineup may freely mix providers, so a built-in-id lineup can hold a
+    // foreign cell. The replacement must come from the SLOT's provider: taking
+    // it from the lineup's produced `{provider:'openai', model:'claude-…'}`, a
+    // pair that cannot exist, and reported it as "refreshed".
+    it("replaces a foreign dead slot with that provider's model, not the lineup's", async () => {
+      const m = await loadModule();
+      const roles = fullRoles({
+        premium: { provider: 'anthropic', model: 'claude-opus-4-6' },
+        mid: { provider: 'openai', model: 'gpt-oss-20b' },
+        cheap: { provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },
+      });
+      await writeLineups({
+        anthropic: { id: 'anthropic', name: 'Mixed', roles, ...stamp },
+      });
+      const ladder = m.loadLineups().anthropic.roles.orchestrator;
+      expect(ladder.mid.provider).toBe('openai');
+      expect(ladder.mid.model).toBe(m.DEFAULT_TIERS.openai.mid);
+    });
+
+    // Per-slot generation params are reachable from the lineup editor without
+    // changing a model, so a lineup carrying them is configured. Rule 1 builds
+    // fresh slots and would drop them; it must decline, leaving rule 2 to fix
+    // the dead model while preserving the field.
+    it('never discards per-slot params, and still fixes the dead model', async () => {
+      const m = await loadModule();
+      const roles = await legacySeed('anthropic');
+      roles.orchestrator.mid = { ...roles.orchestrator.mid, params: { reasoningEffort: 'high' } };
+      await writeLineups({
+        anthropic: { id: 'anthropic', name: 'Anthropic-only', roles, ...stamp },
+      });
+      const ladder = m.loadLineups().anthropic.roles.orchestrator;
+      // Rule 1 declined, so mid keeps the legacy derived model AND its params.
+      expect(ladder.mid.params).toEqual({ reasoningEffort: 'high' });
+      // Rule 2 still rescued the premium slot, which could not dispatch.
+      expect(ladder.premium.model).toBe(m.DEFAULT_TIERS.anthropic.premium);
+    });
+
+    // `grok-4.20-multi-agent` is the legacy derived MID for xAI, and `balanced`
+    // routes every specialist/wrapper/compressor call through mid — so an
+    // install rule 1 can no longer recognise must still have it replaced.
+    it('replaces the xAI mid that fails a probe, when rule 1 cannot fire', async () => {
+      const m = await loadModule();
+      const roles = await legacySeed('xai');
+      roles.coder.cheap = { provider: 'xai', model: 'grok-4.3' };
+      await writeLineups({ xai: { id: 'xai', name: 'xAI-only', roles, ...stamp } });
+      const ladder = m.loadLineups().xai.roles.orchestrator;
+      expect(ladder.mid.model).toBe(m.DEFAULT_TIERS.xai.mid);
+      expect(m.consumeLineupRepairReport()?.dead).toContain('xai/grok-4.20-multi-agent');
+    });
+
     // Across a fresh module load, i.e. what a second `bernard` process sees.
     // Within one process the `repairAttempted` latch alone would make this pass,
     // which would prove nothing about the repair being idempotent.

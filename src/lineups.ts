@@ -386,17 +386,25 @@ function migrateLineupShape(
 /**
  * Model ids that a past seeder wrote and that cannot dispatch.
  *
- * Keyed `provider:model`. Deliberately tiny and deliberately hand-maintained:
+ * Keyed `provider/model` via {@link modelKey}. Deliberately tiny and
+ * deliberately hand-maintained:
  * this is the belt-and-braces half of repair, and its whole job is to guarantee
  * #447 is fixed even for an install whose ladder no longer matches what
  * {@link deriveTiers} produces today (the user seeded months ago against a
  * different gateway snapshot, so the content match below cannot recognise it).
  *
- * **The bar for adding an entry is a live probe returning `not_found`** — not
+ * **The bar for adding an entry is a live probe the model cannot pass** — not
  * "expensive", not "stale", not "absent from the catalog" (see
  * {@link DEFAULT_TIERS} for why membership settles nothing). Silently rewriting
  * a *working* config is a worse trade than leaving it. Every id here is one the
  * old price-ranked derivation actually seeded.
+ *
+ * Three return `not_found`. `grok-4.20-multi-agent` instead returns `Bad
+ * Request`, with or without a temperature parameter, while its siblings
+ * `grok-4.20-reasoning` and `grok-4.20-non-reasoning` both answer normally — so
+ * it is the model that is unreachable here, not the call shape. It matters more
+ * than the others: it is the legacy derived **mid** for xAI, and `balanced`
+ * routes every specialist, wrapper and compressor call through mid.
  *
  * Probed 2026-09-14: the three below returned `not_found`. `claude-opus-4` is
  * carried on the strength of #447's field report (`Error: model:
@@ -410,6 +418,7 @@ const DEAD_SEEDED_MODELS: ReadonlySet<string> = new Set([
   'openai/gpt-oss-20b',
   'openai/gpt-5.1-thinking',
   'xai/grok-4.1-fast-reasoning',
+  'xai/grok-4.20-multi-agent',
 ]);
 
 /**
@@ -420,6 +429,20 @@ const DEAD_SEEDED_MODELS: ReadonlySet<string> = new Set([
  */
 function modelKey(provider: string, model: string): string {
   return `${provider}/${model}`;
+}
+
+/**
+ * The curated ladder for a slot's provider, or `null` when it is a custom one.
+ *
+ * Every {@link DEAD_SEEDED_MODELS} entry names a built-in today, so the `null`
+ * arm is unreachable — but a slot's provider is a free string and a custom
+ * provider has no curated ladder, so indexing without the check is how a
+ * `undefined[tier]` throw arrives later from a file somebody hand-edited.
+ */
+function curatedTiersFor(provider: string): { premium: string; mid: string; cheap: string } | null {
+  return (BUILTIN_PROVIDERS as readonly string[]).includes(provider)
+    ? DEFAULT_TIERS[provider as BuiltinProvider]
+    : null;
 }
 
 /** What {@link repairBuiltinLineups} changed, for the caller to surface. */
@@ -522,6 +545,12 @@ function derivedLadderIfUnmodified(lineup: Lineup, provider: BuiltinProvider): D
     for (const tier of LINEUP_TIERS) {
       const slot = ladder[tier];
       if (slot.provider !== provider || slot.model !== derived[tier]) return null;
+      // Params are reachable from the lineup editor WITHOUT changing a model,
+      // so a lineup carrying any is one the user has configured — and the
+      // re-seed below builds fresh slots and would silently drop them. Decline
+      // rule 1 here; rule 2 still rescues a dead model and preserves params,
+      // so the two rules agree about never discarding this field.
+      if (slot.params !== undefined) return null;
     }
   }
   return derived;
@@ -532,7 +561,7 @@ function derivedLadderIfUnmodified(lineup: Lineup, provider: BuiltinProvider): D
  * curated model. Mutates `lineup.roles` in place, records what it replaced into
  * `dead`, and returns whether it changed anything.
  */
-function replaceDeadSlots(lineup: Lineup, provider: BuiltinProvider, dead: Set<string>): boolean {
+function replaceDeadSlots(lineup: Lineup, dead: Set<string>): boolean {
   let changed = false;
   for (const role of ALL_ROLE_IDS) {
     const ladder = lineup.roles[role];
@@ -540,8 +569,16 @@ function replaceDeadSlots(lineup: Lineup, provider: BuiltinProvider, dead: Set<s
       const slot = ladder[tier];
       const key = modelKey(slot.provider, slot.model);
       if (!DEAD_SEEDED_MODELS.has(key)) continue;
+      // The replacement comes from the SLOT's provider, never the lineup's.
+      // A lineup may freely mix providers (see the module docstring), so an
+      // `anthropic` lineup can legitimately hold an `openai` cell — and taking
+      // the model from `DEFAULT_TIERS[provider]` there produced
+      // `{provider:'openai', model:'claude-sonnet-5'}`, a pair that cannot
+      // exist, reported to the user as "refreshed".
+      const curated = curatedTiersFor(slot.provider);
+      if (!curated) continue;
       dead.add(key);
-      ladder[tier] = { ...slot, model: DEFAULT_TIERS[provider][tier] };
+      ladder[tier] = { ...slot, model: curated[tier] };
       changed = true;
     }
   }
@@ -597,7 +634,7 @@ function repairBuiltinLineups(map: Record<string, Lineup>): boolean {
     // Rule 2 (no catalog, static list): a known-dead id survived in a lineup
     // whose ladder rule 1 can no longer reproduce — seeded against an older
     // snapshot. Per-slot, so the user's other picks stay.
-    if (replaceDeadSlots(lineup, provider, dead)) {
+    if (replaceDeadSlots(lineup, dead)) {
       lineup.updatedAt = now;
       ids.push(provider);
     }

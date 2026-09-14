@@ -18,6 +18,9 @@ describe('lineupRepairNotice', () => {
     const notice = lineupRepairNotice({ ids: ['anthropic', 'openai', 'xai'], dead: [] });
     expect(notice).toContain('your default model lineups (anthropic, openai, xai) were set up');
     expect(notice).toContain('refreshed them');
+    // `/lineup` reaches only the active lineup, so naming three and pointing at
+    // it would leave the other two unreachable from the instruction.
+    expect(notice).toContain('Use /lineups to switch');
   });
 
   // The distinction the notice exists to get right: a ladder match re-seeds the
@@ -32,7 +35,13 @@ describe('lineupRepairNotice', () => {
       ids: ['anthropic'],
       dead: ['anthropic/claude-opus-4'],
     });
-    expect(broken).toContain('1 of them could not be used at all: anthropic/claude-opus-4');
+    expect(broken).toContain('One model could not be used at all: anthropic/claude-opus-4');
+
+    // `d` counts models and `n` counts lineups: one lineup with two dead models
+    // must not read "refreshed it. 2 of them could not be used".
+    const mixed = lineupRepairNotice({ ids: ['openai'], dead: ['openai/a', 'openai/b'] });
+    expect(mixed).toContain('refreshed it.');
+    expect(mixed).toContain('2 models could not be used');
   });
 
   it('bounds a long list rather than pasting every id', () => {

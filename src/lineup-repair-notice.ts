@@ -37,14 +37,22 @@ export function lineupRepairNotice(report: LineupRepairReport | null): string | 
   if (!report || report.ids.length === 0) return null;
   const n = report.ids.length;
   const d = report.dead.length;
+  // `d` counts MODELS and `n` counts LINEUPS, so this clause pluralizes on `d`.
+  // It read `${d} of ${plural(n, …)}` and produced "I've refreshed it. 2 of
+  // them could not be used" for one lineup with two dead models — the tell was
+  // that both arms of that call were plural words.
   const couldNotBeUsed =
     d > 0
-      ? ` ${d} of ${plural(n, 'them', 'those')} could not be used at all: ${nameList(report.dead)}.`
+      ? ` ${plural(d, 'One model', `${d} models`)} could not be used at all: ` +
+        `${nameList(report.dead)}.`
       : '';
+  // `/lineup` edits the ACTIVE lineup only; naming three and pointing at it
+  // leaves the other two unreachable from the instruction.
+  const how = n > 1 ? 'Use /lineups to switch or /lineup to edit.' : 'Use /lineup to change it.';
   return (
     `Heads up — your default model ${plural(n, 'lineup', 'lineups')} ` +
     `(${nameList(report.ids, IDS_NAMED)}) ${plural(n, 'was', 'were')} set up by an older ` +
     `version of Bernard that picked models automatically, so I've refreshed ` +
-    `${plural(n, 'it', 'them')}.${couldNotBeUsed} Use /lineup to change any of it.`
+    `${plural(n, 'it', 'them')}.${couldNotBeUsed} ${how}`
   );
 }
