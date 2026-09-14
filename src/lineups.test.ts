@@ -163,16 +163,16 @@ describe('lineups store', () => {
 
     const stamp = { createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' };
 
+    /** An Anthropic lineup exactly as the pre-#447 price-ranked seeder wrote it. */
+    async function writeLegacySeed(name = 'Anthropic-only'): Promise<void> {
+      await writeLineups({
+        anthropic: { id: 'anthropic', name, roles: await legacySeed('anthropic'), ...stamp },
+      });
+    }
+
     it('rewrites a lineup whose every slot matches the old derivation', async () => {
       const m = await loadModule();
-      await writeLineups({
-        anthropic: {
-          id: 'anthropic',
-          name: 'Anthropic-only',
-          roles: await legacySeed('anthropic'),
-          ...stamp,
-        },
-      });
+      await writeLegacySeed();
       const lineups = m.loadLineups();
       const ladder = lineups.anthropic.roles.orchestrator;
       // `premium` alone proves nothing: every legacy ladder now contains at
@@ -186,7 +186,7 @@ describe('lineups store', () => {
       expect(ladder.cheap.model).toBe(m.DEFAULT_TIERS.anthropic.cheap);
       const report = m.consumeLineupRepairReport();
       expect(report?.ids).toContain('anthropic');
-      expect(report?.dead).toContain('anthropic:claude-opus-4');
+      expect(report?.dead).toContain('anthropic/claude-opus-4');
     });
 
     // The latch. Without it a swallowed write failure means repair re-detects
@@ -195,14 +195,7 @@ describe('lineups store', () => {
     it('does not retry after a failed write within one process', async () => {
       const m = await loadModule();
       const { LINEUPS_PATH } = await import('./paths.js');
-      await writeLineups({
-        anthropic: {
-          id: 'anthropic',
-          name: 'Anthropic-only',
-          roles: await legacySeed('anthropic'),
-          ...stamp,
-        },
-      });
+      await writeLegacySeed();
       const dir = path.dirname(LINEUPS_PATH);
       fs.chmodSync(dir, 0o555);
       try {
@@ -217,19 +210,29 @@ describe('lineups store', () => {
       }
     });
 
+    // xAI specifically, because it is the shape that breaks a careless early-out:
+    // its DERIVED premium (`grok-4.6`) equals its CURATED premium, so any
+    // short-circuit comparing one tier skips it and leaves the failing
+    // `grok-4.20-multi-agent` in `mid`. Every other case here is Anthropic,
+    // where the two differ in all three tiers and the bug is invisible.
+    it('repairs a provider whose derived and curated premium coincide', async () => {
+      const m = await loadModule();
+      await writeLineups({
+        xai: { id: 'xai', name: 'xAI-only', roles: await legacySeed('xai'), ...stamp },
+      });
+      const ladder = m.loadLineups().xai.roles.orchestrator;
+      expect(ladder.premium.model).toBe(m.DEFAULT_TIERS.xai.premium);
+      expect(ladder.mid.model).toBe(m.DEFAULT_TIERS.xai.mid);
+      expect(ladder.cheap.model).toBe(m.DEFAULT_TIERS.xai.cheap);
+      expect(m.consumeLineupRepairReport()?.ids).toContain('xai');
+    });
+
     // Across a fresh module load, i.e. what a second `bernard` process sees.
     // Within one process the `repairAttempted` latch alone would make this pass,
     // which would prove nothing about the repair being idempotent.
     it('does nothing on a second process once repaired', async () => {
       const first = await loadModule();
-      await writeLineups({
-        anthropic: {
-          id: 'anthropic',
-          name: 'Anthropic-only',
-          roles: await legacySeed('anthropic'),
-          ...stamp,
-        },
-      });
+      await writeLegacySeed();
       first.loadLineups();
       expect(first.consumeLineupRepairReport()).not.toBeNull();
 
@@ -242,14 +245,7 @@ describe('lineups store', () => {
     // still broken) nor cost the user their label.
     it('repairs a renamed lineup and keeps its name and createdAt', async () => {
       const m = await loadModule();
-      await writeLineups({
-        anthropic: {
-          id: 'anthropic',
-          name: 'Work',
-          roles: await legacySeed('anthropic'),
-          ...stamp,
-        },
-      });
+      await writeLegacySeed('Work');
       const lineups = m.loadLineups();
       expect(lineups.anthropic.name).toBe('Work');
       expect(lineups.anthropic.createdAt).toBe(stamp.createdAt);
@@ -287,11 +283,7 @@ describe('lineups store', () => {
         anthropic: {
           id: 'anthropic',
           name: 'My own',
-          roles: fullRoles({
-            premium: { provider: 'anthropic', model: 'claude-opus-4-6' },
-            mid: { provider: 'openai', model: 'gpt-4.1' },
-            cheap: { provider: 'xai', model: 'grok-3-mini' },
-          }),
+          roles: fullRoles(SAMPLE),
           ...stamp,
         },
       });
@@ -318,7 +310,7 @@ describe('lineups store', () => {
         m.DEFAULT_TIERS.anthropic.premium,
       );
       expect(lineups.anthropic.roles.orchestrator.mid.model).toBe('claude-sonnet-4-6');
-      expect(m.consumeLineupRepairReport()?.dead).toEqual(['anthropic:claude-opus-4']);
+      expect(m.consumeLineupRepairReport()?.dead).toEqual(['anthropic/claude-opus-4']);
     });
   });
 

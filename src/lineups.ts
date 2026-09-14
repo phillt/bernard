@@ -35,7 +35,7 @@ import { LINEUPS_PATH } from './paths.js';
 import { atomicWriteFileSync } from './fs-utils.js';
 import { debugLog } from './logger.js';
 import { getCatalogForProvider } from './providers/catalog.js';
-import { deriveTiers } from './providers/tiers.js';
+import { deriveTiers, type DerivedTiers } from './providers/tiers.js';
 import { BUILTIN_PROVIDERS, type BuiltinProvider } from './providers/types.js';
 import type { ModelParams } from './providers/model-params.js';
 import { ALL_ROLE_IDS, type RoleId } from './model-roles.js';
@@ -105,12 +105,18 @@ export const PROVIDER_DISPLAY_NAMES: Record<BuiltinProvider, string> = {
  * `gpt-5.1-thinking` for OpenAI and `grok-4.20-multi-agent` /
  * `grok-4.1-fast-reasoning` for xAI, all four of which fail a live probe.
  *
- * No filter over the catalog can fix that, which is why the answer is a table
+ * No filter over THIS catalog can fix that, which is why the answer is a table
  * rather than a better heuristic: the gateway metadata carries no deprecation
  * field, a `tool-use` tag filter excludes exactly one of 84 entries (and
  * `gpt-oss-20b` carries the tag), and a recency window that drops
  * `claude-opus-4` leaves `gpt-oss-20b` (11 months) and `gpt-5.4-pro` (4) in
- * place. Nothing in the catalog says "the direct provider serves this".
+ * place. Nothing in the *gateway* listing says "the direct provider serves
+ * this" — which is a fact about the source, not about catalogues in general.
+ * The deeper fix, deliberately out of scope for a release-blocking bug, is a
+ * serving dimension on `ModelCatalogEntry` populated from each provider's own
+ * `GET /v1/models` under the same stale-while-revalidate contract
+ * `loadCatalog` already has. That would serve seeding, repair, the `/model`
+ * picker and `getDefaultModel` at once instead of one of the four.
  *
  * **Catalog membership is NOT the test, in either direction**, and this is the
  * trap to avoid when editing the rows below. Probed 2026-09-14: `grok-3-mini`
@@ -163,6 +169,7 @@ export const DEFAULT_TIERS: Record<
     cheap: 'grok-4-1-fast-reasoning',
   },
 };
+
 export function validateLineupId(id: string): string | null {
   if (!id) return 'Lineup id cannot be empty.';
   if (id.length > ID_MAX_LENGTH) return `Lineup id must be ${ID_MAX_LENGTH} characters or fewer.`;
@@ -326,13 +333,16 @@ function migrateLineupShape(
   if (!entry || typeof entry !== 'object') return null;
   const e = entry as Record<string, unknown>;
   if (typeof e.id !== 'string' || typeof e.name !== 'string') return null;
-  // One clock read, not two. These are independent `nowIso()` calls in the
-  // original and a file missing BOTH timestamps then gets two values that are
-  // usually but not reliably equal — enough to make any later equality check on
-  // them flaky for reasons nothing in the record explains.
-  const migratedAt = nowIso();
-  const createdAt = typeof e.createdAt === 'string' ? e.createdAt : migratedAt;
-  const updatedAt = typeof e.updatedAt === 'string' ? e.updatedAt : migratedAt;
+  // One clock read, not two, and only when a timestamp is actually missing.
+  // These were independent `nowIso()` calls, so a file missing BOTH got two
+  // values that are usually but not reliably equal — enough to make a later
+  // equality check on them flaky for reasons nothing in the record explains.
+  // Lazy because `loadLineups` is uncached and hot (see `model-policy.ts`), and
+  // a healthy file never needs the value at all.
+  let migratedAt: string | undefined;
+  const at = (): string => (migratedAt ??= nowIso());
+  const createdAt = typeof e.createdAt === 'string' ? e.createdAt : at();
+  const updatedAt = typeof e.updatedAt === 'string' ? e.updatedAt : at();
 
   // Case 2 — already role-keyed.
   if (e.roles && typeof e.roles === 'object') {
@@ -383,10 +393,10 @@ function migrateLineupShape(
  * different gateway snapshot, so the content match below cannot recognise it).
  *
  * **The bar for adding an entry is a live probe returning `not_found`** — not
- * "expensive", not "stale", not "absent from the catalog". Silently rewriting a
- * *working* config is a worse trade than leaving it, and catalog absence proves
- * nothing either way: `grok-3-mini` dispatches and is in no snapshot. Every id
- * here is one the old price-ranked derivation actually seeded.
+ * "expensive", not "stale", not "absent from the catalog" (see
+ * {@link DEFAULT_TIERS} for why membership settles nothing). Silently rewriting
+ * a *working* config is a worse trade than leaving it. Every id here is one the
+ * old price-ranked derivation actually seeded.
  *
  * Probed 2026-09-14: the three below returned `not_found`. `claude-opus-4` is
  * carried on the strength of #447's field report (`Error: model:
@@ -396,11 +406,21 @@ function migrateLineupShape(
  * than a gateway-only name, which is consistent with that report.
  */
 const DEAD_SEEDED_MODELS: ReadonlySet<string> = new Set([
-  'anthropic:claude-opus-4',
-  'openai:gpt-oss-20b',
-  'openai:gpt-5.1-thinking',
-  'xai:grok-4.1-fast-reasoning',
+  'anthropic/claude-opus-4',
+  'openai/gpt-oss-20b',
+  'openai/gpt-5.1-thinking',
+  'xai/grok-4.1-fast-reasoning',
 ]);
+
+/**
+ * `provider/model` — the spelling `entryKey` (`providers/catalog.ts`),
+ * `distinctPairs` and `formatProbeLine` already use, so the startup notice and
+ * `bernard validate-lineup` name the same slot the same way. A colon is this
+ * repo's permission NAMESPACE separator (`shell:git`), a different idea.
+ */
+function modelKey(provider: string, model: string): string {
+  return `${provider}/${model}`;
+}
 
 /** What {@link repairBuiltinLineups} changed, for the caller to surface. */
 export interface LineupRepairReport {
@@ -459,45 +479,73 @@ export function consumeLineupRepairReport(): LineupRepairReport | null {
  * The residual false NEGATIVE is a user seeded against an older catalog
  * snapshot, whose ladder today's derivation no longer reproduces;
  * {@link DEAD_SEEDED_MODELS} is what covers the case that actually crashes.
+ *
+ * Returns the ladder it matched rather than a boolean, so the caller can name
+ * the models it is about to replace without re-deriving them. The predecessor
+ * returned `boolean` and the caller recovered them by indexing
+ * `ALL_ROLE_IDS[0]` — correct only because `replicateAcrossRoles` makes every
+ * role identical, which is a fact stated nowhere near the read.
+ *
+ * **Known decay, accepted deliberately.** This recognises a historical fact by
+ * re-running a price sort over third-party data on a 24h refresh, so the day
+ * the gateway drops or reprices `claude-opus-4` the rule silently stops firing
+ * — and `tiers.test.ts` pins against the *vendored* snapshot, not the user's
+ * live cache, so CI stays green while field behaviour changes. Freezing the
+ * three ladders as literals would make it a fact that cannot rot, but it also
+ * narrows recognition to installs seeded when that snapshot was current, and
+ * the live sort is strictly better for the recently-seeded majority. Neither
+ * covers an install seeded months ago; {@link DEAD_SEEDED_MODELS} is what does.
+ * The mechanism that retires this whole question is provenance — a `version` on
+ * `LineupsFile` and a `seededBy` stamp on a seeded lineup, so repair reads a
+ * field instead of sniffing content.
  */
-function matchesDerivedLadder(lineup: Lineup, provider: BuiltinProvider): boolean {
+function derivedLadderIfUnmodified(lineup: Lineup, provider: BuiltinProvider): DerivedTiers | null {
+  // Cheapest rejection first: this spares a hand-edited or already-repaired
+  // lineup the catalog filter + sort below, which on the steady state is every
+  // install. It must compare ALL THREE tiers, not just `premium` — a one-tier
+  // early-out shipped briefly and silently disabled rule 1 for xAI, whose
+  // derived premium (`grok-4.6`) happens to EQUAL the curated one, leaving the
+  // failing `grok-4.20-multi-agent` in `mid`. A curated ladder and a derived
+  // one can agree on a cell; they cannot agree on all three.
+  const first = lineup.roles[ALL_ROLE_IDS[0]];
+  const curated = DEFAULT_TIERS[provider];
+  if (first.premium.provider !== provider) return null;
+  if (LINEUP_TIERS.every((tier) => first[tier].model === curated[tier])) return null;
+
   const entries = getCatalogForProvider(provider);
-  if (entries.length === 0) return false;
-  let derived: { premium: string; mid: string; cheap: string };
-  try {
-    derived = deriveTiers(entries);
-  } catch {
-    return false;
-  }
+  // `deriveTiers` throws only on an empty list, which this rules out — so there
+  // is deliberately no try/catch here to imply otherwise.
+  if (entries.length === 0) return null;
+  const derived = deriveTiers(entries);
   for (const role of ALL_ROLE_IDS) {
     const ladder = lineup.roles[role];
-    if (!ladder) return false;
     for (const tier of LINEUP_TIERS) {
       const slot = ladder[tier];
-      if (slot.provider !== provider || slot.model !== derived[tier]) return false;
+      if (slot.provider !== provider || slot.model !== derived[tier]) return null;
     }
   }
-  return true;
+  return derived;
 }
 
 /**
  * Replaces any slot holding a {@link DEAD_SEEDED_MODELS} id with this tier's
- * curated model. Mutates `lineup.roles` in place; returns the ids replaced.
+ * curated model. Mutates `lineup.roles` in place, records what it replaced into
+ * `dead`, and returns whether it changed anything.
  */
-function replaceDeadSlots(lineup: Lineup, provider: BuiltinProvider): string[] {
-  const replaced = new Set<string>();
+function replaceDeadSlots(lineup: Lineup, provider: BuiltinProvider, dead: Set<string>): boolean {
+  let changed = false;
   for (const role of ALL_ROLE_IDS) {
     const ladder = lineup.roles[role];
-    if (!ladder) continue;
     for (const tier of LINEUP_TIERS) {
       const slot = ladder[tier];
-      const key = `${slot.provider}:${slot.model}`;
+      const key = modelKey(slot.provider, slot.model);
       if (!DEAD_SEEDED_MODELS.has(key)) continue;
-      replaced.add(key);
+      dead.add(key);
       ladder[tier] = { ...slot, model: DEFAULT_TIERS[provider][tier] };
+      changed = true;
     }
   }
-  return [...replaced];
+  return changed;
 }
 
 /**
@@ -526,15 +574,17 @@ function repairBuiltinLineups(map: Record<string, Lineup>): boolean {
   for (const provider of BUILTIN_PROVIDERS) {
     const lineup = map[provider];
     if (!lineup) continue;
-    if (matchesDerivedLadder(lineup, provider)) {
+
+    // Rule 1 (reads the live catalog): an untouched pre-#447 machine seed →
+    // re-seed the whole lineup, which is the only way `mid` and `cheap` are
+    // restored. Keep `name` and `createdAt`: a rename is cosmetic and must not
+    // cost the user their label, and the lineup really was created when it says.
+    const derived = derivedLadderIfUnmodified(lineup, provider);
+    if (derived) {
       for (const tier of LINEUP_TIERS) {
-        const before = lineup.roles[ALL_ROLE_IDS[0]]?.[tier];
-        if (!before) continue;
-        const key = `${before.provider}:${before.model}`;
+        const key = modelKey(provider, derived[tier]);
         if (DEAD_SEEDED_MODELS.has(key)) dead.add(key);
       }
-      // Keep `name` and `createdAt`: a rename is cosmetic and must not cost the
-      // user their label, and the lineup really was created when it says.
       map[provider] = {
         ...seedForProvider(provider, now),
         name: lineup.name,
@@ -543,18 +593,21 @@ function repairBuiltinLineups(map: Record<string, Lineup>): boolean {
       ids.push(provider);
       continue;
     }
-    const replacedDead = replaceDeadSlots(lineup, provider);
-    if (replacedDead.length > 0) {
-      for (const key of replacedDead) dead.add(key);
+
+    // Rule 2 (no catalog, static list): a known-dead id survived in a lineup
+    // whose ladder rule 1 can no longer reproduce — seeded against an older
+    // snapshot. Per-slot, so the user's other picks stay.
+    if (replaceDeadSlots(lineup, provider, dead)) {
       lineup.updatedAt = now;
       ids.push(provider);
     }
   }
   if (ids.length === 0) return false;
-  lastRepair = { ids, dead: [...dead] };
+  const report: LineupRepairReport = { ids, dead: [...dead] };
+  lastRepair = report;
   // Unconditional, not behind the REPL's notice: `script`, `cron-run` and the
   // applet host repair too and have nowhere to render one.
-  debugLog('lineup:repaired', { ids, dead: [...dead] });
+  debugLog('lineup:repaired', report);
   return true;
 }
 

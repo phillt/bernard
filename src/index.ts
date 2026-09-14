@@ -37,6 +37,7 @@ import {
   resolveActiveLineup,
   resolveActiveLineupWithCorrection,
 } from './lineups.js';
+import { lineupRepairNotice } from './lineup-repair-notice.js';
 import { validateLineup, formatLineupValidation } from './model-validate.js';
 import { setMaxConcurrentAgents, MAX_CONCURRENT_AGENTS_LIMIT } from './tools/agent-pool.js';
 import {
@@ -468,22 +469,9 @@ async function runInkRepl(args: {
   // report is only drainable after a load has happened, and the branch below is
   // conditional. Every other entry point (script, cron, applet host) repairs
   // through the same call and leaves a `lineup:repaired` debug line instead.
-  const lineups = loadLineups();
-  const repair = consumeLineupRepairReport();
-  if (repair) {
-    const which = repair.ids.join(', ');
-    const plural = repair.ids.length > 1;
-    startupNotices.push(
-      `Heads up — your default model lineup${plural ? 's' : ''} (${which}) ` +
-        `${plural ? 'were' : 'was'} set up by an older version of Bernard that picked models ` +
-        `automatically, so I've refreshed ${plural ? 'them' : 'it'}.` +
-        (repair.dead.length > 0
-          ? ` ${repair.dead.length === 1 ? 'One of them' : `${repair.dead.length} of them`} ` +
-            `could not be used at all: ${repair.dead.join(', ')}.`
-          : '') +
-        ` Use /lineup to change any of it.`,
-    );
-  }
+  loadLineups();
+  const repairNotice = lineupRepairNotice(consumeLineupRepairReport());
+  if (repairNotice) startupNotices.push(repairNotice);
 
   // Auto-correct a dangling `activeLineupId` (#264 follow-up). A stale id —
   // left over from a deleted lineup, or a typo in a hand-edited profile —
@@ -495,7 +483,7 @@ async function runInkRepl(args: {
   if (config.activeLineupId) {
     try {
       const resolution = resolveActiveLineupWithCorrection(
-        lineups,
+        loadLineups(),
         config.activeLineupId,
         config.provider,
       );
@@ -525,7 +513,7 @@ async function runInkRepl(args: {
     }
   }
 
-  const startupNotice = startupNotices.length > 0 ? startupNotices.join('\n\n') : undefined;
+  const startupNotice = startupNotices.join('\n\n') || undefined;
 
   let initialHistory: CoreMessage[] | undefined;
   if (resume) {

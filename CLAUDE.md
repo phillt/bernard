@@ -542,7 +542,7 @@ Keys for custom providers are stored in `keys.json` (same path as built-ins) and
 
 `config.modelMode` (#170) tiers the (provider, model) used by each LLM call site within the active provider's model lineup. Four presets:
 
-- `off` — every site uses `config.provider`/`config.model`. Legacy behavior, zero overhead. **Not the default**, which this line claimed for months: `DEFAULT_MODEL_MODE` (`src/config.ts:377`) is `balanced`. That mattered — it is what made #447's broken `premium` slot the live path for every fresh install rather than an opt-in edge case, and reading this table is how you would conclude otherwise.
+- `off` — every site uses `config.provider`/`config.model`. Legacy behavior, zero overhead. **Not the default** — `DEFAULT_MODEL_MODE` (`src/config.ts:377`) is `balanced`, and this line said otherwise until #447. Worth stating because the difference decides blast radius: under `balanced` the lineup's `premium` slot is what every main-agent turn resolves to, so a bad slot is the live path for every install rather than an opt-in.
 - `optimize-tokens` — aggressive cost-saving. Main uses **mid**, every sub-agent/wrapper/router site uses **cheap**.
 - `balanced` (**default**) — main **premium**; specialist/tool-wrapper/compressor **mid**; rewriter/reference-resolver/reference-lookup/recall-filter/specialist-detector **cheap**.
 - `optimize-performance` — every site uses **premium**.
