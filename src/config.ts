@@ -19,7 +19,7 @@ import {
   type ToolPermissions,
   sanitizePermissionRules,
 } from './tool-permissions.js';
-import { FALLBACK_TIERS } from './lineups.js';
+import { DEFAULT_TIERS } from './lineups.js';
 import { DEFAULT_MCP_RESULT_MAX_CHARS } from './mcp-result-shaper.js';
 
 /** Resolved runtime configuration for a Bernard session. */
@@ -859,20 +859,21 @@ export function getProviderKeyStatus(): Array<{
  * vendored snapshot). The dynamic `PROVIDER_MODELS` proxy below consults the
  * catalog first and falls back to these.
  *
- * Derived from `FALLBACK_TIERS` (src/lineups.ts) — the single source of truth
- * for offline-fallback model names — so the two tables can't drift. Only the
+ * Derived from `DEFAULT_TIERS` (src/lineups.ts) — the single source of truth
+ * for built-in model names, and since #447 also what seeds a lineup — so the
+ * two tables can't drift. Only the
  * *ordering* is owned here: the first entry is the `getDefaultModel` fallback,
  * and anthropic deliberately leads with the mid tier (sonnet) rather than
  * premium so the offline default stays the cheaper everyday model.
  */
 const FALLBACK_PROVIDER_MODELS: Record<BuiltinProvider, string[]> = {
   anthropic: [
-    FALLBACK_TIERS.anthropic.mid,
-    FALLBACK_TIERS.anthropic.premium,
-    FALLBACK_TIERS.anthropic.cheap,
+    DEFAULT_TIERS.anthropic.mid,
+    DEFAULT_TIERS.anthropic.premium,
+    DEFAULT_TIERS.anthropic.cheap,
   ],
-  openai: [FALLBACK_TIERS.openai.premium, FALLBACK_TIERS.openai.mid, FALLBACK_TIERS.openai.cheap],
-  xai: [FALLBACK_TIERS.xai.premium, FALLBACK_TIERS.xai.mid, FALLBACK_TIERS.xai.cheap],
+  openai: [DEFAULT_TIERS.openai.premium, DEFAULT_TIERS.openai.mid, DEFAULT_TIERS.openai.cheap],
+  xai: [DEFAULT_TIERS.xai.premium, DEFAULT_TIERS.xai.mid, DEFAULT_TIERS.xai.cheap],
 };
 
 function modelsForBuiltin(provider: BuiltinProvider): string[] {

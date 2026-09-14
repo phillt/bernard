@@ -72,6 +72,256 @@ describe('lineups store', () => {
     });
   });
 
+  // #447. Seeding used to derive tier models by ranking the Vercel AI Gateway
+  // catalog by output price and taking the extremes, which handed Anthropic's
+  // premium slot to `claude-opus-4` — retired, still listing its legacy
+  // $75/MTok price, therefore top of the sort, and not dispatchable. Nothing
+  // observed what the seed produced: the case below deliberately asserts
+  // structural shape only ("so a catalog refresh doesn't break this"), and
+  // `model-policy.test.ts` pre-writes `lineups.json` and never runs the seeder
+  // at all. That two-sided blind spot is why it shipped.
+  describe('seeded models (#447)', () => {
+    it('seeds the curated table verbatim, not a catalog-derived ladder', async () => {
+      const m = await loadModule();
+      const lineups = m.loadLineups();
+      for (const provider of ['anthropic', 'openai', 'xai'] as const) {
+        const expected = m.DEFAULT_TIERS[provider];
+        for (const role of ALL_ROLE_IDS) {
+          const ladder = lineups[provider].roles[role];
+          expect(ladder.premium.model).toBe(expected.premium);
+          expect(ladder.mid.model).toBe(expected.mid);
+          expect(ladder.cheap.model).toBe(expected.cheap);
+        }
+      }
+    });
+
+    // The regression itself, named. This is the one assertion that fails if
+    // anyone reinstates catalog derivation, and it fails loudly enough to
+    // explain itself.
+    it('never seeds a model known not to dispatch', async () => {
+      const m = await loadModule();
+      const lineups = m.loadLineups();
+      const seeded = new Set<string>();
+      for (const lineup of Object.values(lineups)) {
+        for (const role of ALL_ROLE_IDS) {
+          for (const tier of ['premium', 'mid', 'cheap'] as const) {
+            seeded.add(lineup.roles[role][tier].model);
+          }
+        }
+      }
+      // Measured 2026-09-14 against a live key: each of these is what the old
+      // price-ranked derivation picked, and each fails a real probe.
+      for (const dead of [
+        'claude-opus-4',
+        'gpt-oss-20b',
+        'gpt-5.1-thinking',
+        'grok-4.1-fast-reasoning',
+        'grok-4.20-multi-agent',
+      ]) {
+        expect(seeded).not.toContain(dead);
+      }
+    });
+
+    // Catalog membership is NOT a dispatchability check and must never be
+    // mistaken for one — `grok-3-mini` dispatches and is in no snapshot, while
+    // `grok-4.1-fast-reasoning` is in the snapshot and returns not_found. What
+    // it does decide is whether pricing and the context window resolve, since
+    // `getModelMeta` falls soft to 128k / `n/a` on a miss. That is worth
+    // holding: a default whose spend cannot be priced is a poor default.
+    it('seeds only models the catalog can price', async () => {
+      const m = await loadModule();
+      const { getModelMeta } = await import('./providers/catalog.js');
+      for (const provider of ['anthropic', 'openai', 'xai'] as const) {
+        const tiers = m.DEFAULT_TIERS[provider];
+        for (const tier of ['premium', 'mid', 'cheap'] as const) {
+          expect(getModelMeta(provider, tiers[tier]), `${provider}/${tiers[tier]}`).not.toBeNull();
+        }
+      }
+    });
+  });
+
+  // The other half of #447: seeding correctly from now on fixes nobody who has
+  // already run Bernard, including the person who reported it.
+  describe('repair of a pre-#447 seed', () => {
+    /** Exactly what the old price-ranked seeder wrote for this provider. */
+    async function legacySeed(provider: 'anthropic' | 'openai' | 'xai') {
+      const { getCatalogForProvider } = await import('./providers/catalog.js');
+      const { deriveTiers } = await import('./providers/tiers.js');
+      const tiers = deriveTiers(getCatalogForProvider(provider));
+      return fullRoles({
+        premium: { provider, model: tiers.premium },
+        mid: { provider, model: tiers.mid },
+        cheap: { provider, model: tiers.cheap },
+      });
+    }
+
+    async function writeLineups(lineups: Record<string, unknown>): Promise<void> {
+      const { LINEUPS_PATH } = await import('./paths.js');
+      fs.mkdirSync(path.dirname(LINEUPS_PATH), { recursive: true });
+      fs.writeFileSync(LINEUPS_PATH, JSON.stringify({ lineups }, null, 2));
+    }
+
+    const stamp = { createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' };
+
+    it('rewrites a lineup whose every slot matches the old derivation', async () => {
+      const m = await loadModule();
+      await writeLineups({
+        anthropic: {
+          id: 'anthropic',
+          name: 'Anthropic-only',
+          roles: await legacySeed('anthropic'),
+          ...stamp,
+        },
+      });
+      const lineups = m.loadLineups();
+      const ladder = lineups.anthropic.roles.orchestrator;
+      // `premium` alone proves nothing: every legacy ladder now contains at
+      // least one id on `DEAD_SEEDED_MODELS`, so the dead-slot rule would fix
+      // that cell too and mask a ladder match that never fired. `mid` and
+      // `cheap` are what only a whole-lineup re-seed moves — a mutation making
+      // `matchesDerivedLadder` always return false survived until these were
+      // asserted.
+      expect(ladder.premium.model).toBe(m.DEFAULT_TIERS.anthropic.premium);
+      expect(ladder.mid.model).toBe(m.DEFAULT_TIERS.anthropic.mid);
+      expect(ladder.cheap.model).toBe(m.DEFAULT_TIERS.anthropic.cheap);
+      const report = m.consumeLineupRepairReport();
+      expect(report?.ids).toContain('anthropic');
+      expect(report?.dead).toContain('anthropic:claude-opus-4');
+    });
+
+    // The latch. Without it a swallowed write failure means repair re-detects
+    // and retries a temp-write + rename on every `loadLineups()` — which is once
+    // per `resolveSiteModel`, i.e. dozens of times per turn.
+    it('does not retry after a failed write within one process', async () => {
+      const m = await loadModule();
+      const { LINEUPS_PATH } = await import('./paths.js');
+      await writeLineups({
+        anthropic: {
+          id: 'anthropic',
+          name: 'Anthropic-only',
+          roles: await legacySeed('anthropic'),
+          ...stamp,
+        },
+      });
+      const dir = path.dirname(LINEUPS_PATH);
+      fs.chmodSync(dir, 0o555);
+      try {
+        m.loadLineups();
+        expect(m.consumeLineupRepairReport()).not.toBeNull();
+        // The write failed, so the file on disk is still the broken seed and a
+        // second read re-detects it. Only the latch stops a second attempt.
+        m.loadLineups();
+        expect(m.consumeLineupRepairReport()).toBeNull();
+      } finally {
+        fs.chmodSync(dir, 0o755);
+      }
+    });
+
+    // Across a fresh module load, i.e. what a second `bernard` process sees.
+    // Within one process the `repairAttempted` latch alone would make this pass,
+    // which would prove nothing about the repair being idempotent.
+    it('does nothing on a second process once repaired', async () => {
+      const first = await loadModule();
+      await writeLineups({
+        anthropic: {
+          id: 'anthropic',
+          name: 'Anthropic-only',
+          roles: await legacySeed('anthropic'),
+          ...stamp,
+        },
+      });
+      first.loadLineups();
+      expect(first.consumeLineupRepairReport()).not.toBeNull();
+
+      const second = await loadModule();
+      second.loadLineups();
+      expect(second.consumeLineupRepairReport()).toBeNull();
+    });
+
+    // A rename is cosmetic, so it must neither block the repair (the lineup is
+    // still broken) nor cost the user their label.
+    it('repairs a renamed lineup and keeps its name and createdAt', async () => {
+      const m = await loadModule();
+      await writeLineups({
+        anthropic: {
+          id: 'anthropic',
+          name: 'Work',
+          roles: await legacySeed('anthropic'),
+          ...stamp,
+        },
+      });
+      const lineups = m.loadLineups();
+      expect(lineups.anthropic.name).toBe('Work');
+      expect(lineups.anthropic.createdAt).toBe(stamp.createdAt);
+      expect(lineups.anthropic.roles.orchestrator.premium.model).toBe(
+        m.DEFAULT_TIERS.anthropic.premium,
+      );
+    });
+
+    // Isolates the ladder-match rule: this lineup holds no dead id, so rule 2
+    // cannot fire and only the content match is under test. (An earlier draft
+    // used a legacy Anthropic ladder with one cell changed and failed, because
+    // `claude-opus-4` was still in it and rule 2 correctly repaired it — the
+    // test was wrong, not the code.)
+    it('leaves the lineup alone once any single slot differs', async () => {
+      const m = await loadModule();
+      const roles = fullRoles({
+        premium: { provider: 'anthropic', model: 'claude-opus-4-6' },
+        mid: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+        cheap: { provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },
+      });
+      await writeLineups({
+        anthropic: { id: 'anthropic', name: 'Anthropic-only', roles, ...stamp },
+      });
+      const lineups = m.loadLineups();
+      expect(lineups.anthropic.roles.orchestrator.premium.model).toBe('claude-opus-4-6');
+      expect(m.consumeLineupRepairReport()).toBeNull();
+    });
+
+    // The case a `createdAt === updatedAt` heuristic would have destroyed:
+    // `saveLineup` writes one clock read to both fields, so every newly created
+    // user lineup looks "untouched".
+    it('leaves a user-created lineup that reuses a built-in id alone', async () => {
+      const m = await loadModule();
+      await writeLineups({
+        anthropic: {
+          id: 'anthropic',
+          name: 'My own',
+          roles: fullRoles({
+            premium: { provider: 'anthropic', model: 'claude-opus-4-6' },
+            mid: { provider: 'openai', model: 'gpt-4.1' },
+            cheap: { provider: 'xai', model: 'grok-3-mini' },
+          }),
+          ...stamp,
+        },
+      });
+      const lineups = m.loadLineups();
+      expect(lineups.anthropic.roles.orchestrator.mid.model).toBe('gpt-4.1');
+      expect(m.consumeLineupRepairReport()).toBeNull();
+    });
+
+    // The belt-and-braces rule, for an install seeded against an older gateway
+    // snapshot whose ladder today's derivation no longer reproduces. Only the
+    // dead slot moves; the user's other picks stay.
+    it('replaces a known-dead model even when the ladder no longer matches', async () => {
+      const m = await loadModule();
+      const roles = fullRoles({
+        premium: { provider: 'anthropic', model: 'claude-opus-4' },
+        mid: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+        cheap: { provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },
+      });
+      await writeLineups({
+        anthropic: { id: 'anthropic', name: 'Anthropic-only', roles, ...stamp },
+      });
+      const lineups = m.loadLineups();
+      expect(lineups.anthropic.roles.orchestrator.premium.model).toBe(
+        m.DEFAULT_TIERS.anthropic.premium,
+      );
+      expect(lineups.anthropic.roles.orchestrator.mid.model).toBe('claude-sonnet-4-6');
+      expect(m.consumeLineupRepairReport()?.dead).toEqual(['anthropic:claude-opus-4']);
+    });
+  });
+
   describe('loadLineups', () => {
     it('seeds three default lineups on first read', async () => {
       const m = await loadModule();

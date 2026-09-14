@@ -31,7 +31,12 @@ import {
   resolveVoiceWarmupMs,
 } from './config.js';
 import { normalizeStoredModelMode } from './model-policy.js';
-import { loadLineups, resolveActiveLineup, resolveActiveLineupWithCorrection } from './lineups.js';
+import {
+  consumeLineupRepairReport,
+  loadLineups,
+  resolveActiveLineup,
+  resolveActiveLineupWithCorrection,
+} from './lineups.js';
 import { validateLineup, formatLineupValidation } from './model-validate.js';
 import { setMaxConcurrentAgents, MAX_CONCURRENT_AGENTS_LIMIT } from './tools/agent-pool.js';
 import {
@@ -454,6 +459,32 @@ async function runInkRepl(args: {
     getToolPermissions: () => config.toolPermissions,
   };
 
+  // More than one thing can want to say something at startup, so collect rather
+  // than assign — a second `startupNotice = ...` would silently clobber the
+  // first, and the two below are independent.
+  const startupNotices: string[] = [];
+
+  // `loadLineups()` is where #447's repair runs, so call it once up front: the
+  // report is only drainable after a load has happened, and the branch below is
+  // conditional. Every other entry point (script, cron, applet host) repairs
+  // through the same call and leaves a `lineup:repaired` debug line instead.
+  const lineups = loadLineups();
+  const repair = consumeLineupRepairReport();
+  if (repair) {
+    const which = repair.ids.join(', ');
+    const plural = repair.ids.length > 1;
+    startupNotices.push(
+      `Heads up — your default model lineup${plural ? 's' : ''} (${which}) ` +
+        `${plural ? 'were' : 'was'} set up by an older version of Bernard that picked models ` +
+        `automatically, so I've refreshed ${plural ? 'them' : 'it'}.` +
+        (repair.dead.length > 0
+          ? ` ${repair.dead.length === 1 ? 'One of them' : `${repair.dead.length} of them`} ` +
+            `could not be used at all: ${repair.dead.join(', ')}.`
+          : '') +
+        ` Use /lineup to change any of it.`,
+    );
+  }
+
   // Auto-correct a dangling `activeLineupId` (#264 follow-up). A stale id —
   // left over from a deleted lineup, or a typo in a hand-edited profile —
   // otherwise falls back silently inside model-policy, so the user has no idea
@@ -461,11 +492,10 @@ async function runInkRepl(args: {
   // to the active profile, and pass a transcript notice into <App> so the
   // switch is visible. Best-effort: a persistence failure still keeps the
   // in-memory correction for this session.
-  let startupNotice: string | undefined;
   if (config.activeLineupId) {
     try {
       const resolution = resolveActiveLineupWithCorrection(
-        loadLineups(),
+        lineups,
         config.activeLineupId,
         config.provider,
       );
@@ -481,10 +511,11 @@ async function runInkRepl(args: {
         } catch {
           // best-effort; the in-memory correction still applies this session
         }
-        startupNotice =
+        startupNotices.push(
           `Heads up — your selected model lineup "${requestedId}" no longer exists, ` +
-          `so I switched you to "${resolution.lineup.name}" (${resolvedId}) and saved that choice. ` +
-          `Use /lineups to pick a different one.`;
+            `so I switched you to "${resolution.lineup.name}" (${resolvedId}) and saved that choice. ` +
+            `Use /lineups to pick a different one.`,
+        );
         debugLog('lineup:auto-corrected', { requestedId, resolvedId });
       }
     } catch (err: unknown) {
@@ -493,6 +524,8 @@ async function runInkRepl(args: {
       debugLog('lineup:auto-correct-error', err instanceof Error ? err.message : String(err));
     }
   }
+
+  const startupNotice = startupNotices.length > 0 ? startupNotices.join('\n\n') : undefined;
 
   let initialHistory: CoreMessage[] | undefined;
   if (resume) {
