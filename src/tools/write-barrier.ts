@@ -45,6 +45,20 @@
  * write that hangs forever already hangs the step, so waiting on it adds no new
  * way to get stuck.
  *
+ * ## A second known limit: the gates run outside the ordering
+ *
+ * `runOrdered` wraps the tool's `execute`, not the whole augmented call — so a
+ * write parked on a confirm prompt has not registered yet, and a sibling read
+ * proceeds and observes pre-write state. Same defect as the one above, through a
+ * window measured in however long the user takes to answer.
+ *
+ * Declined rather than missed. It is latent under the default `confirmMode:
+ * 'auto'`, which prompts only on high risk while the MCP write that caused the
+ * incident classifies medium; it is live under `strict`. The fix is to move this
+ * outward around the whole wrapper body, which also makes a read wait for its
+ * own gates — ordering only, but a second behaviour change to the hottest path
+ * in the product, and this commit already makes one.
+ *
  * ## Known limit, stated because it is the one way this quietly does nothing
  *
  * A write registers when its `execute` is invoked, so a read only sees it if the

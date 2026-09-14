@@ -179,6 +179,16 @@ export function shouldConfirm(risk: RiskLevel, threshold: ConfirmThreshold | und
  * already get `kind: 'write'` by default via `wrapMCPTool()` so unclassified
  * MCP writes still trip this gate.
  *
+ * **Three callers now, and they agree today for a reason worth stating.** The
+ * read-only block gate (#179) asks "may this run"; `write-barrier.ts` asks
+ * "could a read observe a difference"; `duplicate-guard.ts` asks "is repeating
+ * this harmful". All three reduce to "does it mutate", which is why one
+ * predicate serves them — the #513 lesson that `risk.ts` already owns the
+ * answer. They diverge at IDEMPOTENCY, which the duplicate gate really wants
+ * and no tool declares yet (#570). So a future refinement made for permission
+ * reasons — classifying an unchanged-hash `file_write` as a read, say — would
+ * silently move the other two. Name them here rather than let that be found.
+ *
  * When `meta.isWriteAction` is set, it overrides the static `kind` check for
  * this specific invocation — so `memory({action:'read'})` falls through even
  * though the `memory` tool's declared `kind` is `'write'`. `args` must be

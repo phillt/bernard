@@ -72,10 +72,27 @@ function legacyProfileKey(meta: ToolMeta | undefined): string | undefined {
 }
 
 function safeSerialize(args: unknown): string {
+  return fullArgsJson(args).slice(0, 300);
+}
+
+/**
+ * The whole serialized arguments, never sliced.
+ *
+ * Split out because `safeSerialize` materializes the entire string and then
+ * keeps 300 characters, so every caller wanting the full value was paying for a
+ * second one — the build-then-slice pattern `resultStats` already documents as
+ * wrong on the result side. One serialization per call now feeds both the debug
+ * snippet and the duplicate gate's key; measured on `file_write`-shaped args at
+ * 5 MB, the removed duplicate is 13.2 ms.
+ *
+ * Never throws: circular or exotic args fall back to `String(args)`, the same
+ * contract callers already relied on.
+ */
+function fullArgsJson(args: unknown): string {
   try {
-    return JSON.stringify(args).slice(0, 300);
+    return JSON.stringify(args);
   } catch {
-    return String(args).slice(0, 300);
+    return String(args);
   }
 }
 
@@ -594,7 +611,14 @@ export function augmentTools(
     toolName: string,
     args: unknown,
     toolDef: any,
-  ): { refusal: string } | { grant: 'allow' | 'ask' } => {
+  ): { refusal: string } | { grant: 'allow' | 'ask'; isWrite: boolean; argsJson: string } => {
+    // Resolved once and handed back, for the reason the grant already is. Both
+    // were being recomputed by their consumers — `isWrite` twice per call
+    // (a second `isReadOnlyShellInvocation` parse of the command line for
+    // `shell`), `argsJson` twice — and `write-barrier.ts` states the real cost:
+    // two expressions answering one question is how they drift apart.
+    const isWrite = shouldBlockInReadOnly(readToolMeta(toolDef), args);
+    const argsJson = fullArgsJson(args);
     const grant = resolveProfileGrant(toolName, args);
     if (grant === 'deny') {
       const key = permissionKeyFor(toolName, args, readToolMeta(toolDef));
@@ -605,7 +629,19 @@ export function augmentTools(
       };
     }
     const outOfScope = runWriteScopeGate(toolName, args);
-    return outOfScope ? { refusal: outOfScope } : { grant };
+    if (outOfScope) return { refusal: outOfScope };
+    // Here rather than as a stanza at each of the two `execute` wrappers (#575).
+    // This helper exists precisely because "a gate only SOME call sites run is
+    // the shape that let the write-scope gate ship unwired" — and a duplicate
+    // refusal written twice is that shape, with the envelope copy being the one
+    // nothing exercises. It lands AHEAD of the block and confirm gates, which is
+    // the same ordering the write-scope gate already takes: a call that is going
+    // to be refused should not first cost the user a prompt.
+    if (isWrite) {
+      const duplicate = duplicateWriteRefusal(toolName, argsJson);
+      if (duplicate) return { refusal: duplicate };
+    }
+    return { grant, isWrite, argsJson };
   };
 
   /**
@@ -806,22 +842,6 @@ export function augmentTools(
               }
               debugLog(`cache:tool:miss`, { tool: toolName });
             }
-            // Same gate as the legacy branch below, through the same module —
-            // MCP takes that one, so without this the envelope path would be
-            // the untested half again.
-            const envIsWrite = shouldBlockInReadOnly(source.meta, args);
-            const envArgsJson = safeSerialize(args);
-            if (envIsWrite) {
-              const dup = duplicateWriteRefusal(toolName, envArgsJson);
-              if (dup) {
-                return source.serializeForModel({
-                  status: 'error',
-                  // `denied`, not a new type: the model's next turn already
-                  // branches on this, and what happened IS a refusal to act.
-                  error: { type: 'denied', message: dup },
-                });
-              }
-            }
             let envelope: ToolResult<unknown>;
             const execStartedAt = Date.now();
             const argsPreview = safeSerialize(redactArgs(args, source.meta?.sensitiveArgs));
@@ -834,7 +854,7 @@ export function augmentTools(
               // is the same predicate the read-only block gate uses, consulted
               // per call so `memory{action:'read'}` and a read-shaped `shell`
               // are correctly reads.
-              envelope = await runOrdered(shouldBlockInReadOnly(source.meta, args), () =>
+              envelope = await runOrdered(gates.isWrite, () =>
                 source.execute(args, execOptions as never),
               );
               debugLog(`augment:${toolName}:done`, {
@@ -899,7 +919,7 @@ export function augmentTools(
             // the model can cite it for verified claims. Errored / denied /
             // cancelled envelopes never become evidence.
             if (envelope.status === 'ok') {
-              if (envIsWrite) recordWriteSuccess(toolName, envArgsJson);
+              if (gates.isWrite) recordWriteSuccess(toolName, gates.argsJson);
               const previewSrc =
                 typeof serialized === 'string' ? serialized : safeSerialize(serialized);
               registerEvidence(toolName, args, source.meta, previewSrc);
@@ -932,15 +952,6 @@ export function augmentTools(
           if (!(await runGate(toolName, args, toolDef, execOptions, gates.grant))) {
             return CANCELLED_LEGACY_RESULT;
           }
-          // A write that already succeeded with these exact arguments is
-          // refused once (#575). Reads are never gated: 138 of 187 adjacent
-          // identical calls in the corpus are reads, and repeating one is free.
-          const legacyIsWrite = shouldBlockInReadOnly(readToolMeta(toolDef), args);
-          const legacyArgsJson = safeSerialize(args);
-          if (legacyIsWrite) {
-            const dup = duplicateWriteRefusal(toolName, legacyArgsJson);
-            if (dup) return { output: dup, is_error: true };
-          }
           let result: unknown;
           const execStartedAt = Date.now();
           debugLog('tool:execute:start', {
@@ -949,12 +960,9 @@ export function augmentTools(
           });
           try {
             // The same ordering as the envelope branch above, through the same
-            // helper. Two copies of this would be two things to keep in step,
-            // and MCP tools take THIS branch — which is where the duplicate
+            // helper. MCP tools take THIS branch — which is where the duplicate
             // message came from.
-            result = await runOrdered(shouldBlockInReadOnly(readToolMeta(toolDef), args), () =>
-              originalExecute(args, execOptions),
-            );
+            result = await runOrdered(gates.isWrite, () => originalExecute(args, execOptions));
           } catch (thrown: unknown) {
             debugLog(
               `augment:${toolName}:threw`,
@@ -969,7 +977,13 @@ export function augmentTools(
           }
 
           const profileKey = resolveProfileKey(toolName, args);
-          const argsSnippet = safeSerialize(args);
+          // The string the gates already built, sliced — not a second full
+          // serialization of the same object. Captured BEFORE `execute`, so a
+          // tool that mutated `args` in place would now be recorded with its
+          // pre-mutation arguments; that is the more faithful record of the call
+          // the model actually made, and is named here rather than left to be
+          // discovered.
+          const argsSnippet = gates.argsJson.slice(0, 300);
           const capturedResult = result;
           // Evidence pointer (#141), synchronous: deferring this inside the
           // setImmediate below races with `provenance.clear()` at the start
@@ -1008,7 +1022,7 @@ export function augmentTools(
             // Successes only. A failed write that is retried is the retry
             // working as intended; gating it would turn a transient failure
             // into a permanent one.
-            if (legacyIsWrite) recordWriteSuccess(toolName, legacyArgsJson);
+            if (gates.isWrite) recordWriteSuccess(toolName, gates.argsJson);
             const previewSrc =
               typeof capturedResult === 'string' ? capturedResult : safeSerialize(capturedResult);
             registerEvidence(toolName, args, meta, previewSrc);

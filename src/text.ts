@@ -16,6 +16,30 @@ export function truncate(s: string, max: number): string {
  * single changeset before this existed. Same rationale as {@link truncate}:
  * one spelling beats fourteen drifting ones.
  */
+/**
+ * The largest index <= `n` that does not split a surrogate pair.
+ *
+ * A budget counted in UTF-16 units can land between the halves of an astral
+ * character, and whatever consumes the prefix then renders the orphan as
+ * U+FFFD. Shared because the rule was written twice — `knowledge/chunk.ts`'s
+ * ingestion cut and `watchers/wake.ts`'s observation excerpt — and it decays
+ * asymmetrically: a later correction to one (a lone LOW surrogate, code points,
+ * a ZWJ cluster) leaves the other emitting the replacement character its
+ * docstring was written to prevent, in another subsystem, with nothing failing.
+ *
+ * Here rather than imported across `watchers/ -> knowledge/`: this file is a
+ * zero-import leaf and already the home of the string helpers, while making the
+ * corpus chunker a de-facto string utility is the wrong ownership. The
+ * `front-matter.ts` answer to the same choice.
+ *
+ * Backs off rather than including the whole pair, so the cap is never exceeded.
+ */
+export function safeCutIndex(text: string, n: number): number {
+  if (n <= 0 || n >= text.length) return Math.max(0, Math.min(n, text.length));
+  const last = text.charCodeAt(n - 1);
+  return last >= 0xd800 && last <= 0xdbff ? n - 1 : n;
+}
+
 export function plural(n: number, one: string, many: string): string {
   return n === 1 ? one : many;
 }

@@ -91,11 +91,14 @@ describe('duplicateWriteRefusal', () => {
     expect(duplicateWriteRefusal('other_tool', ARGS, T0 + 1_000)).toBeNull();
   });
 
-  it('reproduces the Dom sequence: send, blind re-send, refusal', () => {
-    // 21:18:02.647 send → succeeded. 21:18:04.568 focus_app. 21:18:06.357 send
-    // again, identical, with no read in between. The barrier sees no race here
-    // because there is no read; this is the gate that catches it.
-    recordWriteSuccess('send_message', ARGS, T0);
-    expect(duplicateWriteRefusal('send_message', ARGS, T0 + 3_710)).toMatch(/already SUCCEEDED/);
+  it('keys on the WHOLE arguments, not a prefix', () => {
+    // The first cut keyed on `augment.ts`'s `safeSerialize`, which slices to 300
+    // characters — so two different calls sharing a long prefix collided and the
+    // second was refused as a duplicate. A false refusal on a write is the
+    // failure this module otherwise exists to avoid.
+    const long = (tail: string) => `{"path":"/tmp/x","content":"${'y'.repeat(400)}${tail}"}`;
+    recordWriteSuccess('file_write', long('A'), T0);
+    expect(duplicateWriteRefusal('file_write', long('B'), T0 + 1_000)).toBeNull();
+    expect(duplicateWriteRefusal('file_write', long('A'), T0 + 1_000)).not.toBeNull();
   });
 });

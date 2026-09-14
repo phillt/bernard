@@ -537,8 +537,15 @@ function splitLong(
  * embeds as garbage, and round-trips through SQLite as a replacement
  * character, so the stored text no longer matches the source it claims to be a
  * span of.
+ *
+ * Restated rather than imported from `text.ts`'s `safeCutIndex`, which is the
+ * same rule for `watchers/wake.ts`'s excerpt: this module's stated property is
+ * that it has NO imports at all, and one for a five-line predicate would spend
+ * it. That is the treatment `MAX_DOC_CHARS` already gets here — restate, and let
+ * a test hold the two together, which `chunk.test.ts` does by exercising both
+ * against the same inputs. Exported solely so that test can reach it.
  */
-function safeCut(text: string, limit: number): number {
+export function safeCut(text: string, limit: number): number {
   if (limit >= text.length) return text.length;
   const code = text.charCodeAt(limit - 1);
   // A high surrogate at the last kept position means its pair is the first

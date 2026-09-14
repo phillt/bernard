@@ -34,6 +34,7 @@
 import { untrustedData } from '../framework/agents/user-message.js';
 import type { UntrustedData } from '../framework/agents/user-message.js';
 import { boundedStringify, looksTruncated, markTruncated } from '../framework/tools/redact.js';
+import { safeCutIndex } from '../text.js';
 import { collapseWhitespace } from './extract.js';
 import { describeWatchTarget, MAX_OBSERVATION_CHARS, type Watcher } from './types.js';
 
@@ -103,16 +104,13 @@ export function renderObservation(value: unknown): { text: string; truncated: bo
   // begin a line and no ``` can ever open or close a fence. That is precisely
   // the property `renderArgsBlock` — the sibling this module is modelled on —
   // already relies on, and the object branch below had for free.
-  if (typeof value === 'string') {
-    const quoted = JSON.stringify(value);
-    return quoted.length > MAX_OBSERVATION_CHARS
-      ? {
-          text: markTruncated(quoted.slice(0, MAX_OBSERVATION_CHARS), quoted.length),
-          truncated: true,
-        }
-      : { text: quoted, truncated: false };
-  }
-  const { text, bounded } = boundedStringify(value, MAX_OBSERVATION_CHARS);
+  // The string branch is the object branch with `bounded` pinned false —
+  // `JSON.stringify` of a string always completes — so the two share one
+  // truncation site rather than each constructing the marked form.
+  const { text, bounded } =
+    typeof value === 'string'
+      ? { text: JSON.stringify(value), bounded: false }
+      : boundedStringify(value, MAX_OBSERVATION_CHARS);
   // `boundedStringify` bounds the WORK, not the result: its budget decrements on
   // strings and its item cap applies to arrays, so an object- or number-heavy
   // shape clears neither and overshoots (measured 10,035 chars against a 4,000
@@ -167,21 +165,6 @@ export interface ObservationSummary {
  * text off disk, and a hand-edited history file must not be able to smuggle
  * extra rows into a bordered panel.
  */
-/**
- * `text.slice(0, n)`, backing off one unit when that would split a surrogate pair.
- *
- * The budget counts UTF-16 units, so an astral character straddling the boundary
- * is cut in half and the `Buffer` round trip below renders the orphan as U+FFFD
- * — a visible `\uFFFD` at the end of every excerpt unlucky enough to land there.
- * Reachable on the live path: `JSON.stringify` passes a valid pair through
- * unescaped, so any emoji in an observed message can do it.
- */
-function cutAt(text: string, n: number): string {
-  if (text.length <= n) return text;
-  const last = text.charCodeAt(n - 1);
-  return text.slice(0, last >= 0xd800 && last <= 0xdbff ? n - 1 : n);
-}
-
 export function summariseObservation(rendered: string, truncated: boolean): ObservationSummary {
   const flat = collapseWhitespace(rendered);
   return {
@@ -204,7 +187,7 @@ export function summariseObservation(rendered: string, truncated: boolean): Obse
     // `renderObservation` JSON-escapes and so emits no whitespace at all. Only an
     // explicit copy works. `Buffer` rather than the `(' ' + x).slice(1)` trick
     // because this function already reaches for `Buffer.byteLength` two lines up.
-    excerpt: Buffer.from(cutAt(flat, WAKE_EXCERPT_CHARS), 'utf8').toString(),
+    excerpt: Buffer.from(flat.slice(0, safeCutIndex(flat, WAKE_EXCERPT_CHARS)), 'utf8').toString(),
     clipped: flat.length > WAKE_EXCERPT_CHARS,
   };
 }

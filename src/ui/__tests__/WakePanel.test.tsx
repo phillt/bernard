@@ -59,8 +59,12 @@ describe('WakePanel', () => {
     // this say three, re-counting the blanks `findIndex` had just skipped for
     // saying nothing. The case was exercised here before and asserted only on
     // the body, which is how the count went unnoticed.
-    expect(text).toContain('1 more instruction line');
-    expect(text).not.toContain('3 more instruction lines');
+    // Anchored on the ellipsis and guarded against a trailing `s`: a bare
+    // `toContain('1 more instruction line')` also matches "11 more instruction
+    // lines", so it would pass for a count an order of magnitude wrong. The
+    // `not.toContain('3 more…')` that stood beside it could never fail, since
+    // `collapsedNote` renders at most one count row.
+    expect(text).toMatch(/… 1 more instruction line(?!s)/);
   });
 
   it('hides nothing for an instruction that is entirely blank', () => {

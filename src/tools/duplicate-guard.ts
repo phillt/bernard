@@ -61,6 +61,8 @@
  * declaring the field now would be a lie on disk. Gating every repeated write is
  * the conservative reading, and the cost of being wrong is one round trip.
  */
+import { createHash } from 'node:crypto';
+
 import { debugLog } from '../logger.js';
 
 /**
@@ -74,43 +76,65 @@ import { debugLog } from '../logger.js';
  */
 export const DUPLICATE_WINDOW_MS = 300_000;
 
-interface Entry {
-  /** When the identical call last SUCCEEDED. */
-  succeededAt: number;
-  /** Whether the model has already been told, and so may now proceed. */
-  warned: boolean;
-}
-
-const seen = new Map<string, Entry>();
+/** Key → when the identical call last SUCCEEDED. */
+const seen = new Map<string, number>();
 
 /**
- * Composite key for one exact call.
+ * Composite key for one exact call: the tool, and a digest of ALL its arguments.
+ *
+ * **Hashed, and the whole string, because both halves were wrong at once.** The
+ * first cut keyed on `augment.ts`'s `safeSerialize`, which slices to 300
+ * characters — so two genuinely different calls sharing a 300-character prefix
+ * collided and the second was refused as a duplicate. A `file_write` to one path
+ * with different content, or two long messages to one chat differing only after
+ * character 300, are both ordinary. That is a false refusal on a write, which is
+ * the failure this module is otherwise written to avoid.
+ *
+ * Keying on the untruncated string instead would fix the collision and hold the
+ * payload for the whole window — five megabytes of a file body, or an unredacted
+ * `shell` credential, resident for five minutes in a module map. A digest fixes
+ * both: 64 characters, and it retains nothing. Measured, it also COSTS nothing
+ * next to what it replaced — sha256 is 18-25% of one `JSON.stringify` of the
+ * same value (2.4 ms against 13.2 ms at 5 MB), and this change removes an entire
+ * duplicate serialization from the call path.
+ *
+ * Deliberately NOT `result-cache.ts`'s `cacheKey`, which redacts through
+ * `meta.sensitiveArgs` before keying. Redaction is right for a value cache and
+ * wrong here: it MAKES collisions, and two calls differing only in a redacted
+ * field are exactly the pair that must stay distinguishable. A hash needs no
+ * redaction because it discloses nothing.
  *
  * The separator is `\\0` written as an ESCAPE, never as a literal control
- * character. It is the right separator — it cannot occur in a tool name or in
- * `JSON.stringify` output, so no two distinct calls can collide on it — but
- * typed raw it is invisible in an editor and sails through prettier and eslint
- * unnoticed. There is already one literal NUL in the tree, at `inbox/send.ts`'s
- * `dedupeKey`, for the same reason; this one is at least readable.
+ * character — it cannot occur in a tool name or in a hex digest, but typed raw
+ * it is invisible in an editor and sails through prettier and eslint unnoticed.
+ * One shipped that way here and was caught only because a mutation anchor failed
+ * to match.
  */
 function keyOf(toolName: string, argsJson: string): string {
-  return `${toolName}\0${argsJson}`;
+  return `${toolName}\0${createHash('sha256').update(argsJson).digest('hex')}`;
 }
 
 /** Drops entries past the window so a long session does not grow without bound. */
 function sweep(now: number): void {
-  for (const [k, e] of seen) {
-    if (now - e.succeededAt > DUPLICATE_WINDOW_MS) seen.delete(k);
+  for (const [k, at] of seen) {
+    if (now - at > DUPLICATE_WINDOW_MS) seen.delete(k);
   }
 }
 
 /**
  * The refusal a repeated write gets, or `null` to proceed.
  *
- * Consumes the warning: the call immediately after a refusal proceeds, which is
- * what makes re-issuing the confirmation. It also clears the record, so the
- * confirmed call starts a fresh window rather than being gated again by the
- * original success.
+ * **Refusing forgets**, which is what makes re-issuing the confirmation: the
+ * call immediately after a refusal finds no entry and proceeds, and its own
+ * success then re-arms the gate through `recordWriteSuccess`. A `warned` flag
+ * on the entry expressed the same three states — traced through expiry,
+ * failure, differing args and a third call, the two forms are identical — so
+ * it was an interface, a mutable field and a branch for no behaviour.
+ *
+ * The one thing lost with it is a `confirmed` debug line, and that is
+ * recoverable from the log rather than gone: a `tool:duplicate-write:refused`
+ * followed by a `tool:execute:start` for the same tool IS a confirmation, and
+ * one with no start after it is a duplicate this actually stopped.
  */
 export function duplicateWriteRefusal(
   toolName: string,
@@ -118,22 +142,12 @@ export function duplicateWriteRefusal(
   now: number = Date.now(),
 ): string | null {
   const key = keyOf(toolName, argsJson);
-  const entry = seen.get(key);
-  if (!entry) return null;
-  if (now - entry.succeededAt > DUPLICATE_WINDOW_MS) {
-    seen.delete(key);
-    return null;
-  }
-  if (entry.warned) {
-    // Confirmed. Forget it entirely rather than re-arming, or the NEXT
-    // identical call would be refused on the strength of a success the model
-    // has already been told about and deliberately repeated.
-    seen.delete(key);
-    debugLog('tool:duplicate-write:confirmed', { tool: toolName });
-    return null;
-  }
-  entry.warned = true;
-  const ago = Math.max(1, Math.round((now - entry.succeededAt) / 1000));
+  const succeededAt = seen.get(key);
+  if (succeededAt === undefined) return null;
+  // Forgotten either way — the difference is only whether the model is told.
+  seen.delete(key);
+  if (now - succeededAt > DUPLICATE_WINDOW_MS) return null;
+  const ago = Math.max(1, Math.round((now - succeededAt) / 1000));
   debugLog('tool:duplicate-write:refused', { tool: toolName, agoSeconds: ago });
   // Names the succeeded/again pair explicitly. "An identical call was made"
   // would tell a model that believes the first one failed nothing it does not
@@ -159,7 +173,7 @@ export function recordWriteSuccess(
   now: number = Date.now(),
 ): void {
   sweep(now);
-  seen.set(keyOf(toolName, argsJson), { succeededAt: now, warned: false });
+  seen.set(keyOf(toolName, argsJson), now);
 }
 
 /** Test seam: no production caller, and none should exist. */

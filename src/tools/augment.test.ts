@@ -2175,35 +2175,42 @@ describe('augmentTools', () => {
  * that `shouldBlockInReadOnly` really calls `send_message` a write and
  * `list_messages` a read — which is what decides whether the rule fires.
  */
-describe('augmentTools orders a verification read behind the write', () => {
-  const opts = { shellTimeout: 30_000, confirmDangerous: vi.fn() };
+/**
+ * An MCP tool built the way `mcp.ts` builds one — shared by the two describes
+ * below, because it was pasted into both and the second copy had already lost
+ * the comment explaining the part that matters.
+ *
+ * The kind comes from the real classifier on the RAW name, never hand-set:
+ * hard-coding `kind: 'write'` on both tools made the READ a write too, and
+ * writes never wait, so the ordering rule silently did not fire. And
+ * `attachMeta`, not a plain `.meta` property — `readToolMeta` reads the
+ * non-enumerable `__bernardMeta` and returns undefined for anything else, which
+ * classifies as a READ and makes the fixture invisible to both gates.
+ *
+ * The names are shaped like the real ones, namespace included, because
+ * `isReadOnlyMCPToolName` strips the `server_hash__` prefix and reads a verb at
+ * either end — they are load-bearing rather than decorative.
+ */
+const SEND = 'beeper_654785__send_message';
+const LIST = 'beeper_654785__list_messages';
+const MCP_OPTS = { shellTimeout: 30_000, confirmDangerous: vi.fn() };
 
+function mcpTool(name: string, execute: (args: unknown) => Promise<unknown>) {
+  const raw = name.split('__')[1];
+  return attachMeta(
+    { description: 'mcp', parameters: z.object({}), execute } as never,
+    {
+      name,
+      rawName: raw,
+      kind: isReadOnlyMCPToolName(raw) ? 'read' : 'write',
+    } as never,
+  );
+}
+
+describe('augmentTools orders a verification read behind the write', () => {
   // Shaped exactly like the real ones, namespace and all: `isReadOnlyMCPToolName`
   // strips the `server_hash__` prefix and reads a verb at either end, so the
   // names are load-bearing rather than decorative.
-  const SEND = 'beeper_654785__send_message';
-  const LIST = 'beeper_654785__list_messages';
-
-  /**
-   * Built the way `mcp.ts` builds one: the kind comes from the real classifier
-   * on the raw name, never hand-set. Hard-coding `kind: 'write'` on both — the
-   * first cut — made the READ a write too, and writes never wait, so the rule
-   * silently did not fire. That is the whole failure mode of a hand-set fixture
-   * here, and deriving it binds this test to the classifier that actually
-   * decides in production.
-   */
-  function mcpTool(name: string, execute: (args: unknown) => Promise<unknown>) {
-    const raw = name.split('__')[1];
-    // `attachMeta`, not a plain `.meta` property: `readToolMeta` reads the
-    // non-enumerable `__bernardMeta` and returns undefined for anything else —
-    // and an undefined meta classifies as a READ, so a hand-hung `.meta` made
-    // the fixture invisible to the gate and the barrier silently inert.
-    return attachMeta(
-      { description: 'mcp', parameters: z.object({}), execute } as never,
-      { name, rawName: raw, kind: isReadOnlyMCPToolName(raw) ? 'read' : 'write' } as never,
-    );
-  }
-
   it('classifies the pair the way production does', async () => {
     // The rule cannot fire unless these two disagree, and they disagree only
     // because `isReadOnlyMCPToolName` reads a verb at either end of the raw
@@ -2231,7 +2238,7 @@ describe('augmentTools orders a verification read behind the write', () => {
         [LIST]: mcpTool(LIST, async () => ({ observedSent: sent })),
       } as never,
       createMockStore() as never,
-      opts as never,
+      MCP_OPTS as never,
     );
 
     await runWithDispatchId('step-1', async () => {
@@ -2274,7 +2281,7 @@ describe('augmentTools orders a verification read behind the write', () => {
         r: envelope('r', 'read', async () => ({ observed: done })),
       } as never,
       createMockStore() as never,
-      opts as never,
+      MCP_OPTS as never,
     );
 
     await runWithDispatchId('step-3', async () => {
@@ -2302,7 +2309,7 @@ describe('augmentTools orders a verification read behind the write', () => {
     const tools = augmentTools(
       { [LIST]: readTool, beeper_654785__get_chat: readTool } as never,
       createMockStore() as never,
-      opts as never,
+      MCP_OPTS as never,
     );
     await runWithDispatchId('step-2', async () => {
       await Promise.all([
@@ -2332,22 +2339,7 @@ describe('augmentTools refuses a repeated successful write', () => {
   // exactly how it landed on the failed-write case here.
   beforeEach(__resetDuplicateGuard);
 
-  const opts = { shellTimeout: 30_000, confirmDangerous: vi.fn() };
-  const SEND = 'beeper_654785__send_message';
-  const LIST = 'beeper_654785__list_messages';
   const TEXT = { chatID: '29', text: 'Nice try, Dom.' };
-
-  function mcpTool(name: string, execute: (args: unknown) => Promise<unknown>) {
-    const raw = name.split('__')[1];
-    return attachMeta(
-      { description: 'mcp', parameters: z.object({}), execute } as never,
-      {
-        name,
-        rawName: raw,
-        kind: isReadOnlyMCPToolName(raw) ? 'read' : 'write',
-      } as never,
-    );
-  }
 
   it('runs once, refuses the identical repeat, then runs it when re-issued', async () => {
     const execute = vi.fn(async () => ({
@@ -2357,7 +2349,7 @@ describe('augmentTools refuses a repeated successful write', () => {
     const tools = augmentTools(
       { [SEND]: mcpTool(SEND, execute) } as never,
       createMockStore() as never,
-      opts as never,
+      MCP_OPTS as never,
     );
 
     await tools[SEND].execute!(TEXT, {} as never);
@@ -2366,7 +2358,10 @@ describe('augmentTools refuses a repeated successful write', () => {
     // The blind re-send. Before the gate this was a second message.
     const refused = await tools[SEND].execute!(TEXT, {} as never);
     expect(execute).toHaveBeenCalledTimes(1);
-    expect((refused as { output: string }).output).toMatch(/already SUCCEEDED/);
+    // The shared unconditional-gate shape — an `Error:`-prefixed string, the
+    // same one the deny rule and the write-scope gate return, so
+    // `detectResultFailure` reads it as a failure for free.
+    expect(String(refused)).toMatch(/^Error: .*already SUCCEEDED/);
 
     // Re-issuing is how the model says "yes, on purpose" — no UI, so it works
     // headless where there is nobody to ask.
@@ -2387,11 +2382,32 @@ describe('augmentTools refuses a repeated successful write', () => {
       execute,
       serializeForModel: (r) => (r.status === 'ok' ? r.result : `Error: ${r.error.message}`),
     } as never);
-    const tools = augmentTools({ w: tool } as never, createMockStore() as never, opts as never);
+    const tools = augmentTools({ w: tool } as never, createMockStore() as never, MCP_OPTS as never);
     await tools.w.execute!({ x: 1 }, {} as never);
     const refused = await tools.w.execute!({ x: 1 }, {} as never);
     expect(execute).toHaveBeenCalledTimes(1);
     expect(String(refused)).toMatch(/already SUCCEEDED/);
+  });
+
+  it('distinguishes two long writes that differ only past 300 characters', async () => {
+    // `safeSerialize` slices to 300, so keying on it collided two genuinely
+    // different calls and refused the second as a duplicate — a false refusal on
+    // a write, which is the failure this gate otherwise exists to avoid. The
+    // unit test pins the module; this pins that `augment.ts` hands it the WHOLE
+    // string, which is the half a mutation to `fullArgsJson` survived without.
+    const execute = vi.fn(async () => ({
+      content: [{ type: 'text', text: 'ok' }],
+      isError: false,
+    }));
+    const tools = augmentTools(
+      { [SEND]: mcpTool(SEND, execute) } as never,
+      createMockStore() as never,
+      MCP_OPTS as never,
+    );
+    const body = (tail: string) => ({ chatID: '29', text: 'z'.repeat(400) + tail });
+    await tools[SEND].execute!(body('A'), {} as never);
+    await tools[SEND].execute!(body('B'), {} as never);
+    expect(execute).toHaveBeenCalledTimes(2);
   });
 
   it('never gates a read, however many times it repeats', async () => {
@@ -2402,7 +2418,7 @@ describe('augmentTools refuses a repeated successful write', () => {
     const tools = augmentTools(
       { [LIST]: mcpTool(LIST, execute) } as never,
       createMockStore() as never,
-      opts as never,
+      MCP_OPTS as never,
     );
     for (let i = 0; i < 4; i++) await tools[LIST].execute!({ chatID: '29' }, {} as never);
     expect(execute).toHaveBeenCalledTimes(4);
@@ -2419,7 +2435,7 @@ describe('augmentTools refuses a repeated successful write', () => {
     const tools = augmentTools(
       { [SEND]: mcpTool(SEND, execute) } as never,
       createMockStore() as never,
-      opts as never,
+      MCP_OPTS as never,
     );
     await tools[SEND].execute!(TEXT, {} as never);
     await tools[SEND].execute!(TEXT, {} as never);
@@ -2437,16 +2453,16 @@ describe('augmentTools refuses a repeated successful write', () => {
     const outer = augmentTools(
       { [SEND]: mcpTool(SEND, execute) } as never,
       createMockStore() as never,
-      opts as never,
+      MCP_OPTS as never,
     );
     const inner = augmentTools(
       { [SEND]: mcpTool(SEND, execute) } as never,
       createMockStore() as never,
-      opts as never,
+      MCP_OPTS as never,
     );
     await runWithDispatchId('parent', () => outer[SEND].execute!(TEXT, {} as never));
     const refused = await runWithDispatchId('child', () => inner[SEND].execute!(TEXT, {} as never));
     expect(execute).toHaveBeenCalledTimes(1);
-    expect((refused as { output: string }).output).toMatch(/already SUCCEEDED/);
+    expect(String(refused)).toMatch(/already SUCCEEDED/);
   });
 });

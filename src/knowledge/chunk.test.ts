@@ -6,12 +6,42 @@ import {
   CHUNK_TARGET_CHARS,
   CHUNK_OVERLAP_CHARS,
   MAX_HEADING_CHARS,
+  safeCut,
 } from './chunk.js';
 import { MAX_EMBED_CHARS } from '../embeddings.js';
+import { safeCutIndex } from '../text.js';
 
 /** Every chunk's own body, in document order — what `stitch` will reassemble. */
 const bodies = (source: string): string[] =>
   chunkText(source).map((c) => c.text.slice(c.prefixLen));
+
+describe('the surrogate-safe cut is one rule in two places', () => {
+  // `text.ts`'s `safeCutIndex` is the same predicate, for `watchers/wake.ts`'s
+  // observation excerpt. They are deliberately NOT one import — this module's
+  // stated property is that it has no imports at all, and `MAX_DOC_CHARS` gets
+  // the same restate-and-pin treatment for the same reason. So the anti-drift
+  // device is behavioural: both are driven over every boundary of a string that
+  // straddles one, and must agree everywhere.
+  //
+  // It matters because this class decays asymmetrically — a later correction to
+  // one (a lone LOW surrogate, code points, a ZWJ cluster) leaves the other
+  // emitting the replacement character its docstring exists to prevent, in a
+  // different subsystem, with nothing failing.
+  it('agrees with text.ts at every offset', () => {
+    const s = 'ab😀cd😀ef';
+    for (let n = 0; n <= s.length + 2; n++) {
+      expect(safeCut(s, n)).toBe(safeCutIndex(s, n));
+    }
+  });
+
+  it('never leaves a lone high surrogate', () => {
+    const s = 'a'.repeat(5) + '😀' + 'b';
+    for (let n = 0; n <= s.length; n++) {
+      const cut = s.slice(0, safeCut(s, n));
+      expect(Buffer.from(cut, 'utf8').toString()).toBe(cut);
+    }
+  });
+});
 
 describe('chunk budget', () => {
   // The anti-drift device for the local constants, following
