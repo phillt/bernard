@@ -96,6 +96,22 @@ export function markTruncated(text: string, total: number): string {
 }
 
 /**
+ * Whether a string carries {@link markTruncated}'s marker.
+ *
+ * Beside its producer so the two cannot drift — the `session-markers.ts` pattern,
+ * whose own docstring exists because every consumer that hand-rolled such a
+ * match eventually disagreed with the thing it was matching.
+ *
+ * For text read back from somewhere else: a caller that still holds the value it
+ * just bounded already knows, and should say so rather than re-deriving it from
+ * its own output. `watchers/wake.ts` is the case this exists for — the resume
+ * path recovers an observation block off disk with no bounding step in scope.
+ */
+export function looksTruncated(text: string): boolean {
+  return /\.\.\. \(truncated, \d+ chars total\)$/.test(text);
+}
+
+/**
  * Bounds a persisted log field of unknown shape, keeping its structure when it
  * fits.
  *

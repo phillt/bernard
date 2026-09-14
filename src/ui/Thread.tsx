@@ -23,6 +23,7 @@ import { useDimensionsCtx } from './DimensionsContext.js';
 import { ErrorPanel } from './ErrorPanel.js';
 import { NoticePanel } from './NoticePanel.js';
 import { WakePanel } from './WakePanel.js';
+import type { ObservationSummary } from '../watchers/wake.js';
 import type { NoticeData } from './notice.js';
 import type { ErrorPanelData } from './error-format.js';
 import type { MessageStore, StreamEvent } from './message-store.js';
@@ -80,7 +81,17 @@ export interface WakeData {
   /** Where the turn came from, already phrased — see `describeSource`. */
   source: string;
   /** The instruction that is about to run. Never anything observed. */
-  text: string;
+  instruction: string;
+  /**
+   * A bounded ABSTRACT of what the watcher saw — a size and at most 200
+   * characters. Absent for a `time` target, which observes nothing.
+   *
+   * Never the observation itself: this lives in an append-only array that
+   * lasts the session, and the thing it describes can be megabytes of
+   * somebody's inbox. The cap is enforced at the mint (`summariseObservation`),
+   * so a panel cannot hold what it will not print.
+   */
+  observation?: ObservationSummary;
 }
 
 interface ThreadProps {
@@ -517,7 +528,10 @@ export function StaticItemView({
 }) {
   if (item.error) return <ErrorPanel data={item.error} />;
   if (item.notice) return <NoticePanel data={item.notice} />;
-  if (item.wake) return <WakePanel data={item.wake} />;
+  // `item.toolDetails` is forwarded, where it used to stop here. Doing it in
+  // the single ladder is what gets BOTH transcript surfaces right by
+  // construction rather than by two components remembering to agree.
+  if (item.wake) return <WakePanel data={item.wake} toolDetails={item.toolDetails} />;
   // The component, not a render prop: a closure would throw away the narrowing
   // this line just did, forcing a `message!` at both call sites — an assertion
   // a later reordering of this ladder could silently invalidate.
@@ -784,8 +798,13 @@ function ToolResultMessage({ message }: { message: CoreToolMessage }) {
  * tags) and the leading `[ISO-timestamp]` injected by `timestampUserMessage`,
  * returning the human-readable body plus the timestamp (if present) for
  * separate rendering.
+ *
+ * Exported for `buildResumeSeed`, which has to strip the same two wrappers
+ * before handing an instruction to a `WakePanel` — a panel does not run this,
+ * so without it the frame renders `<user_request>` inside its border. Exporting
+ * beats adding a FOURTH wrapper-stripper to the tree.
  */
-function parseUserMessage(raw: string): { body: string; timestamp: Date | null } {
+export function parseUserMessage(raw: string): { body: string; timestamp: Date | null } {
   let text = raw;
   if (text.startsWith('# Request\n')) {
     text = text.slice('# Request\n'.length);

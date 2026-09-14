@@ -14,6 +14,7 @@ import {
 import {
   DEFAULT_INTERVAL_MS,
   DEFAULT_MAX_FIRES,
+  listableWatchers,
   MAX_LIFETIME_MS,
   MIN_INTERVAL_MS,
   carriedState,
@@ -256,7 +257,11 @@ async function create(deps: WatcherToolDeps, args: Record<string, unknown>): Pro
 }
 
 function list(deps: WatcherToolDeps): string {
-  const all = deps.store.list();
+  // Through `listableWatchers`, exactly as `/watchers` does. Reading
+  // `store.list()` here returned terminal records for `sweep`'s 24-hour
+  // window, so cancelling six and then listing showed six — and the user's
+  // screen and this answer could disagree about what exists.
+  const all = listableWatchers(deps.store.list());
   if (all.length === 0) return 'No watchers.';
   return all
     .map((w) => {

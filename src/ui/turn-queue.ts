@@ -47,6 +47,7 @@
  */
 
 import type { UntrustedData } from '../framework/agents/user-message.js';
+import type { ObservationSummary } from '../watchers/wake.js';
 
 /** Where a queued turn came from, which decides how it is announced. */
 export type QueuedTurnSource =
@@ -69,6 +70,14 @@ export interface QueuedTurn {
    * observation into a turn. Type-only import, so this leaf gains no runtime edge.
    */
   data?: UntrustedData;
+  /**
+   * What the TRANSCRIPT may say about {@link data} — never the payload.
+   *
+   * Beside `data` rather than on the `watcher` arm of {@link QueuedTurnSource},
+   * because it abstracts the data CHANNEL: the `remote` arm would have to carry
+   * a field it can never populate.
+   */
+  observation?: ObservationSummary;
   source: QueuedTurnSource;
   queuedAt: number;
 }

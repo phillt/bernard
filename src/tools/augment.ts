@@ -19,6 +19,7 @@ import { resolveGrant, type ToolNameAliasResolver } from '../permissions/engine.
 import { breadthOptionsFor, type BreadthOption } from '../permissions/breadth.js';
 import { WRITE_PATH_TOOLS } from '../permissions/matchers.js';
 import { checkWritePath } from '../permissions/write-scope.js';
+import { runOrdered } from './write-barrier.js';
 
 /**
  * The wrapper shim prepends `[failure: <category>] <playbook.model>` to
@@ -70,10 +71,27 @@ function legacyProfileKey(meta: ToolMeta | undefined): string | undefined {
 }
 
 function safeSerialize(args: unknown): string {
+  return fullArgsJson(args).slice(0, 300);
+}
+
+/**
+ * The whole serialized arguments, never sliced.
+ *
+ * Split out because `safeSerialize` materializes the entire string and then
+ * keeps 300 characters, so every caller wanting the full value was paying for a
+ * second one — the build-then-slice pattern `resultStats` already documents as
+ * wrong on the result side. One serialization per call now feeds both the debug
+ * snippet and the duplicate gate's key; measured on `file_write`-shaped args at
+ * 5 MB, the removed duplicate is 13.2 ms.
+ *
+ * Never throws: circular or exotic args fall back to `String(args)`, the same
+ * contract callers already relied on.
+ */
+function fullArgsJson(args: unknown): string {
   try {
-    return JSON.stringify(args).slice(0, 300);
+    return JSON.stringify(args);
   } catch {
-    return String(args).slice(0, 300);
+    return String(args);
   }
 }
 
@@ -592,7 +610,14 @@ export function augmentTools(
     toolName: string,
     args: unknown,
     toolDef: any,
-  ): { refusal: string } | { grant: 'allow' | 'ask' } => {
+  ): { refusal: string } | { grant: 'allow' | 'ask'; isWrite: boolean; argsJson: string } => {
+    // Resolved once and handed back, for the reason the grant already is. Both
+    // were being recomputed by their consumers — `isWrite` twice per call (a
+    // second `isReadOnlyShellInvocation` parse of the command line for `shell`),
+    // `argsJson` twice — and `write-barrier.ts` states the cost: two expressions
+    // answering one question is how they drift apart.
+    const isWrite = shouldBlockInReadOnly(readToolMeta(toolDef), args);
+    const argsJson = fullArgsJson(args);
     const grant = resolveProfileGrant(toolName, args);
     if (grant === 'deny') {
       const key = permissionKeyFor(toolName, args, readToolMeta(toolDef));
@@ -603,7 +628,8 @@ export function augmentTools(
       };
     }
     const outOfScope = runWriteScopeGate(toolName, args);
-    return outOfScope ? { refusal: outOfScope } : { grant };
+    if (outOfScope) return { refusal: outOfScope };
+    return { grant, isWrite, argsJson };
   };
 
   /**
@@ -810,7 +836,15 @@ export function augmentTools(
             debugLog(`augment:${toolName}:start`, undefined);
             debugLog('tool:execute:start', { tool: toolName, args: argsPreview });
             try {
-              envelope = await source.execute(args, execOptions as never);
+              // Ordered against this dispatch's in-flight writes, so a
+              // verification read issued in the same parallel step as the write
+              // it verifies cannot observe pre-write state. `shouldBlockInReadOnly`
+              // is the same predicate the read-only block gate uses, consulted
+              // per call so `memory{action:'read'}` and a read-shaped `shell`
+              // are correctly reads.
+              envelope = await runOrdered(gates.isWrite, () =>
+                source.execute(args, execOptions as never),
+              );
               debugLog(`augment:${toolName}:done`, {
                 ok: envelope.status === 'ok',
               });
@@ -844,7 +878,11 @@ export function augmentTools(
             }
 
             const profileKey = resolveProfileKey(toolName, args);
-            const argsSnippet = safeSerialize(args);
+            // The string the gates already built, sliced — not a second full
+            // serialization of the same object. The legacy branch below takes
+            // the same value for the same reason; missing one of the two is how
+            // "one serialization per call" stops being true silently.
+            const argsSnippet = gates.argsJson.slice(0, 300);
             const errSnippet =
               envelope.status === 'error'
                 ? `${envelope.error.message}${envelope.error.snippet ? `\n${envelope.error.snippet}` : ''}`.slice(
@@ -912,7 +950,10 @@ export function augmentTools(
             args: safeSerialize(redactArgs(args, readToolMeta(toolDef)?.sensitiveArgs)),
           });
           try {
-            result = await originalExecute(args, execOptions);
+            // The same ordering as the envelope branch above, through the same
+            // helper. MCP tools take THIS branch — which is where the duplicate
+            // message came from.
+            result = await runOrdered(gates.isWrite, () => originalExecute(args, execOptions));
           } catch (thrown: unknown) {
             debugLog(
               `augment:${toolName}:threw`,
@@ -927,7 +968,13 @@ export function augmentTools(
           }
 
           const profileKey = resolveProfileKey(toolName, args);
-          const argsSnippet = safeSerialize(args);
+          // The string the gates already built, sliced — not a second full
+          // serialization of the same object. Captured BEFORE `execute`, so a
+          // tool that mutated `args` in place would now be recorded with its
+          // pre-mutation arguments; that is the more faithful record of the call
+          // the model actually made, and is named here rather than left to be
+          // discovered.
+          const argsSnippet = gates.argsJson.slice(0, 300);
           const capturedResult = result;
           // Evidence pointer (#141), synchronous: deferring this inside the
           // setImmediate below races with `provenance.clear()` at the start

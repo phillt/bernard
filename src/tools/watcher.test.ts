@@ -141,6 +141,28 @@ describe('watcher tool', () => {
     expect(new WatcherStore().read(id)?.status).toBe('cancelled');
     // Cancelling twice reports the state rather than pretending it acted.
     expect(await run(t, { action: 'cancel', id })).toMatch(/already cancelled/);
+    // And it is GONE from the listing. `sweep` keeps the record for 24 h, so
+    // reading `store.list()` here reported a watcher the user had just been
+    // told was cleared — and `/watchers` said the same, which is how the two
+    // surfaces came to contradict Bernard's own answer.
+    expect(await run(t, { action: 'list' })).toBe('No watchers.');
+  });
+
+  it('still lists a FAILED watcher, with the error that explains it', async () => {
+    // The asymmetry: done watchers go, a failed one stays because `lastError`
+    // is the only diagnostic that path writes.
+    const t = make();
+    await run(t, {
+      action: 'create',
+      name: 'broken',
+      instructions: 'x',
+      targetKind: 'time',
+      at: new Date(Date.now() + 1000).toISOString(),
+    });
+    const store = new WatcherStore();
+    const id = store.list()[0].id;
+    store.finish(id, 'failed', { lastError: 'probe timed out' });
+    expect(await run(t, { action: 'list' })).toMatch(/broken/);
   });
 
   it('does not leak the digest or a full id set through get', async () => {

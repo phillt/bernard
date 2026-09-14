@@ -784,6 +784,33 @@ describe('Agent', () => {
     expect(toolBlockBytes).toHaveBeenCalledTimes(1);
   });
 
+  it('hands back the user message it pushed, by identity', async () => {
+    // The REPL marks a woken turn as already on screen so the joined
+    // instruction-plus-observation is not ALSO painted as a `❯` bubble under the
+    // panel that just announced it. It keys a WeakSet on the message OBJECT, so
+    // identity is the contract — an equal-looking copy would not suppress
+    // anything. The predecessor had `App` capture a history length and scan the
+    // range instead, which rested on two facts stated nowhere here.
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+    const agent = makeAgent(makeConfig(), toolOptions, store);
+    expect(agent.getLastUserMessage()).toBeNull();
+
+    await agent.processInput('Hello');
+    const pushed = agent.getLastUserMessage();
+    // `toBe`, not `toEqual`: the WeakSet cannot be keyed on a structural match.
+    expect(pushed).toBe(agent.getHistory().find((m) => m.role === 'user'));
+
+    // A second turn re-points it rather than accumulating.
+    await agent.processInput('Again');
+    expect(agent.getLastUserMessage()).not.toBe(pushed);
+
+    agent.clearHistory();
+    expect(agent.getLastUserMessage()).toBeNull();
+  });
+
   it('processInput passes timestamped user message in history', async () => {
     mockGenerateText.mockResolvedValue({
       response: { messages: [{ role: 'assistant', content: 'Hi!' }] },

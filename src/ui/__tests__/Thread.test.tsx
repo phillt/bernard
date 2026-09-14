@@ -877,6 +877,28 @@ describe('both transcript surfaces render the same item', () => {
       error: { title: 'Turn failed', message: 'the provider refused' },
       toolDetails: false,
     },
+    // Two wake items, one per detail level. The `true` one is the point: it is
+    // what fails on BOTH surfaces at once if `StaticItemView` stops forwarding
+    // `item.toolDetails` into the panel, which is exactly the forward that used
+    // to stop at the ladder.
+    {
+      key: 'c',
+      toolDetails: false,
+      wake: {
+        source: 'a watcher',
+        instruction: 'COLLAPSED-FIRST\nhidden-line-one\nhidden-line-two',
+        observation: { bytes: 3277, excerpt: 'SECRET-EXCERPT', clipped: true },
+      },
+    },
+    {
+      key: 'd',
+      toolDetails: true,
+      wake: {
+        source: 'a watcher',
+        instruction: 'EXPANDED-FIRST\nEXPANDED-LAST',
+        observation: { bytes: 3277, excerpt: 'SHOWN-EXCERPT', clipped: false },
+      },
+    },
   ];
 
   it('shows the same text for a message and for an error panel', () => {
@@ -890,6 +912,28 @@ describe('both transcript surfaces render the same item', () => {
     for (const expected of ['a plain answer', 'Turn failed', 'the provider refused']) {
       expect(inlineText).toContain(expected);
       expect(fullText).toContain(expected);
+    }
+    inline.unmount();
+    full.unmount();
+  });
+
+  it('renders both wake detail levels identically on each surface', () => {
+    const inline = render(createElement(Thread, { staticItems: ITEMS, busy: false }));
+    const full = render(
+      createElement(TranscriptViewport, { items: ITEMS, busy: false, rows: 60 } as never),
+    );
+    const inlineText = stripAnsi(inline.lastFrame() ?? '');
+    const fullText = stripAnsi(full.lastFrame() ?? '');
+
+    for (const text of [inlineText, fullText]) {
+      // OFF: first line, a count of what it is holding back, a size — and not
+      // the excerpt, which is the half `toolDetails` is deciding about.
+      expect(text).toContain('COLLAPSED-FIRST');
+      expect(text).not.toContain('SECRET-EXCERPT');
+      expect(text).toContain('2 more instruction lines');
+      // ON: the whole instruction and the excerpt.
+      expect(text).toContain('EXPANDED-LAST');
+      expect(text).toContain('SHOWN-EXCERPT');
     }
     inline.unmount();
     full.unmount();
