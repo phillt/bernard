@@ -78,6 +78,27 @@ function refineCategory(category: ToolErrorType, message: string): ToolErrorType
  * Live-probe a single `(provider, model)` with the user's configured key. Sends
  * a 1-token "ping" and reports whether it succeeded. Never throws — every
  * failure path resolves to `{ ok: false, category, message }`.
+ *
+ * **This cannot tell a dead model id from an empty wallet, and on some providers
+ * the wallet is checked first.** A completion is a billed call, so on an account
+ * with no credit Anthropic answers `Your credit balance is too low` for *every*
+ * model — valid or not — and the probe reports `unknown` for all of them.
+ * (OpenAI happens to resolve the model first, so a bad id there still reports
+ * `not_found`; that is an ordering accident, not a contract.)
+ *
+ * When that happens, the discriminator is the provider's own model-metadata
+ * endpoint, which is **not billed** and needs only a valid key:
+ *
+ *     GET https://api.anthropic.com/v1/models/{model_id}
+ *       -H "x-api-key: $KEY" -H "anthropic-version: 2023-06-01"
+ *     → 200 with a display_name, or 404 `not_found_error`
+ *
+ * Recorded here rather than in a commit message because the instinct on meeting
+ * a suspect model id is to reach for this function, and on a dry account that
+ * returns a billing error that looks like it settles nothing. It is how #447's
+ * premise was finally measured: `claude-opus-4` → 404, the three curated ids →
+ * 200. It answers "does this id exist" only — a 200 is not proof the model is
+ * callable with your parameters, which is what this probe is for.
  */
 export async function validateModel(
   config: BernardConfig,

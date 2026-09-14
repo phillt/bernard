@@ -655,8 +655,18 @@ function repairBuiltinLineups(map: Record<string, Lineup>): boolean {
   }
   if (ids.length === 0) return false;
   // Reported once per process, while the transform above runs every load. A
-  // second identical notice for the same repair is noise, and the write is
-  // requested from the same latch so a failed one is not retried.
+  // second identical notice for the same repair is noise, and this latch is
+  // what bounds the repair's contribution to the write: it requests one, once.
+  //
+  // It does NOT bound writes in general, and the difference matters if you are
+  // reading this to reason about a read-only filesystem. `writeFile` below is
+  // gated on `mutatedRef.value`, which `migrateLineupShape` also sets when it
+  // backfills a missing role — and a failed write leaves that role missing, so
+  // the migration re-detects it and re-requests a write on every load. That is
+  // pre-existing and deliberately left alone: a shape migration retrying is how
+  // it recovers from a TRANSIENT failure, and the cost is one temp-write that
+  // fails fast on EACCES. The repair cannot use that argument, because it would
+  // also re-announce itself and re-do work that is already correct in memory.
   if (!repairReported) {
     repairReported = true;
     const report: LineupRepairReport = { ids, dead: [...dead], persisted: true };
