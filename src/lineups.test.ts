@@ -189,21 +189,35 @@ describe('lineups store', () => {
       expect(report?.dead).toContain('anthropic/claude-opus-4');
     });
 
-    // The latch. Without it a swallowed write failure means repair re-detects
-    // and retries a temp-write + rename on every `loadLineups()` — which is once
-    // per `resolveSiteModel`, i.e. dozens of times per turn.
-    it('does not retry after a failed write within one process', async () => {
+    // The latch gates the WRITE and the notice, never the transform. Latching
+    // the transform looked right and left the process split-brained: load #1
+    // returned the repaired map, every later load re-read the broken file and
+    // was refused a repair, so within one turn the first call site got the
+    // fixed model and the rest got the dead one. An earlier version of this
+    // test asserted that behaviour as if it were the feature.
+    it('keeps returning the repaired map after a failed write, and reports once', async () => {
       const m = await loadModule();
       const { LINEUPS_PATH } = await import('./paths.js');
       await writeLegacySeed();
       const dir = path.dirname(LINEUPS_PATH);
       fs.chmodSync(dir, 0o555);
       try {
-        m.loadLineups();
-        expect(m.consumeLineupRepairReport()).not.toBeNull();
-        // The write failed, so the file on disk is still the broken seed and a
-        // second read re-detects it. Only the latch stops a second attempt.
-        m.loadLineups();
+        const first = m.loadLineups();
+        expect(first.anthropic.roles.orchestrator.premium.model).toBe(
+          m.DEFAULT_TIERS.anthropic.premium,
+        );
+        const report = m.consumeLineupRepairReport();
+        expect(report).not.toBeNull();
+        // The notice must not claim a refresh that outlives the process.
+        expect(report?.persisted).toBe(false);
+
+        // The write failed, so the file on disk is still the broken seed. The
+        // second load must nonetheless agree with the first.
+        const second = m.loadLineups();
+        expect(second.anthropic.roles.orchestrator.premium.model).toBe(
+          m.DEFAULT_TIERS.anthropic.premium,
+        );
+        // ...and must not re-announce it, which is what bounds the retry.
         expect(m.consumeLineupRepairReport()).toBeNull();
       } finally {
         fs.chmodSync(dir, 0o755);

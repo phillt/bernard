@@ -506,7 +506,7 @@ describe('specialist-run tool', () => {
       expect(mockGetModel).toHaveBeenCalledWith(expect.anything(), 'openai', 'gpt-4o-mini');
     });
 
-    it('falls back to global config when no overrides', async () => {
+    it('resolves through the seeded lineup when no override is given', async () => {
       mockGenerateText.mockResolvedValue({ text: 'Done' });
       vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
 

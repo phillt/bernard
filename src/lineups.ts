@@ -144,11 +144,11 @@ export const DEFAULT_TIERS: Record<
   BuiltinProvider,
   { premium: string; mid: string; cheap: string }
 > = {
-  // NOT probe-verified: the account used for #447 had no Anthropic credit, so
-  // every probe returned a billing error before model resolution and could
-  // neither confirm `claude-opus-4`'s failure nor validate these. They are
-  // Anthropic's documented current ids and all three resolve in the catalog.
-  // Re-probe with a funded key before trusting this row.
+  // Verified 2026-09-14 against `GET /v1/models/{id}`, which is NOT billed and
+  // needs only a valid key — so it answers where a `generateText` probe cannot,
+  // on an account with no credit. All three return HTTP 200; `claude-opus-4`
+  // returns 404 `not_found_error`, which is the whole premise of #447 measured
+  // rather than taken from the field report.
   anthropic: {
     premium: 'claude-opus-5',
     mid: 'claude-sonnet-5',
@@ -406,17 +406,21 @@ function migrateLineupShape(
  * than the others: it is the legacy derived **mid** for xAI, and `balanced`
  * routes every specialist, wrapper and compressor call through mid.
  *
- * Probed 2026-09-14: the three below returned `not_found`. `claude-opus-4` is
- * carried on the strength of #447's field report (`Error: model:
- * claude-opus-4`) and could NOT be confirmed here — the account had no
- * Anthropic credit, so every probe failed at billing before model resolution.
- * It is also the only one of the four that is a retired *former* model rather
- * than a gateway-only name, which is consistent with that report.
+ * Probed 2026-09-14. Three return `not_found` from a completion call;
+ * `claude-opus-4` returns HTTP 404 `not_found_error` from
+ * `GET /v1/models/claude-opus-4`, which is unbilled and so answers on an
+ * account with no credit.
  */
 const DEAD_SEEDED_MODELS: ReadonlySet<string> = new Set([
   'anthropic/claude-opus-4',
   'openai/gpt-oss-20b',
   'openai/gpt-5.1-thinking',
+  // NOT a typo for `DEFAULT_TIERS.xai.cheap`, which is `grok-4-1-fast-reasoning`
+  // — one character apart, and both spellings are deliberate. The DOTTED form
+  // here is the gateway's, which xAI's API rejects; the DASHED form there is
+  // the one that dispatches. `normalizeModelId` folds them together for catalog
+  // lookup, which is exactly why this looks like a mistake and is not. Running
+  // either through it would break one of the two.
   'xai/grok-4.1-fast-reasoning',
   'xai/grok-4.20-multi-agent',
 ]);
@@ -449,8 +453,10 @@ function curatedTiersFor(provider: string): { premium: string; mid: string; chea
 export interface LineupRepairReport {
   /** Lineup ids rewritten, in `BUILTIN_PROVIDERS` order. */
   ids: string[];
+  /** False when the repair applied in memory but could not be saved. */
+  persisted: boolean;
   /**
-   * The subset of replaced models that are KNOWN not to dispatch, `provider:model`.
+   * The subset of replaced models that are KNOWN not to dispatch, `provider/model`.
    *
    * Deliberately not "everything that changed". A ladder match re-seeds the
    * whole lineup, so most of what it replaces was working fine — listing
@@ -465,13 +471,21 @@ export interface LineupRepairReport {
  * Set by {@link repairBuiltinLineups}, drained by
  * {@link consumeLineupRepairReport}.
  *
- * `repairAttempted` is a latch, and it is load-bearing rather than defensive:
- * `writeFile`'s failure is swallowed below, so on a read-only filesystem or an
- * EACCES the repair would re-detect the same condition and retry a temp-write +
- * rename on *every* `loadLineups()` — which is once per `resolveSiteModel`,
- * i.e. dozens of times per turn.
+ * `repairReported` is a latch on the REPORT and the WRITE, never on the
+ * transform — and that distinction is the whole correctness argument.
+ * `writeFile`'s failure is swallowed below, so on a read-only filesystem the
+ * repair must not retry a temp-write + rename on every `loadLineups()`, which
+ * is once per `resolveSiteModel`, i.e. dozens of times per turn.
+ *
+ * But latching the TRANSFORM to achieve that left the process split-brained: a
+ * failed write meant load #1 returned the repaired map while every later load
+ * re-read the broken file and was refused a repair, so within a single turn the
+ * first call site got the fixed model and the rest got the dead one — which
+ * reads as a flaky provider rather than a configuration problem. The repair is
+ * therefore applied on every load and costs nothing in the healthy case, where
+ * the written file trips `derivedLadderIfUnmodified`'s curated early-out.
  */
-let repairAttempted = false;
+let repairReported = false;
 let lastRepair: LineupRepairReport | null = null;
 
 /**
@@ -598,13 +612,13 @@ function replaceDeadSlots(lineup: Lineup, dead: Set<string>): boolean {
  *
  * Concurrency: the REPL, the cron daemon and the applet host all share
  * `lineups.json`, so two processes can repair at once. `atomicWriteFileSync`
- * keeps the file from tearing, and last-writer-wins is benign ONLY because both
- * rules converge on the same content. Keep it that way — a repair that depended
- * on what it read would not be safe here.
+ * keeps the file from tearing, and last-writer-wins is benign for a narrower
+ * reason than "the rules agree": neither rule's OUTPUT depends on what it read.
+ * Both write `DEFAULT_TIERS`, a compiled-in constant, so two racing repairs
+ * produce identical bytes. An edit that made the replacement catalog-dependent
+ * would break this silently — that, not rule disagreement, is what to guard.
  */
 function repairBuiltinLineups(map: Record<string, Lineup>): boolean {
-  if (repairAttempted) return false;
-  repairAttempted = true;
   const ids: string[] = [];
   const dead = new Set<string>();
   const now = nowIso();
@@ -640,12 +654,19 @@ function repairBuiltinLineups(map: Record<string, Lineup>): boolean {
     }
   }
   if (ids.length === 0) return false;
-  const report: LineupRepairReport = { ids, dead: [...dead] };
-  lastRepair = report;
-  // Unconditional, not behind the REPL's notice: `script`, `cron-run` and the
-  // applet host repair too and have nowhere to render one.
-  debugLog('lineup:repaired', report);
-  return true;
+  // Reported once per process, while the transform above runs every load. A
+  // second identical notice for the same repair is noise, and the write is
+  // requested from the same latch so a failed one is not retried.
+  if (!repairReported) {
+    repairReported = true;
+    const report: LineupRepairReport = { ids, dead: [...dead], persisted: true };
+    lastRepair = report;
+    // Unconditional, not behind the REPL's notice: `script`, `cron-run` and the
+    // applet host repair too and have nowhere to render one.
+    debugLog('lineup:repaired', report);
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -680,7 +701,10 @@ export function loadLineups(): Record<string, Lineup> {
           try {
             writeFile(out);
           } catch {
-            // best-effort; the in-memory migration still applies this session
+            // best-effort; the in-memory migration still applies this session.
+            // The repair did too, but it will not survive the process — say so
+            // rather than letting the notice claim a refresh that is not saved.
+            if (lastRepair) lastRepair.persisted = false;
           }
         }
         return out;

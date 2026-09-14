@@ -594,7 +594,7 @@ describe('task tool', () => {
       expect(mockGetModel).toHaveBeenCalledWith(expect.anything(), 'xai', 'grok-code-fast-1');
     });
 
-    it('falls back to global config when no override', async () => {
+    it('resolves through the seeded lineup when no override is given', async () => {
       mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
       const taskTool = createTaskTool(makeCtx(makeConfig(), toolOptions, memoryStore));
       await taskTool.execute!(

@@ -49,10 +49,17 @@ export function lineupRepairNotice(report: LineupRepairReport | null): string | 
   // `/lineup` edits the ACTIVE lineup only; naming three and pointing at it
   // leaves the other two unreachable from the instruction.
   const how = n > 1 ? 'Use /lineups to switch or /lineup to edit.' : 'Use /lineup to change it.';
+  // An in-memory repair is real for this session but gone at exit, so saying
+  // "I've refreshed it" and nothing else would be a promise the next launch
+  // breaks. Names the file so the cause (permissions, usually) is findable.
+  const unsaved = report.persisted
+    ? ''
+    : ' I could not save this, so it will need repeating next run — check the' +
+      ' permissions on your `lineups.json`.';
   return (
     `Heads up — your default model ${plural(n, 'lineup', 'lineups')} ` +
     `(${nameList(report.ids, IDS_NAMED)}) ${plural(n, 'was', 'were')} set up by an older ` +
     `version of Bernard that picked models automatically, so I've refreshed ` +
-    `${plural(n, 'it', 'them')}.${couldNotBeUsed} ${how}`
+    `${plural(n, 'it', 'them')}.${couldNotBeUsed}${unsaved} ${how}`
   );
 }

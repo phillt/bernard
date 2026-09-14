@@ -492,7 +492,7 @@ describe('subagent tool', () => {
       expect(mockGetModel).toHaveBeenCalledWith(expect.anything(), 'xai', 'grok-code-fast-1');
     });
 
-    it('falls back to global config when no override', async () => {
+    it('resolves through the seeded lineup when no override is given', async () => {
       mockGenerateText.mockResolvedValue({ text: 'Done' });
       const agentTool = createSubAgentTool(makeCtx(makeConfig(), toolOptions, memoryStore));
       await agentTool.execute!(
