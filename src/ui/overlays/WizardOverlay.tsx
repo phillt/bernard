@@ -24,6 +24,7 @@ import {
   actionRows,
   CONTINUE_LABEL,
   railFor,
+  rowNote,
   rowTrailing,
   unavailableReason,
   stepError,
@@ -972,7 +973,13 @@ function WizardChoiceStep({
         {/* Reserved unconditionally — `OverlayFooter`'s rule. A row that appears
             only on a blocked highlight makes the step's height depend on where
             the cursor is, and the frame jumps as it moves. */}
-        <Text color={colors.muted}>{blocked ?? nothingSelected ?? ' '}</Text>
+        {/* One reserved row, three things that can claim it, in order of
+            urgency: why this row cannot be picked, what picking it costs, and
+            why Continue is refusing. They cannot collide — a note belongs to a
+            highlighted OPTION and `nothingSelected` only fires on a control. */}
+        <Text color={colors.muted}>
+          {blocked ?? rowNote(step, highlighted) ?? nothingSelected ?? ' '}
+        </Text>
       </WizardCard>
     </Box>
   );

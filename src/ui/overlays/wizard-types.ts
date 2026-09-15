@@ -108,6 +108,18 @@ export type WizardStepKind =
        */
       trailing?: Record<string, { text: string; tick?: boolean }>;
       /**
+       * A sentence about one row, shown on the reserved reason row while that
+       * row is highlighted.
+       *
+       * Distinct from {@link trailing}, which is right-aligned detail sized to
+       * fit BESIDE the label — a blurb, a key hint, a status. A note is prose
+       * and gets the full width, which is what a consequence needs: the row
+       * that dissolves every permission gate had its warning declared in the
+       * field registry and rendered nowhere, because a label is all a choice
+       * step used to carry.
+       */
+      notes?: Record<string, string>;
+      /**
        * Enter on a row resolves the step, instead of selecting it.
        *
        * The default is select-then-continue: Enter marks a row with `✓`, and
@@ -555,6 +567,12 @@ export function unavailableReason(step: WizardStep, label: string | undefined): 
 }
 
 /** The right-aligned detail for a row, if it has any. */
+/** The note for a row, or `undefined`. */
+export function rowNote(step: WizardStep, label: string | undefined): string | undefined {
+  if (label === undefined || step.field.kind !== 'choice') return undefined;
+  return step.field.notes?.[label];
+}
+
 export function rowTrailing(
   step: WizardStep,
   label: string | undefined,

@@ -229,7 +229,12 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
             {
               value: 'unrestricted',
               label: '⚠ Unrestricted (no permission checks)',
-              description: 'Dissolves both the block gate and the confirmation gate.',
+              // `toolModePolicy` short-circuits on `skipPermissions` BEFORE every
+              // other rule, so this does not merely relax the confirm gate — it
+              // makes the confirm-mode answer inert. Said on the row, because
+              // the two questions are asked on separate screens and nothing else
+              // connects them.
+              description: 'Dissolves both gates — your confirm-mode answer stops applying.',
             },
           ],
         },
@@ -239,7 +244,8 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
       {
         key: 'confirmMode',
         label: 'Confirm mode',
-        description: 'How aggressively to prompt before running risky tools.',
+        description:
+          'How aggressively to prompt before running risky tools. Ignored entirely when tool mode is unrestricted.',
         field: {
           kind: 'list',
           options: [

@@ -351,6 +351,34 @@ describe('the model step and a catalog that does not list what is in use', () =>
   });
 });
 
+describe('a question that another answer can make inert', () => {
+  it("carries the unrestricted row's consequence onto the screen", () => {
+    // `toolModePolicy` short-circuits on `skipPermissions` before every other
+    // rule, so picking unrestricted makes the confirm-mode answer dead — and
+    // the two are asked on separate screens with nothing else connecting them.
+    // The warning existed in the registry and rendered nowhere.
+    const { spec } = buildSettingsSpec(ctx());
+    const step = spec.steps.find((s) => s.id === 'toolMode')!;
+    const field = step.field as { choices: string[]; notes?: Record<string, string> };
+    const unrestricted = field.choices.find((c) => c.includes('Unrestricted'))!;
+    expect(field.notes?.[unrestricted]).toMatch(/confirm-mode answer stops applying/);
+  });
+
+  it('says it on the confirm-mode question too, which is asked first', () => {
+    const { spec } = buildSettingsSpec(ctx());
+    const step = spec.steps.find((s) => s.id === 'confirmMode')!;
+    expect(step.hint).toMatch(/unrestricted/i);
+  });
+
+  it('adds no notes to a step whose options declare none', () => {
+    // Guard the guard: an always-present `notes` map would satisfy the first
+    // case while telling the renderer every row has something to say.
+    const { spec } = buildSettingsSpec(ctx());
+    const step = spec.steps.find((s) => s.id === 'theme')!;
+    expect((step.field as { notes?: unknown }).notes).toBeUndefined();
+  });
+});
+
 describe('buildDefaultProviderSpec', () => {
   /** Two keyed providers, so the question is worth asking. */
   function twoKeyed(): SetupContext {

@@ -175,10 +175,13 @@ function stepHint(field: WizardFieldData, ctx: SetupContext): string {
 }
 
 /** The options a `dynamic` field resolves to against this installation. */
-function dynamicOptions(
-  field: WizardFieldData,
-  ctx: SetupContext,
-): Array<{ value: string; label: string }> {
+/** A row a choice step can render: the two mandatory halves, plus an optional
+ *  sentence about what picking it costs. Widened from `{value,label}` so a
+ *  `dynamic` source and a declared `list` produce the same shape and `buildStep`
+ *  needs no branch to read a note off one and not the other. */
+type Option = { value: string; label: string; description?: string };
+
+function dynamicOptions(field: WizardFieldData, ctx: SetupContext): Option[] {
   const kind = field.field;
   if (kind.kind !== 'dynamic') return [];
   switch (kind.source) {
@@ -239,7 +242,7 @@ function buildStep(
   const current = ctx.current[field.key];
 
   if (kind.kind === 'list' || kind.kind === 'dynamic') {
-    const options = kind.kind === 'list' ? kind.options : dynamicOptions(field, ctx);
+    const options: Option[] = kind.kind === 'list' ? kind.options : dynamicOptions(field, ctx);
     // A field with nothing to choose from is not a question. Reachable for real:
     // a lineup list before any lineup exists, or a model list when the catalog
     // could not be read.
@@ -250,8 +253,21 @@ function buildStep(
     const effective =
       isToolMode && ctx.current.skipPermissions === true ? UNRESTRICTED : (current ?? '');
     const initial = labelFor(options, effective);
+    // Notes reach the screen. The registry has carried a `description` per
+    // option since it was written and nothing rendered it, so the one row that
+    // dissolves every permission gate said so only in the source.
+    const notes: Record<string, string> = {};
+    for (const o of options) if (o.description !== undefined) notes[o.label] = o.description;
     return {
-      step: { ...base, field: { kind: 'choice', choices: options.map((o) => o.label) }, initial },
+      step: {
+        ...base,
+        field: {
+          kind: 'choice',
+          choices: options.map((o) => o.label),
+          ...(Object.keys(notes).length > 0 ? { notes } : {}),
+        },
+        initial,
+      },
       setup: {
         key: field.key,
         initial,

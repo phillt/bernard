@@ -779,6 +779,77 @@ describe('WizardOverlay — a value the list does not offer (#447)', () => {
  * the one thing a reader tries after typing a value. A control you can see and
  * cannot reach is worse than no control.
  */
+/**
+ * A row can say what picking it costs (#447).
+ *
+ * The field registry has carried a `description` per option since it was
+ * written and `buildStep` mapped options to LABELS, so it rendered nowhere —
+ * including on the one row that dissolves every permission gate, whose warning
+ * existed only in the source.
+ */
+describe('WizardOverlay — a highlighted row can carry a note', () => {
+  const SPEC: WizardSpec = {
+    steps: [
+      {
+        id: 'mode',
+        question: 'Tool mode?',
+        field: {
+          kind: 'choice',
+          choices: ['read-only', 'write', 'unrestricted'],
+          notes: { unrestricted: 'Dissolves both gates.' },
+        },
+        initial: 'read-only',
+      },
+    ],
+  };
+
+  it('shows the note for the highlighted row only', async () => {
+    const { stdin, lastFrame } = await mount(vi.fn(), SPEC);
+    expect(stripAnsi(lastFrame() ?? '')).not.toContain('Dissolves both gates');
+    await type(stdin, ARROW_DOWN);
+    await type(stdin, ARROW_DOWN);
+    expect(stripAnsi(lastFrame() ?? '')).toContain('Dissolves both gates');
+    await type(stdin, ARROW_UP);
+    expect(stripAnsi(lastFrame() ?? '')).not.toContain('Dissolves both gates');
+  });
+
+  it('does not grow a row for it', async () => {
+    // The reason row is reserved unconditionally, so a note claims a row that
+    // already exists — otherwise the frame reflows as the cursor moves.
+    const { stdin, lastFrame } = await mount(vi.fn(), SPEC);
+    const rows = (f: string) => f.replace(/\n+$/, '').split('\n').length;
+    const before = rows(stripAnsi(lastFrame() ?? ''));
+    await type(stdin, ARROW_DOWN);
+    await type(stdin, ARROW_DOWN);
+    expect(rows(stripAnsi(lastFrame() ?? ''))).toBe(before);
+  });
+
+  it('lets a refusal win the row over a note', async () => {
+    // Both claim the same row; why you CANNOT pick this outranks what picking
+    // it would cost.
+    const spec: WizardSpec = {
+      steps: [
+        {
+          id: 'p',
+          question: 'Which?',
+          field: {
+            kind: 'choice',
+            choices: ['a', 'b'],
+            notes: { b: 'a note about b' },
+            unavailable: { b: 'b has no key stored.' },
+          },
+          initial: 'a',
+        },
+      ],
+    };
+    const { stdin, lastFrame } = await mount(vi.fn(), spec);
+    await type(stdin, ARROW_DOWN);
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toContain('b has no key stored');
+    expect(frame).not.toContain('a note about b');
+  });
+});
+
 describe('WizardOverlay — the controls are reachable from every step kind', () => {
   const textSpec: WizardSpec = {
     steps: [
