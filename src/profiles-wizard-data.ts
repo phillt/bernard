@@ -13,6 +13,7 @@
 
 import { MAX_CONCURRENT_AGENTS_LIMIT } from './tools/agent-pool.js';
 import { RESPONSE_STYLE_IDS, type ResponseStyle } from './agent-prompt.js';
+import { REMOTE_MESSAGE_MODES } from './remote-messages.js';
 import { THEMES } from './theme.js';
 import type { ProfileSettings } from './profiles.js';
 
@@ -112,6 +113,21 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
             { value: 'off', label: 'Off (never prompt)' },
           ],
         },
+      },
+      {
+        // Beside the two tool gates rather than under Automation: those govern
+        // what Bernard is allowed to BUILD unattended, and this governs what may
+        // reach it as an instruction — the same question `toolMode` asks, one
+        // channel over.
+        key: 'remoteMessages',
+        label: 'Messages from other processes',
+        description:
+          'What `bernard say` may do. Ask me shows the message and one keystroke acts on it.',
+        // The shared table, not a fourth copy of it. Hand-written here the rows
+        // had already disagreed with the menu's on arrival — which is the drift
+        // `remote-messages.ts` says it exists to prevent, happening in the one
+        // surface that could not import it while it lived under `src/ui/`.
+        field: { kind: 'list', options: [...REMOTE_MESSAGE_MODES] },
       },
     ],
   },

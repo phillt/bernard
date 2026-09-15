@@ -203,7 +203,7 @@ program
   )
   .option(
     '--accept-remote-prompts',
-    'Let `bernard say --run` start turns in this session. Off by default: any local process that can write the state directory could then put instructions in front of the agent',
+    'Let `bernard say --run` start turns in this session. Off by default: any local process that can write the state directory could then put instructions in front of the agent. A delivered message can always be acted on with one keystroke without this; set it from /agent-options to keep the choice',
   )
   .action(async (opts) => {
     try {

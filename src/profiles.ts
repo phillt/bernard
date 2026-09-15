@@ -24,6 +24,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { PREFS_PATH, PROFILES_PATH, PROFILES_MIGRATED_MARKER } from './paths.js';
 import { atomicWriteFileSync } from './fs-utils.js';
+import type { RemoteMessageMode } from './remote-messages.js';
 import type { ResponseStyle } from './agent-prompt.js';
 import type { ToolPermissions, ToolPermissionRules } from './tool-permissions.js';
 import type { AppCspGrant } from './host/csp-grant.js';
@@ -69,6 +70,18 @@ export interface ProfileSettings {
   scratchSubjectThreshold?: number;
   conciseMode?: boolean;
   confirmMode?: 'off' | 'auto' | 'strict';
+  /**
+   * What happens to a message delivered by another local process (#462/#493).
+   *
+   * `ask` (the default) runs nothing by itself: the message is shown, and one
+   * keystroke on an empty prompt acts on it. That keystroke is per-message human
+   * consent, which is strictly stronger than the blanket kind, so the affordance
+   * itself needs no setting — this gates only the AUTOMATIC modes.
+   *
+   * `prompts` is exactly what `--accept-remote-prompts` has always meant: a
+   * `bernard say --run` runs, a plain notice waits. `all` runs everything.
+   */
+  remoteMessages?: RemoteMessageMode;
   toolMode?: 'read-only' | 'write';
   maxConcurrentAgents?: number;
   responseStyle?: ResponseStyle;

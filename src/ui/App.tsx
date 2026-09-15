@@ -214,6 +214,13 @@ import { persistAgentState } from './save.js';
 import { MessageStore } from './message-store.js';
 import { InboxWatcher } from '../inbox/watcher.js';
 import { coalescedNotice, toNoticeData, type NoticeData } from './notice.js';
+import {
+  REMOTE_MESSAGE_MODES,
+  capabilitiesFor,
+  modeRow,
+  runsUnattended,
+  type RemoteMessageMode,
+} from '../remote-messages.js';
 import { setOutputSink } from '../framework/hooks/output-sink.js';
 import { setInkHandlers, type MenuResult } from './ink-handlers.js';
 import { formatAskUserAnswers, injectAskUserHistoryMessages } from '../tools/ask-user-history.js';
@@ -762,6 +769,13 @@ export function App({
   // jump gating (full-screen). Flipped by `<Prompt onEmptyChange>` only when the
   // boolean changes, so it doesn't re-render `<App>` on every keystroke.
   const [promptEmpty, setPromptEmpty] = useState(true);
+  // The delivered message the keystroke would act on, or null. STATE rather than
+  // a ref because the hint bar has to appear and disappear with it — a ref would
+  // leave the one surface that advertises the affordance a render behind.
+  const [pendingMessage, setPendingMessage] = useState<{
+    text: string;
+    sourceLabel: string;
+  } | null>(null);
   // Mouse-wheel transcript scrolling is on when full-screen and not opted out.
   const mouseEnabled = fullScreen && config.mouse;
   // Append-only log of finalized turns, rendered through Ink's `<Static>` so
@@ -1004,8 +1018,113 @@ export function App({
     activeOverlay === 'usage' ||
     activeOverlay === 'settings';
 
+  /**
+   * Run the message on screen, with nothing typed (#462).
+   *
+   * Through `requestTurn`, never `runAgentTurn`: a keystroke landing mid-turn
+   * must queue rather than hit the silent `submittingRef` guard. That also buys
+   * the `WakePanel` provenance row and `announced: true`, so the instruction is
+   * attributed to whoever sent it and is never painted as a `❯` user bubble.
+   */
+  const actOnPendingMessage = (): void => {
+    if (!pendingMessage) return;
+    // Only cleared once the queue actually took it. `requestTurn` refuses when
+    // the queue is full and says so in its return, and dropping the message on
+    // that branch would lose the one thing the keystroke exists to preserve —
+    // it stays pending, and the next press retries.
+    if (runRemote(pendingMessage.text, pendingMessage.sourceLabel)) setPendingMessage(null);
+  };
+
+  /**
+   * Run a delivered message as a turn, through the queue.
+   *
+   * Never `runAgentTurn`: one arriving mid-turn must not hit `submittingRef` and
+   * vanish. #493 requires the mid-turn answer to be #200's or #202's rather than
+   * a third rule; this is #202's — a new top-level request, run after the
+   * current turn. That matters for the `^o` path and for an automatic mode,
+   * which can both fire while busy; the Enter path cannot, since `Prompt` is
+   * `disabled` for the whole turn.
+   */
+  const runRemote = (text: string, label: string): boolean =>
+    requestTurn({ text, source: { kind: 'remote', label } }).ok;
+
+  /**
+   * Act once, or stop being asked — at the moment you are looking at the message.
+   *
+   * The rows are the `once | session | profile` vocabulary `timeout-offer.ts` and
+   * `ConfirmDialog` already use, so this is a third instance of an established
+   * shape rather than a fourth way to say the same thing. Branching on `value`
+   * and never the label, per the sibling menus.
+   */
+  const runPendingMessageMenu = async (): Promise<void> => {
+    if (!pendingMessage) return;
+    const result = await requestMenu(
+      [
+        { label: 'Act on it now', value: 'once' },
+        {
+          label: 'Act on every message for the rest of this session',
+          value: 'session',
+          description: 'Not saved — the next session asks again.',
+        },
+        {
+          label: 'Act on every message on this profile',
+          value: 'profile',
+          description: modeRow('all').description,
+        },
+        { label: 'Dismiss it', value: 'dismiss' },
+      ],
+      { title: `Message from ${pendingMessage.sourceLabel}`, headerLines: [pendingMessage.text] },
+    );
+    if (result.cancelled) return;
+    if (result.item.value === 'dismiss') {
+      setPendingMessage(null);
+      return;
+    }
+    // Both automatic rows widen what arrives LATER; neither is a reason to leave
+    // the message already on screen unacted, which is what the user pressed a key
+    // about.
+    if (result.item.value !== 'once') setRemoteMessages('all', result.item.value === 'profile');
+    actOnPendingMessage();
+  };
+
+  /**
+   * Apply a mode to the live session, and persist it when asked.
+   *
+   * In-place mutation plus a targeted save — `toggleBooleanPref`'s idiom — so
+   * every subsystem holding the `config` reference sees it with no reload. The
+   * session row deliberately writes nothing: "for the rest of this session" is a
+   * promise about this process, and `saveActiveSettings` would break it.
+   */
+  const setRemoteMessages = (mode: RemoteMessageMode, persist: boolean): void => {
+    config.remoteMessages = mode;
+    // Nothing re-advertises here: `InboxWatcher` reads the capability thunk on
+    // its own sweep, so what this session accepts follows the live config
+    // whether it moved from this menu, from `/agent-options`, or from a profile
+    // switch — the last of which had no call site and so had no chance of
+    // remembering.
+    if (persist) saveActiveSettings({ remoteMessages: mode });
+  };
+
   useInput(
-    (_input, key) => {
+    (input, key) => {
+      // The options for the message on screen. A plain Ctrl chord rather than
+      // Ctrl+Enter, which is not expressible on most terminals: only the CSI-u
+      // family sends a modified Return at all, and `MODIFIED_ENTER_RE` does not
+      // read the modifier even there, so Ctrl+Enter and Shift+Enter are one
+      // keystroke as far as this process is concerned. A chord that silently IS
+      // Enter on the majority of terminals would act on the message instead of
+      // offering to.
+      if (key.ctrl === true && input === 'o') {
+        // With nothing pending it opens the MODE menu rather than doing nothing.
+        // Gated on a pending message, the chord went dead the moment it was
+        // used: picking an automatic mode means no message is ever pending
+        // again, so the one surface that offers "…and on this profile" vanished
+        // exactly after the session row had been taken — a one-way door with no
+        // visible way back. `/agent-options` was always the standing answer, and
+        // a keystroke nobody can find is not an answer.
+        void (pendingMessage ? runPendingMessageMenu() : runRemoteMessagesPrompt());
+        return;
+      }
       // Shift-Tab opens the first viewer tab (Agent Status) while idle; the
       // viewer itself cycles to Sources and back to the thread.
       if (key.shift && key.tab) {
@@ -1132,14 +1251,53 @@ export function App({
         ...prev,
         { key: String(itemKeyRef.current++), notice, toolDetails: false },
       ]);
+    /**
+     * Render it, and arm the keystroke on it.
+     *
+     * Split from `push` because `push` has a third caller that must NOT arm
+     * anything: `onCoalesced` renders "+3 more messages not shown.", and arming
+     * that made Enter submit *those words* as a turn. It also broke the rule the
+     * hint bar's else-if rests on — under `all` a notice never reaches here, but
+     * the coalesced summary still did, so a mode that runs everything could
+     * still show a pending message.
+     *
+     * A newer message replaces the pending one rather than queueing behind it:
+     * this is an affordance on what is on screen, and a backlog of things Enter
+     * might mean is worse than none.
+     *
+     * Deliberately NOT cleared when an ordinary turn runs. That is the exact
+     * sequence this exists for — a message arrives, you say something about it,
+     * and THEN you want it acted on — and clearing there reproduces the failure.
+     */
+    const offer = (notice: NoticeData, instruction: string = notice.text) => {
+      push(notice);
+      // The instruction is the SENDER's text, which is not always the text on
+      // screen: a prompt refused by the mode is rendered with an explanation
+      // appended, and arming that sent Bernard "delete everything\n\n(Sent as a
+      // prompt. This session does not run them by itself.)" as one instruction.
+      // Same shape as the coalesced-summary bug, one branch over, and on the
+      // least-trusted path of the three.
+      setPendingMessage({ text: instruction, sourceLabel: notice.sourceLabel });
+    };
     const watcher = new InboxWatcher({
       sessionId: getSessionId(),
-      // Advertised only when the session was started with the opt-in (#493), so
-      // a plain REPL keeps the original guarantee and a `prompt` sent to it is
-      // refused at the SENDER rather than arriving somewhere that would not run
-      // it. A sender cannot upgrade itself: this record is written here.
-      ...(config.acceptRemotePrompts ? { capabilities: ['notice', 'prompt'] as const } : {}),
+      // Advertised only when an automatic mode is in force (#493), so a session
+      // that runs nothing by itself keeps the original guarantee and a `prompt`
+      // sent to it is refused at the SENDER rather than arriving somewhere that
+      // would not run it. A sender cannot upgrade itself: this record is written
+      // here.
+      //
+      // A thunk, so the watcher re-reads it. `config` is mutated in place by the
+      // menu below AND by `applyProfileToConfig` on every profile switch, and a
+      // value captured here would pin what the session advertises to whatever
+      // was true at mount.
+      capabilities: () => capabilitiesFor(config.remoteMessages),
       onMessage: (message) => {
+        // Read LIVE off the config object rather than captured: this effect is
+        // mount-once and `config` is mutated in place by the menu below and by
+        // `applyProfileToConfig`, so a captured value would pin the mode to
+        // whatever it was at launch.
+        const mode = config.remoteMessages;
         // ENFORCED on receive, not merely advertised on the record. `send.ts`
         // filters by capability, but anything that can write
         // `sessionInboxDir(sessionId)` can drop a message file directly and
@@ -1147,34 +1305,28 @@ export function App({
         // states in as many words ("anything that can write the state directory
         // can write a message file"). Advertising alone meant a session that
         // never opted in would still run an arbitrary turn for any local writer.
-        //
-        // Degraded to a notice rather than dropped: the text was delivered, the
-        // user should see it, and silently discarding it would make a refused
-        // prompt indistinguishable from one that never arrived.
-        if (message.kind === 'prompt' && !config.acceptRemotePrompts) {
-          push(
+        if (message.kind === 'prompt' && !runsUnattended(mode, 'prompt')) {
+          // Shown, never dropped. The sentence states what happened and names no
+          // key: it is frozen in the transcript, and the hint bar is the only
+          // surface that can stop offering the keystroke once it stops working.
+          offer(
             toNoticeData({
               ...message,
               kind: 'notice',
               text: `${message.text}
 
-(Sent as a prompt, but this session does not accept them. Restart with --accept-remote-prompts to let it run.)`,
+(Sent as a prompt. This session does not run them by itself.)`,
             }),
+            // Render the explanation; act on the message.
+            message.text,
           );
           return;
         }
-        if (message.kind === 'prompt') {
-          // Through the queue, never `runAgentTurn` — a prompt arriving mid-turn
-          // must not hit `submittingRef` and vanish. #493 requires the mid-turn
-          // answer to be #200's or #202's rather than a third rule; this is
-          // #202's: a new top-level request, run after the current turn.
-          requestTurn({
-            text: message.text,
-            source: { kind: 'remote', label: message.sourceLabel },
-          });
-          return;
+        // `all` is the only mode that runs a message nobody marked as a prompt.
+        if (runsUnattended(mode, message.kind)) {
+          return runRemote(message.text, message.sourceLabel);
         }
-        push(toNoticeData(message));
+        offer(toNoticeData(message));
       },
       onCoalesced: (count, label) => push(coalescedNotice(count, label)),
     });
@@ -3431,6 +3583,33 @@ export function App({
     );
   }
 
+  /**
+   * What a message from another local process is allowed to do (#462/#493).
+   *
+   * Tri-state, so it takes `runToolModePrompt`'s shape rather than
+   * `toggleBooleanPref`'s — and it sits beside it deliberately: both answer
+   * "what may run without me", one about tools and one about instructions.
+   *
+   * The rows come from `REMOTE_MESSAGE_MODES`, shared with the keystroke menu,
+   * because this decision is rendered on more than one surface and a label
+   * written twice becomes two different claims about what the setting does.
+   */
+  async function runRemoteMessagesPrompt(): Promise<void> {
+    const entries: MenuEntry[] = REMOTE_MESSAGE_MODES.map((m) => ({
+      label: m.label,
+      description: m.description,
+      active: config.remoteMessages === m.value,
+      value: m.value,
+    }));
+    const result = await requestMenu(entries, {
+      title: `Messages from other processes: ${config.remoteMessages}`,
+    });
+    if (result.cancelled) return;
+    const chosen = result.item.value as RemoteMessageMode;
+    setRemoteMessages(chosen, true);
+    flashToast(`Remote messages → ${chosen}`, chosen === 'all' ? 'warning' : 'success');
+  }
+
   async function runToolModePrompt(): Promise<void> {
     const modes: Array<{ value: 'read-only' | 'write' | 'skip'; label: string; desc: string }> = [
       {
@@ -3682,6 +3861,17 @@ export function App({
             'Read-only blocks write tools until enabled. Write lets every tool run subject to the confirm gate. Unrestricted skips all permission checks.',
         },
         action: runToolModePrompt,
+      },
+      {
+        kind: 'item',
+        item: {
+          label: 'Messages from other processes',
+          annotation: `= ${config.remoteMessages}`,
+          description:
+            modeRow('ask').description +
+            ' The other two let a local process start a turn with nobody watching.',
+        },
+        action: runRemoteMessagesPrompt,
       },
       toggleRow(
         'promptRewriter',
@@ -5392,6 +5582,7 @@ export function App({
         onSubmit={handleSubmit}
         onSlashActiveChange={setSlashActive}
         onEmptyChange={setPromptEmpty}
+        onEmptySubmit={actOnPendingMessage}
         history={inputHistory}
         onRecordInput={recordInput}
         dynamicCommands={getDynamicCommands}
@@ -5405,6 +5596,8 @@ export function App({
           overlayActive={activeOverlay !== null}
           slashActive={slashActive}
           scrollable={fullScreen}
+          pendingMessage={pendingMessage !== null}
+          remoteMode={config.remoteMessages}
         />
         <StatusBar agent={agent} />
       </Box>

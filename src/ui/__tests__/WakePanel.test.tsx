@@ -37,7 +37,7 @@ describe('WakePanel', () => {
       false,
     );
 
-    expect(text).toContain('⏰ Woken');
+    expect(text).toContain('◷ Woken');
     expect(text).toContain('watcher "beeper-dm"');
     expect(text).toContain('New message in chat 25.');
     expect(text).not.toContain('line two');

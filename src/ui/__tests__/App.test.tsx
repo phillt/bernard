@@ -24,7 +24,7 @@ import { createElement } from 'react';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { ARROW_DOWN, ENTER, ESC, SHIFT_TAB, tick } from './_keys.js';
+import { ARROW_DOWN, CTRL_O, ENTER, ESC, SHIFT_TAB, tick } from './_keys.js';
 import stripAnsi from 'strip-ansi';
 import { getInkHandlers } from '../ink-handlers.js';
 import type { PendingPermission } from '../../apps/permission-consent.js';
@@ -143,6 +143,7 @@ function makeConfig(overrides: Partial<BernardConfig> = {}): BernardConfig {
     tokenWindow: 0,
     maxSteps: 25,
     coordinatorMode: 'off',
+    remoteMessages: 'ask',
     modelMode: 'balanced',
     subagentResultMaxChars: 4000,
     autoCreateSpecialists: false,
@@ -2166,7 +2167,7 @@ describe('<App> external messages', () => {
     await tick();
     await deliver('Action "now" failed: No datetime tool available', 'bernard app logs news');
     // The watcher polls; a tick past its interval is enough.
-    await tick(1200);
+    await tick(150);
     const frame = stripAnsi(lastFrame() ?? '');
     expect(frame).toContain('applet:news');
     expect(frame).toContain('No datetime tool available');
@@ -2183,7 +2184,7 @@ describe('<App> external messages', () => {
     await tick();
     const before = JSON.stringify(history);
     await deliver('something happened');
-    await tick(1200);
+    await tick(150);
     // Not billed: no turn was started.
     expect(agentSpy.processInput).not.toHaveBeenCalled();
     // Not visible to the model: the notice went to `staticItems` only.
@@ -2622,6 +2623,241 @@ describe('<App> /sleep', () => {
  * The two directions are the whole feature: a plain session must keep #462's
  * guarantee exactly, and an opted-in one must actually run the thing.
  */
+/**
+ * Acting on a delivered message with no typing (#462 follow-up).
+ *
+ * The panel's footer promised "type to act on it" and typing did no such thing:
+ * the text never enters `agent.history`, so a reader who took the footer at its
+ * word got an agent hunting for something it could not see. Enter on an empty
+ * prompt — which has always been a silent no-op — is what makes the promise
+ * true, and it is per-message human consent, so it is gated by nothing.
+ */
+describe('<App> acting on a delivered message', () => {
+  beforeEach(() => {
+    process.env.BERNARD_HOME = TMP_HOME;
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  async function deliverNotice(text: string) {
+    const { sendToSessions, resetSendDedupe } = await import('../../inbox/send.js');
+    resetSendDedupe();
+    return sendToSessions({
+      text,
+      source: { kind: 'cli', label: 'ci' },
+      target: { all: true },
+    });
+  }
+
+  it('runs the message on Enter, with nothing typed', async () => {
+    const { stdin, lastFrame, agentSpy, unmount } = renderApp();
+    await tick();
+    await deliverNotice('the deploy finished, summarise the log');
+    await tick(150);
+    // The affordance is advertised while it works — the footer is frozen at
+    // arrival, so this row is the only live statement of it.
+    expect(stripAnsi(lastFrame() ?? '')).toContain('act on message');
+    expect(agentSpy.processInput).not.toHaveBeenCalled();
+
+    stdin.write(ENTER);
+    await tick(300);
+    expect(agentSpy.processInput).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(agentSpy.processInput).mock.calls[0][0]).toContain('the deploy finished');
+    // Attributed through the same wake path a `--run` takes, so the transcript
+    // records where the instruction came from and never paints it as typed.
+    expect(stripAnsi(lastFrame() ?? '')).toMatch(/sent by ci/);
+    unmount();
+  });
+
+  it('does nothing on Enter when no message is waiting', async () => {
+    // Guard the guard: Enter on an empty prompt was a no-op and must stay one
+    // when there is nothing to act on, or every stray keystroke starts a turn.
+    const { stdin, lastFrame, agentSpy, unmount } = renderApp();
+    await tick();
+    expect(stripAnsi(lastFrame() ?? '')).not.toContain('act on message');
+    stdin.write(ENTER);
+    await tick(200);
+    expect(agentSpy.processInput).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it('acts once, however many times Enter is pressed', async () => {
+    const { stdin, agentSpy, unmount } = renderApp();
+    await tick();
+    await deliverNotice('do the thing');
+    await tick(150);
+    stdin.write(ENTER);
+    await tick(50);
+    stdin.write(ENTER);
+    await tick(300);
+    expect(agentSpy.processInput).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+
+  it('stays available across an ordinary turn', async () => {
+    // The sequence this exists for: a message arrives, the user says something
+    // ABOUT it, and only then wants it acted on. Clearing the pending message
+    // when a turn starts would reproduce the failure exactly.
+    const { stdin, lastFrame, agentSpy, unmount } = renderApp();
+    await tick();
+    await deliverNotice('the report is attached');
+    await tick(150);
+    stdin.write('there it is.');
+    await tick(50);
+    stdin.write(ENTER);
+    await tick(400);
+    expect(agentSpy.processInput).toHaveBeenCalledTimes(1);
+    expect(stripAnsi(lastFrame() ?? '')).toContain('act on message');
+
+    stdin.write(ENTER);
+    await tick(400);
+    expect(agentSpy.processInput).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(agentSpy.processInput).mock.calls[1][0]).toContain('the report is attached');
+    unmount();
+  });
+
+  it('offers act/session/profile on ^o, and acts on the row picked', async () => {
+    const { stdin, lastFrame, agentSpy, unmount } = renderApp();
+    await tick();
+    await deliverNotice('summarise the log');
+    await tick(150);
+    stdin.write(CTRL_O);
+    await tick(100);
+    const menu = stripAnsi(lastFrame() ?? '');
+    expect(menu).toContain('Act on it now');
+    expect(menu).toContain('rest of this session');
+    expect(menu).toContain('on this profile');
+    // Every automatic row still acts on the message already on screen — that is
+    // what the key was pressed about.
+    stdin.write(ENTER);
+    await tick(400);
+    expect(agentSpy.processInput).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+
+  it('does not arm the keystroke on a coalesced summary', async () => {
+    // `push` had been given a second job, and `onCoalesced` is its third caller:
+    // arming "+N more messages not shown." made Enter submit THOSE WORDS as a
+    // turn. It also broke the rule the hint bar rests on — under an automatic
+    // mode a notice never reaches the render path, but the summary still did.
+    const { stdin, lastFrame, agentSpy, unmount } = renderApp();
+    await tick();
+    const { sendToSessions, resetSendDedupe } = await import('../../inbox/send.js');
+    // Past MAX_RENDER_BURST, so the tail is folded into a summary.
+    for (let i = 0; i < 8; i++) {
+      resetSendDedupe();
+      sendToSessions({
+        text: `message ${i}`,
+        source: { kind: 'cli', label: 'ci' },
+        target: { all: true },
+      });
+    }
+    await tick(300);
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toMatch(/more message/);
+    stdin.write(ENTER);
+    await tick(300);
+    // Something was acted on — a real message, never the summary about them.
+    const ran = vi.mocked(agentSpy.processInput).mock.calls.map((c) => String(c[0]));
+    expect(ran.some((t) => /more message/.test(t))).toBe(false);
+    unmount();
+  });
+
+  it("acts on the sender's text, not the explanation appended to it", async () => {
+    // A `prompt` a mode will not run is rendered with an explanation appended,
+    // and arming THAT sent Bernard "<instruction>\n\n(Sent as a prompt. …)" as
+    // one instruction — on the least-trusted path of the three. Every other test
+    // here goes through a plain notice, where the rendered text and the sender's
+    // text are the same string, so none of them could see it.
+    const { sessionInboxDir } = await import('../../paths.js');
+    const { getSessionId } = await import('../../logger.js');
+    const { stdin, agentSpy, unmount } = renderApp();
+    await tick();
+    // Written straight into the inbox, bypassing `send.ts` — which is the only
+    // way to reach the degrade branch from a session that advertises no prompt
+    // capability, and is the threat model `inbox/types.ts` states outright.
+    const dir = sessionInboxDir(getSessionId());
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, `p${Date.now()}.json`),
+      JSON.stringify({
+        schemaVersion: 1,
+        kind: 'prompt',
+        sourceKind: 'cli',
+        sourceLabel: 'attacker',
+        text: 'summarise the deploy log',
+        sentAt: Date.now(),
+      }),
+    );
+    await tick(400);
+    stdin.write(ENTER);
+    await tick(400);
+    expect(agentSpy.processInput).toHaveBeenCalledTimes(1);
+    const sent = String(vi.mocked(agentSpy.processInput).mock.calls[0][0]);
+    expect(sent).toContain('summarise the deploy log');
+    expect(sent).not.toContain('Sent as a prompt');
+    unmount();
+  });
+
+  it('keeps disclosing an automatic mode while a message is pending', async () => {
+    // `prompts` runs a `--run` and leaves a plain notice pending, so an if/else
+    // suppressed the disclosure in exactly the case it exists for.
+    const { lastFrame, unmount } = renderApp({ config: { remoteMessages: 'prompts' as const } });
+    await tick();
+    await deliverNotice('the deploy finished');
+    await tick(200);
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toContain('act on message');
+    expect(frame).toContain('messages: prompts');
+    unmount();
+  });
+
+  it('opens the mode menu on ^o when nothing is pending', async () => {
+    // Gated on a pending message the chord went dead the moment it was used:
+    // an automatic mode means nothing is ever pending again, so the one surface
+    // offering "…and on this profile" vanished exactly after the session row
+    // had been taken. Found by walking it.
+    const { stdin, lastFrame, unmount } = renderApp({ config: { remoteMessages: 'all' as const } });
+    await tick();
+    stdin.write(CTRL_O);
+    await tick(100);
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toContain('Run every message');
+    expect(frame).toContain('Ask me');
+    unmount();
+  });
+
+  it('says so in the hint bar while a mode runs messages unattended', async () => {
+    // A state worth disclosing on its own: any local process that can write the
+    // state directory can start a turn here, and nothing else on screen says so.
+    const { lastFrame, unmount } = renderApp({ config: { remoteMessages: 'all' as const } });
+    await tick();
+    expect(stripAnsi(lastFrame() ?? '')).toContain('messages: all');
+    unmount();
+  });
+
+  it('says nothing in the hint bar under the default', async () => {
+    // Guard the guard: an unconditional row would be noise on every session and
+    // would still satisfy the assertion above.
+    const { lastFrame, unmount } = renderApp();
+    await tick();
+    expect(stripAnsi(lastFrame() ?? '')).not.toContain('messages:');
+    unmount();
+  });
+
+  it('runs a plain message with no keystroke once the mode says so', async () => {
+    // The point of the automatic modes, and the one case #493's guarantee
+    // deliberately gives up.
+    const { agentSpy, unmount } = renderApp({ config: { remoteMessages: 'all' as const } });
+    await tick();
+    await deliverNotice('summarise the log');
+    await tick(150);
+    expect(agentSpy.processInput).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+});
+
 describe('<App> remote prompts', () => {
   beforeEach(() => {
     process.env.BERNARD_HOME = TMP_HOME;
@@ -2658,7 +2894,7 @@ describe('<App> remote prompts', () => {
     // rather than calling `loadConfig`, and it is the config field the session
     // actually advertises from. Env parsing is `config.test.ts`'s job.
     const { unmount, agentSpy, lastFrame } = renderApp({
-      config: { acceptRemotePrompts: true },
+      config: { remoteMessages: 'prompts' as const },
     });
     await tick();
     const result = await deliverPrompt('summarise the deploy log');
@@ -2675,7 +2911,7 @@ describe('<App> remote prompts', () => {
   it('still delivers a plain notice to an opted-in session without running it', async () => {
     // Opting in to prompts must not turn every notice into a turn.
     const { unmount, agentSpy, lastFrame } = renderApp({
-      config: { acceptRemotePrompts: true },
+      config: { remoteMessages: 'prompts' as const },
     });
     await tick();
     const { sendToSessions, resetSendDedupe } = await import('../../inbox/send.js');
@@ -2732,12 +2968,16 @@ describe('<App> remote prompts — receive-side enforcement', () => {
     expect(agentSpy.processInput).not.toHaveBeenCalled();
     // Degraded to a notice rather than dropped: the text arrived, and silently
     // discarding it would make a refusal indistinguishable from a lost message.
-    expect(lastFrame()).toMatch(/does not accept them/);
+    expect(lastFrame()).toMatch(/does not run them by itself/);
+    // The sentence states what happened and names no key: it is frozen in the
+    // transcript, and only the hint bar can stop offering a keystroke once it
+    // stops working.
+    expect(lastFrame()).not.toMatch(/press ↵/);
     unmount();
   });
 
   it('runs the same file when the session did opt in', async () => {
-    const { unmount, agentSpy } = renderApp({ config: { acceptRemotePrompts: true } });
+    const { unmount, agentSpy } = renderApp({ config: { remoteMessages: 'prompts' as const } });
     await tick();
     await dropPromptFile('summarise the log');
     await tick(1500);

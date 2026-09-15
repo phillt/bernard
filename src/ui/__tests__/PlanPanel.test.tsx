@@ -66,7 +66,7 @@ describe('<PlanPanel>', () => {
     // that has nothing to do with what it is checking.
     const { lastFrame } = mountPanel(store, PLAN_CHROME_ROWS + 3);
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('✔ 1. first step');
+    expect(frame).toContain('✓ 1. first step');
     expect(frame).toContain('▸ 2. second step');
     expect(frame).toContain('○ 3. third step');
   });
@@ -106,7 +106,7 @@ describe('<PlanPanel>', () => {
     store.update(1, 'done', { signoff: 'verified by test run' });
     await tick();
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('✔ 1. appears live');
+    expect(frame).toContain('✓ 1. appears live');
     expect(frame).toContain('1/2');
   });
 

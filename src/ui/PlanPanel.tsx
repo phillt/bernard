@@ -26,7 +26,12 @@ interface PlanPanelProps {
 function stepIcon(status: StepStatus, colors: ThemeColors): { icon: string; color?: string } {
   switch (status) {
     case 'done':
-      return { icon: '✔', color: colors.success };
+      // `✓` (U+2713), not `✔` (U+2714): the latter is one code unit, two
+      // columns and classified as emoji, so it makes this row a different width
+      // from the rest of the PROMPT's border, which is the one bordered box on
+      // screen at all times — it broke the moment a step completed. See
+      // `glyph-width.ts`; the fixed icon cell below buys alignment, not width.
+      return { icon: '✓', color: colors.success };
     case 'cancelled':
     case 'error':
       return { icon: '✘', color: colors.error };
@@ -86,8 +91,10 @@ export function PlanPanel({ agent, maxRows, reserveColumns }: PlanPanelProps) {
   const { done, total } = summarizePlan(steps);
   // Fixed-width gutter cells so the description column aligns across rows and
   // stays deterministic regardless of how the terminal measures the status
-  // glyph: a 2-col icon cell (✔/✘ measure as 1 or 2 in different locales — the
-  // fixed cell absorbs the difference) and an id cell sized to the widest id.
+  // glyph: a 2-col icon cell (✓/✘ measure as 1 or 2 in different locales — the
+  // fixed cell absorbs the difference for ALIGNMENT; it does not stop a
+  // two-column glyph widening the row, which is why the glyphs themselves are
+  // one column — see `glyph-width.ts`) and an id cell sized to the widest id.
   const maxIdLen = Math.max(...steps.map((s) => String(s.id).length));
   const idCellWidth = maxIdLen + 2; // "<id>. "
   const textWidth = stepTextWidth(columns, reserveColumns, idCellWidth);

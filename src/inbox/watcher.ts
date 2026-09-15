@@ -9,8 +9,10 @@ import {
   sanitizeSourceLabel,
   INBOX_POLL_MS,
   MAX_RENDER_BURST,
+  DEFAULT_CAPABILITIES,
   type InboxMessage,
   type InboxKind,
+  type SessionRecord,
 } from './types.js';
 
 /**
@@ -52,13 +54,25 @@ export interface InboxWatcherOptions {
   onCoalesced: (count: number, sourceLabel: string) => void;
   pollMs?: number;
   /**
-   * What this session advertises it can be asked to do (#493).
+   * What this session advertises it can be asked to do (#493), read LIVE.
    *
    * Defaults to `notice` only, which is what keeps a plain REPL's guarantee: a
    * `prompt` sent to it is refused at the sender rather than delivered and
    * mis-handled. A caller opts in explicitly — see `--accept-remote-prompts`.
+   *
+   * **A thunk, not a value, because the answer changes while the session
+   * runs.** Read once at `start()` it was correct exactly until the setting
+   * moved: the receive side reads the live config, so a mode changed mid-run
+   * took effect for what arrived while `say --run` from another process kept
+   * coming back `not-accepted` — the setting appearing not to have taken. An
+   * imperative `advertise()` fixed the one path that called it and left the
+   * four `applyProfileToConfig` sites, where a profile switch reintroduced the
+   * same bug with nothing to notice. A reader has no call site to forget, which
+   * is the shape `ToolOptions.getToolPermissions` already uses for exactly this
+   * ("a live reader … so mid-session grants and profile switches apply
+   * immediately").
    */
-  capabilities?: readonly InboxKind[];
+  capabilities?: () => readonly InboxKind[];
 }
 
 export class InboxWatcher {
@@ -67,6 +81,15 @@ export class InboxWatcher {
   private watcher: fs.FSWatcher | null = null;
   private timer: NodeJS.Timeout | null = null;
   private draining = false;
+  /**
+   * The record this watcher wrote, so a re-registration carries `startedAt`
+   * rather than re-stamping it — nothing about the session began again, and
+   * `say --list` reports that field. Held whole rather than as loose copies of
+   * its fields: it is also the "have I started?" latch, and cleared by `stop()`,
+   * which is what stops a late re-advertise resurrecting an unregistered
+   * session.
+   */
+  private record: SessionRecord | null = null;
 
   constructor(opts: InboxWatcherOptions) {
     this.opts = opts;
@@ -80,10 +103,7 @@ export class InboxWatcher {
    * `bernard say` hits.
    */
   start(): void {
-    const record = registerSession({
-      sessionId: this.opts.sessionId,
-      ...(this.opts.capabilities ? { capabilities: this.opts.capabilities } : {}),
-    });
+    const record = this.register();
     this.inboxDir = record.inboxDir;
     this.drain();
 
@@ -104,8 +124,43 @@ export class InboxWatcher {
     // coalesces on macOS and does not fire at all on some network
     // filesystems. Both paths call the same idempotent drain, so a double
     // fire costs one `readdir`.
-    this.timer = setInterval(() => this.drain(), this.opts.pollMs ?? INBOX_POLL_MS);
+    this.timer = setInterval(() => {
+      this.syncCapabilities();
+      this.drain();
+    }, this.opts.pollMs ?? INBOX_POLL_MS);
     this.timer.unref();
+  }
+
+  /**
+   * Writes the session record, and returns it.
+   *
+   * `startedAt` is carried over on every call after the first, so the record
+   * says when the session began rather than when its capabilities last moved.
+   */
+  private register(): SessionRecord {
+    const caps = this.opts.capabilities?.();
+    const record = registerSession({
+      sessionId: this.opts.sessionId,
+      ...(caps ? { capabilities: caps } : {}),
+      ...(this.record ? { startedAt: this.record.startedAt } : {}),
+    });
+    this.record = record;
+    return record;
+  }
+
+  /**
+   * Re-writes the record if what this session accepts has changed.
+   *
+   * Runs from the sweep that already lists the directory, so it costs a string
+   * comparison per tick and a ~52 µs write only when the answer actually moved.
+   * Immediacy is not worth more than that: a sender polls at `INBOX_POLL_MS`
+   * and waits `DEFAULT_DELIVERY_TIMEOUT_MS`, so a tick's lag is invisible to it.
+   */
+  private syncCapabilities(): void {
+    if (this.record === null) return;
+    const caps = this.opts.capabilities?.() ?? DEFAULT_CAPABILITIES;
+    if (caps.join(',') === this.record.capabilities.join(',')) return;
+    this.register();
   }
 
   /** Stops watching and removes this session's registration and inbox. */
@@ -114,6 +169,11 @@ export class InboxWatcher {
     this.watcher = null;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    // Ordering hygiene, not a guard against a reachable path: `clearInterval`
+    // above is synchronous and `drain`/`syncCapabilities` have no other caller,
+    // so no tick can be in flight to write the record back. A test asserting
+    // otherwise passed with this line deleted, which is why there isn't one.
+    this.record = null;
     unregisterSession(this.opts.sessionId);
   }
 

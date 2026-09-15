@@ -20,22 +20,35 @@ import type { NoticeData } from './notice.js';
  * states the boundary in words.
  *
  * That footer is the load-bearing row. It is the only place a reader learns
- * that the message is **not in Bernard's context** — that acting on it means
- * saying so, and costs a turn they chose to spend.
+ * that the message is **not in Bernard's context**.
+ *
+ * It used to read *"type to act on it"*, which was false: the text never enters
+ * `agent.history`, so a reader who typed got an agent hunting for something it
+ * could not see. Observed costing eight dispatches across two mail accounts and
+ * a chat bridge before the user interrupted.
+ *
+ * **It states a fact and names no key**, which is a correction to the first fix
+ * for that. Naming one made the row a present-tense instruction on a panel that
+ * cannot take it back: every earlier notice still said "press ↵ to act on it"
+ * after it had been acted on, or superseded by a newer message. The defence
+ * offered was that `<Static>` never repaints — true of the legacy surface and
+ * false of the default one, since `TranscriptViewport` re-renders every item
+ * every frame. `HintBar` owns the affordance, because it is the only surface
+ * that can stop saying it.
  */
 export function NoticePanel({ data }: { data: NoticeData }) {
   const colors = getThemeColors();
   return (
     <TranscriptPanel
       color={colors.warning}
-      title={`✉ Message from ${data.sourceLabel}`}
+      title={`» Message from ${data.sourceLabel}`}
       // Same dim weight as the timestamp, deliberately: the label is a claim
       // by whoever wrote the file, not something Bernard verified.
       meta={` · ${data.sourceKind} · ${formatFriendlyTimestamp(new Date(data.receivedAt))}`}
       body={data.text}
       hint={data.hint}
       hintColor={colors.accent}
-      footer="Bernard has not seen this — type to act on it."
+      footer="Bernard has not seen this."
     />
   );
 }
