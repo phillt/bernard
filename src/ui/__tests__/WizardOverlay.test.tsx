@@ -787,6 +787,100 @@ describe('WizardOverlay — a value the list does not offer (#447)', () => {
  * including on the one row that dissolves every permission gate, whose warning
  * existed only in the source.
  */
+/**
+ * A long hint keeps a straight left edge (#447).
+ *
+ * Ink wraps with `trim: false`, keeping the break space at the START of a
+ * continuation line — and only where the break lands after one, so the edge is
+ * ragged on some lines and not others. Survivable while a hint was one line;
+ * not once the descriptions grew to say what each setting is FOR.
+ */
+describe('WizardOverlay — the masthead signs the screen', () => {
+  const spec = (masthead?: { left: string; right: string }): WizardSpec => ({
+    ...(masthead ? { masthead } : {}),
+    steps: [{ id: 'q', question: 'Which?', field: { kind: 'choice', choices: ['a', 'b'] } }],
+  });
+
+  it('puts one on the row above the card, at its own width', async () => {
+    const { lastFrame } = await mount(
+      vi.fn(),
+      spec({ left: 'Setup your', right: 'Valet to your digital world.' }),
+    );
+    const rows = stripAnsi(lastFrame() ?? '').split('\n');
+    const at = rows.findIndex((l) => l.includes('Setup your'));
+    expect(at).toBeGreaterThanOrEqual(0);
+    // Above the box, not inside it.
+    expect(rows[at]).not.toContain('│');
+    expect(rows[at + 1]).toContain('╭');
+    // Both ends on one row, and squared with the card's borders.
+    expect(rows[at]).toContain('Valet to your digital world.');
+    expect(rows[at].trimEnd().length).toBe(rows[at + 1].trimEnd().length);
+  });
+
+  it('signs nothing when a spec declares none', async () => {
+    // Guard the guard, and the reason the field is opt-in: `WizardCard` also
+    // draws every `ask_user` batch, and a product masthead over a clarifying
+    // question would be signing the wrong thing.
+    const { lastFrame } = await mount(vi.fn(), spec());
+    const rows = stripAnsi(lastFrame() ?? '')
+      .split('\n')
+      .filter((l) => l.trim().length > 0);
+    expect(rows[0]).toContain('╭');
+  });
+});
+
+describe('WizardOverlay — prose above a step is pre-wrapped', () => {
+  it('starts no body line with a space', async () => {
+    const spec: WizardSpec = {
+      steps: [
+        {
+          id: 'q',
+          // A section, so the RAIL renders. That is not decoration: the rail
+          // narrows the content column, and the artifact only appears when a
+          // break lands immediately after a space at the wrap column — at the
+          // full width this same text wraps cleanly and the test would pass
+          // with the pre-wrap deleted. Verified by deleting it.
+          section: 'Model',
+          question: 'Active lineup',
+          // Long enough to wrap several times at the card's width, with the
+          // breaks landing after spaces — which is the only case that shows it.
+          hint: 'A named set of models — a strong one for hard work, a cheap one for small jobs. Lets Bernard spend less without you choosing a model each time. Currently anthropic (default).',
+          field: { kind: 'choice', choices: ['one', 'two'] },
+          initial: 'one',
+        },
+      ],
+      intro: 'Each question opens on its current value, so Continue keeps it.',
+    };
+    const { lastFrame } = await mount(vi.fn(), spec);
+    const rows = stripAnsi(lastFrame() ?? '').split('\n');
+    // The prose band: everything between the rule under the title and the first
+    // option row. Bounded at both ends because an option row carries its own
+    // marker gutter and legitimately starts further in, and the card is centred
+    // so there is leading whitespace before the border on every line.
+    const start = rows.findIndex((l) => l.includes('───'));
+    const end = rows.findIndex((l, i) => i > start && /\d+\.\s/.test(l));
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start + 2);
+    const prose = rows
+      .slice(start + 1, end)
+      // Between the LAST TWO bars. A line has two when there is no rail and
+      // three when there is — left border, divider, right border — so anchoring
+      // on the first would fold the rail column into the band, and anchoring
+      // only on the last leaves the card's blank rows reading as content.
+      .map((l) => {
+        const bars = [...l.matchAll(/│/g)].map((m) => m.index ?? -1);
+        return bars.length < 2 ? '' : l.slice(bars[bars.length - 2] + 1, bars[bars.length - 1]);
+      })
+      .filter((l) => l.trim().length > 0);
+    // Several wrapped lines from the hint plus the intro, or this is asserting
+    // about nothing.
+    expect(prose.length).toBeGreaterThan(3);
+    // Two spaces is the card's own padding; a third is Ink's break space, and
+    // it lands on some continuation lines and not others.
+    expect(prose.filter((l) => l.startsWith('   '))).toEqual([]);
+  });
+});
+
 describe('WizardOverlay — a highlighted row can carry a note', () => {
   const SPEC: WizardSpec = {
     steps: [

@@ -281,7 +281,9 @@ export interface WelcomeMcpSummary {
   tools: number;
 }
 
-const TAGLINE = 'Valet to your digital world.';
+/** Bernard's one-line subtitle, shared by the splash and any other surface
+ *  that wants to sign a screen as Bernard's. */
+export const TAGLINE = 'Valet to your digital world.';
 const BORDER_COLOR = '#555555';
 const MIN_BOX_WIDTH = 64;
 // Must match the `paddingX` on the root <Box> in src/ui/App.tsx so the

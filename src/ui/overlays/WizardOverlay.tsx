@@ -58,6 +58,7 @@ interface WizardOverlayProps {
    * box would push off the screen.
    */
   fill?: boolean;
+  masthead?: { left: string; right: string };
 }
 
 /**
@@ -111,6 +112,9 @@ export function WizardOverlay({ spec, onResolve, reserveRows = 0, fill }: Wizard
       ? onResolve({ cancelled: true, answered: answeredSoFar(state), back: true })
       : setState(goBack);
   const submit = (answer: WizardAnswer): void => setState((s) => answerStep(s, spec.steps, answer));
+  // Every step kind draws the same card, so the line above it is threaded once
+  // here rather than reached for out of `spec` in four render branches.
+  const masthead = spec.masthead;
 
   if (settled) return null;
 
@@ -122,6 +126,7 @@ export function WizardOverlay({ spec, onResolve, reserveRows = 0, fill }: Wizard
         reserveRows={reserveRows}
         rail={railFor(spec.steps, spec.steps.length, spec.railContext)}
         fill={fill}
+        masthead={masthead}
         onBack={back}
         onEdit={(index) => setState((s) => editStep(s, index))}
         onCommit={() => onResolve({ cancelled: false, answers: state.answers })}
@@ -146,6 +151,7 @@ export function WizardOverlay({ spec, onResolve, reserveRows = 0, fill }: Wizard
         rail={rail}
         canGoBack={canGoBack}
         fill={fill}
+        masthead={masthead}
         onSubmit={submit}
         onBack={back}
         onCancel={cancel}
@@ -166,6 +172,7 @@ export function WizardOverlay({ spec, onResolve, reserveRows = 0, fill }: Wizard
       }
       canGoBack={canGoBack}
       fill={fill}
+      masthead={masthead}
       onSubmit={submit}
       onBack={back}
       onCancel={cancel}
@@ -179,6 +186,7 @@ export function WizardOverlay({ spec, onResolve, reserveRows = 0, fill }: Wizard
       current={state.answers[state.index]}
       canGoBack={canGoBack}
       fill={fill}
+      masthead={masthead}
       onSubmit={submit}
       onOther={() => setState(useFreeform)}
       onBack={back}
@@ -311,6 +319,7 @@ function WizardCard({
   section,
   title,
   fill,
+  masthead,
   rail,
   next,
   canGoBack,
@@ -321,6 +330,8 @@ function WizardCard({
 }: {
   /** The group label. Rendered only when there is no rail to carry it. */
   section?: string;
+  /** A line above the card: what this is, and who it belongs to. */
+  masthead?: { left: string; right: string };
   title: string;
   /** Sections down the left. Dropped below {@link RAIL_MIN_COLUMNS}. */
   rail?: RailEntry[];
@@ -363,6 +374,15 @@ function WizardCard({
       height={fill === true ? rows : undefined}
     >
       <Box flexDirection="column" alignItems="center">
+        {/* Above the box and outside it, at the card's own width so the two
+            ends line up with its borders. Muted, because it signs the screen
+            rather than competing with the question inside it. */}
+        {masthead !== undefined && (
+          <Box width={width} justifyContent="space-between">
+            <Text color={colors.muted}>{masthead.left}</Text>
+            <Text color={colors.muted}>{masthead.right}</Text>
+          </Box>
+        )}
         <Box
           flexDirection="column"
           width={width}
@@ -469,6 +489,7 @@ function WizardInfoStep({
   rail,
   canGoBack,
   fill,
+  masthead,
   onSubmit,
   onBack,
   onCancel,
@@ -477,6 +498,7 @@ function WizardInfoStep({
   rail?: RailEntry[];
   canGoBack: boolean;
   fill?: boolean;
+  masthead?: { left: string; right: string };
   onSubmit: (answer: string) => void;
   onBack: () => void;
   onCancel: () => void;
@@ -513,6 +535,7 @@ function WizardInfoStep({
         title={step.question}
         rail={rail}
         fill={fill}
+        masthead={masthead}
         next={step.nextLabel ?? 'Continue'}
         canGoBack={canGoBack}
         focus={focus}
@@ -536,15 +559,47 @@ function WizardInfoStep({
 }
 
 /** The question, plus its standing hint. Never a placeholder — see `wizard-types.ts`. */
-function StepHeader({ step, intro }: { step: WizardStep; intro?: string }) {
+/**
+ * The prose above a step's answer: what the setting is for, then the standing
+ * note about how the walk works.
+ *
+ * **Pre-wrapped, for the reason the info step already is.** Ink wraps with
+ * `trim: false`, so it keeps the break space at the START of every continuation
+ * line — and only where the break happens to land after one, which gives a left
+ * edge that is ragged on some lines and not others. That was survivable while a
+ * hint was one line; it stopped being so when the descriptions grew to say what
+ * each setting is FOR rather than only what it does.
+ */
+function StepHeader({
+  step,
+  intro,
+  rail,
+}: {
+  step: WizardStep;
+  intro?: string;
+  rail?: RailEntry[];
+}) {
   const colors = getThemeColors();
+  const { columns } = useDimensionsCtx();
+  const width = contentWidth(columns, rail);
+  const lines = (text: string): string[] => wrapText(text, width);
   return (
     <>
-      {step.hint !== undefined && <Text color={colors.muted}>{step.hint}</Text>}
+      {step.hint !== undefined &&
+        lines(step.hint).map((line, i) => (
+          // Keyed by index: these are prose lines with no identity of their own.
+          <Text key={`h${i}`} color={colors.muted}>
+            {line === '' ? ' ' : line}
+          </Text>
+        ))}
       {intro !== undefined && (
         <>
           <Text> </Text>
-          <Text color={colors.muted}>{intro}</Text>
+          {lines(intro).map((line, i) => (
+            <Text key={`i${i}`} color={colors.muted}>
+              {line === '' ? ' ' : line}
+            </Text>
+          ))}
         </>
       )}
       <Text> </Text>
@@ -559,6 +614,7 @@ function WizardTextStep({
   initial,
   canGoBack,
   fill,
+  masthead,
   onSubmit,
   onBack,
   onCancel,
@@ -569,6 +625,7 @@ function WizardTextStep({
   initial: string;
   canGoBack: boolean;
   fill?: boolean;
+  masthead?: { left: string; right: string };
   onSubmit: (answer: string) => void;
   onBack: () => void;
   onCancel: () => void;
@@ -645,6 +702,7 @@ function WizardTextStep({
         title={step.question}
         rail={rail}
         fill={fill}
+        masthead={masthead}
         next={step.nextLabel ?? (step.optional === true ? 'Skip this' : 'Continue')}
         canGoBack={canGoBack}
         focus={focus === 'input' ? undefined : focus}
@@ -661,7 +719,7 @@ function WizardTextStep({
           HINT_CANCEL,
         ]}
       >
-        <StepHeader step={step} intro={intro} />
+        <StepHeader step={step} intro={intro} rail={rail} />
         <BoundedLine
           buffer={editor.buffer}
           cursor={editor.cursor}
@@ -689,6 +747,7 @@ function WizardChoiceStep({
   current,
   canGoBack,
   fill,
+  masthead,
   onSubmit,
   onOther,
   onBack,
@@ -702,6 +761,7 @@ function WizardChoiceStep({
   current: WizardAnswer | undefined;
   canGoBack: boolean;
   fill?: boolean;
+  masthead?: { left: string; right: string };
   onSubmit: (answer: WizardAnswer) => void;
   onOther: () => void;
   onBack: () => void;
@@ -889,6 +949,7 @@ function WizardChoiceStep({
         title={step.question}
         rail={rail}
         fill={fill}
+        masthead={masthead}
         next={nextLabel}
         canGoBack={canGoBack}
         focus={onBackControl ? 'back' : onOption ? undefined : 'next'}
@@ -914,7 +975,7 @@ function WizardChoiceStep({
           HINT_CANCEL,
         ]}
       >
-        <StepHeader step={step} intro={intro} />
+        <StepHeader step={step} intro={intro} rail={rail} />
         {visible.map((label, i) => {
           const index = offset + i;
           const why = unavailableReason(step, label);
@@ -999,6 +1060,7 @@ function WizardReview({
   reserveRows,
   rail,
   fill,
+  masthead,
   onBack,
   onEdit,
   onCommit,
@@ -1009,6 +1071,7 @@ function WizardReview({
   reserveRows: number;
   rail?: RailEntry[];
   fill?: boolean;
+  masthead?: { left: string; right: string };
   /**
    * Re-open the last question.
    *
@@ -1095,6 +1158,7 @@ function WizardReview({
         title={title}
         rail={rail}
         fill={fill}
+        masthead={masthead}
         next="Save and finish"
         canGoBack
         focus={cursor.index === backIndex ? 'back' : inControls ? 'next' : undefined}

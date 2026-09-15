@@ -53,6 +53,7 @@ import {
   type SetupContext,
   type SetupProvider,
 } from './setup-wizard.js';
+import { TAGLINE } from './output.js';
 import type { WizardAnswer, WizardResult, WizardSpec } from './ui/overlays/wizard-types.js';
 import { debugLog } from './logger.js';
 
@@ -207,6 +208,19 @@ function buildContext(config: BernardConfig | null, provider: string): SetupCont
  * is what makes `loadConfig()` — and therefore the model list and the
  * verification probe — possible at all.
  */
+/**
+ * The line above the card, added once here rather than by each spec builder.
+ *
+ * Setup is five wizards and one journey, so the masthead is a property of the
+ * FLOW: a builder that forgot it would put an unsigned screen in the middle of
+ * a signed sequence, and there would be nothing to notice. `ask_user` builds no
+ * spec through here and so stays unsigned, which is the point of the field
+ * being opt-in.
+ */
+function signed(spec: WizardSpec): WizardSpec {
+  return { ...spec, masthead: { left: 'Setup your', right: TAGLINE } };
+}
+
 export async function runSetupFlow(deps: SetupFlowDeps): Promise<SetupOutcome> {
   const startingConfig = tryLoadConfig();
   const startingProvider = String(
@@ -231,7 +245,7 @@ export async function runSetupFlow(deps: SetupFlowDeps): Promise<SetupOutcome> {
     switch (stage) {
       case 'welcome': {
         // Nothing precedes it, so no `backExits` and no Back control.
-        const welcome = await deps.requestWizard(buildWelcomeSpec(), deps.signal);
+        const welcome = await deps.requestWizard(signed(buildWelcomeSpec()), deps.signal);
         if (welcome.cancelled) return { status: 'cancelled', stage: 'provider' };
         stage = 'providers';
         break;
@@ -248,7 +262,10 @@ export async function runSetupFlow(deps: SetupFlowDeps): Promise<SetupOutcome> {
         // a second provider" is ordinary use rather than an edge case.
         for (;;) {
           const hubCtx = buildContext(tryLoadConfig(), provider);
-          const picked = await deps.requestWizard(buildProviderHubSpec(hubCtx), deps.signal);
+          const picked = await deps.requestWizard(
+            signed(buildProviderHubSpec(hubCtx)),
+            deps.signal,
+          );
           if (picked.cancelled) {
             // Back returns to the welcome; Esc on the HUB leaves setup, because
             // the hub is the screen you are on.
@@ -262,7 +279,7 @@ export async function runSetupFlow(deps: SetupFlowDeps): Promise<SetupOutcome> {
           if (picking === null) break;
 
           const entry = buildKeyEntrySpec(hubCtx, picking);
-          const typed = await deps.requestWizard(entry.spec, deps.signal);
+          const typed = await deps.requestWizard(signed(entry.spec), deps.signal);
           // Back and Esc mean the same thing on a page opened FROM the hub:
           // return to it. Nothing is written either way.
           if (typed.cancelled) continue;
@@ -293,7 +310,7 @@ export async function runSetupFlow(deps: SetupFlowDeps): Promise<SetupOutcome> {
         const defaultStage = buildDefaultProviderSpec(buildContext(tryLoadConfig(), provider));
         askedDefault = defaultStage !== null;
         if (defaultStage !== null) {
-          const chosen = await deps.requestWizard(defaultStage.spec, deps.signal);
+          const chosen = await deps.requestWizard(signed(defaultStage.spec), deps.signal);
           if (chosen.cancelled) {
             if (chosen.back === true) {
               stage = 'providers';
@@ -309,7 +326,7 @@ export async function runSetupFlow(deps: SetupFlowDeps): Promise<SetupOutcome> {
 
       case 'settings': {
         settingsStage = buildSettingsSpec(buildContext(tryLoadConfig(), provider));
-        const answered = await deps.requestWizard(settingsStage.spec, deps.signal);
+        const answered = await deps.requestWizard(signed(settingsStage.spec), deps.signal);
         if (answered.cancelled) {
           if (answered.back === true) {
             stage = askedDefault ? 'default' : 'providers';

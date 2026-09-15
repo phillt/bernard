@@ -994,6 +994,29 @@ true}` and the caller reopens whatever came before. A FLAG on the cancelled
   Branching and typed answers are still deliberately absent — setup keeps its own
   label↔value mapping rather than pushing its domain into the type every
   `ask_user` batch is built from.
+- **Each question says what the setting is FOR, not only what it does.** The
+  descriptions were one terse line apiece (`How aggressively to prompt before
+running risky tools.`), which tells a reader what the words mean and nothing
+  about whether to change it. They are two short sentences now — what it does,
+  then why you would want it — in plain words, which is `PLAIN_LANGUAGE_RULE`'s
+  register applied to the surface a new user meets first.
+  - **That growth exposed a wrapping defect the short lines had hidden.** Ink
+    wraps with `trim: false`, keeping the break space at the START of a
+    continuation line — and only where the break lands after one, so the left
+    edge came out ragged on some lines and straight on others. `StepHeader`
+    pre-wraps through `wrapText` now, which is what the info step already did
+    for exactly this reason. The guard needs a fixture with a RAIL: the rail
+    narrows the content column, and at the full width the same text wraps
+    cleanly and the test passes with the pre-wrap deleted.
+- **`WizardSpec.masthead` signs the screen**, on the row above the card and at
+  its width, so the two ends square with its borders. Opt-in and both halves
+  supplied by the caller: `WizardCard` also draws every `ask_user` batch the
+  model raises mid-turn, and a product masthead over a clarifying question would
+  be signing the wrong thing — a hard-coded tagline in the overlay would make
+  that unavoidable rather than a choice. `runSetupFlow` adds it in ONE place
+  rather than each spec builder, because setup is five wizards and one journey:
+  a builder that forgot would put an unsigned screen mid-sequence with nothing
+  to notice.
 - **The 37 questions are a starting point, not the answer.** This phase exists to
   be walked end to end so the day-one subset can be chosen from experience.
   Trimming, and the splash copy that says what Bernard is, are follow-ups.
