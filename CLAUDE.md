@@ -1008,15 +1008,20 @@ running risky tools.`), which tells a reader what the words mean and nothing
     for exactly this reason. The guard needs a fixture with a RAIL: the rail
     narrows the content column, and at the full width the same text wraps
     cleanly and the test passes with the pre-wrap deleted.
-- **`WizardSpec.masthead` signs the screen**, on the row above the card and at
-  its width, so the two ends square with its borders. Opt-in and both halves
-  supplied by the caller: `WizardCard` also draws every `ask_user` batch the
-  model raises mid-turn, and a product masthead over a clarifying question would
-  be signing the wrong thing — a hard-coded tagline in the overlay would make
-  that unavoidable rather than a choice. `runSetupFlow` adds it in ONE place
-  rather than each spec builder, because setup is five wizards and one journey:
-  a builder that forgot would put an unsigned screen mid-sequence with nothing
-  to notice.
+- **`WizardSpec.masthead` signs the screen** — a small line, `BERNARD_BANNER`'s
+  block lettering, and the tagline right-aligned under it, all above the card and
+  at its width so the banner starts at its left border and the tagline ends at
+  its right. Opt-in, and every part supplied by the caller: `WizardCard` also
+  draws every `ask_user` batch the model raises mid-turn, and a product splash
+  over a clarifying question would be signing the wrong thing — a hard-coded
+  banner in the overlay would make that unavoidable rather than a choice.
+  `runSetupFlow` adds it in ONE place rather than each spec builder, because
+  setup is five wizards and one journey: a builder that forgot would put an
+  unsigned screen mid-sequence with nothing to notice.
+  - **Dropped whole below its own width**, the rule the rail follows and for the
+    same reason: block lettering cannot reflow, so a banner that does not fit is
+    worse present than absent. Measured with `stringWidth`, not `.length` — the
+    rows are box-drawing today and a future banner need not be.
 - **The 37 questions are a starting point, not the answer.** This phase exists to
   be walked end to end so the day-one subset can be chosen from experience.
   Trimming, and the splash copy that says what Bernard is, are follow-ups.

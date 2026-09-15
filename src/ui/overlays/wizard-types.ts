@@ -260,17 +260,24 @@ export interface WizardSpec {
    */
   railContext?: { before?: string[]; after?: string[] };
   /**
-   * A line above the card, outside it — what this is on the left, who it
-   * belongs to on the right.
+   * The splash above the card: a small line, block lettering, and a tagline
+   * under it on the right.
    *
-   * Opt-in, and both halves supplied by the caller. `WizardCard` also draws
+   * Opt-in, and every part supplied by the caller. `WizardCard` also draws
    * every `ask_user` batch the model raises mid-turn, and a product masthead
-   * over a clarifying question would be signing the wrong thing; giving the
-   * overlay a hard-coded tagline would make that unavoidable rather than a
-   * choice. So the component knows only "a left string and a right string",
+   * over a clarifying question would be signing the wrong thing; a hard-coded
+   * banner in the overlay would make that unavoidable rather than a choice. So
+   * the component knows only "some rows to draw big and two lines around them",
    * and setup is what decides they say Bernard.
    */
-  masthead?: { left: string; right: string };
+  masthead?: {
+    /** Small, left-aligned, above the banner. */
+    intro?: string;
+    /** Block-lettering rows, drawn in the accent colour. */
+    banner: string[];
+    /** One line under the banner, right-aligned against the card's edge. */
+    tagline?: string;
+  };
 }
 
 export type WizardResult =

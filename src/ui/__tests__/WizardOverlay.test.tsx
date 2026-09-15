@@ -796,25 +796,43 @@ describe('WizardOverlay — a value the list does not offer (#447)', () => {
  * not once the descriptions grew to say what each setting is FOR.
  */
 describe('WizardOverlay — the masthead signs the screen', () => {
-  const spec = (masthead?: { left: string; right: string }): WizardSpec => ({
+  const BANNER = ['██╗', '██║', '╚═╝'];
+  const spec = (masthead?: WizardSpec['masthead']): WizardSpec => ({
     ...(masthead ? { masthead } : {}),
     steps: [{ id: 'q', question: 'Which?', field: { kind: 'choice', choices: ['a', 'b'] } }],
   });
 
-  it('puts one on the row above the card, at its own width', async () => {
+  it('draws intro, banner and tagline above the card', async () => {
     const { lastFrame } = await mount(
       vi.fn(),
-      spec({ left: 'Setup your', right: 'Valet to your digital world.' }),
+      spec({ intro: 'Welcome to', banner: BANNER, tagline: 'Valet to your digital world.' }),
     );
     const rows = stripAnsi(lastFrame() ?? '').split('\n');
-    const at = rows.findIndex((l) => l.includes('Setup your'));
+    const at = rows.findIndex((l) => l.includes('Welcome to'));
+    const box = rows.findIndex((l) => l.includes('╭'));
     expect(at).toBeGreaterThanOrEqual(0);
-    // Above the box, not inside it.
-    expect(rows[at]).not.toContain('│');
-    expect(rows[at + 1]).toContain('╭');
-    // Both ends on one row, and squared with the card's borders.
-    expect(rows[at]).toContain('Valet to your digital world.');
-    expect(rows[at].trimEnd().length).toBe(rows[at + 1].trimEnd().length);
+    // In order, and all of it outside the box.
+    expect(box).toBeGreaterThan(at);
+    for (const line of BANNER) {
+      const i = rows.findIndex((l) => l.includes(line));
+      expect(i).toBeGreaterThan(at);
+      expect(i).toBeLessThan(box);
+    }
+    const tag = rows.findIndex((l) => l.includes('Valet to your'));
+    expect(tag).toBeGreaterThan(at + BANNER.length);
+    expect(tag).toBeLessThan(box);
+    // Right-aligned against the CARD's edge, not the terminal's.
+    expect(rows[tag].trimEnd().length).toBe(rows[box].trimEnd().length);
+  });
+
+  it('drops the whole splash rather than wrapping block lettering', async () => {
+    // Block lettering cannot reflow, so a banner too wide for the card goes
+    // entirely — the rule the rail follows, for the same reason.
+    const wide = ['x'.repeat(400)];
+    const { lastFrame } = await mount(vi.fn(), spec({ intro: 'Welcome to', banner: wide }));
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).not.toContain('Welcome to');
+    expect(frame).not.toContain('xxxx');
   });
 
   it('signs nothing when a spec declares none', async () => {

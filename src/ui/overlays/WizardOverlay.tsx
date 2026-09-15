@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Box, Text, useInput } from 'ink';
+import stringWidth from 'string-width';
 import { getThemeColors } from '../../theme.js';
 import { truncate } from '../../text.js';
 import { HintRow, KEY, HINT_CANCEL, HINT_MOVE, type KeyHint } from '../hints.js';
@@ -58,7 +59,7 @@ interface WizardOverlayProps {
    * box would push off the screen.
    */
   fill?: boolean;
-  masthead?: { left: string; right: string };
+  masthead?: WizardSpec['masthead'];
 }
 
 /**
@@ -265,6 +266,16 @@ function leaders(head: string, tailWidth: number, span: number): string {
   return ` ${'·'.repeat(Math.max(1, gap))} `;
 }
 
+/**
+ * Whether the block lettering fits the card, banner rows being unwrappable.
+ *
+ * Measured with `stringWidth` rather than `.length` — the rows are box-drawing
+ * characters today and a future banner need not be.
+ */
+function bannerFits(banner: string[], width: number): boolean {
+  return banner.length > 0 && Math.max(...banner.map((l) => stringWidth(l))) <= width;
+}
+
 function cardWidth(columns: number, withRail = false): number {
   const max = withRail ? CARD_WIDTH + RAIL_WIDTH : CARD_WIDTH;
   return Math.max(CARD_MIN_WIDTH, Math.min(max, columns - 4));
@@ -330,8 +341,8 @@ function WizardCard({
 }: {
   /** The group label. Rendered only when there is no rail to carry it. */
   section?: string;
-  /** A line above the card: what this is, and who it belongs to. */
-  masthead?: { left: string; right: string };
+  /** The splash above the card. See {@link WizardSpec.masthead}. */
+  masthead?: WizardSpec['masthead'];
   title: string;
   /** Sections down the left. Dropped below {@link RAIL_MIN_COLUMNS}. */
   rail?: RailEntry[];
@@ -374,13 +385,26 @@ function WizardCard({
       height={fill === true ? rows : undefined}
     >
       <Box flexDirection="column" alignItems="center">
-        {/* Above the box and outside it, at the card's own width so the two
-            ends line up with its borders. Muted, because it signs the screen
-            rather than competing with the question inside it. */}
-        {masthead !== undefined && (
-          <Box width={width} justifyContent="space-between">
-            <Text color={colors.muted}>{masthead.left}</Text>
-            <Text color={colors.muted}>{masthead.right}</Text>
+        {/* Above the box and outside it, at the card's own width so the banner
+            starts at its left border and the tagline ends at its right. Dropped
+            whole when the banner would not fit — the same rule the rail
+            follows, and for the same reason: block lettering that wraps is
+            worse than block lettering that is absent. */}
+        {masthead !== undefined && bannerFits(masthead.banner, width) && (
+          <Box flexDirection="column" width={width}>
+            {masthead.intro !== undefined && <Text color={colors.muted}>{masthead.intro}</Text>}
+            {masthead.banner.map((line, i) => (
+              // Keyed by index: these are rows of one picture, not items.
+              <Text key={i} color={colors.accent}>
+                {line}
+              </Text>
+            ))}
+            {masthead.tagline !== undefined && (
+              <Box justifyContent="flex-end">
+                <Text color={colors.muted}>{masthead.tagline}</Text>
+              </Box>
+            )}
+            <Text> </Text>
           </Box>
         )}
         <Box
@@ -498,7 +522,7 @@ function WizardInfoStep({
   rail?: RailEntry[];
   canGoBack: boolean;
   fill?: boolean;
-  masthead?: { left: string; right: string };
+  masthead?: WizardSpec['masthead'];
   onSubmit: (answer: string) => void;
   onBack: () => void;
   onCancel: () => void;
@@ -625,7 +649,7 @@ function WizardTextStep({
   initial: string;
   canGoBack: boolean;
   fill?: boolean;
-  masthead?: { left: string; right: string };
+  masthead?: WizardSpec['masthead'];
   onSubmit: (answer: string) => void;
   onBack: () => void;
   onCancel: () => void;
@@ -761,7 +785,7 @@ function WizardChoiceStep({
   current: WizardAnswer | undefined;
   canGoBack: boolean;
   fill?: boolean;
-  masthead?: { left: string; right: string };
+  masthead?: WizardSpec['masthead'];
   onSubmit: (answer: WizardAnswer) => void;
   onOther: () => void;
   onBack: () => void;
@@ -1071,7 +1095,7 @@ function WizardReview({
   reserveRows: number;
   rail?: RailEntry[];
   fill?: boolean;
-  masthead?: { left: string; right: string };
+  masthead?: WizardSpec['masthead'];
   /**
    * Re-open the last question.
    *

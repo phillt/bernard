@@ -223,7 +223,9 @@ export function buildSpinnerMessage(stats: SpinnerStats): string {
 export function startSpinner(_message?: string | (() => string)): void {}
 export function stopSpinner(): void {}
 
-const BERNARD_BANNER = [
+/** Block lettering for the splash, 6 rows and 58 columns. Exported so any
+ *  surface that opens with Bernard's name draws the same one. */
+export const BERNARD_BANNER = [
   '██████╗ ███████╗██████╗ ███╗   ██╗ █████╗ ██████╗ ██████╗ ',
   '██╔══██╗██╔════╝██╔══██╗████╗  ██║██╔══██╗██╔══██╗██╔══██╗',
   '██████╔╝█████╗  ██████╔╝██╔██╗ ██║███████║██████╔╝██║  ██║',

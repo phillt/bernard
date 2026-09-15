@@ -53,7 +53,7 @@ import {
   type SetupContext,
   type SetupProvider,
 } from './setup-wizard.js';
-import { TAGLINE } from './output.js';
+import { BERNARD_BANNER, TAGLINE } from './output.js';
 import type { WizardAnswer, WizardResult, WizardSpec } from './ui/overlays/wizard-types.js';
 import { debugLog } from './logger.js';
 
@@ -218,7 +218,7 @@ function buildContext(config: BernardConfig | null, provider: string): SetupCont
  * being opt-in.
  */
 function signed(spec: WizardSpec): WizardSpec {
-  return { ...spec, masthead: { left: 'Setup your', right: TAGLINE } };
+  return { ...spec, masthead: { intro: 'Welcome to', banner: BERNARD_BANNER, tagline: TAGLINE } };
 }
 
 export async function runSetupFlow(deps: SetupFlowDeps): Promise<SetupOutcome> {
