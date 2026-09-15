@@ -267,13 +267,56 @@ function leaders(head: string, tailWidth: number, span: number): string {
 }
 
 /**
- * Whether the block lettering fits the card, banner rows being unwrappable.
+ * How wide the splash block is: the widest of its three parts.
+ *
+ * The block is CENTRED in the card and its parts are aligned to the block's own
+ * edges, not the card's — so the small line sits at the banner's left shoulder
+ * and the tagline at its right, which is what makes them read as belonging to
+ * the lettering rather than to the box below it.
+ *
+ * The widest part rather than the banner's width, because a tagline longer than
+ * the lettering would otherwise be right-aligned into space the block does not
+ * own and spill past it.
  *
  * Measured with `stringWidth` rather than `.length` — the rows are box-drawing
  * characters today and a future banner need not be.
  */
-function bannerFits(banner: string[], width: number): boolean {
-  return banner.length > 0 && Math.max(...banner.map((l) => stringWidth(l))) <= width;
+function mastheadWidth(m: NonNullable<WizardSpec['masthead']>): number {
+  const parts = [...m.banner, m.intro ?? '', m.tagline ?? ''];
+  return Math.max(...parts.map((l) => stringWidth(l)));
+}
+
+/**
+ * The splash above the card, or nothing when it would not fit.
+ *
+ * Dropped WHOLE rather than wrapped: block lettering cannot reflow, so a banner
+ * too wide for the card is worse present than absent — the rule the rail
+ * follows, for the same reason.
+ */
+function mastheadBlock(m: NonNullable<WizardSpec['masthead']>, cardCols: number): ReactNode {
+  const block = mastheadWidth(m);
+  if (block > cardCols) return null;
+  const colors = getThemeColors();
+  return (
+    // Centred in the card; the parts then align to the BLOCK's edges.
+    <Box width={cardCols} justifyContent="center">
+      <Box flexDirection="column" width={block}>
+        {m.intro !== undefined && <Text color={colors.muted}>{m.intro}</Text>}
+        {m.banner.map((line, i) => (
+          // Keyed by index: these are rows of one picture, not items.
+          <Text key={i} color={colors.accent}>
+            {line}
+          </Text>
+        ))}
+        {m.tagline !== undefined && (
+          <Box justifyContent="flex-end">
+            <Text color={colors.muted}>{m.tagline}</Text>
+          </Box>
+        )}
+        <Text> </Text>
+      </Box>
+    </Box>
+  );
 }
 
 function cardWidth(columns: number, withRail = false): number {
@@ -390,23 +433,7 @@ function WizardCard({
             whole when the banner would not fit — the same rule the rail
             follows, and for the same reason: block lettering that wraps is
             worse than block lettering that is absent. */}
-        {masthead !== undefined && bannerFits(masthead.banner, width) && (
-          <Box flexDirection="column" width={width}>
-            {masthead.intro !== undefined && <Text color={colors.muted}>{masthead.intro}</Text>}
-            {masthead.banner.map((line, i) => (
-              // Keyed by index: these are rows of one picture, not items.
-              <Text key={i} color={colors.accent}>
-                {line}
-              </Text>
-            ))}
-            {masthead.tagline !== undefined && (
-              <Box justifyContent="flex-end">
-                <Text color={colors.muted}>{masthead.tagline}</Text>
-              </Box>
-            )}
-            <Text> </Text>
-          </Box>
-        )}
+        {masthead !== undefined && masthead.banner.length > 0 && mastheadBlock(masthead, width)}
         <Box
           flexDirection="column"
           width={width}

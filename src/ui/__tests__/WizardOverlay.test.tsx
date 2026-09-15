@@ -796,33 +796,41 @@ describe('WizardOverlay — a value the list does not offer (#447)', () => {
  * not once the descriptions grew to say what each setting is FOR.
  */
 describe('WizardOverlay — the masthead signs the screen', () => {
-  const BANNER = ['██╗', '██║', '╚═╝'];
+  // Wider than the tagline below it, so "flush to the banner's right edge" and
+  // "flush to the card's" are different answers and the test can tell them
+  // apart. Equal widths would pass either way.
+  const BANNER = ['█████████████████╗', '█████████████████║', '╚════════════════╝'];
+  const TAG = 'a tagline';
   const spec = (masthead?: WizardSpec['masthead']): WizardSpec => ({
     ...(masthead ? { masthead } : {}),
     steps: [{ id: 'q', question: 'Which?', field: { kind: 'choice', choices: ['a', 'b'] } }],
   });
 
-  it('draws intro, banner and tagline above the card', async () => {
+  it('centres the block and hangs its parts on the banner, not the card', async () => {
     const { lastFrame } = await mount(
       vi.fn(),
-      spec({ intro: 'Welcome to', banner: BANNER, tagline: 'Valet to your digital world.' }),
+      spec({ intro: 'Welcome to', banner: BANNER, tagline: TAG }),
     );
     const rows = stripAnsi(lastFrame() ?? '').split('\n');
     const at = rows.findIndex((l) => l.includes('Welcome to'));
     const box = rows.findIndex((l) => l.includes('╭'));
+    const bannerRow = rows.findIndex((l) => l.includes(BANNER[0]));
+    const tag = rows.findIndex((l) => l.includes(TAG));
     expect(at).toBeGreaterThanOrEqual(0);
     // In order, and all of it outside the box.
-    expect(box).toBeGreaterThan(at);
-    for (const line of BANNER) {
-      const i = rows.findIndex((l) => l.includes(line));
-      expect(i).toBeGreaterThan(at);
-      expect(i).toBeLessThan(box);
-    }
-    const tag = rows.findIndex((l) => l.includes('Valet to your'));
-    expect(tag).toBeGreaterThan(at + BANNER.length);
-    expect(tag).toBeLessThan(box);
-    // Right-aligned against the CARD's edge, not the terminal's.
-    expect(rows[tag].trimEnd().length).toBe(rows[box].trimEnd().length);
+    expect(bannerRow).toBeGreaterThan(at);
+    expect(tag).toBeGreaterThan(bannerRow);
+    expect(box).toBeGreaterThan(tag);
+
+    const left = (i: number) => rows[i].length - rows[i].trimStart().length;
+    const right = (i: number) => rows[i].trimEnd().length;
+    // The small line starts where the lettering does…
+    expect(left(at)).toBe(left(bannerRow));
+    // …and the tagline ends where the lettering ends.
+    expect(right(tag)).toBe(right(bannerRow));
+    // Centred in the card, which is what makes those two edges narrower than it.
+    expect(left(bannerRow)).toBeGreaterThan(left(box));
+    expect(right(bannerRow)).toBeLessThan(right(box));
   });
 
   it('drops the whole splash rather than wrapping block lettering', async () => {
@@ -835,9 +843,22 @@ describe('WizardOverlay — the masthead signs the screen', () => {
     expect(frame).not.toContain('xxxx');
   });
 
+  it('sizes the block to its widest part, so a long tagline cannot spill', async () => {
+    const long = 'a tagline considerably longer than the lettering above it';
+    const { lastFrame } = await mount(
+      vi.fn(),
+      spec({ intro: 'Welcome to', banner: BANNER, tagline: long }),
+    );
+    const rows = stripAnsi(lastFrame() ?? '').split('\n');
+    const box = rows.findIndex((l) => l.includes('╭'));
+    const tag = rows.findIndex((l) => l.includes(long));
+    expect(tag).toBeGreaterThanOrEqual(0);
+    expect(rows[tag].trimEnd().length).toBeLessThanOrEqual(rows[box].trimEnd().length);
+  });
+
   it('signs nothing when a spec declares none', async () => {
     // Guard the guard, and the reason the field is opt-in: `WizardCard` also
-    // draws every `ask_user` batch, and a product masthead over a clarifying
+    // draws every `ask_user` batch, and a product splash over a clarifying
     // question would be signing the wrong thing.
     const { lastFrame } = await mount(vi.fn(), spec());
     const rows = stripAnsi(lastFrame() ?? '')

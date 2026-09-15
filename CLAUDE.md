@@ -1009,9 +1009,13 @@ running risky tools.`), which tells a reader what the words mean and nothing
     narrows the content column, and at the full width the same text wraps
     cleanly and the test passes with the pre-wrap deleted.
 - **`WizardSpec.masthead` signs the screen** — a small line, `BERNARD_BANNER`'s
-  block lettering, and the tagline right-aligned under it, all above the card and
-  at its width so the banner starts at its left border and the tagline ends at
-  its right. Opt-in, and every part supplied by the caller: `WizardCard` also
+  block lettering, and the tagline under it on the right. The block is CENTRED in
+  the card and its parts hang on the BLOCK's own edges, not the card's, so the
+  small line sits at the lettering's left shoulder and the tagline at its right —
+  which is what makes them read as belonging to the name rather than to the box
+  below it. Sized to its widest part rather than to the banner, or a tagline
+  longer than the lettering would be right-aligned into space the block does not
+  own and spill past it. Opt-in, and every part supplied by the caller: `WizardCard` also
   draws every `ask_user` batch the model raises mid-turn, and a product splash
   over a clarifying question would be signing the wrong thing — a hard-coded
   banner in the overlay would make that unavoidable rather than a choice.
