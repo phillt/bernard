@@ -80,6 +80,19 @@ export const KEY = {
   escBack: 'esc/←',
 } as const;
 
+/**
+ * A control chord, spelled the way people say it.
+ *
+ * `ctrl+b` rather than `^b`: the caret is terminal shorthand that readers of
+ * emacs and older CLIs know and nobody else does, and this row is read by
+ * someone being onboarded. One function rather than a literal per site, because
+ * the wizard and the transcript hint bar had already picked `^b` and `^o`
+ * independently and would have drifted again the next time one was added.
+ */
+export function ctrlKey(letter: string): string {
+  return `ctrl+${letter}`;
+}
+
 /** `esc close` — the dismiss hint for a read-only surface. */
 export const HINT_CLOSE: KeyHint = { key: KEY.esc, label: 'close' };
 /**

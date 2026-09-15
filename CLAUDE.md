@@ -823,6 +823,21 @@ true}` and the caller reopens whatever came before. A FLAG on the cancelled
     detail is usually the very thing that explains why the row cannot be picked
     (`xai ···· no key`), so branching it away left the reader with a dead row and
     no reason until they highlighted it.
+  - **`ctrl+n` continues from any step kind, and it ACTS.** Symmetric with
+    `ctrl+b`, which goes back rather than focusing Back — a pair where one
+    commits and the other only points at a button would be two rules wearing one
+    shape. It routes through each step's own commit, so a value its validator
+    refuses is still refused; a shortcut that bypassed that would open the one
+    door nothing else does. A chord rather than `→` because a text step spends
+    the arrow keys on its buffer, and a shortcut that works on four step kinds
+    and silently does nothing on the fifth is the inconsistency it replaces —
+    `→` does also reach Continue from an option ROW, where the arrow is free,
+    but that is the cheap half rather than the rule.
+  - **Chords are spelled `ctrl+b`, not `^b`.** The caret is terminal shorthand
+    that readers of emacs and older CLIs know and nobody else does, and this row
+    is read by someone being onboarded. `ctrlKey()` in `hints.tsx` is the one
+    spelling, because the wizard and the transcript hint bar had already picked
+    `^b` and `^o` independently and would have drifted again on the next one.
   - **Back is reached SIDEWAYS from Continue**, `←` to it and `→` back. They are
     one row on screen, so walking `↓` through them would be the cursor moving
     down where nothing is — `↓` on Continue therefore does nothing at all. `↑`

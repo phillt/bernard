@@ -12,6 +12,7 @@ import {
   ARROW_LEFT,
   ARROW_RIGHT,
   ARROW_UP,
+  CTRL_N,
   CTRL_B,
   tick,
 } from './_keys.js';
@@ -795,6 +796,97 @@ describe('WizardOverlay — a value the list does not offer (#447)', () => {
  * ragged on some lines and not others. Survivable while a hint was one line;
  * not once the descriptions grew to say what each setting is FOR.
  */
+/**
+ * One chord forward, the sibling of the one back (#447).
+ *
+ * `ctrl+b` goes back rather than focusing Back, so the forward half ACTS too —
+ * a pair where one commits and the other only points at a button would be two
+ * rules wearing one shape. A chord rather than `→` because a text step spends
+ * the arrow keys on its buffer, and a shortcut that works on four step kinds
+ * and silently does nothing on the fifth is the inconsistency it replaces.
+ */
+describe('WizardOverlay — ctrl+n continues from any step kind', () => {
+  const twoStep = (first: WizardStep): WizardSpec => ({
+    skipReview: true,
+    steps: [
+      first,
+      // Optional, so the second `ctrl+n` commits rather than holding — an empty
+      // REQUIRED text step holds on Enter by design, which is the rule this
+      // shortcut must obey rather than skip.
+      { id: 'after', question: 'The next question', field: { kind: 'text' }, optional: true },
+    ],
+  });
+
+  it('commits a choice step', async () => {
+    const { stdin, lastFrame } = await mount(
+      vi.fn(),
+      twoStep({
+        id: 'c',
+        question: 'Which?',
+        field: { kind: 'choice', choices: ['a', 'b'] },
+        initial: 'a',
+      }),
+    );
+    await type(stdin, CTRL_N);
+    expect(stripAnsi(lastFrame() ?? '')).toContain('The next question');
+  });
+
+  it('commits a text step, buffer and all', async () => {
+    const onResolve = vi.fn();
+    const { stdin } = await mount(
+      onResolve,
+      twoStep({ id: 't', question: 'Threshold?', field: { kind: 'text' }, initial: '0.15' }),
+    );
+    await type(stdin, CTRL_N);
+    await type(stdin, CTRL_N);
+    expect(onResolve).toHaveBeenCalledWith({ cancelled: false, answers: ['0.15', ''] });
+  });
+
+  it('commits an info step', async () => {
+    const { stdin, lastFrame } = await mount(
+      vi.fn(),
+      twoStep({ id: 'w', question: 'Welcome', field: { kind: 'info', body: ['hello'] } }),
+    );
+    await type(stdin, CTRL_N);
+    expect(stripAnsi(lastFrame() ?? '')).toContain('The next question');
+  });
+
+  it('holds where Continue would hold, rather than skipping validation', async () => {
+    // Guard the guard: a shortcut that bypassed the step's own commit would let
+    // a refused value through the one door nothing else opens.
+    const onResolve = vi.fn();
+    const { stdin, lastFrame } = await mount(
+      onResolve,
+      twoStep({
+        id: 't',
+        question: 'Threshold?',
+        field: { kind: 'text' },
+        initial: 'nope',
+        validate: (a) => (Number.isNaN(Number(a)) ? 'Not a number.' : undefined),
+      }),
+    );
+    await type(stdin, CTRL_N);
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toContain('Not a number.');
+    expect(frame).not.toContain('The next question');
+    expect(onResolve).not.toHaveBeenCalled();
+  });
+
+  it('reaches Continue with → from an option row, where the arrow is free', async () => {
+    const { stdin, lastFrame } = await mount(
+      vi.fn(),
+      twoStep({
+        id: 'c',
+        question: 'Which?',
+        field: { kind: 'choice', choices: ['a', 'b'] },
+        initial: 'a',
+      }),
+    );
+    await type(stdin, ARROW_RIGHT);
+    expect(stripAnsi(lastFrame() ?? '')).toContain('▸ Continue');
+  });
+});
+
 describe('WizardOverlay — the masthead signs the screen', () => {
   // Wider than the tagline below it, so "flush to the banner's right edge" and
   // "flush to the card's" are different answers and the test can tell them
@@ -1040,7 +1132,7 @@ describe('WizardOverlay — the controls are reachable from every step kind', ()
     await type(stdin, ENTER);
     const frame = stripAnsi(lastFrame() ?? '');
     expect(frame).toContain('↑/↓');
-    expect(frame).toContain('^b');
+    expect(frame).toContain('ctrl+b');
   });
 
   it('opens an info step on Continue and switches sideways', async () => {
@@ -1256,7 +1348,7 @@ describe('WizardOverlay — moving between the two controls (#447)', () => {
     const { lastFrame, unmount } = await atControls();
     const frame = stripAnsi(lastFrame() ?? '');
     unmount();
-    expect(frame).toContain('^b back');
+    expect(frame).toContain('ctrl+b back');
     expect(frame).toContain('←/→ switch');
     // The control carries the label; the chord belongs with the other keys.
     expect(frame).not.toContain('← Back (^b)');
@@ -1273,7 +1365,7 @@ describe('WizardOverlay — moving between the two controls (#447)', () => {
     await type(stdin, ARROW_DOWN);
     const frame = stripAnsi(lastFrame() ?? '');
     expect(frame).toContain('First');
-    expect(frame).not.toContain('^b back');
+    expect(frame).not.toContain('ctrl+b back');
     expect(frame).not.toContain('←/→ switch');
   });
 });
@@ -1360,7 +1452,7 @@ describe('WizardOverlay — the review moves on like every other page (#447)', (
     // It was the one surface whose hints omitted it, which is how "there is no
     // back button" survives a page that has one.
     const { lastFrame, unmount } = await atReview();
-    expect(stripAnsi(lastFrame() ?? '')).toContain('^b back');
+    expect(stripAnsi(lastFrame() ?? '')).toContain('ctrl+b back');
     unmount();
   });
 

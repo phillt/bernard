@@ -3,7 +3,7 @@ import { Box, Text, useInput } from 'ink';
 import stringWidth from 'string-width';
 import { getThemeColors } from '../../theme.js';
 import { truncate } from '../../text.js';
-import { HintRow, KEY, HINT_CANCEL, HINT_MOVE, type KeyHint } from '../hints.js';
+import { HintRow, KEY, HINT_CANCEL, HINT_MOVE, ctrlKey, type KeyHint } from '../hints.js';
 import { isDismissKey } from './overlay-contract.js';
 import { useListCursor, useListWindow } from './use-list-cursor.js';
 import { chromeRows, overlayViewport } from './menu-geometry.js';
@@ -39,10 +39,25 @@ import {
 } from './wizard-types.js';
 
 /** Back. Not Esc — `overlay-contract.ts`'s rule is that Esc always dismisses. */
-const BACK_HINT = { key: '^b', label: 'back' };
-/** The line editor claims ctrl-a/e/w/u/k/d and declines every other chord, so ^B is free. */
+const BACK_HINT = { key: ctrlKey('b'), label: 'back' };
+/**
+ * Forward, and it ACTS rather than moving the cursor onto Continue.
+ *
+ * Symmetric with `ctrl+b`, which goes back rather than focusing Back — a pair
+ * where one commits and the other only points at a button would be two rules
+ * wearing one shape. It is a chord rather than `→` because a text step spends
+ * the arrow keys on its buffer, and a shortcut that works on four step kinds
+ * and silently does nothing on the fifth is the inconsistency this replaces.
+ * (`→` still reaches Continue from an option ROW, where it is free.)
+ */
+const NEXT_HINT = { key: ctrlKey('n'), label: 'continue' };
+/** The line editor claims ctrl-a/e/w/u/k/d and declines every other chord, so
+ *  ^B and ^N are both free — verified against `use-line-editor.tsx`. */
 function isBackKey(input: string, key: { ctrl?: boolean }): boolean {
   return key.ctrl === true && input === 'b';
+}
+function isNextKey(input: string, key: { ctrl?: boolean }): boolean {
+  return key.ctrl === true && input === 'n';
 }
 
 interface WizardOverlayProps {
@@ -574,6 +589,7 @@ function WizardInfoStep({
   useInput((input, key) => {
     if (isDismissKey(input, key)) return onCancel();
     if (canGoBack && isBackKey(input, key)) return onBack();
+    if (isNextKey(input, key)) return onSubmit('');
     if (key.leftArrow === true && canGoBack) return setFocus('back');
     if (key.rightArrow === true) return setFocus('next');
     if (key.return) return focus === 'back' ? onBack() : onSubmit('');
@@ -594,6 +610,7 @@ function WizardInfoStep({
           ...(canGoBack ? [{ key: '←/→', label: 'switch' }] : []),
           ...(focus === 'back' ? [] : [{ key: KEY.enter, label: 'continue' }]),
           ...(canGoBack ? [BACK_HINT] : []),
+          NEXT_HINT,
           HINT_CANCEL,
         ]}
       >
@@ -726,6 +743,7 @@ function WizardTextStep({
     // the `q` variant: this surface has a buffer, so `q` must stay typeable.
     if (isDismissKey(input, key)) return onCancel();
     if (canGoBack && isBackKey(input, key)) return onBack();
+    if (isNextKey(input, key)) return commit();
     if (onControl) {
       if (key.upArrow === true) return setFocus('input');
       if (key.downArrow === true) return;
@@ -767,6 +785,7 @@ function WizardTextStep({
           // would be wrong.
           ...(onControl && canGoBack ? [{ key: '←/→', label: 'switch' }] : []),
           ...(canGoBack ? [BACK_HINT] : []),
+          NEXT_HINT,
           HINT_CANCEL,
         ]}
       >
@@ -930,6 +949,7 @@ function WizardChoiceStep({
   useInput((input, key) => {
     if (isDismissKey(input, key)) return onCancel();
     if (canGoBack && isBackKey(input, key)) return onBack();
+    if (isNextKey(input, key)) return submitChosen();
     if (inControls) {
       // ↑ returns to the list, and to its END — the row the cursor left, not the
       // top, which is where it would land if this were a plain wrap.
@@ -937,6 +957,12 @@ function WizardChoiceStep({
       if (key.downArrow === true) return;
       if (key.leftArrow === true && canGoBack) return cursor.setIndex(backAt);
       if (key.rightArrow === true) return cursor.setIndex(continueAt);
+    } else if (key.rightArrow === true) {
+      // From an option ROW, where the arrow has nothing else to mean. A text
+      // step spends it on the buffer, which is why `ctrl+n` exists and is the
+      // shortcut advertised — this is the cheap half that happens to be free
+      // here, not the rule.
+      return cursor.setIndex(continueAt);
     }
     cursor.handleKey(input, key);
   });
@@ -1023,6 +1049,7 @@ function WizardChoiceStep({
           // a page with one button describes a key that does nothing.
           ...(inControls && canGoBack ? [{ key: '←/→', label: 'switch' }] : []),
           ...(canGoBack ? [BACK_HINT] : []),
+          NEXT_HINT,
           HINT_CANCEL,
         ]}
       >
@@ -1167,6 +1194,7 @@ function WizardReview({
   useInput((input, key) => {
     if (isDismissKey(input, key)) return onCancel();
     if (isBackKey(input, key)) return onBack();
+    if (isNextKey(input, key)) return onCommit();
     if (inControls) {
       if (key.upArrow === true && rows_.length > 0) return cursor.setIndex(rows_.length - 1);
       if (key.downArrow === true) return;
@@ -1219,6 +1247,7 @@ function WizardReview({
           ...(cursor.index < commitIndex ? [{ key: KEY.enter, label: 'change' }] : []),
           ...(inControls ? [{ key: '←/→', label: 'switch' }] : []),
           BACK_HINT,
+          NEXT_HINT,
           HINT_CANCEL,
         ]}
       >
