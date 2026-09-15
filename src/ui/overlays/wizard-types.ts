@@ -221,9 +221,52 @@ export interface WizardStep {
    * broken. Returning `undefined` accepts.
    *
    * Pure, and called on every keystroke-free Enter rather than continuously: it
-   * must not be where a caller does I/O.
+   * must not be where a caller does I/O. That is a statement about THIS hook,
+   * not a ban on I/O in a wizard — {@link WizardStep.check} is the explicit door
+   * for that, and it exists partly so this one does not become the tempting one.
    */
   validate?: (answer: WizardAnswer) => string | undefined;
+  /**
+   * An optional check the reader can run against the answer, on demand.
+   *
+   * The only ASYNC field on a step, and the only one that reaches outside the
+   * overlay. It exists for the API-key page: a pasted key is worth testing
+   * before it is saved, and every other way of finding out costs a whole flow.
+   *
+   * **The verdict is inert.** It never enters `WizardState`, never reaches
+   * {@link stepError} / `isAnswered` / `answerStep`, and never gates the answer
+   * — running the check is optional, and a failed one still lets the step
+   * commit. That is what keeps the state machine as pure as it was.
+   *
+   * **Never built from model input.** `stepsFromQuestions` constructs steps
+   * explicitly from `AskUserQuestion`, which has no such key, and a function
+   * would not survive the model's JSON in any case — so injection is
+   * structurally impossible. Worth stating because this field is a CAPABILITY
+   * (the network, and whatever the reader has typed) rather than data, which is
+   * a different thing for `WizardStep` to carry than everything above it.
+   *
+   * `run` is handed an `AbortSignal` and must settle: the overlay draws no
+   * spinner, so a hang and a freeze are indistinguishable there.
+   */
+  check?: {
+    /** The control's label, e.g. `Test key`. */
+    label: string;
+    /** In-flight label. Keep it the same display width, or the footer jiggles. */
+    busyLabel: string;
+    run: (answer: string, signal: AbortSignal) => Promise<StepCheckResult>;
+  };
+}
+
+/**
+ * What a {@link WizardStep.check} concluded.
+ *
+ * Three states, deliberately: a boolean cannot say "I could not tell", so every
+ * uncertain answer would render as a failure — which is the exact shape of the
+ * bug the API-key check exists to avoid.
+ */
+export interface StepCheckResult {
+  tone: 'ok' | 'bad' | 'unknown';
+  message: string;
 }
 
 export type WizardAnswer = string | string[];

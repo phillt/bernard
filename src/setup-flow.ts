@@ -25,6 +25,7 @@
  */
 
 import {
+  getProviderApiKey,
   getProviderKeyStatus,
   getStoredKeyHint,
   saveProviderKey,
@@ -33,10 +34,11 @@ import {
   getDefaultModel,
   type BernardConfig,
 } from './config.js';
-import { loadCustomProviders } from './custom-providers.js';
+import { loadCustomProviders, SUPPORTED_SDKS } from './custom-providers.js';
+import { checkProviderKey, keyCheckEndpoint, tidyKey } from './provider-key-check.js';
 import { saveActiveSettings, type ProfileSettings } from './profiles.js';
 import { getCatalogForProvider } from './providers/catalog.js';
-import type { BuiltinProvider } from './providers/types.js';
+import type { BuiltinProvider, SupportedSdk } from './providers/types.js';
 import { listLineups, loadLineups, resolveActiveLineup } from './lineups.js';
 import { resolveSiteModel } from './model-policy.js';
 import { validateModel, type ModelProbeResult } from './model-validate.js';
@@ -112,6 +114,72 @@ function readProviders(): SetupProvider[] {
       ...(keyHint === undefined ? {} : { keyHint }),
     };
   });
+}
+
+/**
+ * Where a key for this provider would be checked — the SDK, and the host.
+ *
+ * Resolved from the provider's own configuration, never from its NAME. A custom
+ * provider wraps one of the three SDKs at somebody else's endpoint, and a CLI
+ * `--provider-base-url` re-points a built-in the same way; keying off the name
+ * would POST a key minted for a private gateway to the vendor that never issued
+ * it. `null` for a provider we cannot place, which is what makes the control
+ * absent rather than wrong.
+ */
+function keyCheckTarget(
+  provider: string,
+  config: BernardConfig | null,
+): { sdk: SupportedSdk; baseURL?: string } | null {
+  const custom = loadCustomProviders()[provider];
+  if (custom !== undefined) return { sdk: custom.sdk, baseURL: custom.baseURL };
+  if (!SUPPORTED_SDKS.includes(provider as SupportedSdk)) return null;
+  // The override names one provider — whichever this process was started
+  // against — so it applies here only when that is the one being checked.
+  const baseURL = config?.provider === provider ? config.providerBaseUrl : undefined;
+  return { sdk: provider as SupportedSdk, baseURL };
+}
+
+/**
+ * The optional check behind the key page's `Test key` control.
+ *
+ * Never required, and never a gate: the verdict is shown and then forgotten, so
+ * Save works identically whether the key was tested, failed the test, or the
+ * network was down. That is the whole contract of `WizardStep.check`.
+ *
+ * An EMPTY buffer tests the key already stored, which is the question a reader
+ * with a key in place actually has ("is the one I have still good?"). The
+ * fallback lives here rather than in the pure module because only this side can
+ * read `keys.json`.
+ */
+function keyCheckFor(provider: string, config: BernardConfig | null) {
+  const target = keyCheckTarget(provider, config);
+  if (target === null) return undefined;
+  const host = keyCheckEndpoint(target.sdk, target.baseURL).host;
+  return {
+    label: 'Test key',
+    // Same width as the label, so the footer cannot jiggle between states.
+    busyLabel: 'Testing…',
+    run: async (typed: string, signal: AbortSignal) => {
+      // Read at RUN time, not at build time: a key saved on an earlier pass
+      // through the hub is exactly the one a reader is most likely to re-check.
+      const stored = tryLoadConfig();
+      const key =
+        tidyKey(typed) || (stored === null ? '' : (getProviderApiKey(stored, provider) ?? ''));
+      if (key.length === 0) {
+        return { tone: 'unknown' as const, message: 'No key to test — paste one first.' };
+      }
+      const verdict = await checkProviderKey({
+        sdk: target.sdk,
+        baseURL: target.baseURL,
+        key,
+        signal,
+      });
+      // Naming the host is the reader's only chance to see where their secret
+      // went, and for a custom provider it is what proves the endpoint resolved
+      // to their gateway rather than to the vendor.
+      return { ...verdict, message: `${verdict.message} (${host})` };
+    },
+  };
 }
 
 /** Model ids to offer for a provider. Empty for a custom one — we have no catalog. */
@@ -278,7 +346,7 @@ export async function runSetupFlow(deps: SetupFlowDeps): Promise<SetupOutcome> {
           const picking = providerFromHubRow(hubCtx, picked.answers[0] ?? '');
           if (picking === null) break;
 
-          const entry = buildKeyEntrySpec(hubCtx, picking);
+          const entry = buildKeyEntrySpec(hubCtx, picking, keyCheckFor(picking, startingConfig));
           const typed = await deps.requestWizard(signed(entry.spec), deps.signal);
           // Back and Esc mean the same thing on a page opened FROM the hub:
           // return to it. Nothing is written either way.

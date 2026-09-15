@@ -493,6 +493,16 @@ export function providerFromHubRow(ctx: SetupContext, row: WizardAnswer): string
 export function buildKeyEntrySpec(
   ctx: SetupContext,
   provider: string,
+  /**
+   * The optional "is this key any good?" probe, INJECTED and never imported.
+   *
+   * This module promises no I/O — see its own docstring — and a check is a
+   * network call carrying the user's plaintext secret. `setup-flow.ts` already
+   * owns exactly that kind of work, and it is also the only side that knows
+   * which endpoint a custom provider or a `providerBaseUrl` override resolves
+   * to. Omitted, the page is what it was: a field with no check at all.
+   */
+  check?: WizardStep['check'],
 ): { spec: WizardSpec; decode: (answers: readonly WizardAnswer[]) => string } {
   const known = ctx.providers.find((p) => p.name === provider);
   const hasKey = known?.hasKey === true;
@@ -523,6 +533,7 @@ export function buildKeyEntrySpec(
           // contrast rather than by explanation.
           nextLabel: (typed) =>
             typed.length > 0 ? 'Save key' : hasKey ? 'Keep the stored key' : 'Skip for now',
+          check,
         },
       ],
       railContext: { before: ['Welcome'], after: settingsSections() },

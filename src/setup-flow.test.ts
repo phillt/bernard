@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import { useTempHome } from './__tests__/temp-home.js';
 import type { WizardAnswer, WizardResult, WizardSpec } from './ui/overlays/wizard-types.js';
@@ -464,5 +464,118 @@ describe('describeOutcome', () => {
     expect(lines).toContain('claude-opus-4');
     expect(lines).toContain('/lineup');
     expect(lines).toContain('not_found');
+  });
+});
+
+/**
+ * The optional key check, wired from the flow side (#447).
+ *
+ * The leaf's own tests cover the status table and the endpoint arithmetic; what
+ * only this side can answer is which endpoint a given PROVIDER resolves to, and
+ * that a check is never a gate on saving. Getting the first wrong means mailing
+ * somebody's secret to a host that never issued it, so it is asserted against
+ * the URL the runner really fetches rather than against the resolver.
+ */
+describe('the key page carries an optional check', () => {
+  /** Run the flow far enough to capture the key page it builds for `provider`. */
+  async function keyStep(provider: string, keys: Record<string, string> = {}) {
+    const { runSetupFlow } = await flow();
+    const driver = drive({ [provider]: keys[provider] ?? '' });
+    let captured: WizardSpec['steps'][number] | undefined;
+    await runSetupFlow({
+      verify: false,
+      requestWizard: (spec) => {
+        const step = spec.steps.find((s) => s.id === `key:${provider}`);
+        if (step !== undefined) captured = step;
+        return driver.answer(spec);
+      },
+    });
+    return captured;
+  }
+
+  /** A fetch that records where it was sent and answers 200. */
+  function recordingFetch() {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const impl = ((url: URL | string, init: RequestInit = {}) => {
+      calls.push({ url: String(url), init });
+      return Promise.resolve(new Response('{}', { status: 200 }));
+    }) as unknown as typeof fetch;
+    return { calls, impl };
+  }
+
+  it('sends a built-in provider its own vendor host', async () => {
+    const step = await keyStep('anthropic');
+    expect(step?.check).toBeDefined();
+    const { calls, impl } = recordingFetch();
+    vi.stubGlobal('fetch', impl);
+    try {
+      const verdict = await step!.check!.run('sk-ant-test', new AbortController().signal);
+      expect(calls[0].url).toBe('https://api.anthropic.com/v1/models');
+      // The header shape is per SDK, and it is what a wrong resolution would
+      // get wrong silently — an Anthropic key sent as a bearer token reads as
+      // invalid rather than as misrouted.
+      expect(Object.keys(calls[0].init.headers as Record<string, string>)).toContain('x-api-key');
+      expect(verdict.tone).toBe('ok');
+      // …and the reader is told where their secret went.
+      expect(verdict.message).toContain('api.anthropic.com');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('sends a custom provider its OWN gateway, not the SDK vendor', async () => {
+    // The defect this exists to prevent: a custom provider wraps one of the
+    // three SDKs, so keying the endpoint off the SDK — or off the provider name
+    // — would POST a key minted for a private gateway to a vendor that never
+    // issued it.
+    const { saveCustomProvider } = await import('./custom-providers.js');
+    saveCustomProvider({
+      name: 'gateway',
+      sdk: 'anthropic',
+      baseURL: 'http://localhost:11434/v1',
+      defaultModel: 'llama3.2',
+    });
+    const step = await keyStep('gateway');
+    const { calls, impl } = recordingFetch();
+    vi.stubGlobal('fetch', impl);
+    try {
+      await step!.check!.run('sk-local', new AbortController().signal);
+      expect(calls[0].url).toBe('http://localhost:11434/v1/models');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('never writes a key, whatever the verdict', async () => {
+    // Testing is not saving. A reader who tests a key and then backs out must
+    // leave nothing behind.
+    const step = await keyStep('anthropic');
+    const { impl } = recordingFetch();
+    vi.stubGlobal('fetch', impl);
+    try {
+      await step!.check!.run('sk-ant-typed-but-not-saved', new AbortController().signal);
+      const keysPath = `${getHome()}/bernard/keys.json`;
+      const stored = fs.existsSync(keysPath) ? fs.readFileSync(keysPath, 'utf-8') : '';
+      expect(stored).not.toContain('sk-ant-typed-but-not-saved');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('says so rather than probing when there is no key to test', async () => {
+    const step = await keyStep('anthropic');
+    const { calls, impl } = recordingFetch();
+    vi.stubGlobal('fetch', impl);
+    try {
+      const verdict = await step!.check!.run('', new AbortController().signal);
+      expect(verdict.tone).toBe('unknown');
+      expect(calls).toHaveLength(0);
+      // Says what to DO. The leaf refuses an empty key too, with wording that
+      // describes its own job ("no key to check"); on this page the reader has
+      // an empty field in front of them and a next action.
+      expect(verdict.message).toContain('paste one first');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

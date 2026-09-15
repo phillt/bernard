@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Box, Text, useInput } from 'ink';
 import stringWidth from 'string-width';
 import { getThemeColors } from '../../theme.js';
@@ -27,6 +27,7 @@ import {
   railFor,
   nextLabelFor,
   rowNote,
+  type StepCheckResult,
   rowTrailing,
   unavailableReason,
   stepError,
@@ -60,6 +61,13 @@ function isBackKey(input: string, key: { ctrl?: boolean }): boolean {
 function isNextKey(input: string, key: { ctrl?: boolean }): boolean {
   return key.ctrl === true && input === 'n';
 }
+/** Run the step's own check. Free at every layer — `t` is unclaimed. */
+function isCheckKey(input: string, key: { ctrl?: boolean }): boolean {
+  return key.ctrl === true && input === 't';
+}
+
+/** Where Enter lands on a text step: the buffer, or one of its controls. */
+type Focus = 'input' | 'back' | 'check' | 'next';
 
 interface WizardOverlayProps {
   spec: WizardSpec;
@@ -263,6 +271,8 @@ const BODY_DIVIDER_COLUMNS = 3;
  * pane, which is where a terminal spends much of its life.
  */
 const RAIL_MIN_COLUMNS = 100;
+/** Below this the check control is dropped and `ctrl+t` carries it alone. */
+const CHECK_CONTROL_MIN_WIDTH = 48;
 
 function showRail(columns: number, rail: RailEntry[] | undefined): boolean {
   return rail !== undefined && rail.length > 0 && columns >= RAIL_MIN_COLUMNS;
@@ -392,6 +402,7 @@ function WizardCard({
   masthead,
   rail,
   next,
+  check,
   canGoBack,
   focus,
   position,
@@ -417,6 +428,8 @@ function WizardCard({
   fill?: boolean;
   /** What Enter does, in the reader's words. */
   next: string;
+  /** An optional middle control's label — absent draws nothing. */
+  check?: string;
   canGoBack: boolean;
   /**
    * Which footer control the cursor is on.
@@ -426,7 +439,7 @@ function WizardCard({
    * button are two places to do one thing, and the reader has to work out
    * whether they differ.
    */
-  focus?: 'back' | 'next';
+  focus?: 'back' | 'check' | 'next';
   /** `options 3–9 of 40`, or null when everything fits. */
   position?: string | null;
   /** The keys that are always available, for the line under the card. */
@@ -515,6 +528,22 @@ function WizardCard({
                   color={focus === 'back' ? colors.accent : colors.muted}
                 >
                   {`${focus === 'back' ? '▸ ' : '  '}← Back`}
+                </Text>
+                <Text>{'   '}</Text>
+              </>
+            )}
+            {check !== undefined && (
+              <>
+                {/* Between Back and the forward button, because that is the
+                    order they are reached in and the order they read in: leave,
+                    check, commit. Padded exactly like its neighbours — each
+                    control keeps its width focused and unfocused, or the whole
+                    row shifts sideways as focus moves. */}
+                <Text
+                  bold={focus === 'check'}
+                  color={focus === 'check' ? colors.accent : colors.muted}
+                >
+                  {`${focus === 'check' ? '▸ ' : '  '}${check}${focus === 'check' ? '  ↵' : '   '}`}
                 </Text>
                 <Text>{'   '}</Text>
               </>
@@ -700,6 +729,7 @@ function WizardTextStep({
   onCancel: () => void;
 }) {
   const colors = getThemeColors();
+  const { columns } = useDimensionsCtx();
   const editor = useLineEditor(initial);
   // Ink drops the Home/End key NAMES, so they reach the editor only through the
   // raw-stdin decoder (#399). Without this they are dead here while working in
@@ -715,8 +745,65 @@ function WizardTextStep({
   // on the one surface where a reader has most reason to press it after typing.
   // Same three positions and the same keys as a choice step — the only
   // difference is that the thing above the controls is a buffer, not a list.
-  const [focus, setFocus] = useState<'input' | 'next' | 'back'>('input');
+  const [focus, setFocus] = useState<Focus>('input');
   const onControl = focus !== 'input';
+  // The controls that are actually on this page, left to right, matching the
+  // order the card draws them. `←/→` step through THIS rather than jumping to
+  // named positions: with a third control the absolute jumps skipped it.
+  const controls: Focus[] = [
+    ...(canGoBack ? (['back'] as const) : []),
+    ...(step.check !== undefined ? (['check'] as const) : []),
+    'next',
+  ];
+  const shift = (by: number): void => {
+    const at = controls.indexOf(focus);
+    const to = controls[at + by];
+    if (to !== undefined) setFocus(to);
+  };
+
+  // The verdict of the last check, and whether one is running. Neither ever
+  // reaches the wizard's state machine — see `WizardStep.check`.
+  const [checking, setChecking] = useState(false);
+  const [verdict, setVerdict] = useState<StepCheckResult | undefined>(undefined);
+  const inflight = useRef<AbortController | null>(null);
+
+  // Required, not hygiene: a step REMOUNTS on every navigation, so Esc or Back
+  // mid-probe would otherwise leave a socket open for the whole timeout — and
+  // hang a test runner that waits for the process to go quiet.
+  useEffect(() => () => inflight.current?.abort(), []);
+
+  /** Forget a verdict that no longer describes the buffer, and stop earning one. */
+  const dropCheck = (): void => {
+    inflight.current?.abort();
+    inflight.current = null;
+    setChecking(false);
+    setVerdict(undefined);
+  };
+
+  const runCheck = (): void => {
+    // A second Enter while one runs is ignored rather than restarting it: the
+    // label already reads the busy word, so a no-op is legible, and aborting to
+    // start again would just double the requests.
+    if (step.check === undefined || inflight.current !== null) return;
+    const ctrl = new AbortController();
+    inflight.current = ctrl;
+    setChecking(true);
+    setVerdict(undefined);
+    void step.check
+      .run(editor.buffer.trim(), ctrl.signal)
+      .then((result) => {
+        // The signal IS the mounted flag: React 18 makes a post-unmount set a
+        // silent no-op, so a second ref would be state to keep in sync for
+        // nothing.
+        if (ctrl.signal.aborted) return;
+        setVerdict(result);
+      })
+      .finally(() => {
+        if (ctrl.signal.aborted) return;
+        inflight.current = null;
+        setChecking(false);
+      });
+  };
 
   const commit = (): void => {
     const trimmed = editor.buffer.trim();
@@ -745,25 +832,58 @@ function WizardTextStep({
     if (isDismissKey(input, key)) return onCancel();
     if (canGoBack && isBackKey(input, key)) return onBack();
     if (isNextKey(input, key)) return commit();
+    // From anywhere on the page, including the buffer — the chord acts, which is
+    // what chords do here.
+    if (step.check !== undefined && isCheckKey(input, key)) return runCheck();
     if (onControl) {
       if (key.upArrow === true) return setFocus('input');
       if (key.downArrow === true) return;
-      if (key.leftArrow === true && canGoBack) return setFocus('back');
-      if (key.rightArrow === true) return setFocus('next');
-      if (key.return === true) return focus === 'back' ? onBack() : commit();
+      if (key.leftArrow === true) return shift(-1);
+      if (key.rightArrow === true) return shift(1);
+      if (key.return === true) {
+        if (focus === 'back') return onBack();
+        // Explicit, not a fallthrough: a third focus value reaching a
+        // `focus === 'back' ? … : commit()` ternary would silently COMMIT.
+        if (focus === 'check') return runCheck();
+        return commit();
+      }
       // Anything else is typing, so the buffer takes it back. Swallowing it
       // would reproduce the complaint one key over — a keystroke that does
       // nothing, with nothing on screen explaining why.
       setFocus('input');
     } else if (key.downArrow === true) {
+      // Onto the PRIMARY action, not the leftmost control. Back is reached
+      // sideways from Continue (`←`), which is the rule the choice step already
+      // follows — and with a third control between them, landing on the left
+      // would put the cursor two presses from the thing ↓ is pressed to reach.
       return setFocus('next');
     }
     if (key.return) return commit();
     // Typing clears a standing rejection: the message described the buffer that
-    // was refused, and it no longer describes this one.
+    // was refused, and it no longer describes this one. A verdict goes for the
+    // same reason and it matters more — a green "Key is valid" beside a key that
+    // is no longer the one tested is the worst thing this page could say.
     if (error !== undefined) setError(undefined);
+    if (verdict !== undefined || checking) dropCheck();
     editor.handleKey(input, key);
   });
+
+  // Dropped whole on a narrow card — the rule the rail and the masthead follow.
+  // A control row cannot reflow any more than block lettering can; `ctrl+t` still
+  // works, which is why its hint is not conditional on this.
+  const roomForCheck = cardWidth(columns, showRail(columns, rail)) >= CHECK_CONTROL_MIN_WIDTH;
+  const checkLabel =
+    step.check === undefined || !roomForCheck
+      ? undefined
+      : checking
+        ? step.check.busyLabel
+        : step.check.label;
+  // Three claimants on one reserved row. A validation error OUTRANKS a verdict,
+  // because it blocks and a verdict does not — and a verdict arriving while an
+  // error stands is dropped rather than queued.
+  const rowTone: 'bad' | 'ok' | 'none' | 'unknown' =
+    error !== undefined ? 'bad' : (verdict?.tone ?? 'none');
+  const rowMessage = error ?? verdict?.message ?? '';
 
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -780,36 +900,61 @@ function WizardTextStep({
         )}
         canGoBack={canGoBack}
         focus={focus === 'input' ? undefined : focus}
+        check={checkLabel}
+        // Collapsed, and that is what buys the third control its place. Measured
+        // at 80 columns this row was 74 with focus on the buffer and 89 on a
+        // control, against a 64-column budget — it was ALREADY wrapping, before
+        // anything was added. `←/→/↑/↓ move` replaces two entries, and `ctrl+b` /
+        // `ctrl+n` go because they now duplicate controls that are visible in the
+        // footer and reachable with those arrows. `ctrl+t` stays: it is the only
+        // one of the three with no visible twin at narrow widths, where the check
+        // control is dropped.
         hints={[
-          HINT_MOVE,
-          // Enter submits from the buffer and from Continue alike, so the hint
-          // is the same in both places; on Back the card's own `▸ … ↵` says it.
-          ...(focus === 'back' ? [] : [{ key: KEY.enter, label: 'continue' }]),
-          // Only while there are two controls to move between — on the buffer
-          // these are cursor movement, and advertising them as "switch" there
-          // would be wrong.
-          ...(onControl && canGoBack ? [{ key: '←/→', label: 'switch' }] : []),
+          { key: KEY.arrowsAll, label: 'move' },
+          // Enter acts wherever the cursor is, and the focused control draws its
+          // own `↵`, so this says the one thing the footer cannot.
+          { key: KEY.enter, label: onControl ? 'choose' : 'continue' },
           ...(canGoBack ? [BACK_HINT] : []),
           NEXT_HINT,
+          // Named only where the CONTROL is not drawn. Everywhere else the
+          // button is visible, arrow-reachable and carries its own `↵`, so the
+          // chord would be a second spelling of something already on screen —
+          // on the one row that was already at its budget before this feature.
+          // Narrow, the control is dropped and the chord is the only way in.
+          ...(step.check !== undefined && checkLabel === undefined
+            ? [{ key: ctrlKey('t'), label: 'test' }]
+            : []),
           HINT_CANCEL,
         ]}
       >
         <StepHeader step={step} intro={intro} rail={rail} />
-        <BoundedLine
-          buffer={editor.buffer}
-          cursor={editor.cursor}
-          // The caret means "typing lands here". With focus on a control it
-          // would say that while Enter went somewhere else — the same claim the
-          // accent makes on the controls, made twice and contradicting itself.
-          showCursor={!onControl}
-          cursorColor={colors.accent}
-          cursorGlyph="▎"
-          reserveColumns={OVERLAY_RESERVED_COLUMNS + CARD_CHROME_COLUMNS}
-        />
+        {/* `minHeight`, because an EMPTY buffer with the caret hidden renders an
+            empty `<Text>`, which Yoga measures at zero rows — so the card lost a
+            row the moment focus moved onto a control, and gained it back on the
+            way up. Layout height must not depend on where the cursor is. */}
+        <Box flexDirection="column" minHeight={1}>
+          <BoundedLine
+            buffer={editor.buffer}
+            cursor={editor.cursor}
+            // The caret means "typing lands here". With focus on a control it
+            // would say that while Enter went somewhere else — the same claim the
+            // accent makes on the controls, made twice and contradicting itself.
+            showCursor={!onControl}
+            cursorColor={colors.accent}
+            cursorGlyph="▎"
+            reserveColumns={OVERLAY_RESERVED_COLUMNS + CARD_CHROME_COLUMNS}
+          />
+        </Box>
         {/* Reserved unconditionally — `OverlayFooter`'s rule. A row that appears
             only on rejection makes the step's height depend on the answer, and
             the frame reflows under the reader mid-correction. */}
-        <Text color={colors.error}>{error ?? ' '}</Text>
+        <Text
+          color={
+            rowTone === 'bad' ? colors.error : rowTone === 'ok' ? colors.success : colors.muted
+          }
+        >
+          {truncate(rowMessage, contentWidth(columns, rail)) || ' '}
+        </Text>
       </WizardCard>
     </Box>
   );
