@@ -153,8 +153,16 @@ export class InboxWatcher {
    *
    * Runs from the sweep that already lists the directory, so it costs a string
    * comparison per tick and a ~52 µs write only when the answer actually moved.
-   * Immediacy is not worth more than that: a sender polls at `INBOX_POLL_MS`
-   * and waits `DEFAULT_DELIVERY_TIMEOUT_MS`, so a tick's lag is invisible to it.
+   *
+   * **What makes the lag harmless is the RECEIVE side, not the sender's poll.**
+   * An earlier version of this comment claimed a sender polling at
+   * `INBOX_POLL_MS` could not see a tick of staleness; it can — `sendToSessions`
+   * reads capabilities once before writing and never re-checks, so "change the
+   * setting, immediately send" sees one stale answer however fast this sweep
+   * runs. That is fine because `onMessage` reads `config.remoteMessages` live:
+   * the worst case is a refusal at the sender, never something running that
+   * should not. The lag is in the safe direction, which is the fact a reader
+   * needs before changing any of this.
    */
   private syncCapabilities(): void {
     if (this.record === null) return;
