@@ -39,6 +39,71 @@ import {
 
 const TAB = '\t';
 
+/**
+ * Enter on a buffer with nothing submittable in it (#462).
+ *
+ * Always a silent no-op, which is what made it free to give a meaning — and
+ * giving it one HERE, at the guard the Prompt already owns, is what avoids a
+ * second `useInput` for Enter. Ink broadcasts every key to every mounted
+ * handler with no stop-propagation, so an App-level binding would have to be
+ * arbitrated against this one.
+ */
+describe('<Prompt> the empty-buffer Enter', () => {
+  it('calls onEmptySubmit instead of submitting nothing', async () => {
+    const onSubmit = vi.fn();
+    const onEmptySubmit = vi.fn();
+    const { stdin } = render(createElement(Prompt, { onSubmit, onEmptySubmit }));
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    expect(onEmptySubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('treats a whitespace-only buffer the same, and clears it', async () => {
+    // The two emptiness predicates genuinely disagree — the submit guard trims,
+    // `bufferEmpty` tests `.length` — so a buffer of spaces is unsubmittable
+    // while reporting itself non-empty. Leaving it behind would make the NEXT
+    // Enter a no-op for a reason nothing on screen explains.
+    const onSubmit = vi.fn();
+    const onEmptySubmit = vi.fn();
+    const { stdin, lastFrame } = render(createElement(Prompt, { onSubmit, onEmptySubmit }));
+    await tick();
+    stdin.write('   ');
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    expect(onEmptySubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(stripAnsi(lastFrame() ?? '')).not.toMatch(/›\s{4}/);
+  });
+
+  it('still submits real text, and does not call onEmptySubmit', async () => {
+    // Guard the guard: routing everything through the empty path would satisfy
+    // both assertions above while breaking the prompt.
+    const onSubmit = vi.fn();
+    const onEmptySubmit = vi.fn();
+    const { stdin } = render(createElement(Prompt, { onSubmit, onEmptySubmit }));
+    await tick();
+    stdin.write('hello');
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    expect(onSubmit).toHaveBeenCalledWith('hello');
+    expect(onEmptySubmit).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when no handler is supplied', async () => {
+    // Optional, so every existing caller is untouched.
+    const onSubmit = vi.fn();
+    const { stdin } = render(createElement(Prompt, { onSubmit }));
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+});
+
 describe('<Prompt>', () => {
   it('echoes typed characters into the buffer', async () => {
     const { stdin, lastFrame } = render(createElement(Prompt, { onSubmit: () => {} }));

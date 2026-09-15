@@ -60,7 +60,7 @@ describe('<Thread>', () => {
       },
     ];
     const frame = stripAnsi(render(createElement(Thread, { staticItems })).lastFrame() ?? '');
-    expect(frame).toContain('⚠ Rate limit / quota');
+    expect(frame).toContain('▲ Rate limit / quota');
     expect(frame).toContain('You exceeded your current quota.');
     expect(frame).toMatch(/[╭╮╰╯]/);
   });

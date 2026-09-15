@@ -64,6 +64,8 @@ export const CTRL_D = '\x04';
 /** Ctrl-B / Ctrl-F. Word-wise here, not char-wise: `use-line-editor`'s
  *  `wordMod` is `key.meta || key.ctrl`, so these land in the Alt-B/F branch. */
 export const CTRL_B = '\x02';
+/** Free at every layer — see `remote-messages.ts` on why not Ctrl+Enter. */
+export const CTRL_O = '\x0f';
 export const CTRL_F = '\x06';
 export const ALT_B = '\x1bb';
 export const ALT_F = '\x1bf';

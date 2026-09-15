@@ -15,7 +15,7 @@ describe('<ErrorPanel>', () => {
   it('renders the title, category tag, message and hint in a bordered frame', () => {
     const { lastFrame } = render(createElement(ErrorPanel, { data: DATA }));
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('⚠ Rate limit / quota');
+    expect(frame).toContain('▲ Rate limit / quota');
     expect(frame).toContain('· rate_limit');
     expect(frame).toContain('You exceeded your current quota.');
     expect(frame).toContain('→ Rate-limited — wait or switch lineup with /lineups.');

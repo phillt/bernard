@@ -45,6 +45,16 @@ interface PromptProps {
    */
   onEmptyChange?: (empty: boolean) => void;
   /**
+   * Enter on a buffer with nothing submittable in it (#462).
+   *
+   * That keystroke has always been a silent no-op, so nothing is taken away by
+   * giving it a meaning — and giving it one HERE, at the guard the Prompt
+   * already owns, is what avoids a second `useInput` for Enter. Ink broadcasts
+   * every key to every mounted handler with no stop-propagation, so an
+   * App-level Enter binding would have to be arbitrated against this one.
+   */
+  onEmptySubmit?: () => void;
+  /**
    * Session input history (oldest → newest) for ↑/↓ recall. Owned by the
    * parent so it survives this component unmounting (e.g. a Shift-Tab viewer).
    * Mutated in place by `onRecordInput`; read live on each keystroke.
@@ -78,8 +88,9 @@ interface PromptProps {
 /**
  * Single-line input box. Uses Ink's `useInput` directly so the surface area
  * stays small (no `ink-text-input` dep). Maintains its own buffer state and
- * emits `onSubmit(text)` on Enter; an empty buffer is rejected silently to
- * match the legacy prompt's behavior.
+ * emits `onSubmit(text)` on Enter; an empty buffer submits nothing and instead
+ * calls `onEmptySubmit`, which is how a delivered message is acted on with no
+ * typing (#462).
  *
  * Slash-command autocomplete: when the buffer starts with `/` and has no
  * trailing args, a hint strip renders directly below the input. Up/Down
@@ -93,6 +104,7 @@ export function Prompt({
   onSubmit,
   onSlashActiveChange,
   onEmptyChange,
+  onEmptySubmit,
   history = [],
   onRecordInput,
   dynamicCommands,
@@ -194,7 +206,16 @@ export function Prompt({
           return;
         }
         const text = buffer.trim();
-        if (text.length === 0) return;
+        if (text.length === 0) {
+          // Keyed on `trim()`, not on `bufferEmpty` — a buffer of spaces is
+          // equally unsubmittable, and the two predicates genuinely disagree
+          // (`bufferEmpty` tests `.length`). Whichever this is, the buffer is
+          // cleared: leaving whitespace behind would make the next Enter a
+          // no-op again for a reason nothing on screen explains.
+          if (buffer.length > 0) editor.clear();
+          onEmptySubmit?.();
+          return;
+        }
         editor.clear();
         setSelectedIndex(0);
         setHistoryCursor(null);

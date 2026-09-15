@@ -113,6 +113,24 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
           ],
         },
       },
+      {
+        // Beside the two tool gates rather than under Automation: those govern
+        // what Bernard is allowed to BUILD unattended, and this governs what may
+        // reach it as an instruction — the same question `toolMode` asks, one
+        // channel over.
+        key: 'remoteMessages',
+        label: 'Messages from other processes',
+        description:
+          'What `bernard say` may do. Ask me shows the message and one keystroke acts on it.',
+        field: {
+          kind: 'list',
+          options: [
+            { value: 'ask', label: 'Ask me (nothing runs on its own)' },
+            { value: 'prompts', label: 'Run messages sent with --run' },
+            { value: 'all', label: 'Run every message' },
+          ],
+        },
+      },
     ],
   },
   {

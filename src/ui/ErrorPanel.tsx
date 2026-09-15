@@ -14,7 +14,7 @@ export function ErrorPanel({ data }: { data: ErrorPanelData }) {
   return (
     <TranscriptPanel
       color={colors.error}
-      title={`⚠ ${data.title}`}
+      title={`▲ ${data.title}`}
       meta={` · ${data.category}`}
       body={data.message}
       hint={data.hint}

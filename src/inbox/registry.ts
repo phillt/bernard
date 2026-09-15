@@ -34,6 +34,14 @@ import { isPidAlive } from '../pid.js';
 export function registerSession(opts: {
   sessionId: string;
   capabilities?: readonly InboxKind[];
+  /**
+   * When the session began, for a re-registration that only changes what the
+   * session advertises (#462). Defaulting to `Date.now()` is right for the first
+   * call and a lie for any later one — a session that re-advertises mid-run
+   * would otherwise report itself as having just started, to `bernard say
+   * --list` and to anything else reading the record.
+   */
+  startedAt?: number;
 }): SessionRecord {
   const inboxDir = sessionInboxDir(opts.sessionId);
   // 0700 on the inbox is the credential: a message transport with no token
@@ -48,7 +56,7 @@ export function registerSession(opts: {
     schemaVersion: 1,
     sessionId: opts.sessionId,
     pid: process.pid,
-    startedAt: Date.now(),
+    startedAt: opts.startedAt ?? Date.now(),
     cwd: process.cwd(),
     inboxDir,
     capabilities: opts.capabilities ?? DEFAULT_CAPABILITIES,

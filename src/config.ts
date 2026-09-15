@@ -329,20 +329,27 @@ export interface BernardConfig {
    */
   mouse: boolean;
   /**
-   * Whether this session accepts `bernard say --run` — a message from another
-   * local process that RUNS as a turn rather than being shown (#493).
+   * What happens to a message another local process delivers (#462/#493).
    *
-   * Off by default, and that default is the feature. Anything that can write the
-   * state directory can write a message file, so a notice is safe by
-   * construction: the text has no path to the model. A prompt gives that up
-   * deliberately, so the decision is the user's, made once at startup, and a
-   * sender cannot upgrade itself — the capability is written by the session.
+   * `ask` is the default and runs nothing by itself. Anything that can write the
+   * state directory can write a message file, so a delivered NOTICE is safe by
+   * construction: the text has no path to the model, and no later refactor can
+   * accidentally open one. The two automatic modes give that up deliberately, so
+   * choosing one is the user's act.
    *
-   * Env/flag only, not profile-scoped: a setting that quietly persists into
-   * every future session is the wrong shape for one that widens an instruction
-   * boundary.
+   * `prompts` is what `--accept-remote-prompts` has always meant — a
+   * `bernard say --run` runs, a plain notice waits. `all` runs everything.
+   *
+   * **Profile-scoped, reversing #493's original narrowing.** That decision read
+   * "a setting that quietly persists into every future session is the wrong
+   * shape for one that widens an instruction boundary" — true of the automatic
+   * modes and the reason the default is `ask`, but it left the only escape from
+   * retyping a message as a flag decided at launch, for every future message
+   * from every local writer. #493's own proposal named both forms; only the flag
+   * was built. What makes persisting safe now is that a single keystroke acts on
+   * one message, so nobody has to reach for the blanket setting to get work done.
    */
-  acceptRemotePrompts: boolean;
+  remoteMessages: 'ask' | 'prompts' | 'all';
 }
 
 const DEFAULT_PROVIDER = 'anthropic';
@@ -391,6 +398,11 @@ function isCoordinatorMode(v: unknown): v is 'on' | 'off' | 'auto' {
 /** Type guard for `confirmMode` string values (#144). */
 export function isConfirmMode(v: unknown): v is 'off' | 'auto' | 'strict' {
   return v === 'off' || v === 'auto' || v === 'strict';
+}
+
+/** Type guard for `remoteMessages` string values (#462/#493). */
+export function isRemoteMessages(v: unknown): v is 'ask' | 'prompts' | 'all' {
+  return v === 'ask' || v === 'prompts' || v === 'all';
 }
 
 /** Type guard for `toolMode` string values (#179). */
@@ -539,6 +551,7 @@ export function savePreferences(prefs: {
   scratchSubjectThreshold?: number;
   conciseMode?: boolean;
   confirmMode?: 'off' | 'auto' | 'strict';
+  remoteMessages?: 'ask' | 'prompts' | 'all';
   toolMode?: 'read-only' | 'write';
   maxConcurrentAgents?: number;
   responseStyle?: ResponseStyle;
@@ -599,6 +612,7 @@ export function loadPreferences(): {
   scratchSubjectThreshold?: number;
   conciseMode?: boolean;
   confirmMode?: 'off' | 'auto' | 'strict';
+  remoteMessages?: 'ask' | 'prompts' | 'all';
   toolMode?: 'read-only' | 'write';
   maxConcurrentAgents?: number;
   responseStyle?: ResponseStyle;
@@ -660,6 +674,7 @@ export function loadPreferences(): {
         : undefined,
     conciseMode: typeof parsed.conciseMode === 'boolean' ? parsed.conciseMode : undefined,
     confirmMode: isConfirmMode(parsed.confirmMode) ? parsed.confirmMode : undefined,
+    remoteMessages: isRemoteMessages(parsed.remoteMessages) ? parsed.remoteMessages : undefined,
     toolMode: isToolMode(parsed.toolMode) ? parsed.toolMode : undefined,
     maxConcurrentAgents:
       typeof parsed.maxConcurrentAgents === 'number' ? parsed.maxConcurrentAgents : undefined,
@@ -1208,10 +1223,16 @@ export function loadConfig(overrides?: {
   const mouse = !(
     process.env.BERNARD_DISABLE_MOUSE === 'true' || process.env.BERNARD_DISABLE_MOUSE === '1'
   );
-  // #493. Opt-in per session, never per message.
-  const acceptRemotePrompts =
+  // #462/#493. The flag is KEPT and means exactly what it always did — run a
+  // `say --run`, leave a plain notice to be acted on — so it resolves to
+  // `prompts` rather than to the wider `all`. A stored preference still wins,
+  // per the usual `prefs ?? env ?? DEFAULT` order, which is what lets the
+  // in-session menu's "for this profile" row outlive the launch flag.
+  const envRemotePrompts =
     process.env.BERNARD_ACCEPT_REMOTE_PROMPTS === 'true' ||
     process.env.BERNARD_ACCEPT_REMOTE_PROMPTS === '1';
+  const remoteMessages: 'ask' | 'prompts' | 'all' =
+    prefs.remoteMessages ?? (envRemotePrompts ? 'prompts' : 'ask');
   const theme = prefs.theme || 'bernard';
 
   // Tri-state coordinator mode (#167). Precedence: explicit pref >
@@ -1499,7 +1520,7 @@ export function loadConfig(overrides?: {
     specialistRecall,
     fullScreen,
     mouse,
-    acceptRemotePrompts,
+    remoteMessages,
   };
 
   validateConfig(config);
@@ -1570,6 +1591,7 @@ const PROFILE_SCOPED_KEYS: ReadonlyArray<keyof BernardConfig> = [
   'promptRewriter',
   'recallFilter',
   'confirmMode',
+  'remoteMessages',
   'toolMode',
   'maxConcurrentAgents',
   'responseStyle',

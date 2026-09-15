@@ -76,8 +76,14 @@ const REASON_MESSAGE: Record<SendReason, (opts: SayOptions) => string> = {
   // someone staring at a running REPL that nothing is running sends them after
   // the wrong problem entirely.
   'not-accepted': () =>
-    'A Bernard session is running, but it does not accept prompts.\n' +
-    'Restart it with --accept-remote-prompts, or send without --run to deliver a notice.',
+    'A Bernard session is running, but it does not run prompts by itself.\n' +
+    // Sending it as a plain message is the cheapest remedy and was buried
+    // behind "restart with a flag": the message is delivered either way, and
+    // the person at the REPL acts on it with one keystroke. Changing the
+    // setting is the standing answer, and restarting is the last resort rather
+    // than the first thing offered.
+    'Send it without --run — it arrives the same, and one keystroke acts on it.\n' +
+    'To stop being asked, set /agent-options → Messages from other processes.',
 };
 
 export async function sayCommand(text: string, opts: SayOptions = {}): Promise<number> {

@@ -86,7 +86,7 @@ export function WakePanel({ data, toolDetails }: { data: WakeData; toolDetails: 
   return (
     <TranscriptPanel
       color={colors.accent}
-      title="⏰ Woken"
+      title="◷ Woken"
       meta={` · ${data.source}`}
       body={collapsed ? collapsed.first : data.instruction}
       detail={detail}

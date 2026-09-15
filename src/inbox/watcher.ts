@@ -67,6 +67,8 @@ export class InboxWatcher {
   private watcher: fs.FSWatcher | null = null;
   private timer: NodeJS.Timeout | null = null;
   private draining = false;
+  /** From the first registration, so `advertise` does not re-stamp it. */
+  private startedAt: number | null = null;
 
   constructor(opts: InboxWatcherOptions) {
     this.opts = opts;
@@ -84,6 +86,7 @@ export class InboxWatcher {
       sessionId: this.opts.sessionId,
       ...(this.opts.capabilities ? { capabilities: this.opts.capabilities } : {}),
     });
+    this.startedAt = record.startedAt;
     this.inboxDir = record.inboxDir;
     this.drain();
 
@@ -106,6 +109,29 @@ export class InboxWatcher {
     // fire costs one `readdir`.
     this.timer = setInterval(() => this.drain(), this.opts.pollMs ?? INBOX_POLL_MS);
     this.timer.unref();
+  }
+
+  /**
+   * Re-writes the session record with a different capability set (#462).
+   *
+   * What a session advertises is read at `start()`, so without this a mode
+   * changed mid-run would take effect for what arrives — the receive-side check
+   * reads the live config — while `bernard say --run` from another process kept
+   * coming back `not-accepted`, which reads as the setting not having taken.
+   *
+   * `startedAt` is carried over rather than re-stamped: nothing about the
+   * session began again, and `say --list` reports that field.
+   *
+   * A no-op before `start()`, so a caller cannot register a session the watcher
+   * has not opened an inbox for.
+   */
+  advertise(capabilities: readonly InboxKind[]): void {
+    if (this.startedAt === null) return;
+    registerSession({
+      sessionId: this.opts.sessionId,
+      capabilities,
+      startedAt: this.startedAt,
+    });
   }
 
   /** Stops watching and removes this session's registration and inbox. */

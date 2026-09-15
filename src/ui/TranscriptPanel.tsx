@@ -59,6 +59,11 @@ export function TranscriptPanel({
   return (
     <Box flexDirection="column" marginTop={1} borderStyle="round" borderColor={color} paddingX={1}>
       <Box>
+        {/* An emoji glyph in this title makes THIS row a different width from
+            every other row in the box, so the border breaks — see
+            `glyph-width.ts`. Enforced by a test over the callers rather than
+            repaired here: the disagreement is between Ink and the terminal, and
+            a transformation can only choose which way it breaks. */}
         <Text color={color} bold>
           {title}
         </Text>
