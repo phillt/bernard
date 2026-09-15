@@ -11,6 +11,7 @@ import {
   settingsPatch,
   type SetupContext,
 } from './setup-wizard.js';
+import { nextLabelFor } from './ui/overlays/wizard-types.js';
 import { WIZARD_FIELDS } from './profiles-wizard-data.js';
 import type { ProfileSettings } from './profiles.js';
 
@@ -330,15 +331,25 @@ describe('the provider hub', () => {
 });
 
 describe('the key entry page', () => {
-  it('words itself for whether that provider already has a key', () => {
-    const withKey = buildKeyEntrySpec(ctx(), 'anthropic').spec.steps[0];
-    const without = buildKeyEntrySpec(ctx(), 'openai').spec.steps[0];
-    expect(withKey.nextLabel).toBe('Keep the stored key');
-    expect(without.nextLabel).toBe('Back to providers');
-    // Blank always means "leave this provider as it is", which is also what Esc
-    // does — so it can never be a dead end.
-    expect(withKey.optional).toBe(true);
-    expect(without.optional).toBe(true);
+  it('words itself for what is typed, and never as a second "back"', () => {
+    // The page already draws `← Back`. This button read "Back to providers",
+    // so it drew two controls a reader could only tell apart by trying one.
+    const label = (provider: string, typed: string): string =>
+      nextLabelFor(buildKeyEntrySpec(ctx(), provider).spec.steps[0], typed, 'fallback');
+    for (const provider of ['anthropic', 'openai']) {
+      expect(label(provider, 'sk-typed')).toBe('Save key');
+      expect(label(provider, '')).not.toMatch(/back/i);
+    }
+    // Empty means different things depending on whether a key is already there.
+    expect(label('anthropic', '')).toBe('Keep the stored key');
+    expect(label('openai', '')).toBe('Skip for now');
+  });
+
+  it('treats blank as "leave this provider alone", which Esc also does', () => {
+    // So the page can never be a dead end.
+    for (const provider of ['anthropic', 'openai']) {
+      expect(buildKeyEntrySpec(ctx(), provider).spec.steps[0].optional).toBe(true);
+    }
   });
 
   it('trims what it returns, and returns nothing for a blank', () => {

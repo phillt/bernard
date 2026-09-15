@@ -129,6 +129,19 @@ describe('ctrl+n walks every stage of the real setup flow', () => {
     expect(result.answers).toEqual(steps.map((s) => s.initial));
   });
 
+  it('never draws two controls that both read as "back"', async () => {
+    // The key page draws `← Back` and its own forward button. That button said
+    // "Back to providers", so the row had two controls a reader could only tell
+    // apart by pressing one.
+    for (const provider of ['anthropic', 'xai']) {
+      const { frame } = await walkWithChord(buildKeyEntrySpec(CTX, provider).spec, 0);
+      const controls = frame.split('\n').find((l) => l.includes('← Back')) ?? '';
+      expect(controls, provider).toContain('← Back');
+      // One "back" on the row, not two.
+      expect(controls.toLowerCase().match(/back/g) ?? [], provider).toHaveLength(1);
+    }
+  });
+
   it('is advertised on exactly the stages where it works', async () => {
     // The hint and the binding come apart silently: a key line naming a chord
     // that does nothing is the defect this whole block exists for.

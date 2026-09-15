@@ -191,8 +191,14 @@ export interface WizardStep {
    * the answer at all. The live case is an API-key field on a provider that
    * already has one stored: the honest label is "Keep the stored key", and
    * nothing the renderer can see tells it that.
+   *
+   * A FUNCTION where the label depends on what has been typed, which the spec
+   * cannot know because `steps` is frozen. The same key field is the case: with
+   * something in the buffer the button saves it, and with the buffer empty it
+   * does not — labelling both the same way is how that page ended up drawing two
+   * controls a reader could only read as "back".
    */
-  nextLabel?: string;
+  nextLabel?: string | ((answer: string) => string);
   /**
    * The answer this step opens with.
    *
@@ -587,6 +593,19 @@ export function unavailableReason(step: WizardStep, label: string | undefined): 
 
 /** The right-aligned detail for a row, if it has any. */
 /** The note for a row, or `undefined`. */
+/**
+ * The forward button's words for the answer currently in hand.
+ *
+ * One reader for both shapes, so a step kind that only handles the string form
+ * would silently render `[object Function]` rather than fail — the failure mode
+ * of widening a field and updating three of four call sites.
+ */
+export function nextLabelFor(step: WizardStep, answer: string, fallback: string): string {
+  const label = step.nextLabel;
+  if (label === undefined) return fallback;
+  return typeof label === 'function' ? label(answer) : label;
+}
+
 export function rowNote(step: WizardStep, label: string | undefined): string | undefined {
   if (label === undefined || step.field.kind !== 'choice') return undefined;
   return step.field.notes?.[label];

@@ -25,6 +25,7 @@ import {
   actionRows,
   CONTINUE_LABEL,
   railFor,
+  nextLabelFor,
   rowNote,
   rowTrailing,
   unavailableReason,
@@ -603,7 +604,7 @@ function WizardInfoStep({
         rail={rail}
         fill={fill}
         masthead={masthead}
-        next={step.nextLabel ?? 'Continue'}
+        next={nextLabelFor(step, '', 'Continue')}
         canGoBack={canGoBack}
         focus={focus}
         hints={[
@@ -772,7 +773,11 @@ function WizardTextStep({
         rail={rail}
         fill={fill}
         masthead={masthead}
-        next={step.nextLabel ?? (step.optional === true ? 'Skip this' : 'Continue')}
+        next={nextLabelFor(
+          step,
+          editor.buffer.trim(),
+          step.optional === true ? 'Skip this' : 'Continue',
+        )}
         canGoBack={canGoBack}
         focus={focus === 'input' ? undefined : focus}
         hints={[
@@ -1046,7 +1051,11 @@ function WizardChoiceStep({
   // select-then-continue page Enter over an option selects, which is not what
   // this button does, and a button that renames itself to a neighbour's action
   // is how a reader ends up pressing the wrong thing.
-  const nextLabel = step.nextLabel ?? tail.find((r) => r !== BACK_ROW) ?? CONTINUE_LABEL;
+  const nextLabel = nextLabelFor(
+    step,
+    labels[chosen] ?? '',
+    tail.find((r) => r !== BACK_ROW) ?? CONTINUE_LABEL,
+  );
 
   return (
     <Box flexDirection="column" marginTop={1}>

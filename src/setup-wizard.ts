@@ -516,7 +516,13 @@ export function buildKeyEntrySpec(
           // Blank is always a valid answer here: it means "leave this provider
           // as it is". Esc returns to the hub, which is the same thing.
           optional: true,
-          nextLabel: hasKey ? 'Keep the stored key' : 'Back to providers',
+          // Never a second "back". The page already draws `← Back`, and this
+          // button read "Back to providers" — two controls a reader could only
+          // tell apart by trying one. It says what it DOES with the buffer in
+          // front of them, which makes `← Back` mean "without saving" by
+          // contrast rather than by explanation.
+          nextLabel: (typed) =>
+            typed.length > 0 ? 'Save key' : hasKey ? 'Keep the stored key' : 'Skip for now',
         },
       ],
       railContext: { before: ['Welcome'], after: settingsSections() },
