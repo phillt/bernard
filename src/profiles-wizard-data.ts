@@ -236,7 +236,7 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'memoryConsolidation',
         label: 'Memory consolidation',
         description:
-          'At the end of a session, Bernard looks over the notes you have asked it to keep and flags the ones that look finished. Nothing goes without you — you see the list next time you start. Leave it off and that pile only grows, and past a point the oldest notes stop reaching the model at all.',
+          'Every note you keep is sent to the model on every call, so one about something long finished costs you tokens forever — and once the pile outgrows its budget Bernard leaves some out to fit, which may well be one you still need. This flags what looks done at the end of a session, and you approve the list next time you start. The call runs after you have closed the session, so you never wait on it.',
         field: { kind: 'boolean' },
         envVar: 'BERNARD_MEMORY_CONSOLIDATION',
       },

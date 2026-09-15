@@ -1073,6 +1073,19 @@ coordinator)`, which translated one piece of jargon into another beside every
     plus when that cost is not worth paying — the last only where there is a
     real cost. Casual register throughout: this is a first-run screen, not a
     reference page.
+  - **Part 2 of the formula is the one no test can hold, and it is the one that
+    goes missing.** Memory consolidation shipped this pass reading "Leave it off
+    and that pile only grows" — a consequence of NOT doing it, phrased as a
+    vague threat, with no statement of what doing it gets you and no cost at
+    all. Both are checkable-looking and neither is checkable: a word floor and a
+    second sentence pass happily on a description that says what a thing is
+    twice. The remedy is that the missing benefit is usually a measured fact
+    nobody put in the copy — here, that memory is re-sent on every DISPATCH (a
+    turn with three sub-agents pays four times), so a dead note costs tokens
+    forever, and past `MAX_PERSISTENT_MEMORY_CHARS` a live one starts being
+    dropped to make room for it. The cost has a mitigation worth naming too:
+    the pass runs in the detached exit worker, so it costs a call and no
+    latency.
   - **Three stores were all called "notes" or "facts", and the copy could not
     tell them apart.** `recallFilter` said "saved facts" (the RAG store),
     `memoryConsolidation` "notes it has saved" (the memory store),
