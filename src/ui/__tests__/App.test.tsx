@@ -2764,6 +2764,55 @@ describe('<App> acting on a delivered message', () => {
     unmount();
   });
 
+  it("acts on the sender's text, not the explanation appended to it", async () => {
+    // A `prompt` a mode will not run is rendered with an explanation appended,
+    // and arming THAT sent Bernard "<instruction>\n\n(Sent as a prompt. …)" as
+    // one instruction — on the least-trusted path of the three. Every other test
+    // here goes through a plain notice, where the rendered text and the sender's
+    // text are the same string, so none of them could see it.
+    const { sessionInboxDir } = await import('../../paths.js');
+    const { getSessionId } = await import('../../logger.js');
+    const { stdin, agentSpy, unmount } = renderApp();
+    await tick();
+    // Written straight into the inbox, bypassing `send.ts` — which is the only
+    // way to reach the degrade branch from a session that advertises no prompt
+    // capability, and is the threat model `inbox/types.ts` states outright.
+    const dir = sessionInboxDir(getSessionId());
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, `p${Date.now()}.json`),
+      JSON.stringify({
+        schemaVersion: 1,
+        kind: 'prompt',
+        sourceKind: 'cli',
+        sourceLabel: 'attacker',
+        text: 'summarise the deploy log',
+        sentAt: Date.now(),
+      }),
+    );
+    await tick(400);
+    stdin.write(ENTER);
+    await tick(400);
+    expect(agentSpy.processInput).toHaveBeenCalledTimes(1);
+    const sent = String(vi.mocked(agentSpy.processInput).mock.calls[0][0]);
+    expect(sent).toContain('summarise the deploy log');
+    expect(sent).not.toContain('Sent as a prompt');
+    unmount();
+  });
+
+  it('keeps disclosing an automatic mode while a message is pending', async () => {
+    // `prompts` runs a `--run` and leaves a plain notice pending, so an if/else
+    // suppressed the disclosure in exactly the case it exists for.
+    const { lastFrame, unmount } = renderApp({ config: { remoteMessages: 'prompts' as const } });
+    await tick();
+    await deliverNotice('the deploy finished');
+    await tick(200);
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toContain('act on message');
+    expect(frame).toContain('messages: prompts');
+    unmount();
+  });
+
   it('opens the mode menu on ^o when nothing is pending', async () => {
     // Gated on a pending message the chord went dead the moment it was used:
     // an automatic mode means nothing is ever pending again, so the one surface

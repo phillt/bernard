@@ -76,6 +76,18 @@ export function hasPresentationChoice(ch: string): boolean {
   return ch.length === 1 && stringWidth(ch) === 2 && EMOJI.test(ch);
 }
 
+/**
+ * `s` with every such glyph removed.
+ *
+ * For the one string in a bordered frame that is not ours to choose: an inbox
+ * `sourceLabel` comes from `bernard say --source`, lands in a panel title, and
+ * cannot be swapped for a narrow glyph the way a hard-coded title can. A message
+ * BODY is deliberately not run through this — see `sanitizeSourceLabel`.
+ */
+export function stripPresentationAmbiguous(s: string): string {
+  return [...s].filter((ch) => !hasPresentationChoice(ch)).join('');
+}
+
 /** Every such glyph in `s`, for a test to name what it is refusing. */
 export function presentationAmbiguousGlyphs(s: string): string[] {
   // Iterated by code POINT, so a surrogate pair arrives whole and its

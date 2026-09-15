@@ -17,6 +17,8 @@
  * being silently delivered as something it is not.
  */
 
+import { stripPresentationAmbiguous } from '../glyph-width.js';
+
 /**
  * What a message asks the receiving REPL to do.
  *
@@ -155,10 +157,21 @@ export function sanitizeNoticeText(raw: string): { text: string; truncated: bool
  *
  * Any local writer can set this, so it is a claim and never a credential — the
  * renderer must not style it as verified.
+ *
+ * **Presentation-ambiguous glyphs go too**, because this string lands in a
+ * bordered panel's TITLE, and one of them makes that row a different width from
+ * the rest of the box — so `--source '⚠evil'` broke the frame the way the three
+ * hard-coded titles used to (measured: widths `[60, 61]`). Stripping is right
+ * here and is NOT right for a message body, which is the caller's content: a
+ * label is a claim, and this function already truncates it and collapses its
+ * whitespace, so nothing is being decided that was not decided already.
  */
 export function sanitizeSourceLabel(raw: string): string {
   const { text } = sanitizeNoticeText(raw);
-  return text.replace(/\s+/g, ' ').trim().slice(0, MAX_SOURCE_LABEL) || 'unknown';
+  return (
+    stripPresentationAmbiguous(text).replace(/\s+/g, ' ').trim().slice(0, MAX_SOURCE_LABEL) ||
+    'unknown'
+  );
 }
 
 /** Whether a parsed value is a message this binary understands. */

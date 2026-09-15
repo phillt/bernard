@@ -1269,9 +1269,15 @@ export function App({
      * sequence this exists for — a message arrives, you say something about it,
      * and THEN you want it acted on — and clearing there reproduces the failure.
      */
-    const offer = (notice: NoticeData) => {
+    const offer = (notice: NoticeData, instruction: string = notice.text) => {
       push(notice);
-      setPendingMessage({ text: notice.text, sourceLabel: notice.sourceLabel });
+      // The instruction is the SENDER's text, which is not always the text on
+      // screen: a prompt refused by the mode is rendered with an explanation
+      // appended, and arming that sent Bernard "delete everything\n\n(Sent as a
+      // prompt. This session does not run them by itself.)" as one instruction.
+      // Same shape as the coalesced-summary bug, one branch over, and on the
+      // least-trusted path of the three.
+      setPendingMessage({ text: instruction, sourceLabel: notice.sourceLabel });
     };
     const watcher = new InboxWatcher({
       sessionId: getSessionId(),
@@ -1311,6 +1317,8 @@ export function App({
 
 (Sent as a prompt. This session does not run them by itself.)`,
             }),
+            // Render the explanation; act on the message.
+            message.text,
           );
           return;
         }

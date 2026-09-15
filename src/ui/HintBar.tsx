@@ -76,14 +76,22 @@ function pickHints(state: HintBarProps): KeyHint[] {
     ];
   }
   const idle: KeyHint[] = [];
-  // Ahead of the standing hints, and mutually exclusive: the first is transient
-  // and answers a thing that just appeared on screen; the second is a STATE and
-  // is only shown because that state is worth disclosing. Both cannot be true —
-  // an automatic mode means nothing is ever pending.
-  if (state.pendingMessage) {
-    idle.push({ key: KEY.enter, label: 'act on message' }, { key: OPTIONS_KEY, label: 'options' });
-  } else if (isAutomatic(state.remoteMode)) {
-    idle.push({ key: OPTIONS_KEY, label: `messages: ${state.remoteMode}` });
+  // Ahead of the standing hints. Two independent facts, not two branches of one:
+  // a pending message is transient and answers something that just appeared,
+  // while the mode is a STATE worth disclosing on its own — in `all` or
+  // `prompts` any local process that can write the state directory can start a
+  // turn here, and nothing else on screen says so.
+  //
+  // They were an if/else under a comment asserting "both cannot be true", which
+  // is false: `prompts` runs a `--run` and leaves a plain notice pending, so the
+  // disclosure was suppressed in exactly the case it exists for. `^o` appears
+  // once either way and its label says which fact it is about.
+  if (state.pendingMessage) idle.push({ key: KEY.enter, label: 'act on message' });
+  if (state.pendingMessage || isAutomatic(state.remoteMode)) {
+    idle.push({
+      key: OPTIONS_KEY,
+      label: isAutomatic(state.remoteMode) ? `messages: ${state.remoteMode}` : 'options',
+    });
   }
   idle.push({ key: '/', label: 'commands' }, { key: KEY.shiftTab, label: 'status' });
   // In full-screen the transcript scrolls in-app (no native scrollback).

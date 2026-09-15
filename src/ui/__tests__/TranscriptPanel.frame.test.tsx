@@ -7,10 +7,11 @@ import { Box, Text } from 'ink';
 import { ErrorPanel } from '../ErrorPanel.js';
 import { NoticePanel } from '../NoticePanel.js';
 import { WakePanel } from '../WakePanel.js';
-import { hasPresentationChoice, presentationAmbiguousGlyphs } from '../glyph-width.js';
+import { hasPresentationChoice, presentationAmbiguousGlyphs } from '../../glyph-width.js';
 import { PlanPanel } from '../PlanPanel.js';
 import { PlanStore } from '../../plan-store.js';
 import type { Agent } from '../../agent.js';
+import { sanitizeSourceLabel } from '../../inbox/types.js';
 import { tick } from './_keys.js';
 
 const WIDTH = 60;
@@ -102,8 +103,41 @@ describe('no bordered title carries a glyph whose width is a presentation choice
       }),
     ],
     ['ErrorPanel', createElement(ErrorPanel, { data: { title: 'Nope', message: 'x' } })],
+    [
+      'NoticePanel with a hostile --source label',
+      // The half the rule was NOT enforcing: `sourceLabel` is whatever
+      // `bernard say --source` was given, and it lands in the title. The fixed
+      // `'ci'` above checks the literal in the source rather than the string
+      // that reaches the terminal — measured `[60, 61]` before the strip.
+      createElement(NoticePanel, {
+        data: {
+          sourceKind: 'cli',
+          sourceLabel: sanitizeSourceLabel('⚠evil⏰'),
+          text: LONG,
+          receivedAt: 0,
+        },
+      }),
+    ],
   ])('%s', async (_name, node) => {
     expect(presentationAmbiguousGlyphs(await headerRow(node))).toEqual([]);
+  });
+
+  it('keeps the frame square with a hostile label, not just the glyphs out', async () => {
+    // The predicate and the frame are two claims; a strip that dropped the wrong
+    // characters would satisfy the first and still break the second.
+    const widths = await frameWidths(
+      createElement(NoticePanel, {
+        data: {
+          sourceKind: 'cli',
+          sourceLabel: sanitizeSourceLabel('⚠evil⏰'),
+          text: LONG,
+          receivedAt: 0,
+        },
+      }),
+    );
+    expect([...new Set(widths)]).toEqual([WIDTH]);
+    // …and the label is still legible, rather than emptied to 'unknown'.
+    expect(sanitizeSourceLabel('⚠evil⏰')).toBe('evil');
   });
 });
 
