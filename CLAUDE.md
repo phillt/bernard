@@ -1073,6 +1073,18 @@ coordinator)`, which translated one piece of jargon into another beside every
     plus when that cost is not worth paying — the last only where there is a
     real cost. Casual register throughout: this is a first-run screen, not a
     reference page.
+  - **The part-2 audit found six more, and what they had in common is worth the
+    line.** Every one described its own MECHANISM well and never said what the
+    mechanism is for: tool mode explained what each of its three rows does
+    without saying that read-only means nothing reaches your machine unseen;
+    confirm mode named the thresholds but never that a prompt is your chance to
+    stop a call; the rewriter said you get "a better first answer", which is a
+    tautology; natural speech said what it rewrites but, worse, its closing
+    clause ("speech stays intelligible either way") argued AGAINST turning it
+    on. `autoCreateSpecialists` and `autoCreateApplets` never said what a
+    specialist or an applet gets you at all — only whether Bernard asks first.
+    The tell is the same each time: the sentence answers "what does this do"
+    twice and "why would I want it" never.
   - **Part 2 of the formula is the one no test can hold, and it is the one that
     goes missing.** Memory consolidation shipped this pass reading "Leave it off
     and that pile only grows" — a consequence of NOT doing it, phrased as a

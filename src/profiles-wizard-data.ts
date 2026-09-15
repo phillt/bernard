@@ -220,7 +220,7 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'promptRewriter',
         label: 'Prompt rewriter',
         description:
-          "Rewrites your message into the shape the answering model reads best, before it's sent. You get a better first answer for one small extra call a turn — worth most if you type fast or switch between model families.",
+          "Different model families want to be asked differently. This rewrites your message into the shape the one answering reads best, so you get the answer you meant without learning each model's habits. Costs one small extra call a turn, and falls back to your exact words if anything goes wrong.",
         field: { kind: 'boolean' },
         envVar: 'BERNARD_PROMPT_REWRITER',
       },
@@ -272,7 +272,7 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         // option, where a sentence above has room to say what each one means by
         // the time the reader reaches it.
         description:
-          'How much Bernard can do on its own. Read-only lets it read anything but stops it changing anything until you say so. Write lets changes through, with a check first on the risky ones. Unrestricted drops every check.',
+          "How much Bernard can do on its own. Read-only lets it read anything but holds every change until you approve it, so nothing lands on your machine you haven't seen first. Write lets changes through, with a check before the risky ones. Unrestricted drops every check — quickest, and nothing stands between a mistake and your files.",
         // The shared table, not a fourth copy of it — see `tool-modes.ts` on the
         // three spellings this had already grown, one of them wrong.
         field: { kind: 'list', options: [...TOOL_MODES] },
@@ -286,7 +286,7 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         // says nothing about a risk threshold, so the sentence has to name all
         // three — which it could not while each row carried two words of it.
         description:
-          'How often Bernard stops to check with you before it acts. Auto only asks about the riskiest calls — a dangerous shell command, or anything reaching outside your machine. Strict also asks before ordinary file writes. Off never asks. Ignored while tool mode is unrestricted.',
+          'How often Bernard stops to check with you before it acts — your chance to catch a call before it happens, at the price of being interrupted. Auto only asks about the riskiest: a dangerous shell command, or anything reaching outside your machine. Strict also asks before ordinary file writes. Off never asks. Ignored while tool mode is unrestricted.',
         field: {
           kind: 'list',
           options: [
@@ -323,7 +323,7 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'conciseMode',
         label: 'Concise mode',
         description:
-          "Keeps answers as short as the question allows. Off lets Bernard explain its reasoning and show its working, which is worth having while you're still learning what it does; on suits work where you already know what you asked for.",
+          "Keeps answers as short as the question allows, so you can scan a reply instead of reading it. Off lets Bernard explain its reasoning and show its working, which is worth having while you're still learning what it does — and is a lot more to get through once you aren't.",
         field: { kind: 'boolean' },
         envVar: 'BERNARD_CONCISE_MODE',
       },
@@ -378,7 +378,7 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'voiceNormalizer',
         label: 'Natural speech',
         description:
-          'Rewrites an answer into how a person would actually say it — links named instead of spelled out, numbers read as what they are, no markup read aloud. Costs one small call per spoken reply. Off still strips the markup, so speech stays intelligible either way.',
+          "Written answers don't read aloud well: a link comes out character by character, a table cell by cell, a phone number as one enormous number. This rewrites the answer into what a person would actually say, so you can follow it by ear. Costs one small call per spoken reply; off strips the markup but leaves the rest as written.",
         field: { kind: 'boolean' },
         envVar: 'BERNARD_VOICE_NORMALIZER',
       },
@@ -428,7 +428,7 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'autoCreateSpecialists',
         label: 'Auto-create specialists',
         description:
-          "When the same kind of work keeps coming back, Bernard can save a specialist for it. On, it saves one once it's confident enough; off, it offers and waits for you. The threshold below is what confident enough means.",
+          "When the same kind of work keeps coming back, Bernard can save a specialist for it — so that job comes out the same way each time instead of being explained again. On, it saves one once it's confident enough; off, it offers and waits for you. The threshold below is what confident enough means.",
         field: { kind: 'boolean' },
         envVar: 'BERNARD_AUTO_CREATE_SPECIALISTS',
       },
@@ -436,7 +436,7 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'autoCreateApplets',
         label: 'Auto-create applets',
         description:
-          'Whether Bernard offers to build you a small web app — an applet — when it notices the same task coming round again. It only ever offers; building one is still a turn you ask for. So this widens what gets suggested, not what gets made.',
+          'Whether Bernard offers to build you a small web app — an applet — when it notices the same task coming round again. An applet turns that task into a button instead of a conversation. It only ever offers; building one is still a turn you ask for, so this widens what gets suggested, not what gets made.',
         field: { kind: 'boolean' },
         envVar: 'BERNARD_AUTO_CREATE_APPLETS',
       },
