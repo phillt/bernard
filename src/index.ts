@@ -74,7 +74,8 @@ import {
 import type { ScriptCliOptions } from './script/run.js';
 import { listMCPServers, removeMCPServer, MCPManager, setActiveMCPManager } from './mcp.js';
 import { ToolProfileStore } from './tool-profiles.js';
-import { runFirstTimeSetup } from './setup.js';
+import { runSetupHost } from './ui/SetupHost.js';
+import { describeOutcome } from './setup-flow.js';
 import { getLocalVersion, startupUpdateCheck, interactiveUpdate } from './update.js';
 import { factsList, factsSearch, clearFacts } from './facts-cli.js';
 import { migrateFromLegacy } from './migrate.js';
@@ -219,7 +220,23 @@ program
       // qualify — an existing prefs file means we're migrating, not onboarding.
       const isFreshInstall = !fs.existsSync(PROFILES_PATH) && !fs.existsSync(PREFS_PATH);
 
-      await runFirstTimeSetup();
+      // A first run walks setup before `loadConfig` is reached, because without
+      // a key `loadConfig` throws. The gate is the KEY, not `isFreshInstall`:
+      // someone whose only key is in the environment has no profiles file and
+      // does not need to be asked anything.
+      if (!getProviderKeyStatus().some((p) => p.hasKey)) {
+        const outcome = await runSetupHost();
+        for (const line of describeOutcome(outcome)) printInfo(`  ${line}`);
+        // Anything short of a saved provider leaves `loadConfig` about to throw,
+        // and its message is about `add-key` rather than about the wizard the
+        // user just walked away from. Exit here with the better sentence.
+        if (outcome.status !== 'saved') {
+          if (outcome.status === 'cancelled') {
+            printInfo('  Run `bernard setup` when you are ready.');
+          }
+          process.exit(0);
+        }
+      }
 
       const config = loadConfig({
         provider: opts.provider,
@@ -831,6 +848,21 @@ program
       printError(message);
       process.exit(1);
     }
+  });
+
+program
+  .command('setup')
+  .description('Walk provider, key and every setting, then check the result can make a call')
+  .option('--no-verify', 'Skip the closing probe that confirms the model answers')
+  .action(async (opts: { verify?: boolean }) => {
+    // Deliberately does NOT call `loadConfig` — that throws without a key, and a
+    // keyless install is the case this command most needs to serve. The
+    // `voice-test` precedent.
+    const outcome = await runSetupHost({ verify: opts.verify !== false });
+    for (const line of describeOutcome(outcome)) printInfo(`  ${line}`);
+    // A failed probe is a real failure of the thing this command promises, so it
+    // exits non-zero the way `validate-lineup` does. A cancellation is not.
+    if (outcome.status === 'saved' && outcome.probe && !outcome.probe.ok) process.exit(1);
   });
 
 program

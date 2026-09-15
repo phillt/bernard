@@ -589,7 +589,14 @@ export type SnapshotReason =
   | 'lineup-change'
   | 'model-mode-change'
   | 'profile-switch'
-  | 'provider-change';
+  | 'provider-change'
+  /**
+   * `/setup` committed. Its own reason rather than `profile-switch`: no profile
+   * changed, and a setup run is the one event that can move the provider, the
+   * model mode and the lineup in a single commit — which is exactly the diff
+   * someone reads this log to understand.
+   */
+  | 'setup';
 
 interface SiteChange {
   site: ModelSite;

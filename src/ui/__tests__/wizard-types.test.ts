@@ -7,6 +7,9 @@ import {
   goBack,
   initialWizardState,
   isAnswered,
+  isInfoStep,
+  railFor,
+  stepError,
   stepsFromQuestions,
   summarizeAnswer,
   type WizardStep,
@@ -187,12 +190,18 @@ describe('stepsFromQuestions', () => {
       choices: ['x', 'y'],
       allowOther: true,
       otherLabel: undefined,
+      // One keystroke: a clarifying question from the model is a menu, and
+      // select-then-continue would put a second press on every one it asks.
+      pickAdvances: true,
     });
     expect(multi.field).toEqual({
       kind: 'multi',
       choices: ['x', 'y'],
       allowOther: false,
       otherLabel: undefined,
+      // Space toggles and Enter confirms the set, which is what an `ask_user`
+      // multi-select has always done.
+      pickAdvances: true,
     });
   });
 
@@ -235,5 +244,170 @@ describe('choiceRows — the #230 escape-hatch rule, in one place', () => {
     );
     expect(choiceRows({ choices: ['A'] }).labels).toEqual(['A']);
     expect(choiceRows({ choices: ['A'] }).isHatch(0)).toBe(false);
+  });
+});
+
+describe('initial answers (#447)', () => {
+  it('opens each step on its declared initial', () => {
+    const steps: WizardStep[] = [
+      { id: 'a', question: 'A?', field: { kind: 'text' }, initial: 'alpha' },
+      {
+        id: 'b',
+        question: 'B?',
+        field: { kind: 'choice', choices: ['On', 'Off'] },
+        initial: 'Off',
+      },
+    ];
+    expect(initialWizardState(steps).answers).toEqual(['alpha', 'Off']);
+  });
+
+  it('leaves a step with no initial empty, so existing callers are unchanged', () => {
+    expect(initialWizardState(STEPS).answers).toEqual(['', '', '']);
+  });
+
+  it('keeps a changed answer rather than the initial when walking back', () => {
+    const steps: WizardStep[] = [
+      { id: 'a', question: 'A?', field: { kind: 'text' }, initial: 'alpha' },
+      { id: 'b', question: 'B?', field: { kind: 'text' }, initial: 'beta' },
+    ];
+    let state = initialWizardState(steps);
+    state = answerStep(state, steps, 'changed');
+    state = goBack(state);
+    expect(state.index).toBe(0);
+    expect(state.answers[0]).toBe('changed');
+  });
+
+  it('survives an edit round trip from the review', () => {
+    const steps: WizardStep[] = [
+      { id: 'a', question: 'A?', field: { kind: 'text' }, initial: 'alpha' },
+      { id: 'b', question: 'B?', field: { kind: 'text' }, initial: 'beta' },
+    ];
+    let state = initialWizardState(steps);
+    state = answerStep(state, steps, 'alpha');
+    state = answerStep(state, steps, 'beta');
+    expect(state.phase).toBe('review');
+    state = editStep(state, 0);
+    state = answerStep(state, steps, 'edited');
+    expect(state.phase).toBe('review');
+    // The untouched step keeps its initial, which is what makes "only what
+    // changed is written" answerable at the end of a walk.
+    expect(state.answers).toEqual(['edited', 'beta']);
+  });
+});
+
+describe('stepError (#447)', () => {
+  const plain: WizardStep = { id: 'a', question: 'A?', field: { kind: 'text' } };
+
+  it('is undefined for a step with no hook, whatever the answer', () => {
+    expect(stepError(plain, '')).toBeUndefined();
+    expect(stepError(plain, 'anything')).toBeUndefined();
+    expect(stepError(plain, ['a', 'b'])).toBeUndefined();
+  });
+
+  it('returns the hook message', () => {
+    const step: WizardStep = {
+      ...plain,
+      validate: (a) => (a === '7' ? undefined : 'Enter a whole number.'),
+    };
+    expect(stepError(step, '7')).toBeUndefined();
+    expect(stepError(step, 'x')).toBe('Enter a whole number.');
+  });
+
+  it('lets a hook speak for the empty answer, which isAnswered alone cannot', () => {
+    const step: WizardStep = {
+      ...plain,
+      validate: (a) => (String(a).trim() === '' ? 'This one is required.' : undefined),
+    };
+    // `isAnswered` says the same thing, but only as a boolean — the whole point
+    // of running validation first is that the user is told why it held.
+    expect(isAnswered(step, '')).toBe(false);
+    expect(stepError(step, '')).toBe('This one is required.');
+  });
+});
+
+describe('info pages (#447)', () => {
+  const INFO: WizardStep = {
+    id: 'welcome',
+    question: 'Welcome',
+    field: { kind: 'info', body: ['Hello.'] },
+  };
+
+  it('is always answered, so Enter advances without an answer', () => {
+    expect(isInfoStep(INFO)).toBe(true);
+    // Without this the page holds on Enter and the walk cannot start — the
+    // empty-answer rule would be gating a step that has no answer to give.
+    expect(isAnswered(INFO, '')).toBe(true);
+  });
+
+  it('is not an info page merely for being optional', () => {
+    expect(isInfoStep({ ...INFO, field: { kind: 'text' }, optional: true })).toBe(false);
+  });
+});
+
+describe('railFor', () => {
+  const steps: WizardStep[] = [
+    { id: 'a', question: 'A', section: 'One', field: { kind: 'text' } },
+    { id: 'b', question: 'B', section: 'One', field: { kind: 'text' } },
+    { id: 'c', question: 'C', section: 'Two', field: { kind: 'text' } },
+  ];
+
+  it('lists sections once, in first-seen order, plus the review', () => {
+    expect(railFor(steps, 0).map((e) => e.label)).toEqual(['One', 'Two', 'Review']);
+  });
+
+  it('marks the section the walk is in, and only that one', () => {
+    expect(railFor(steps, 1).map((e) => e.state)).toEqual(['current', 'todo', 'todo']);
+  });
+
+  it('marks a section done only once the walk is past its LAST step', () => {
+    // Keyed on the last step rather than the first, so a two-question section
+    // does not read as finished while its second question is on screen.
+    expect(railFor(steps, 1)[0].state).toBe('current');
+    expect(railFor(steps, 2)[0].state).toBe('done');
+  });
+
+  it('shows Review as current once the walk is past the last step', () => {
+    const rail = railFor(steps, steps.length);
+    expect(rail.map((e) => e.state)).toEqual(['done', 'done', 'current']);
+  });
+
+  it('is empty when no step declares a section', () => {
+    // An `ask_user` batch declares none, and a rail of one row reading "Review"
+    // would be chrome that tells the reader nothing.
+    expect(railFor([{ id: 'x', question: 'X', field: { kind: 'text' } }], 0)).toEqual([]);
+  });
+});
+
+describe('railFor across a two-stage flow', () => {
+  const steps: WizardStep[] = [
+    { id: 'a', question: 'A', section: 'One', field: { kind: 'text' } },
+    { id: 'b', question: 'B', section: 'Two', field: { kind: 'text' } },
+  ];
+
+  it('shows what came before as done and what is coming as todo', () => {
+    // A flow that cannot be one wizard is still one journey. Derived from steps
+    // alone the rail restarts at the seam, telling the reader they are at the
+    // beginning immediately after finishing a third of the work.
+    const rail = railFor(steps, 0, { before: ['Welcome'], after: ['Later'] });
+    expect(rail.map((e) => [e.label, e.state])).toEqual([
+      ['Welcome', 'done'],
+      ['One', 'current'],
+      ['Two', 'todo'],
+      ['Later', 'todo'],
+    ]);
+  });
+
+  it('omits the review row while more stages follow', () => {
+    // Every stage has its own check-your-answers screen, but only the last is
+    // the end of the journey; two "Review" rows in one rail read as a mistake.
+    expect(railFor(steps, 0, { after: ['Later'] }).map((e) => e.label)).not.toContain('Review');
+    expect(railFor(steps, 0).map((e) => e.label)).toContain('Review');
+  });
+
+  it('keeps the last section current on an intermediate review', () => {
+    // Past the last step with nothing after it in this wizard, the derived
+    // lookup finds no section — which would leave the rail with nothing marked.
+    const rail = railFor(steps, steps.length, { after: ['Later'] });
+    expect(rail.find((e) => e.state === 'current')?.label).toBe('Two');
   });
 });

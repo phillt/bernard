@@ -1481,10 +1481,36 @@ describe('<App> requestAskUser multi-select (#231)', () => {
     stdin.write('2');
     await tick(40);
     // A batch of 2+ now renders as a wizard (#473), so it lands on the
-    // check-your-answers review rather than resolving. Row 3 is "Looks right".
+    // check-your-answers review rather than resolving. Row 3 is the Save control.
     stdin.write('3');
     await tick(40);
     await expect(pending).resolves.toEqual({ answers: [['A'], 'Y'] });
+    unmount();
+  });
+
+  it('moves the review cursor with the arrow keys, not only with digits', async () => {
+    // Every other wizard assertion in this file commits by DIGIT, so arrow
+    // navigation on a review had no App-level coverage at all — and the review
+    // is the one wizard surface App renders beside a live `Prompt`, which owns
+    // up/down for history. Ink broadcasts to every mounted handler with no
+    // stop-propagation, so "the component works standalone" does not settle it.
+    const { stdin, lastFrame, unmount } = renderApp();
+    await tick();
+    void getInkHandlers()!.requestAskUser([
+      { question: 'Multi', choices: ['A', 'B'], allowOther: false, multiSelect: true },
+      { question: 'Single', choices: ['X', 'Y'], allowOther: false },
+    ]);
+    await tick(40);
+    stdin.write('1');
+    await tick();
+    stdin.write(ENTER);
+    await tick(40);
+    stdin.write('2');
+    await tick(40);
+    expect(lastFrame()).toContain('> Multi — A');
+    stdin.write(ARROW_DOWN);
+    await tick(40);
+    expect(lastFrame()).toContain('> Single — Y');
     unmount();
   });
 });

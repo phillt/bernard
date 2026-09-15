@@ -1441,32 +1441,25 @@ export function App({
     return () => setInkHandlers(null);
   }, []);
 
-  // Fresh-install profile wizard (#207). Runs once on mount, after handlers
-  // are registered, before the user starts typing. Failures are swallowed so
-  // a wizard glitch never blocks the REPL from coming up.
+  // A first run points at `/setup` rather than opening a wizard on mount (#447).
+  //
+  // The wizard it used to open ran AFTER the REPL had come up, which meant it
+  // could only ever ask about settings — the provider and key were already
+  // settled by then, by a `readline` prompt printed before Ink started, or the
+  // session would not have mounted at all. Setup now runs before `loadConfig`
+  // in its own Ink host (`src/ui/SetupHost.tsx`), so by the time this component
+  // exists there is nothing left for it to collect.
+  //
+  // What remains is telling a new user the command exists. A notice rather than
+  // an overlay: the walk is 37 questions, and a fresh session should open on a
+  // prompt the user can type into, not on a form they did not ask for.
   const onboardingRanRef = useRef(false);
   useEffect(() => {
     if (!isFreshInstall || onboardingRanRef.current) return;
     onboardingRanRef.current = true;
-    void (async () => {
-      try {
-        const wiz = await runProfileWizardInk(requestMenu, requestTextInput, flashToast);
-        if (!wiz.cancelled) {
-          const { savePreferences: save } = await import('../config.js');
-          save({ provider: config.provider, model: config.model, ...wiz.settings });
-          const { applyProfileToConfig: apply } = await import('../config.js');
-          apply(config);
-          flashToast('Default profile updated.', 'success');
-        } else {
-          flashToast('Setup skipped — running with built-in defaults.', 'info');
-        }
-      } catch (err) {
-        flashToast(
-          `Onboarding wizard error: ${err instanceof Error ? err.message : String(err)}`,
-          'error',
-        );
-      }
-    })();
+    pushAssistantNotice(
+      'Welcome. Run `/setup` to walk every setting with its current value shown, or just start typing — the defaults work.',
+    );
   }, [isFreshInstall]);
 
   // Startup model-catalog refresh (#264 follow-up, extended by #306). Every
@@ -2294,6 +2287,33 @@ export function App({
           `Update check failed: ${err instanceof Error ? err.message : String(err)}`,
           'error',
         );
+      }
+      return;
+    }
+
+    if (is(text, '/setup')) {
+      // The same flow `bernard setup` and a first run walk — see
+      // `src/setup-flow.ts`. Only the host differs: there the wizard is rendered
+      // by a standalone Ink mount, here by the overlay bridge this REPL already
+      // owns. Deferred import so the REPL's startup graph does not acquire the
+      // model-catalog and lineup modules for a command most sessions never run.
+      const { runSetupFlow, describeOutcome } = await import('../setup-flow.js');
+      try {
+        const outcome = await runSetupFlow({ requestWizard });
+        if (outcome.status === 'saved') {
+          // Settings were written to the profile; pull them onto the live config
+          // and re-fire the runtime side effects, exactly as a profile switch
+          // does. Without this the theme and tool-details choices sit on disk
+          // and do not take until the next launch.
+          applyProfileToConfig(config);
+          reapplyRuntimeSettings(config);
+          logSiteModelSnapshot(config, 'setup');
+        }
+        // The transcript, not a toast: several lines, and "this model cannot be
+        // reached" must outlive the next keystroke.
+        pushAssistantNotice(describeOutcome(outcome).join('\n'));
+      } catch (err) {
+        flashToast(`Setup failed: ${err instanceof Error ? err.message : String(err)}`, 'error');
       }
       return;
     }
@@ -5648,6 +5668,11 @@ export function App({
         <WizardOverlay
           spec={pendingWizard.spec}
           reserveRows={overlayReserveRows}
+          // Full-screen replaces the transcript with a modal layer, so the card
+          // can centre in the frame it now owns. Legacy inline appends below a
+          // live transcript and prompt, where a full-height box would push both
+          // off the screen.
+          fill={fullScreen}
           onResolve={(result) => {
             pendingWizard.resolve(result);
             setPendingWizard(null);
@@ -5879,6 +5904,13 @@ async function pickWizardField(
   requestTextInput: RequestTextInput,
 ): Promise<unknown> {
   const kind = field.field;
+  // A dynamic list's options depend on the installed keys, the model catalog or
+  // the lineups on disk — none of which this flow resolves. Creating a PROFILE
+  // is also not the same act as running setup: provider, model and lineup are
+  // better chosen afterwards against a profile that is already live, via
+  // `/provider`, `/model` and `/lineups`. Skipped explicitly so the field is a
+  // decision here rather than a silent fall-through into the numeric branch.
+  if (kind.kind === 'dynamic') return undefined;
   if (kind.kind === 'list') {
     const entries: MenuEntry[] = kind.options.map((o) => ({
       label: o.label,
@@ -5907,6 +5939,7 @@ async function pickWizardField(
   if (val.cancelled) return undefined;
   const trimmed = val.raw.trim();
   if (!trimmed) return undefined;
+  if (kind.kind === 'text') return trimmed;
   if (kind.kind === 'int') {
     const parsed = Number.parseInt(trimmed, 10);
     if (!Number.isFinite(parsed) || String(parsed) !== trimmed) return undefined;

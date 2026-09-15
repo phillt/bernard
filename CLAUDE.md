@@ -43,6 +43,12 @@ bernard knowledge read mybooks ./docs/deploy.md --from 4 --to 8
 bernard knowledge stats mybooks
 bernard knowledge remove mybooks                    # or `… remove mybooks <uri>`
 
+# Setup: provider, key and every setting, each opening on its current value (#447).
+# Only what you change is saved, so anything inherited from a BERNARD_* var stays so.
+bernard setup                                      # works with no API key at all
+bernard setup --no-verify                          # skip the closing "can it call?" probe
+# …and /setup in the REPL runs the identical flow.
+
 # Facts, yours and each specialist's own (#501). No flag = your own store.
 bernard facts                                      # names any specialist stores that exist
 bernard facts --specialist coder                   # that specialist's own
@@ -457,7 +463,7 @@ bernard applet-host uninstall
 - **src/providers/catalog.ts** — Model catalog fetched from the Vercel AI Gateway (`https://ai-gateway.vercel.sh/v1/models`, 24 h TTL) and cached at `~/.cache/bernard/model-catalog.json`, with a vendored snapshot at `src/data/model-catalog-fallback.json` (regenerate with `npm run refresh-catalog`). It is the **single upstream source for both context windows and pricing** — `getContextWindow` (`src/context.ts`) and `priceUsageUsd` (`src/usage-report.ts`) both fail soft on a miss (128 k default window; `null` cost → `n/a`), so a whole provider dropping out of the catalog degrades silently rather than erroring. Two guards exist because of that: **owner aliasing** — the gateway namespaces a provider by `owned_by` prefix and renamed xAI's from `xai/` to `spacexai/`, which dropped every Grok model until `resolveGatewayOwner` (`src/providers/types.ts`, `GATEWAY_OWNER_ALIASES`) mapped it back; and **id normalization** — `normalizeModelId` (lowercase, dots→dashes, strip a trailing `-YYYYMMDD`) gives `getModelMeta` / `findModelMetaByName` a second-chance match after exact match, because gateway ids use dots (`grok-4.1-fast-reasoning`) while our lineups use dashes and date suffixes (`grok-4-1-fast-reasoning`, `claude-sonnet-4-5-20250929`). Bump `CACHE_SCHEMA_VERSION` whenever a parser change alters which entries survive, so caches written by the broken build are discarded rather than served for another TTL. Since #306 a refresh also reports **what disappeared**: `refreshCatalogWithDiff` returns `byProvider` (every built-in provider seeded to `0`, so a wipe reads as an explicit zero rather than a missing key) and logs `catalog:removed`, and the pure decision in **src/catalog-notice.ts** (`catalogRefreshNotice`, modelled on `cost-guardrail.ts`) classifies the refresh as `none` / `added` / `removed` / `provider-wiped`. `provider-wiped` fires only when a provider that lost entries lands at zero **and** is one the session actually uses (`config.provider` + `lineupProviders(activeLineup)`) — the count-alone test would false-fire every startup for a built-in that was never catalogued. App renders `provider-wiped` through `pushAssistantNotice` rather than a toast, because toasts are cleared by the next submit and "your cost and context numbers are now wrong" has to outlive a keystroke.
 - **src/custom-providers.ts** — `CustomProviderStore`: single-file JSON store at `~/.config/bernard/custom-providers.json`. Each entry binds a user-chosen `name` to one of the three installed SDKs (`openai` / `anthropic` / `xai`), a `baseURL`, a `defaultModel`, and a remembered `models[]` list that grows as the user types new names in `/model`. Reserved names: `anthropic`, `openai`, `xai`.
 - **src/profiles.ts** — Settings-profile store (#207) at `~/.config/bernard/profiles.json`. CRUD + atomic writes + lazy migration from legacy `preferences.json`. `loadPreferences` / `savePreferences` in `src/config.ts` are now thin shims that read/write the active profile's `settings` blob, so every existing settings call site is automatically profile-scoped.
-- **src/profiles-wizard.ts** — `WIZARD_CATEGORIES` constant + `runProfileWizard()` orchestrator for `/profiles` (create new) and the fresh-install onboarding flow. Built on `selectFromMenu` / `promptValue`; never persists mid-flight (caller commits via `createProfile`).
+- **src/profiles-wizard-data.ts** — the declarative field registry behind every settings wizard. A pure data tree (no Ink, no readline) so any host can interpret it; the legacy `src/profiles-wizard.ts` that paired field metadata with readline pickers is long gone, and `runProfileWizardInk` (`App.tsx`) is what `/profiles` → create runs. See **Setup** below for the coverage invariant.
 - **src/tool-call-repair.ts** — `makeRepairHook()`: one-shot `ToolCallRepairFunction` wired into every `generateText` site (main, specialist, subagent, tool-wrapper, cron). Re-prompts the model on `InvalidToolArgumentsError` / `NoSuchToolError`. Detects argument truncation (e.g. a 16 KB heredoc cut mid-string) and steers the retry toward `file_write` + `shell` instead of inlining payloads. Forwards the parent abort signal so user-cancel (Esc) also cancels the repair call.
 - **src/tools/wrap-with-specialist.ts** — Transparent shim that routes the main agent's direct `shell`, `web_read`, and `file_*_lines` calls through their wrapper specialists (same tool name/schema; only `execute` changes). On `status: 'ok'` returns the wrapper's `result` as-is; on `status: 'error'` maps to the _native_ tool's error shape so `detectToolError` and tool-profile learning still see the right format. Falls through to the raw tool when the specialist is missing or wrong kind. Only active on the main agent — sub-agents and wrappers themselves bypass it.
 - **src/tools/ask-user.ts** — `ask_user` tool: pauses the agent loop to ask the user one or more clarifying questions and waits for their answers. Accepts a `questions` array (1-10 entries), each with optional `choices` / `allow_other` / `other_label`. For batches of 2+ the REPL pins a tab strip above the menu. Returns `{answers: [...]}`, `{cancelled: true, answered: [...]}` on Esc, or `{unavailable: true}` when running headless. Exists so the agent stops writing clarifying questions as prose (which leaves the turn idle and, in coordinator mode, trips the plan-enforcement loop).
@@ -632,13 +638,349 @@ User-tunable settings are organized into named **profiles** (#207). Bernard alwa
 - `/manage-profiles` — rename or delete (guards against deleting the active or last-remaining profile).
 - `bernard profiles` — read-only listing from the CLI.
 
-`src/profiles.ts` is the disk-backed store (CRUD + atomic writes); `src/profiles-wizard.ts` defines `WIZARD_CATEGORIES` (Agent behavior / Tool safety / Output style / Limits / Advanced) and the `runProfileWizard()` orchestrator, both built on the existing `selectFromMenu` / `promptValue` primitives — no new UI components.
+`src/profiles.ts` is the disk-backed store (CRUD + atomic writes); `src/profiles-wizard-data.ts` defines the field registry (Model / Agent behavior / Memory & context / Tool safety / Output style / Voice / Automation / Limits) that both `/setup` and `/profiles` → create read.
 
 Migration: the first read of `profiles.json` is lazy; if the file is absent but `~/.config/bernard/preferences.json` exists, its contents seed the `default` profile and a `.migrated-to-profiles` marker is dropped (subsequent loads consult the marker to avoid re-ingesting stale legacy settings if `profiles.json` is later removed). The legacy `preferences.json` is left in place (no destructive delete) so users can roll back. Brand-new users (neither file present) get the wizard at REPL start to customize their `default` profile.
 
 Resolution precedence in `loadConfig` matches the pre-profiles behavior: **CLI overrides > active profile (stored prefs) > environment variables > built-in defaults**. The profile is the preferences layer — storing a value in the active profile shadows the matching env var (e.g. `BERNARD_MODEL`, `BERNARD_MODEL_MODE`). To let an env var take effect again, reset the field from `/agent-options` or use a fresh profile that omits it.
 
 Profile switching mid-session calls `applyProfileToConfig(config)` (`src/config.ts`) which re-runs `loadConfig()` and copies only the profile-scoped fields back onto the live `config` reference, so subsystems holding that reference (agent loop, tool augment layer) see the new values without reinitialization. `setMaxConcurrentAgents()` is re-fired inside `loadConfig()` so the shared agent pool reflects the new cap.
+
+## Setup
+
+`bernard setup`, `/setup`, and a first run all walk the same flow (#447). Provider
+and key, then every remaining setting, each question opening on the value that is
+in force right now.
+
+- **`src/setup-wizard.ts`** is pure — the questions and the decode rules, over an
+  injected `SetupContext`, so the whole question set is testable without a
+  terminal or a provider key. **`src/setup-flow.ts`** owns the I/O: what is
+  installed, what gets persisted, and the closing probe. **`src/ui/SetupHost.tsx`**
+  is a minimal Ink mount that provides `requestWizard`; the REPL provides its own.
+  One flow, two hosts — the `apps/manage.ts` (returns) vs `app-cli.ts` (prints)
+  split applied to a flow. The legacy `src/setup.ts` readline prompt is gone.
+- **Only what CHANGED is written, and that is the point.** `loadConfig` resolves
+  `prefs.X ?? env ?? DEFAULT`, so writing a value into the profile permanently
+  shadows the matching `BERNARD_*` variable. Every step opens on the EFFECTIVE
+  value, which for an unset field is the environment's — so saving all of them
+  back would freeze whatever each variable happened to hold and leave it dead,
+  for settings nobody touched. `settingsPatch` emits a key only when its answer
+  differs from the one the step opened with; a step whose value comes from the
+  environment says so in its hint. The cost, stated rather than discovered: there
+  is no way here to RESET a field to inheriting — `/options` and
+  `bernard reset-option` own that, and a row meaning "unset" would need a third
+  state these answers cannot carry.
+- **Two stages, because `WizardSpec.steps` is a frozen array with no branching.**
+  Stage A settles provider and key; stage B is built afterwards, when the model
+  list is knowable and `loadConfig()` no longer throws. Stage A persists BEFORE
+  stage B is built — a stored key is progress worth keeping, and it is what makes
+  the model list and the probe possible at all. Back does not cross the boundary,
+  which is honest: changing provider invalidates every model answer after it.
+- **`bernard setup` must work with no API key**, which is why it cannot be the
+  REPL: `loadConfig()` throws without one. It reads through `getProviderKeyStatus()`
+  / `loadPreferences()`, the `voice-test` precedent, and checks `process.stdin.isTTY`
+  before mounting — Ink's `useInput` throws out of an already-returned `render()`
+  when raw mode is unavailable, surfacing as an unhandled rejection rather than a
+  sentence anyone can act on.
+- **A step never invents the answer it opens on.** `WizardChoiceStep` seeded its
+  cursor-and-tick at row one whenever `initial` matched no row, so a page whose
+  in-force value the list did not offer said `✓` against a value nobody held —
+  and Continue then WROTE it, because `settingsPatch`'s change test compares the
+  answer against `initial` and an invented answer differs from it like any other.
+  That is the env-shadowing hazard's twin and strictly worse: not shadowing a
+  variable, but replacing a working setting with the first row of a list. It
+  seeds `-1` now, ticks nothing, and the reserved reason row says why Continue is
+  refusing rather than letting the button swallow the keystroke in silence.
+  - **It is reachable through the model step, and the catalog is why.** Catalog
+    membership is not dispatchability in either direction — the same fact the
+    lineup table above is curated over — so a model in force can be absent from
+    its own list. It is offered back as a row (`… — in use, not in the catalog`)
+    rather than dropped, since the remedy for "your value is not here" cannot be
+    "pick one of these instead". Only when the catalog answered at all: an empty
+    list means "could not read it", and the step is dropped entirely, which is
+    the same rule a lineup list follows before any lineup exists.
+- **Every step must open on something Enter can accept**, and both halves of that
+  were found by walking it rather than by reasoning. A CHOICE step with no initial
+  puts the cursor on row one and Enter writes that row as though it had been
+  chosen — `activeLineupId` is unset on most installs, so the flow resolves it
+  through `resolveActiveLineup` instead of leaving it blank. A NUMERIC step with
+  no initial is refused by its own range check, so the walk **cannot proceed** —
+  `voiceRate` is `undefined` on `BernardConfig` until someone sets one, so an
+  unset numeric step is `optional` and its validator tolerates empty. Neither is
+  visible from a hand-written context, which is why `setup-flow.test.ts` asserts
+  it against the real one.
+- **`profiles-wizard-data.ts` covers every settable field, and a test says so.**
+  It covered 22 of `ProfileSettings`' 40 — the other 18 were never a considered
+  exclusion, so `provider`, `model`, the lineup, every voice setting and five
+  toggles were reachable from no wizard at all. `settings-coverage.test.ts` walks
+  the fields DECLARED IN THE SOURCE to the registry — the record-to-table
+  direction, per `bundled-manifest.test.ts` — and fails on any that is neither
+  declared nor in a reasoned exclusion set (the three structured permission maps,
+  which have their own surfaces). It also reconciles the four numeric options
+  against `OPTIONS_REGISTRY`, which is a second table describing the same
+  settings with its own bounds; merging the three registries is #441's job, and
+  the house answer for two tables that must agree is a test (`timeout-offer.test.ts`
+  already reconciles a third against the same registry).
+- **It opens on a welcome page, and `{kind:'info'}` is how.** A step that asks
+  nothing, whose Enter advances. A STEP rather than something the host draws
+  first, because back has to work: `^B` from question one should reach it, and a
+  host-rendered preamble is gone by then. `isAnswered` is always true for one and
+  the review leaves it out — a row reading "Welcome — (not answered)" invites the
+  reader to go and fix something that is not broken. The copy is paragraphs, not
+  pre-wrapped lines; the card wraps them to whatever width it has.
+- **A progress rail down the left, derived from `WizardStep.section`.** Sections,
+  not steps: a 36-question walk cannot list every question in a rail a terminal
+  can hold, and "which part am I in" is the question a reader has. Derived rather
+  than declared, so a spec cannot carry a rail that disagrees with its own steps.
+  Marked with a glyph AND a colour (`✓ ▸ ·`), never colour alone. Dropped below
+  `RAIL_MIN_COLUMNS` — a rail that squeezes the question into 30 columns costs
+  more than the orientation it buys.
+  - **`WizardSpec.railContext` spans the seam.** Setup is two wizards because the
+    model list cannot be built before a provider is chosen, but it is one journey
+    to the person walking it — and a rail derived from `steps` alone restarts at
+    the boundary, telling the reader they are at the beginning immediately after
+    finishing a third of the work. `before` renders done, `after` todo. The
+    review row belongs to the LAST stage only; two of them read as a mistake, and
+    on an intermediate review the last section stays current so the rail is never
+    left with nothing marked.
+  - This **reverses #473's "no progress fraction"** at the user's explicit
+    request. That finding is about an ADAPTIVE interview which cannot know its own
+    length, where a fraction is a guess in the direction that nearly doubled
+    abandonment; here the length is fixed and known, and a rail names sections
+    rather than claiming a proportion.
+- **The header belongs to the BODY, not to the card.** Spanning the full width
+  it sat above the rail as well — over a column the reader is not looking at —
+  and read as a title for the modal rather than for the page inside it.
+- **Select, then continue — one model on every screen.** Enter on a row marks it
+  with `✓`; the Continue control at the foot hands back what is marked. It costs
+  a keystroke over "Enter picks and advances", and the keystroke is the price of
+  not having two models: a page whose rows are things to DO (the provider hub)
+  and a page whose rows are answers otherwise behave differently under the same
+  key, and the reader has to learn which is which per screen.
+  - The selection is tracked **separately from the cursor**, which is what makes
+    it work at all: by the time Continue is pressed the cursor is on a control,
+    so a page handing back "the highlighted row" would have nothing to give.
+  - Seeded from the answer the step opens on, so accepting a prepopulated page is
+    Continue alone rather than a re-pick.
+  - **`pickAdvances` is the opt-out**, for pages where picking IS the act: a hub
+    row that opens an editor, and `ask_user`, whose whole point is that a
+    clarifying question answers in one keystroke (on a multi-select that means
+    space toggles and Enter confirms the set, exactly as before). Such a page
+    shows **no tick at all** — there is no selection to mark, and one on row one
+    would claim an answer nobody had given.
+  - The Continue control is **not relabelled from whatever the cursor is
+    touching**. It says what IT does; the key line under the card says what Enter
+    does where the cursor is (`↵ select`). A button that renames itself to a
+    neighbour's action is how a reader presses the wrong thing.
+- **`← Back` and a step's own actions are focusable CONTROLS.** Arrowing past
+  the last option moves onto the buttons in the footer rather than into list rows
+  that duplicate them: a "Continue" row and a Continue button are two places to
+  do one thing, and the reader has to work out whether they differ. The focused
+  control takes the marker, the accent AND the `↵`; the list neither grows a row
+  for one nor counts it in the position.
+  - **Accent means focused, and nothing else.** Painted as the primary colour
+    whenever the cursor was merely not on Back, Continue read as highlighted from
+    the moment the page opened — so the one thing the accent is for, saying where
+    Enter will land, said nothing. The return glyph moves with it: on an option
+    row Enter SELECTS, and a `↵` sitting on Continue promises otherwise.
+  - **`WizardSpec.backExits` is what makes Back exist at a stage boundary.**
+    Four of setup's five screens are single-step specs, so `canGoBack` —
+    `index > 0` — was false on almost all of them and the control was simply
+    absent. With it, Back on the first step resolves `{cancelled: true, back:
+true}` and the caller reopens whatever came before. A FLAG on the cancelled
+    variant rather than a third result case: a caller that does not know about it
+    still compiles and still stops, and treating an unhandled "go back" as a
+    cancel loses a step where treating it as a completion would lose the answers.
+  - **So `runSetupFlow` is a stage machine, not a run of awaits.** Setup cannot
+    be one wizard (the model list needs a provider first) but it is one journey,
+    and a straight sequence has nowhere to put "go back". Each stage names where
+    Back goes; `askedDefault` is recorded because the default question is skipped
+    when only one provider has a key, and Back from the settings must skip it in
+    the same case rather than reopening a question that was never asked.
+  - **The review commits through the same control**, not a last list row reading
+    "Looks right — go ahead". Every other page moves on with Continue, and a
+    review that needed its own gesture was the one screen where the reader had to
+    learn a second one. Its key line names the back chord too — it was the one
+    surface whose hints omitted it, which is how "there is no back button"
+    survives a page that has one.
+  - **A greyed row keeps its trailing detail**, muted along with the label. That
+    detail is usually the very thing that explains why the row cannot be picked
+    (`xai ···· no key`), so branching it away left the reader with a dead row and
+    no reason until they highlighted it.
+  - **Back is reached SIDEWAYS from Continue**, `←` to it and `→` back. They are
+    one row on screen, so walking `↓` through them would be the cursor moving
+    down where nothing is — `↓` on Continue therefore does nothing at all. `↑`
+    from either returns to the END of the list, which is the row the cursor left;
+    from Back that is the case worth having, since the row above it is Continue
+    and plain list navigation would step onto it. `^b` still works from anywhere
+    and is named in the key line, which is why the control itself no longer
+    spells the chord. `WizardStepKind.choice.actions` name the extra
+    controls, each resolving the step with its own label — which is also what the
+    button then says, because the action names what Enter does better than any
+    generic word. A page whose Enter already means "choose this and move on"
+    declares none: a second control doing the same thing would have to guess which
+    option was meant once the cursor had left them.
+- **`WizardStepKind.choice.trailing`** is right-aligned detail per row with
+  leader dots filling the gap — the table-of-contents shape `output.ts`'s welcome
+  box already uses. Separate from the label because the label is the ANSWER
+  vocabulary: a decoder that had to strip a decorated suffix back off would be a
+  second copy of the formatting, and the decoration changes with the terminal
+  width.
+- **One tick, one place, one colour.** `✓` goes hard right of the row, past the
+  leader dots, in the theme's success green, on every page that draws one. It
+  marks a fact ABOUT the row — chosen here, a key already stored on the provider
+  hub — where `>` marks where the cursor is. The selection tick used to be
+  rendered INSIDE the label (`1. ✓ anthropic`), which broke both halves at once:
+  it inherited whatever `MenuRow` painted the highlighted row, so the same glyph
+  meant "chosen" in accent on one screen and "key stored" in green on the next,
+  and it sat in a different column on each. Plain text is blind to both — a
+  `toContain('✓')` assertion passes on either position and either colour — so the
+  guard is a bounded colour assertion in `WizardRow.theme.test.tsx`, mutation-
+  checked against accent-instead-of-green and against moving it back inside the
+  label.
+- **`WizardSpec.skipReview`** resolves on the last answer instead of ending at
+  the review. The review is a check-your-ANSWERS screen and is unskippable by
+  construction precisely so a caller cannot forget it; a navigational page — a
+  hub whose rows are things to DO, or a single field opened from one — has no
+  batch to check, and a summary reading `Providers — anthropic` is unactionable.
+  **A single-question stage counts as one of those**, which the default-provider
+  page did not do at first: its review was the page you had just left, restated
+  as one row with the blurbs and the greyed rows that made the choice legible
+  stripped out. The guard is on the SPEC, not the flow — `runSetupFlow` hands out
+  a spec and takes a `WizardResult` back, so the review is entirely a renderer
+  concern and every flow test passes with it on or off.
+  Resolved from an EFFECT, never in render: it calls back into the host, which
+  sets state, and doing that mid-render updates one component while another is
+  rendering.
+- **Stage A is providers, plural.** Bernard is not a one-provider product —
+  lineups mix providers across tiers and a specialist can pin one — and the old
+  stage A asked "which provider, and its key", which taught every reader the
+  opposite. It is now a key page **per provider**, every one optional, so a
+  single walk can add a second and third. One page each is also what keeps the
+  spec a flat array: "which do you want to add" followed by pages for the answers
+  is branching, which `WizardSpec` deliberately cannot express.
+  - **`✓` marks the default in force, and nothing else.** It first shipped as a
+    per-row `[✓ key set]` badge, which read as "this row is selected" and
+    competed with the cursor marker for the same meaning — two markers, two
+    different facts, one of them wrong on every row. Key status is carried by the
+    greying and the key hint instead.
+  - **It is a HUB, not a page per provider.** A page each asked about three
+    providers in a row when almost everyone wants one, gave no view of the set,
+    and made "which of these am I actually using" a thing you had to remember
+    across screens. Here the state IS the screen: every provider with a tick and
+    the last four characters of its stored key, Enter opens that key, and a
+    the Continue control leaves. A tick alone cannot say WHICH key is
+    in place, which is the question after a rotation or with several accounts —
+    and the SUFFIX, because provider keys share a scheme-and-project prefix, so
+    the front of one identifies nothing. `getStoredKeyHint` exists rather than
+    exporting `loadStoredKeys`, which would hand every caller the keys to get at
+    four characters; it reads STORED keys only, since one that arrived through
+    the environment is not ours to echo back even in part.
+  - **The hub is a LOOP in the flow, rebuilt on every pass**, which is what keeps
+    the ticks and hints describing what is on disk NOW rather than when the
+    wizard opened. Built once, it still says "no key" for a provider whose key you
+    typed two screens ago. **Esc on the hub leaves setup; Esc inside a key page
+    only leaves that page** — the hub is the screen you are on, and a field
+    opened from it dismisses back to where it came from.
+  - **A keyless provider is shown, greyed, and refuses Enter**, with the reason on
+    a reserved row under the list and `Unavailable` where the action label goes.
+    Shown rather than hidden because absence answers no question: a provider
+    missing from the list looks unsupported, where a greyed one with "no key"
+    beside it says what to do. The cursor still lands on it for the same reason —
+    the explanation has to be reachable. Muted **even while highlighted**, or the
+    highlight says "pickable" at exactly the moment the reader is looking.
+  - **That rule is what forces the default question into its own stage, AFTER the
+    keys.** `steps` is frozen, so a page built beside the key pages cannot know
+    what was typed into them — and this page must, to grey the right rows. Asked
+    first, every row on a fresh install is unpickable and the reader is stuck on a
+    question with no valid answer. So: welcome + key pages, then a separate
+    one-question wizard, **skipped** when fewer than two providers have keys,
+    because a question whose answer is forced is a screen that costs a keystroke.
+  - **No keys at all stops the flow** (`status: 'no-key'`) rather than walking 35
+    settings questions to arrive at "no API key is stored".
+  - **`WizardStep.emptySummary`** is what the review says for a blank answer.
+    `(not answered)` is right for a question that wanted one; it is actively
+    misleading on an optional page where blank IS the answer — a skipped key page
+    read as unanswered next to a provider that works.
+- **Every screen is a centred, bounded card (`WizardCard`).** Flush-left and
+  full-width, a four-word question wrapped across 100+ columns and a long walk
+  read as a terminal that kept reprinting rather than a sequence of pages. The
+  border is a **considered reversal** of this component's own "no borders" rule,
+  not an oversight: that rule cited the finding that unstructured
+  two-dimensional output is the core barrier for CLI screen readers, and the
+  barrier it names is two-dimensional LAYOUT — what is inside the frame is still
+  one linear column read top to bottom. It is also already the house surface
+  (`Prompt` draws one every frame; `TranscriptPanel` around every error and
+  notice). The rest of the original rule stands: no animation, no colour-only
+  meaning, every step answerable by typing plus Enter. `fill` centres vertically
+  too and is **opt-in**, because it is only correct where the wizard owns the
+  frame — the standalone host and the REPL in full-screen; legacy inline appends
+  below a live transcript that a full-height box would push off the screen.
+- **The frame is laid out like a dialog, and `WizardCard` owns all of it.**
+  A title bar across the top with a rule under it, the rail and body below,
+  the primary action bottom-right with Back immediately to its left, and the
+  universally-true keys on a line **under** the card. Inside the frame those
+  keys read as being about this question; under it they read as being about the
+  wizard — which is also why dismissal is said there and **only** there: a close
+  control in the corner plus the same word in the key line is one frame saying
+  `esc` twice. `OverlayFooter` is
+  correspondingly no longer used here — its blank/position/hints trio is the
+  right shape for a free-standing list overlay and the wrong one for a dialog
+  with its own button row — so `CARD_CHROME_ROWS` is the single constant every
+  budget subtracts, for the reason `OVERLAY_FOOTER_ROWS` exists.
+  - The question is a **header across the whole card**, above the rail as well as
+    the body. Inside the body column it was one more paragraph competing with
+    the hint and the options. Both rules are the box's own border — the header's
+    bottom, the body's left — so they span their extent without anyone computing
+    it, and the divider grows with the body however tall it gets.
+  - **`contentWidth` must charge for the divider**, which is a real border (1)
+    plus the body's inset (2). Three columns optimistic, prose pre-wrapped to it
+    overflows and Ink wraps it a **second** time — and Ink wraps with
+    `trim: false`, so every re-broken line keeps its break space and the welcome
+    page comes out with a ragged left edge. Info bodies are pre-wrapped through
+    `wrapText` for that reason rather than left to Ink. The guard's fixture is
+    uniform short words on purpose: whether a second wrap leaves a visible space
+    depends on where the break lands, so ordinary prose passes or fails on its
+    own wording.
+  - **Back works on the review now.** `goBack` has handled the review phase
+    since it was written and is unit-tested, but no renderer ever called it —
+    so the one transition a reader most expects from a summary screen was
+    unreachable. Found while making Back part of the frame rather than a
+    per-step hint.
+- **The primary action says what Enter does, in words, from the STATE.** On a
+  prepopulated walk most screens are "accept what is already here", and a bare
+  `↵ choose` invites the reader to think nothing is selected yet — so it reads
+  `Keep this` when Enter commits the value the step opened on and `Choose this`
+  when it commits a different one. `WizardStep.nextLabel` overrides it for the
+  case the renderer cannot see: an API-key field on a provider that already has
+  one, where Enter on a blank buffer is not skipping a question but keeping the
+  stored key. The Enter hint is correspondingly dropped from the key legend —
+  one statement, in the reader's words rather than as a key.
+- **Narrowing the frame exposed a latent review bug.** `WizardReview`'s
+  docstring claimed each row is bounded to one terminal row "by
+  `summarizeAnswer`" — which caps the ANSWER at 60 characters and never touched
+  the QUESTION. At full width the sum happened to fit; inside a 68-column card a
+  long label wrapped to two rows and the window overflowed the budget it had
+  been given, because the arithmetic counts ITEMS and assumes one row each. The
+  composed row is truncated now, and the invariant has its own test.
+- **`WizardStep.section`** carries the group label ("Tool safety") as its own
+  field rather than as a prefix baked into `question`. The setup flow built
+  `Tool safety — Tool mode` first; the renderer would then have to split on a
+  delimiter to style the halves differently, and any question legitimately
+  containing an em dash would break it.
+- **`WizardStep.initial` and `.validate` were added for this** and are generic:
+  `initial` is prepopulation, `validate` is what `runAddProviderInk` still wants
+  (it discards four steps of typing when step three fails). Validation runs
+  BEFORE the empty-answer rule, so a hook can own the empty case and say
+  something — reversed, a required numeric field holds silently and reads as a
+  broken Enter key. The message row is reserved unconditionally, `OverlayFooter`'s
+  rule, so being refused does not reflow the frame under a reader mid-correction.
+  Branching and typed answers are still deliberately absent — setup keeps its own
+  label↔value mapping rather than pushing its domain into the type every
+  `ask_user` batch is built from.
+- **The 37 questions are a starting point, not the answer.** This phase exists to
+  be walked end to end so the day-one subset can be chosen from experience.
+  Trimming, and the splash copy that says what Bernard is, are follow-ups.
 
 ## Key Patterns
 

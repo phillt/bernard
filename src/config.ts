@@ -838,6 +838,23 @@ export function resetAllOptions(): void {
  * Checks both stored keys and environment variables (env vars apply only
  * to the three built-in providers; custom providers always use `keys.json`).
  */
+/**
+ * The last few characters of a provider's STORED key, or `undefined`.
+ *
+ * Purpose-built rather than exporting `loadStoredKeys`, which would hand every
+ * caller the keys themselves to get at four characters. The suffix is what a
+ * reader needs to tell which of several keys is in place — provider keys share
+ * a scheme-and-project prefix, so the front of one identifies nothing.
+ *
+ * Stored keys only. One that reached us through the environment is not ours to
+ * echo back even in part, and it is not what a "saved in this profile" surface
+ * is talking about.
+ */
+export function getStoredKeyHint(provider: string, chars = 4): string | undefined {
+  const key = loadStoredKeys()[provider];
+  return typeof key === 'string' && key.length >= chars ? key.slice(-chars) : undefined;
+}
+
 export function getProviderKeyStatus(): Array<{
   provider: string;
   hasKey: boolean;
