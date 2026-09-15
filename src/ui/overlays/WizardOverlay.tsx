@@ -490,10 +490,19 @@ function WizardInfoStep({
     para === '' ? [''] : wrapText(para, contentWidth(columns, rail)),
   );
 
+  // Focus starts on Continue and never leaves the controls: this step has no
+  // body to move between, so there is nothing above them for ↑/↓ to reach — and
+  // the hints below say ←/→ rather than ↑/↓ for exactly that reason. The
+  // controls are reachable on every step; which keys reach them depends on what
+  // else is on the page.
+  const [focus, setFocus] = useState<'next' | 'back'>('next');
+
   useInput((input, key) => {
     if (isDismissKey(input, key)) return onCancel();
     if (canGoBack && isBackKey(input, key)) return onBack();
-    if (key.return) return onSubmit('');
+    if (key.leftArrow === true && canGoBack) return setFocus('back');
+    if (key.rightArrow === true) return setFocus('next');
+    if (key.return) return focus === 'back' ? onBack() : onSubmit('');
   });
 
   return (
@@ -505,7 +514,13 @@ function WizardInfoStep({
         fill={fill}
         next={step.nextLabel ?? 'Continue'}
         canGoBack={canGoBack}
-        hints={[HINT_CANCEL]}
+        focus={focus}
+        hints={[
+          ...(canGoBack ? [{ key: '←/→', label: 'switch' }] : []),
+          ...(focus === 'back' ? [] : [{ key: KEY.enter, label: 'continue' }]),
+          ...(canGoBack ? [BACK_HINT] : []),
+          HINT_CANCEL,
+        ]}
       >
         {body.map((line, i) => (
           // Keyed by index because these are prose lines with no identity, and
@@ -568,28 +583,54 @@ function WizardTextStep({
   }, true);
 
   const [error, setError] = useState<string | undefined>(undefined);
+  // Where Enter will land. A text step used to have no notion of this at all:
+  // the footer drew controls the arrow keys could not reach, so ↓ did nothing
+  // on the one surface where a reader has most reason to press it after typing.
+  // Same three positions and the same keys as a choice step — the only
+  // difference is that the thing above the controls is a buffer, not a list.
+  const [focus, setFocus] = useState<'input' | 'next' | 'back'>('input');
+  const onControl = focus !== 'input';
+
+  const commit = (): void => {
+    const trimmed = editor.buffer.trim();
+    // Validation BEFORE the empty rule, so a hook can own the empty case and
+    // say something. Reversed, a required numeric field would hold silently
+    // on a cleared buffer and read as a broken Enter key.
+    const message = stepError(step, trimmed);
+    if (message !== undefined) {
+      setError(message);
+      // Back to the buffer: the reader has to change it before anything else
+      // can happen, and leaving focus on a control that just refused is how a
+      // step reads as stuck.
+      setFocus('input');
+      return;
+    }
+    // An empty answer HOLDS rather than cancelling. Cancelling on empty is
+    // right for a one-shot prompt and wrong mid-wizard, where it would throw
+    // away every answer already given on a stray Enter.
+    if (trimmed.length === 0 && step.optional !== true) return;
+    onSubmit(trimmed);
+  };
 
   useInput((input, key) => {
     // Dismissal first, before the editor claims its chords. `isDismissKey`, not
     // the `q` variant: this surface has a buffer, so `q` must stay typeable.
     if (isDismissKey(input, key)) return onCancel();
     if (canGoBack && isBackKey(input, key)) return onBack();
-    if (key.return) {
-      const trimmed = editor.buffer.trim();
-      // Validation BEFORE the empty rule, so a hook can own the empty case and
-      // say something. Reversed, a required numeric field would hold silently
-      // on a cleared buffer and read as a broken Enter key.
-      const message = stepError(step, trimmed);
-      if (message !== undefined) {
-        setError(message);
-        return;
-      }
-      // An empty answer HOLDS rather than cancelling. Cancelling on empty is
-      // right for a one-shot prompt and wrong mid-wizard, where it would throw
-      // away every answer already given on a stray Enter.
-      if (trimmed.length === 0 && step.optional !== true) return;
-      return onSubmit(trimmed);
+    if (onControl) {
+      if (key.upArrow === true) return setFocus('input');
+      if (key.downArrow === true) return;
+      if (key.leftArrow === true && canGoBack) return setFocus('back');
+      if (key.rightArrow === true) return setFocus('next');
+      if (key.return === true) return focus === 'back' ? onBack() : commit();
+      // Anything else is typing, so the buffer takes it back. Swallowing it
+      // would reproduce the complaint one key over — a keystroke that does
+      // nothing, with nothing on screen explaining why.
+      setFocus('input');
+    } else if (key.downArrow === true) {
+      return setFocus('next');
     }
+    if (key.return) return commit();
     // Typing clears a standing rejection: the message described the buffer that
     // was refused, and it no longer describes this one.
     if (error !== undefined) setError(undefined);
@@ -605,13 +646,28 @@ function WizardTextStep({
         fill={fill}
         next={step.nextLabel ?? (step.optional === true ? 'Skip this' : 'Continue')}
         canGoBack={canGoBack}
-        hints={[HINT_CANCEL]}
+        focus={focus === 'input' ? undefined : focus}
+        hints={[
+          HINT_MOVE,
+          // Enter submits from the buffer and from Continue alike, so the hint
+          // is the same in both places; on Back the card's own `▸ … ↵` says it.
+          ...(focus === 'back' ? [] : [{ key: KEY.enter, label: 'continue' }]),
+          // Only while there are two controls to move between — on the buffer
+          // these are cursor movement, and advertising them as "switch" there
+          // would be wrong.
+          ...(onControl && canGoBack ? [{ key: '←/→', label: 'switch' }] : []),
+          ...(canGoBack ? [BACK_HINT] : []),
+          HINT_CANCEL,
+        ]}
       >
         <StepHeader step={step} intro={intro} />
         <BoundedLine
           buffer={editor.buffer}
           cursor={editor.cursor}
-          showCursor
+          // The caret means "typing lands here". With focus on a control it
+          // would say that while Enter went somewhere else — the same claim the
+          // accent makes on the controls, made twice and contradicting itself.
+          showCursor={!onControl}
           cursorColor={colors.accent}
           cursorGlyph="▎"
           reserveColumns={OVERLAY_RESERVED_COLUMNS + CARD_CHROME_COLUMNS}

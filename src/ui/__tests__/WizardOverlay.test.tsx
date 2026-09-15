@@ -771,6 +771,118 @@ describe('WizardOverlay — a value the list does not offer (#447)', () => {
   });
 });
 
+/**
+ * Every step reaches its controls with the arrow keys (#447).
+ *
+ * The footer draws Continue and Back on every screen, and only the choice step
+ * could reach them — so on a numeric settings question ↓ did nothing, which is
+ * the one thing a reader tries after typing a value. A control you can see and
+ * cannot reach is worse than no control.
+ */
+describe('WizardOverlay — the controls are reachable from every step kind', () => {
+  const textSpec: WizardSpec = {
+    steps: [
+      // Seeded, because an empty required text step HOLDS on Enter — so an
+      // unseeded first step would never let these cases reach step two.
+      { id: 'first', question: 'First', field: { kind: 'text' }, initial: 'x' },
+      { id: 'n', question: 'Threshold?', field: { kind: 'text' }, initial: '0.15' },
+    ],
+  };
+
+  it('moves ↓ from the buffer onto Continue, and ↑ back to it', async () => {
+    const { stdin, lastFrame } = await mount(vi.fn(), textSpec);
+    await type(stdin, ENTER); // past step one, onto the numeric step
+    expect(stripAnsi(lastFrame() ?? '')).not.toContain('▸ Continue');
+    await type(stdin, ARROW_DOWN);
+    expect(stripAnsi(lastFrame() ?? '')).toContain('▸ Continue');
+    await type(stdin, ARROW_UP);
+    expect(stripAnsi(lastFrame() ?? '')).not.toContain('▸ Continue');
+  });
+
+  it('commits from Continue with the value in the buffer', async () => {
+    const onResolve = vi.fn();
+    const { stdin } = await mount(onResolve, { ...textSpec, skipReview: true });
+    await type(stdin, ENTER);
+    await type(stdin, ARROW_DOWN);
+    await type(stdin, ENTER);
+    expect(onResolve).toHaveBeenCalledWith({ cancelled: false, answers: ['x', '0.15'] });
+  });
+
+  it('gives the buffer back the moment anything is typed', async () => {
+    // Swallowing a keystroke on a control would reproduce the original
+    // complaint one key over — a key that does nothing, with nothing on screen
+    // explaining why.
+    const { stdin, lastFrame } = await mount(vi.fn(), textSpec);
+    await type(stdin, ENTER);
+    await type(stdin, ARROW_DOWN);
+    await type(stdin, '9');
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toContain('0.159');
+    expect(frame).not.toContain('▸ Continue');
+  });
+
+  it('reaches Back sideways from Continue, as a choice step does', async () => {
+    const { stdin, lastFrame } = await mount(vi.fn(), textSpec);
+    await type(stdin, ENTER);
+    await type(stdin, ARROW_DOWN);
+    await type(stdin, ARROW_LEFT);
+    expect(stripAnsi(lastFrame() ?? '')).toContain('▸ ← Back');
+    await type(stdin, ARROW_RIGHT);
+    expect(stripAnsi(lastFrame() ?? '')).toContain('▸ Continue');
+  });
+
+  it('says which keys move, instead of leaving the row to esc alone', async () => {
+    const { stdin, lastFrame } = await mount(vi.fn(), textSpec);
+    await type(stdin, ENTER);
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toContain('↑/↓');
+    expect(frame).toContain('^b');
+  });
+
+  it('opens an info step on Continue and switches sideways', async () => {
+    // No body to move between, so ←/→ rather than ↑/↓ — and the hints say so
+    // rather than advertising a key with nowhere to go.
+    const onResolve = vi.fn();
+    const spec: WizardSpec = {
+      skipReview: true,
+      // So Back exists on the first step — otherwise the ←/→ half of this has
+      // no second control to reach and the assertions pass vacuously.
+      backExits: true,
+      steps: [
+        { id: 'w', question: 'Welcome', field: { kind: 'info', body: ['hello'] } },
+        { id: 'after', question: 'Next', field: { kind: 'text' } },
+      ],
+    };
+    const { stdin, lastFrame } = await mount(onResolve, spec);
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toContain('▸ Continue');
+    // ↑/↓ is not advertised, because there is nothing above the controls for it
+    // to reach — the keys that move here are ←/→.
+    expect(frame).not.toContain('↑/↓');
+    expect(frame).toContain('←/→');
+
+    await type(stdin, ARROW_LEFT);
+    expect(stripAnsi(lastFrame() ?? '')).toContain('▸ ← Back');
+    await type(stdin, ARROW_RIGHT);
+    expect(stripAnsi(lastFrame() ?? '')).toContain('▸ Continue');
+    await type(stdin, ENTER);
+    expect(stripAnsi(lastFrame() ?? '')).toContain('Next');
+  });
+
+  it('Back on an info step resolves as back, not as an answer', async () => {
+    const onResolve = vi.fn();
+    const spec: WizardSpec = {
+      skipReview: true,
+      backExits: true,
+      steps: [{ id: 'w', question: 'Welcome', field: { kind: 'info', body: ['hello'] } }],
+    };
+    const { stdin } = await mount(onResolve, spec);
+    await type(stdin, ARROW_LEFT);
+    await type(stdin, ENTER);
+    expect(onResolve).toHaveBeenCalledWith({ cancelled: true, back: true, answered: [] });
+  });
+});
+
 describe('WizardOverlay — select, then continue (#447)', () => {
   const SPEC: WizardSpec = {
     steps: [

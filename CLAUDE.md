@@ -772,6 +772,22 @@ in force right now.
     touching**. It says what IT does; the key line under the card says what Enter
     does where the cursor is (`↵ select`). A button that renames itself to a
     neighbour's action is how a reader presses the wrong thing.
+- **Every step kind reaches the controls, and which keys get there depends on
+  what else is on the page.** The footer draws Continue and Back on every screen
+  and only the choice step could reach them — so on a numeric settings question
+  `↓` did nothing, which is the one key a reader tries after typing a value, and
+  the key line read `esc cancel` alone on a page showing two buttons. A control
+  you can see and cannot reach is worse than no control.
+  - A TEXT step takes `↓` from the buffer onto Continue and `↑` back, with `←/→`
+    between the two controls exactly as a choice step has. Three details follow
+    from the buffer being there: `←/→` are cursor movement while it has focus, so
+    they are advertised only once the cursor is ON a control; the caret is hidden
+    there, because it means "typing lands here" and would say so while Enter went
+    elsewhere; and anything typed on a control hands the buffer back rather than
+    being swallowed, which would reproduce the original complaint one key over.
+  - An INFO step opens with Continue focused and moves with `←/→` only. There is
+    no body above the controls for `↑/↓` to reach, so the hints name the keys
+    that work rather than one with nowhere to go.
 - **`← Back` and a step's own actions are focusable CONTROLS.** Arrowing past
   the last option moves onto the buttons in the footer rather than into list rows
   that duplicate them: a "Continue" row and a Continue button are two places to
