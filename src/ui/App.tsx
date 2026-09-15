@@ -213,6 +213,7 @@ import { Toast, type ToastVariant } from './Toast.js';
 import { persistAgentState } from './save.js';
 import { MessageStore } from './message-store.js';
 import { InboxWatcher } from '../inbox/watcher.js';
+import type { InboxMessage } from '../inbox/types.js';
 import { coalescedNotice, toNoticeData, type NoticeData } from './notice.js';
 import {
   REMOTE_MESSAGE_MODES,
@@ -1269,15 +1270,28 @@ export function App({
      * sequence this exists for — a message arrives, you say something about it,
      * and THEN you want it acted on — and clearing there reproduces the failure.
      */
-    const offer = (notice: NoticeData, instruction: string = notice.text) => {
-      push(notice);
-      // The instruction is the SENDER's text, which is not always the text on
-      // screen: a prompt refused by the mode is rendered with an explanation
-      // appended, and arming that sent Bernard "delete everything\n\n(Sent as a
-      // prompt. This session does not run them by itself.)" as one instruction.
-      // Same shape as the coalesced-summary bug, one branch over, and on the
-      // least-trusted path of the three.
-      setPendingMessage({ text: instruction, sourceLabel: notice.sourceLabel });
+    /**
+     * Render a delivered message, and arm the keystroke on it.
+     *
+     * **The armed text is not an argument**, which is the whole point of the
+     * signature. What Enter sends is always the SENDER's text; what varies is
+     * the DISPLAY — a prompt the mode will not run is rendered with an
+     * explanation appended. With the instruction as the parameter, the wrong
+     * configuration was the default: `offer(annotatedNotice)` compiled, armed
+     * the explanation, and sent Bernard `<instruction>\n\n(Sent as a prompt…)`
+     * as one instruction on the least-trusted path. That had already happened
+     * twice — once here, once via `onCoalesced` arming "+N more messages not
+     * shown." — so making it merely explicit left a third instance one careless
+     * call away.
+     *
+     * Same move as `UntrustedData` in `watchers/wake.ts`, and the same two
+     * channels: what a human wrote and what arrived. There, confusing them is a
+     * compile error rather than a convention. Here the parameter that could be
+     * confused no longer exists.
+     */
+    const offer = (message: InboxMessage, display: NoticeData = toNoticeData(message)) => {
+      push(display);
+      setPendingMessage({ text: message.text, sourceLabel: display.sourceLabel });
     };
     const watcher = new InboxWatcher({
       sessionId: getSessionId(),
@@ -1310,6 +1324,9 @@ export function App({
           // key: it is frozen in the transcript, and the hint bar is the only
           // surface that can stop offering the keystroke once it stops working.
           offer(
+            message,
+            // The DISPLAY carries the explanation; what Enter sends is
+            // `message.text`, and no argument here can change that.
             toNoticeData({
               ...message,
               kind: 'notice',
@@ -1317,8 +1334,6 @@ export function App({
 
 (Sent as a prompt. This session does not run them by itself.)`,
             }),
-            // Render the explanation; act on the message.
-            message.text,
           );
           return;
         }
@@ -1326,7 +1341,7 @@ export function App({
         if (runsUnattended(mode, message.kind)) {
           return runRemote(message.text, message.sourceLabel);
         }
-        offer(toNoticeData(message));
+        offer(message);
       },
       onCoalesced: (count, label) => push(coalescedNotice(count, label)),
     });
