@@ -192,6 +192,40 @@ describe('every question says enough to decide on', () => {
     }
   });
 
+  it('uses none of our own words for our own machinery', () => {
+    // `Sub-agent PAC pipeline` was a live LABEL. PAC is the three phases of an
+    // internal pipeline; it names the mechanism to someone who already knows
+    // the mechanism, and nothing at all to the person meeting this screen on
+    // their first run. The list is short on purpose — it is the acronyms this
+    // repo actually uses about itself, not a general prose rule.
+    const OURS = /\b(PAC|ReAct|RAG|MCP|JSONL|TTL)\b/;
+    for (const f of WIZARD_FIELDS) {
+      expect(f.label, `${f.key} label`).not.toMatch(OURS);
+      expect(f.description, `${f.key} description`).not.toMatch(OURS);
+      if (f.field.kind !== 'list') continue;
+      for (const o of f.field.options) expect(o.label, `${f.key}/${o.value}`).not.toMatch(OURS);
+    }
+  });
+
+  it('explains a word that means something only here', () => {
+    // `sub-agent`, `specialist`, `applet` and `lineup` are ours. Each is
+    // glossed at the first question that uses it, so a reader walking the
+    // sections in order has met it before it is used plainly — which is why
+    // this asserts on the FIRST field to mention one rather than on every
+    // field, and why moving a section could fail it.
+    const GLOSSED: Array<[RegExp, RegExp]> = [
+      [/sub-agents?/i, /small helpers/i],
+      [/\bspecialist\b/i, /saved persona/i],
+      [/\bapplets?\b/i, /small web app/i],
+      [/\blineups?\b/i, /named set of models/i],
+    ];
+    for (const [term, gloss] of GLOSSED) {
+      const first = WIZARD_FIELDS.find((f) => term.test(f.description));
+      expect(first, String(term)).toBeDefined();
+      expect(first?.description, `${first?.key} must gloss ${term}`).toMatch(gloss);
+    }
+  });
+
   it('puts nothing in parentheses on a row label', () => {
     // A gloss beside the option is the thing the description is supposed to
     // have absorbed. Asserted across every list rather than per question,

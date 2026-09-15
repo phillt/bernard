@@ -1066,6 +1066,27 @@ coordinator)`, which translated one piece of jargon into another beside every
     `BERNARD_COORDINATOR_MODE`), but a bare `On` beside `Auto` invites the
     reading that `Auto` is somehow less on, and the word that distinguishes them
     is `Always`. It belongs in the label rather than being left for the note.
+  - **The formula is written on `WizardFieldData.description`**, because that
+    is where the next person adding a field looks. Three parts, in order: what
+    it is (glossing any word that is OURS rather than English), what you get
+    from it in terms of the work rather than the mechanism, and what it costs
+    plus when that cost is not worth paying — the last only where there is a
+    real cost. Casual register throughout: this is a first-run screen, not a
+    reference page.
+  - **`sub-agent`, `specialist`, `applet` and `lineup` are ours**, and each is
+    glossed at the FIRST question that uses it, so a reader walking the sections
+    in order has met it before it is used plainly. The test asserts on the first
+    field to mention each term rather than on every field, which means moving a
+    section can fail it — correctly, since that is exactly what would put a term
+    in front of its own explanation. It caught one on arrival: `provider` and
+    `model` both said "lineup" two questions before `activeLineupId` explained
+    it.
+  - **No label or description may use one of our acronyms.** `Sub-agent PAC
+pipeline` was a live LABEL — PAC names three phases of an internal pipeline
+    to someone who already knows the pipeline, and nothing at all to the person
+    meeting the screen on their first run. It is `Sub-agent self-review`, and
+    the banned list is short on purpose: the acronyms this repo uses about
+    itself, not a general prose rule.
   - **Every question owes the trade, not only the mechanism**, and the sweep to
     make that true is what turned three one-off rewrites into a rule. The old
     copy named what a setting was and stopped — `Integer 1-20.` was a real
