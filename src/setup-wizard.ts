@@ -143,6 +143,39 @@ const UNRESTRICTED = 'unrestricted';
  * see, while looking at the question, that answering it differently will take a
  * variable out of play for good.
  */
+/**
+ * Whether this step's value was chosen by the user rather than inherited.
+ *
+ * `covers` is part of the question: Tool mode decides `skipPermissions` too, so
+ * a profile that stores only that key has still been answered — reading the
+ * field's own key alone would call the `unrestricted` row untouched.
+ */
+function storedExplicitly(field: WizardFieldData, ctx: SetupContext): boolean {
+  if (ctx.explicit.has(field.key)) return true;
+  return field.covers?.some((k) => ctx.explicit.has(k)) === true;
+}
+
+/**
+ * Whether the value in force is the built-in default.
+ *
+ * Nothing stored, nothing from the environment, and something actually there —
+ * which is as far as this can be taken: the defaults live as module-private
+ * constants in `config.ts` and there is no table mapping a settings key to one.
+ * So the recommendation is visible exactly while it is still in force, and a
+ * setting the reader has already changed shows none. Building that table is a
+ * FOURTH registry describing these same fields, which `settings-coverage.test.ts`
+ * exists because of.
+ */
+function isDefaultInForce(field: WizardFieldData, ctx: SetupContext): boolean {
+  if (storedExplicitly(field, ctx)) return false;
+  if (field.envVar !== undefined && ctx.env[field.envVar] !== undefined) return false;
+  const shown = ctx.current[field.key];
+  return shown !== undefined && shown !== '';
+}
+
+/** Marks the row a reader should keep, beside the row rather than below the list. */
+const RECOMMENDED = '(recommended)';
+
 export function provenanceNote(field: WizardFieldData, ctx: SetupContext): string {
   const shown = ctx.current[field.key];
   // The VALUE is deliberately not repeated. The rows below carry a `✓` on the
@@ -151,20 +184,31 @@ export function provenanceNote(field: WizardFieldData, ctx: SetupContext): strin
   // has to point at what is already on screen is a sign the screen was not
   // obvious enough, not a fix for it. What is left is the half a reader cannot
   // see: where the value came from, and so where else to go and change it.
-  if (ctx.explicit.has(field.key)) return 'Saved in this profile.';
+  if (storedExplicitly(field, ctx)) return 'Saved in this profile.';
   if (field.envVar !== undefined && ctx.env[field.envVar] !== undefined) {
     return `Set by ${field.envVar} — changing it here overrides that.`;
   }
   // "Not set" is the one thing the rows cannot show: a blank buffer looks the
   // same whether the value is empty or absent.
   if (shown === undefined || shown === '') return 'Not set.';
-  // "(recommended)" rather than "(default)". Both are true, and only one is
-  // useful to a reader deciding whether to touch it: "default" says where the
+  // The recommendation rides on the ROW it recommends, so a page with rows says
+  // nothing here — a sentence under the list pointing at one of the options is
+  // the reader doing the join themselves. A text or numeric step has no row to
+  // carry it, and there the sentence is the only place it can go.
+  //
+  // "(recommended)" rather than "(default)": both are true, and only one is
+  // useful to a reader deciding whether to touch it — "default" says where the
   // value came from, which they can already see, while "recommended" answers the
-  // question they are actually asking. The other two branches keep saying where
-  // a value came from, because a stored answer and an inherited variable are
-  // both things the reader may want to go and change elsewhere.
-  return 'Recommended.';
+  // question they are actually asking. The other branches keep saying where a
+  // value came from, because a stored answer and an inherited variable are both
+  // things the reader may want to go and change elsewhere.
+  return hasRows(field) ? '' : 'Recommended.';
+}
+
+/** Whether this field is asked as a list of rows, which is what can carry a mark. */
+function hasRows(field: WizardFieldData): boolean {
+  const kind = field.field.kind;
+  return kind === 'list' || kind === 'dynamic' || kind === 'boolean';
 }
 
 /** The label a list step shows for a stored value, or `''` when nothing matches. */
@@ -175,7 +219,21 @@ function labelFor(options: readonly { value: string; label: string }[], value: u
 }
 
 function stepHint(field: WizardFieldData, ctx: SetupContext): string {
-  return `${field.description} ${provenanceNote(field, ctx)}`;
+  // Joined rather than interpolated: the note is empty wherever a row carries
+  // the recommendation instead, and a template would leave a trailing space
+  // that `wrapText` then measures as a word.
+  return [field.description, provenanceNote(field, ctx)].filter((s) => s !== '').join(' ');
+}
+
+/** `trailing` marking the recommended row, or nothing to mark. */
+function recommendedTrailing(
+  field: WizardFieldData,
+  ctx: SetupContext,
+  labels: readonly string[],
+  initial: string,
+): { trailing: Record<string, { text: string }> } | Record<string, never> {
+  if (!isDefaultInForce(field, ctx) || !labels.includes(initial)) return {};
+  return { trailing: { [initial]: { text: RECOMMENDED } } };
 }
 
 /** The options a `dynamic` field resolves to against this installation. */
@@ -269,6 +327,12 @@ function buildStep(
           kind: 'choice',
           choices: options.map((o) => o.label),
           ...(Object.keys(notes).length > 0 ? { notes } : {}),
+          ...recommendedTrailing(
+            field,
+            ctx,
+            options.map((o) => o.label),
+            initial,
+          ),
         },
         initial,
       },
@@ -295,7 +359,15 @@ function buildStep(
   if (kind.kind === 'boolean') {
     const initial = current === true ? ON : current === false ? OFF : '';
     return {
-      step: { ...base, field: { kind: 'choice', choices: [ON, OFF] }, initial },
+      step: {
+        ...base,
+        field: {
+          kind: 'choice',
+          choices: [ON, OFF],
+          ...recommendedTrailing(field, ctx, [ON, OFF], initial),
+        },
+        initial,
+      },
       setup: {
         key: field.key,
         initial,

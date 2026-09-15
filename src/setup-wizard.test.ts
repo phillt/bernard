@@ -207,6 +207,59 @@ describe('tool mode folds skipPermissions in', () => {
   });
 });
 
+describe('the recommendation rides on the row it recommends', () => {
+  /** The choice step this field builds, whatever else the settings spec holds. */
+  function stepFor(key: string, c = ctx()) {
+    const { spec } = buildSettingsSpec(c);
+    const step = spec.steps.find((s) => s.id === key)!;
+    expect(step, key).toBeDefined();
+    return step;
+  }
+
+  it('marks the row whose value is in force by default', () => {
+    const step = stepFor('coordinatorMode');
+    expect(step.field.kind).toBe('choice');
+    if (step.field.kind !== 'choice') return;
+    // Keyed by LABEL and carried in `trailing`, never spliced into the label
+    // itself: the label is the answer vocabulary, and a decoder that had to
+    // strip the decoration back off would be a second copy of the formatting.
+    expect(step.field.trailing).toEqual({ Auto: { text: '(recommended)' } });
+    expect(step.field.choices).toContain('Auto');
+  });
+
+  it('marks a boolean row too', () => {
+    const step = stepFor('promptRewriter');
+    if (step.field.kind !== 'choice') return;
+    expect(step.field.trailing).toEqual({ On: { text: '(recommended)' } });
+  });
+
+  it('says nothing once the reader has chosen for themselves', () => {
+    // The defaults live as module-private constants with no key-to-value table,
+    // so the recommendation is derivable exactly while it is still in force.
+    // Claiming one against a stored answer would be inventing it.
+    const step = stepFor('coordinatorMode', ctx({ explicit: new Set(['coordinatorMode']) }));
+    if (step.field.kind !== 'choice') return;
+    expect(step.field.trailing).toBeUndefined();
+  });
+
+  it('says nothing when an environment variable is deciding', () => {
+    const step = stepFor('coordinatorMode', ctx({ env: { BERNARD_COORDINATOR_MODE: 'auto' } }));
+    if (step.field.kind !== 'choice') return;
+    expect(step.field.trailing).toBeUndefined();
+  });
+
+  it('counts a covered key as the reader having answered', () => {
+    // Tool mode decides `skipPermissions` too, so a profile storing only that
+    // key has still answered this question — reading the field's own key alone
+    // would call the `unrestricted` row a recommendation.
+    const c = ctx({ explicit: new Set(['skipPermissions']) });
+    (c.current as Record<string, unknown>).skipPermissions = true;
+    const step = stepFor('toolMode', c);
+    if (step.field.kind !== 'choice') return;
+    expect(step.field.trailing).toBeUndefined();
+  });
+});
+
 describe('provenanceNote', () => {
   const field = WIZARD_FIELDS.find((f) => f.key === 'modelMode')!;
 
@@ -226,10 +279,18 @@ describe('provenanceNote', () => {
     expect(note).not.toContain('BERNARD_MODEL_MODE');
   });
 
-  it('calls an untouched value recommended', () => {
-    // "Default" says where the value came from, which the reader can already
-    // see; "recommended" answers the question they are actually asking.
-    expect(provenanceNote(field, ctx())).toBe('Recommended.');
+  it('says nothing about an untouched value on a page that has rows', () => {
+    // The recommendation moved onto the row it recommends. A sentence under the
+    // list saying one of the options is the good one leaves the reader to work
+    // out which — and `modelMode` is a list, so its note is now empty.
+    expect(provenanceNote(field, ctx())).toBe('');
+  });
+
+  it('keeps the sentence where there is no row to carry it', () => {
+    // A numeric step opens with a buffer, not a list, so the only place left to
+    // say it is the line above.
+    const numeric = WIZARD_FIELDS.find((f) => f.field.kind === 'int')!;
+    expect(provenanceNote(numeric, ctx())).toBe('Recommended.');
   });
 
   it('never repeats the value, which the rows already show', () => {
