@@ -1039,10 +1039,33 @@ coordinator)`, which translated one piece of jargon into another beside every
   three, so each is explained by the time it is read. `/agent-options` asks the
   same question and was given the same words, since two vocabularies for one
   setting is the drift these questions keep being rewritten to remove.
-  - Parentheses elsewhere are NOT the same thing and stay: `Read-only (least
-privilege)` and `Strict (also medium-risk)` disambiguate an answer that is
-    genuinely ambiguous alone, rather than glossing a term the reader has not
-    met.
+  - **This line used to carve out an exception, and the exception was wrong.**
+    It said `Read-only (least privilege)` and `Strict (also medium-risk)` were
+    disambiguating an answer that is genuinely ambiguous alone, rather than
+    glossing a term. Both went bare too. The test is not whether the gloss is
+    informative — it is whether the SENTENCE can carry it, and it always can:
+    two words beside a row cannot say what four lines above the list can, and
+    `Auto` is no more ambiguous than `On` once the description names all three.
+    What the carve-out actually protected was a copy of the answer in a second
+    place, which is the drift the label-is-the-answer-vocabulary rule exists to
+    refuse — and it had already produced `Write (allow all tools)`, describing
+    `write` as what `unrestricted` does.
+  - **`src/tool-modes.ts` is the table**, in the `remote-messages.ts` shape and
+    at `src/` root for its stated reason. Three surfaces had grown three
+    spellings of these three answers — setup, the `/agent-options` menu, and
+    that menu's own parent-row description — and the sentinel for the third row
+    was `'unrestricted'` in one and `'skip'` in the other. `ProfileSettings.toolMode`
+    holds two values; the third answer is `skipPermissions`, and presenting it
+    as a row is right (a mode you can set and then contradict on the next screen
+    is not a mode), so the sentinel is written down once rather than invented
+    per caller.
+  - **The reserved note row is reserved as exactly ONE row, and had to be
+    truncated to keep that true.** The comment above it already claimed the
+    height could not depend on the cursor; it could, through the CONTENT — a
+    note wider than the card wrapped to two rows, so the card grew as the
+    cursor passed and shrank on the way back. Bounding it is the structural
+    guard; keeping each note under about fifty characters is what stops the
+    guard from firing and cutting a sentence mid-word.
 - **The provenance note says where a value came FROM, never what it IS.** It
   read `Currently On, saved in this profile.` above a row already carrying a `✓`
   on `On` — the same fact twice, and on a text step the buffer shows it too. A

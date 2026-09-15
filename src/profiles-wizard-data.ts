@@ -37,6 +37,7 @@
 import { MAX_CONCURRENT_AGENTS_LIMIT } from './tools/agent-pool.js';
 import { RESPONSE_STYLE_IDS, type ResponseStyle } from './agent-prompt.js';
 import { REMOTE_MESSAGE_MODES } from './remote-messages.js';
+import { TOOL_MODES } from './tool-modes.js';
 import { THEMES } from './theme.js';
 import { VOICE_BACKEND_VALUES } from './voice-service.js';
 import type { ProfileSettings } from './profiles.js';
@@ -229,39 +230,33 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
       {
         key: 'toolMode',
         label: 'Tool mode',
+        // The rows are bare and the description names all three, which is the
+        // treatment the coordinator question already got: a gloss in
+        // parentheses translates one piece of jargon into another beside every
+        // option, where a sentence above has room to say what each one means by
+        // the time the reader reaches it.
         description:
-          'Whether Bernard may change things without asking. Read-only blocks writes until you allow them.',
-        field: {
-          kind: 'list',
-          options: [
-            { value: 'read-only', label: 'Read-only (least privilege)' },
-            { value: 'write', label: 'Write (allow all tools)' },
-            {
-              value: 'unrestricted',
-              label: '⚠ Unrestricted (no permission checks)',
-              // `toolModePolicy` short-circuits on `skipPermissions` BEFORE every
-              // other rule, so this does not merely relax the confirm gate — it
-              // makes the confirm-mode answer inert. Said on the row, because
-              // the two questions are asked on separate screens and nothing else
-              // connects them.
-              description: 'Dissolves both gates — your confirm-mode answer stops applying.',
-            },
-          ],
-        },
+          'How much Bernard can do on its own. Read-only lets it read anything and stops it changing anything until you say so. Write lets changes through, with a check first on the risky ones. Unrestricted removes every check.',
+        // The shared table, not a fourth copy of it — see `tool-modes.ts` on the
+        // three spellings this had already grown, one of them wrong.
+        field: { kind: 'list', options: [...TOOL_MODES] },
         envVar: 'BERNARD_TOOL_MODE',
         covers: ['skipPermissions'],
       },
       {
         key: 'confirmMode',
         label: 'Confirm mode',
+        // Bare rows for the same reason as its neighbour above. `Auto` alone
+        // says nothing about a risk threshold, so the sentence has to name all
+        // three — which it could not while each row carried two words of it.
         description:
-          'When Bernard stops to ask before doing something risky. Ignored entirely when tool mode is unrestricted.',
+          'How often Bernard checks with you before it acts. Auto asks only about the riskiest calls — a dangerous shell command, or anything that reaches outside your machine. Strict also asks before ordinary file writes. Off never asks. Ignored when tool mode is unrestricted.',
         field: {
           kind: 'list',
           options: [
-            { value: 'auto', label: 'Auto (high-risk only)' },
-            { value: 'strict', label: 'Strict (also medium-risk)' },
-            { value: 'off', label: 'Off (never prompt)' },
+            { value: 'auto', label: 'Auto' },
+            { value: 'strict', label: 'Strict' },
+            { value: 'off', label: 'Off' },
           ],
         },
         envVar: 'BERNARD_CONFIRM_MODE',

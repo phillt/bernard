@@ -221,6 +221,7 @@ import {
   runsUnattended,
   type RemoteMessageMode,
 } from '../remote-messages.js';
+import { TOOL_MODES, UNRESTRICTED, type ToolModeChoice } from '../tool-modes.js';
 import { setOutputSink } from '../framework/hooks/output-sink.js';
 import { setInkHandlers, type MenuResult } from './ink-handlers.js';
 import { formatAskUserAnswers, injectAskUserHistoryMessages } from '../tools/ask-user-history.js';
@@ -3636,37 +3637,24 @@ export function App({
   }
 
   async function runToolModePrompt(): Promise<void> {
-    const modes: Array<{ value: 'read-only' | 'write' | 'skip'; label: string; desc: string }> = [
-      {
-        value: 'read-only',
-        label: 'Read-only (least privilege)',
-        desc: 'Write tools blocked until explicitly enabled.',
-      },
-      {
-        value: 'write',
-        label: 'Write',
-        desc: 'Every tool may run; confirm gate still prompts on risk.',
-      },
-      {
-        value: 'skip',
-        label: 'Run Without Permission Checks or Safeguards',
-        desc: '⚠ No blocking, no confirmation prompts — every tool call runs unattended.',
-      },
-    ];
-    const entries: MenuEntry[] = modes.map((m) => ({
+    // The shared table, not this menu's own spelling of it. The three answers
+    // were worded three ways across this file and the setup wizard, and one of
+    // those — "Write (allow all tools)" — described `write` as what
+    // `unrestricted` does; see `tool-modes.ts`.
+    const entries: MenuEntry[] = TOOL_MODES.map((m) => ({
       label: m.label,
-      description: m.desc,
+      description: m.description,
       active:
-        m.value === 'skip'
+        m.value === UNRESTRICTED
           ? config.skipPermissions
           : !config.skipPermissions && config.toolMode === m.value,
       value: m.value,
     }));
-    const current = config.skipPermissions ? 'unrestricted' : config.toolMode;
+    const current = config.skipPermissions ? UNRESTRICTED : config.toolMode;
     const result = await requestMenu(entries, { title: `Tool mode: ${current}` });
     if (result.cancelled) return;
-    const chosen = result.item.value as 'read-only' | 'write' | 'skip';
-    if (chosen === 'skip') {
+    const chosen = result.item.value as ToolModeChoice;
+    if (chosen === UNRESTRICTED) {
       setSkipPermissions(true);
       return;
     }
@@ -3884,7 +3872,7 @@ export function App({
           label: 'Tool mode',
           annotation: `= ${config.skipPermissions ? '⚠ unrestricted' : config.toolMode}`,
           description:
-            'Read-only blocks write tools until enabled. Write lets every tool run subject to the confirm gate. Unrestricted skips all permission checks.',
+            'How much Bernard can do on its own. Read-only stops it changing anything until you say so; write lets changes through, with a check first on the risky ones; unrestricted removes every check.',
         },
         action: runToolModePrompt,
       },

@@ -187,7 +187,7 @@ describe('tool mode folds skipPermissions in', () => {
   it('sets both keys when unrestricted is chosen', () => {
     const { spec, steps, at } = toolModeStep(ctx());
     const answers = acceptAll(spec.steps.map((s) => ({ initial: s.initial ?? '' })));
-    answers[at] = '⚠ Unrestricted (no permission checks)';
+    answers[at] = '⚠ Unrestricted';
     expect(settingsPatch(steps, answers)).toEqual({ toolMode: 'write', skipPermissions: true });
   });
 
@@ -198,7 +198,7 @@ describe('tool mode folds skipPermissions in', () => {
     (c.current as Record<string, unknown>).skipPermissions = true;
     const { spec, steps, at } = toolModeStep(c);
     const answers = acceptAll(spec.steps.map((s) => ({ initial: s.initial ?? '' })));
-    answers[at] = 'Read-only (least privilege)';
+    answers[at] = 'Read-only';
     expect(settingsPatch(steps, answers)).toEqual({
       toolMode: 'read-only',
       skipPermissions: false,
@@ -464,7 +464,10 @@ describe('a question that another answer can make inert', () => {
     const step = spec.steps.find((s) => s.id === 'toolMode')!;
     const field = step.field as { choices: string[]; notes?: Record<string, string> };
     const unrestricted = field.choices.find((c) => c.includes('Unrestricted'))!;
-    expect(field.notes?.[unrestricted]).toMatch(/confirm-mode answer stops applying/);
+    // The CLAIM, not the sentence: the note has to say that confirming stops
+    // happening, and the wording has since been shortened to fit the one row
+    // the wizard reserves for it.
+    expect(field.notes?.[unrestricted]).toMatch(/confirmed/i);
   });
 
   it('says it on the confirm-mode question too, which is asked first', () => {

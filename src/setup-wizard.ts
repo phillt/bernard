@@ -45,6 +45,7 @@ import {
   type WizardFieldData,
 } from './profiles-wizard-data.js';
 import type { ProfileSettings } from './profiles.js';
+import { UNRESTRICTED } from './tool-modes.js';
 import type { WizardAnswer, WizardSpec, WizardStep } from './ui/overlays/wizard-types.js';
 
 /** A provider the user can pick, and whether a key is already stored for it. */
@@ -132,9 +133,6 @@ export const WELCOME_FOOTER = 'Once you are in: /help lists everything, /setup r
 /** How the wizard spells a boolean. One place, so a decode cannot miss a variant. */
 const ON = 'On';
 const OFF = 'Off';
-
-/** The Tool mode row that means `skipPermissions`, as `/agent-options` spells it. */
-const UNRESTRICTED = 'unrestricted';
 
 /**
  * Where a value is coming from right now, in a few words.

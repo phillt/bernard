@@ -14,6 +14,7 @@ import {
   ARROW_UP,
   CTRL_N,
   CTRL_B,
+  frameRows,
   tick,
 } from './_keys.js';
 
@@ -1115,6 +1116,36 @@ describe('WizardOverlay — a highlighted row can carry a note', () => {
     const frame = stripAnsi(lastFrame() ?? '');
     expect(frame).toContain('b has no key stored');
     expect(frame).not.toContain('a note about b');
+  });
+
+  it('keeps the card the same height whatever the note says', async () => {
+    // The reserved row is reserved as exactly ONE row, and a note wider than
+    // the card wrapped to two — so the card grew under the cursor and shrank
+    // again on the way back. The same reflow the reservation exists to prevent,
+    // arriving through the CONTENT rather than through the condition, which is
+    // why reserving alone was not enough.
+    const spec: WizardSpec = {
+      steps: [
+        {
+          id: 'p',
+          question: 'Which?',
+          field: {
+            kind: 'choice',
+            choices: ['a', 'b', 'c'],
+            notes: { b: 'x'.repeat(400), c: 'short' },
+          },
+          initial: 'a',
+        },
+      ],
+    };
+    const { stdin, lastFrame } = await mount(vi.fn(), spec);
+    const heights = [frameRows(lastFrame())];
+    for (let i = 0; i < 2; i++) {
+      await type(stdin, ARROW_DOWN);
+      heights.push(frameRows(lastFrame()));
+    }
+    // Three cursor positions — no note, a 400-character note, a short one.
+    expect(new Set(heights).size, `heights: ${heights.join(',')}`).toBe(1);
   });
 });
 

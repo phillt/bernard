@@ -1301,8 +1301,16 @@ function WizardChoiceStep({
             urgency: why this row cannot be picked, what picking it costs, and
             why Continue is refusing. They cannot collide — a note belongs to a
             highlighted OPTION and `nothingSelected` only fires on a control. */}
+        {/* Truncated, or the row it reserves is not one row: a note wider than
+            the card wraps and the card grows under the cursor — which is the
+            reflow the reservation above exists to prevent, arriving through the
+            content instead of through the condition. The text step already
+            bounds its own reserved row this way. */}
         <Text color={colors.muted}>
-          {blocked ?? rowNote(step, highlighted) ?? nothingSelected ?? ' '}
+          {truncate(
+            blocked ?? rowNote(step, highlighted) ?? nothingSelected ?? '',
+            contentWidth(columns, rail),
+          ) || ' '}
         </Text>
       </WizardCard>
     </Box>
