@@ -157,6 +157,53 @@ describe('numeric options agree with OPTIONS_REGISTRY', () => {
   });
 });
 
+/**
+ * Every question explains the TRADE, not just the mechanism (#447).
+ *
+ * The question a reader brings to a settings page is "which of these is right
+ * for me", and naming the mechanism does not answer it — `Integer 1-20.` was a
+ * real description here, and `Which colors the terminal uses.` was as much as
+ * most of the others said. A reader could not tell from any of them whether to
+ * touch the setting.
+ *
+ * So each one now says what it is for, what it buys, what it costs, and the
+ * condition under which the cost is not worth paying. That is a judgement and
+ * cannot be asserted directly; what CAN be asserted is the shape it takes, and
+ * the shapes the old copy took when it was not doing the job.
+ */
+describe('every question says enough to decide on', () => {
+  it('is more than a restatement of its own label', () => {
+    // The floor is deliberately low. It is not a style rule — it is the guard
+    // against a description that names the type and stops, which is what the
+    // step-budget and concurrency questions used to do.
+    for (const f of WIZARD_FIELDS) {
+      expect(f.description.split(/\s+/).length, f.key).toBeGreaterThan(12);
+      expect(f.description.toLowerCase(), f.key).not.toBe(`${f.label.toLowerCase()}.`);
+    }
+  });
+
+  it('carries a second sentence, which is where the trade lives', () => {
+    // One sentence can only say what a thing is. What it costs, and when not to
+    // pay it, needs another — so a single-sentence description is the tell that
+    // the question went back to describing its mechanism.
+    for (const f of WIZARD_FIELDS) {
+      const sentences = f.description.split(/[.!?](?:\s|$)/).filter((s) => s.trim() !== '');
+      expect(sentences.length, `${f.key}: ${f.description}`).toBeGreaterThan(1);
+    }
+  });
+
+  it('puts nothing in parentheses on a row label', () => {
+    // A gloss beside the option is the thing the description is supposed to
+    // have absorbed. Asserted across every list rather than per question,
+    // because this was fixed three times — coordinator, tool and confirm mode —
+    // before the rule was general.
+    for (const f of WIZARD_FIELDS) {
+      if (f.field.kind !== 'list') continue;
+      for (const o of f.field.options) expect(o.label, `${f.key}/${o.value}`).not.toMatch(/[()]/);
+    }
+  });
+});
+
 /** Type-level: `covers` may only name real settings. */
 const _coversAreSettings: Array<keyof ProfileSettings> = WIZARD_FIELDS.flatMap(
   (f) => f.covers ?? [],

@@ -103,7 +103,7 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'provider',
         label: 'Provider',
         description:
-          "Which company's AI Bernard talks to. Each one has its own models, prices and API key.",
+          "Which company's models Bernard sends your work to. Each has its own API key, its own prices and its own strengths. You are not locked in \u2014 a lineup can mix providers and a specialist can pin one \u2014 so this is the provider Bernard reaches for when nothing else names a model.",
         field: { kind: 'dynamic', source: 'provider' },
         envVar: 'BERNARD_PROVIDER',
       },
@@ -111,7 +111,7 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'model',
         label: 'Default model',
         description:
-          'The model Bernard uses when nothing else picks one. Bigger models think better and cost more.',
+          'The model Bernard falls back to when nothing else names one. A larger model reasons better on hard work and costs more per turn; a smaller one is faster and cheaper and gives up sooner. Model mode and lineups decide most calls, so this matters most when they are off.',
         field: { kind: 'dynamic', source: 'model' },
         envVar: 'BERNARD_MODEL',
       },
@@ -119,7 +119,7 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'activeLineupId',
         label: 'Active lineup',
         description:
-          'A named set of models — a strong one for hard work, a cheap one for small jobs. Lets Bernard spend less without you choosing a model each time.',
+          'A named set of models: a strong one for hard work, a cheaper one for routine jobs, a cheap one for the small internal passes. It is what lets Bernard spend less without you choosing a model each turn. It does nothing while model mode is off, since every call then uses the default model.',
         field: { kind: 'dynamic', source: 'lineup' },
       },
     ],
@@ -155,11 +155,11 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'modelMode',
         label: 'Model mode',
         description:
-          'How much Bernard spends across its own internal calls. Most of them are small jobs a cheap model does just as well.',
+          'Which rung of the lineup each internal call uses. Most of those calls are small jobs a cheap model does just as well, so spreading them out cuts cost with nothing visible lost. Balanced keeps the strong model for your own turns; optimize for token usage moves those down too; optimize for performance uses the strong one everywhere; off ignores the lineup.',
         field: {
           kind: 'list',
           options: [
-            { value: 'off', label: 'Off (single model)' },
+            { value: 'off', label: 'Off' },
             { value: 'balanced', label: 'Balanced' },
             { value: 'optimize-tokens', label: 'Optimize for token usage' },
             { value: 'optimize-performance', label: 'Optimize for performance' },
@@ -171,7 +171,7 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'subagentPac',
         label: 'Sub-agent PAC pipeline',
         description:
-          'Have sub-agents plan, work, then check their own output. Catches mistakes before they reach you, and costs extra calls.',
+          'Whether a sub-agent plans, works, then checks its own output before handing it back. The extra pass catches mistakes that would otherwise reach you as a confident wrong answer, and costs two more model calls every time you delegate. Worth turning off only if you rarely do.',
         field: { kind: 'boolean' },
         envVar: 'BERNARD_SUBAGENT_PAC',
       },
@@ -186,7 +186,7 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'promptRewriter',
         label: 'Prompt rewriter',
         description:
-          'Optimizes your message for the model that will answer it, before it is sent. Costs one small call each turn.',
+          'Rewrites your message into the shape the answering model reads best, before it is sent. It costs one small call each turn and buys a better first answer, which is worth most if you type quickly or move between model families.',
         field: { kind: 'boolean' },
         envVar: 'BERNARD_PROMPT_REWRITER',
       },
@@ -194,7 +194,7 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'recallFilter',
         label: 'Recall filter',
         description:
-          'Pull up more of your saved facts, then let a cheap model keep only the ones that matter. Stops unrelated memories crowding the answer.',
+          'Bernard searches its saved facts before each turn. This widens that search and has a cheap model drop whatever is not relevant, so an unrelated memory cannot pull the answer off course. It costs one small call each turn; without it the narrower search is used instead.',
         field: { kind: 'boolean' },
         envVar: 'BERNARD_RECALL_FILTER',
       },
@@ -202,7 +202,7 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'memoryConsolidation',
         label: 'Memory consolidation',
         description:
-          'At the end of a session, suggest saved notes that look finished. Without it, memory only ever grows.',
+          'At the end of a session, look over the notes Bernard has saved and suggest which ones look finished. Nothing is removed without you \u2014 the list is shown next time you start. Left alone, memory only grows, and past a point the oldest notes stop reaching the model at all.',
         field: { kind: 'boolean' },
         envVar: 'BERNARD_MEMORY_CONSOLIDATION',
       },
@@ -210,7 +210,7 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'specialistRecall',
         label: 'Specialist recall',
         description:
-          'Let each specialist keep notes from its own work, so it stops repeating the same mistake.',
+          'Lets each specialist keep notes from its own runs, so it stops repeating a mistake it has already made. The notes are private to that specialist and go when it does. It costs one small call per specialist at the end of a session.',
         field: { kind: 'boolean' },
         envVar: 'BERNARD_SPECIALIST_RECALL',
       },
@@ -218,7 +218,7 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'scratchSubjectThreshold',
         label: 'Scratch subject-change threshold',
         description:
-          'How different a new message has to be before Bernard drops its working notes. Lower keeps context for longer.',
+          'Bernard keeps working notes across turns and drops them when you change the subject. This is how close a new message has to be to the last one to count as the same subject. Higher drops the notes more readily, which keeps a new task clean; lower carries them further, which keeps a long one coherent.',
         field: { kind: 'float01' },
         envVar: 'BERNARD_SCRATCH_SUBJECT_THRESHOLD',
       },
@@ -271,7 +271,7 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'remoteMessages',
         label: 'Messages from other processes',
         description:
-          'What a message from another program may do. Ask me shows it and one keystroke acts on it.',
+          'What a message from another program on this machine may do. Ask me shows it and waits \u2014 one keystroke acts on it, so nothing runs unwatched. The other two let any local process that can write your state directory start a turn on its own, which is convenient for scripts and is a real grant.',
         // The shared table, not a fourth copy of it. Hand-written here the rows
         // had already disagreed with the menu's on arrival — which is the drift
         // `remote-messages.ts` says it exists to prevent, happening in the one
@@ -288,14 +288,16 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
       {
         key: 'conciseMode',
         label: 'Concise mode',
-        description: 'Keep answers as short as the question allows.',
+        description:
+          'Keeps answers as short as the question allows. Off lets Bernard explain its reasoning and show its working, which is worth having while you are still learning what it does; on suits work where you already know what you asked for.',
         field: { kind: 'boolean' },
         envVar: 'BERNARD_CONCISE_MODE',
       },
       {
         key: 'responseStyle',
         label: 'Response style',
-        description: 'The shape of an answer — how long, how detailed, what tone.',
+        description:
+          'The shape of an answer rather than its length \u2014 how much structure, how much detail, what tone. Default adds nothing and lets the model answer as it would; the others trade some of that freedom for a predictable form, which helps when answers are read the same way every time.',
         field: {
           kind: 'list',
           options: RESPONSE_STYLE_IDS.map((id: ResponseStyle) => ({
@@ -309,14 +311,15 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'toolDetails',
         label: 'Tool details',
         description:
-          "Show what each tool was called with and what came back. Useful when you want to check Bernard's work.",
+          "Shows the arguments each tool was called with and what it returned. It is how you check Bernard's work rather than take it on trust, and it makes the transcript considerably noisier. Worth having on while you are still deciding whether to trust a tool.",
         field: { kind: 'boolean' },
         envVar: 'BERNARD_TOOL_DETAILS',
       },
       {
         key: 'theme',
         label: 'Theme',
-        description: 'Which colors the terminal uses.',
+        description:
+          'Which colours the terminal uses. Pick high-contrast or colorblind if the defaults are hard to read; nothing but the colours changes.',
         field: {
           kind: 'list',
           options: Object.keys(THEMES).map((name) => ({ value: name, label: name })),
@@ -332,7 +335,8 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
       {
         key: 'voiceTts',
         label: 'Speak replies',
-        description: 'Read each answer out loud.',
+        description:
+          'Reads each answer out loud as well as printing it, which is what makes Bernard usable while you are looking somewhere else. It speaks the last answer only, so anything that has scrolled past is not read back.',
         field: { kind: 'boolean' },
         envVar: 'BERNARD_VOICE',
       },
@@ -340,14 +344,15 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'voiceNormalizer',
         label: 'Natural speech',
         description:
-          'Rewrite the answer so it sounds right spoken — links named, numbers read properly, no markdown read aloud.',
+          'Rewrites an answer into how a person would say it \u2014 links named rather than spelled out, numbers read as what they are, no markup read aloud. It costs one small call per spoken reply. Off still strips the markup, so speech stays intelligible either way.',
         field: { kind: 'boolean' },
         envVar: 'BERNARD_VOICE_NORMALIZER',
       },
       {
         key: 'voiceBackend',
         label: 'Voice backend',
-        description: 'Which program does the speaking. Auto finds one that is already installed.',
+        description:
+          'Which program does the speaking. Auto picks whichever is installed, which is the right answer unless you have more than one and want a particular voice from a particular one.',
         field: {
           kind: 'list',
           options: VOICE_BACKEND_VALUES.map((b) => ({ value: b, label: b })),
@@ -357,14 +362,16 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
       {
         key: 'voiceVoice',
         label: 'Voice name',
-        description: "Which voice to speak in. Leave blank for the backend's own.",
+        description:
+          'Which named voice the backend speaks in. Leave blank for its own default. The name is not checked here \u2014 a backend that does not recognise it simply says nothing \u2014 so try it after changing.',
         field: { kind: 'text' },
         envVar: 'BERNARD_VOICE_VOICE',
       },
       {
         key: 'voiceRate',
         label: 'Speech rate (wpm)',
-        description: 'How fast Bernard speaks, in words per minute.',
+        description:
+          'How fast Bernard speaks, in words per minute. Higher gets through a long answer sooner and is harder to follow while your attention is elsewhere, which is where spoken replies are usually heard.',
         field: { kind: 'int', min: 50, max: 500 },
         envVar: 'BERNARD_VOICE_RATE',
       },
@@ -372,7 +379,7 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'voiceWarmupMs',
         label: 'Audio warmup (ms)',
         description:
-          'Plays a moment of silence first, so the first word is not cut off. Linux only; 0 turns it off.',
+          'Plays a moment of silence before speaking, so a sleeping speaker is awake by the first word. Linux only \u2014 macOS and Windows keep audio devices ready. Raise it if words are still clipped; 0 turns it off.',
         field: { kind: 'int', min: 0, max: 5_000 },
         envVar: 'BERNARD_VOICE_WARMUP_MS',
       },
@@ -387,21 +394,23 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'autoCreateSpecialists',
         label: 'Auto-create specialists',
         description:
-          'Save a new specialist by itself once Bernard is confident enough, instead of asking you.',
+          'When the same kind of work keeps coming back, Bernard can write a specialist for it. On, it saves one once it is confident enough; off, it offers and waits. The threshold below is what confident enough means.',
         field: { kind: 'boolean' },
         envVar: 'BERNARD_AUTO_CREATE_SPECIALISTS',
       },
       {
         key: 'autoCreateApplets',
         label: 'Auto-create applets',
-        description: 'Offer to build a small app when the same task keeps coming back.',
+        description:
+          'Whether Bernard offers to build a small web app when it notices the same task returning. It only ever offers \u2014 building one is still a turn you ask for \u2014 so this widens what gets suggested, not what gets made.',
         field: { kind: 'boolean' },
         envVar: 'BERNARD_AUTO_CREATE_APPLETS',
       },
       {
         key: 'autoOpenApplets',
         label: 'Open new applets',
-        description: 'Open a new applet in your browser as soon as it is built.',
+        description:
+          'Opens a newly built applet in your browser as soon as it is ready. Turn it off where there is nothing to open, such as over SSH or on a machine with no display.',
         field: { kind: 'boolean' },
         envVar: 'BERNARD_AUTO_OPEN_APPLETS',
       },
@@ -409,14 +418,15 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'autoStyleApplets',
         label: 'Style new applets',
         description:
-          'Run a design pass over a new applet, so it does not arrive looking unfinished.',
+          'Runs a design pass over a new applet before it opens, so it does not arrive looking unmade. It costs one call at build time, and only on create \u2014 an applet whose page you supply is left exactly as written.',
         field: { kind: 'boolean' },
         envVar: 'BERNARD_AUTO_STYLE_APPLETS',
       },
       {
         key: 'appletPlanning',
         label: 'Plan applets before building',
-        description: 'Work out what an applet needs before writing any of it. Fewer rebuilds.',
+        description:
+          'Works out what an applet should be \u2014 its screens, its controls, what it stores \u2014 before any of it is written. It costs three short calls up front and saves the rebuilds that come from deciding those things while writing the page.',
         field: { kind: 'boolean' },
         envVar: 'BERNARD_APPLET_PLANNING',
       },
@@ -424,14 +434,15 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'autoCreateThreshold',
         label: 'Auto-create threshold',
         description:
-          'How sure Bernard has to be before doing any of the above on its own. Higher means it asks you more often.',
+          'How sure Bernard has to be before acting on any of the above by itself. Higher means it asks more often and surprises you less; lower means it acts more freely and will sometimes make something you did not want.',
         field: { kind: 'float01' },
         envVar: 'BERNARD_AUTO_CREATE_THRESHOLD',
       },
       {
         key: 'autoUpdate',
         label: 'Auto-update',
-        description: 'Install a new version of Bernard at startup when one is available.',
+        description:
+          'Installs a new version of Bernard at startup when one is available. On keeps you current without thinking about it; off keeps a version you have tested in place until you choose to move.',
         field: { kind: 'boolean' },
       },
     ],
@@ -444,7 +455,8 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
       {
         key: 'maxConcurrentAgents',
         label: 'Max concurrent sub-agents',
-        description: `Integer 1-${MAX_CONCURRENT_AGENTS_LIMIT}.`,
+        description:
+          "How many sub-agents may run at once. More finishes a fan-out sooner, and multiplies how quickly you reach a provider's rate limit \u2014 which is what this bounds, rather than the amount of work itself.",
         field: { kind: 'int', min: 1, max: MAX_CONCURRENT_AGENTS_LIMIT },
         envVar: 'BERNARD_MAX_CONCURRENT_AGENTS',
       },
@@ -452,21 +464,23 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'maxSteps',
         label: 'Max agent steps per turn',
         description:
-          'How many times Bernard may call the model to finish one turn. Higher handles bigger jobs and costs more.',
+          'How many times Bernard may call the model to finish one turn. Higher lets it see a long job through; lower caps what a single turn can cost you, and a turn that runs out stops mid-job and says so.',
         field: { kind: 'int', min: 1, max: 200 },
         envVar: 'BERNARD_MAX_STEPS',
       },
       {
         key: 'maxTokens',
         label: 'Max response tokens',
-        description: 'The longest answer the model may write in one go.',
+        description:
+          'The longest single answer the model may write. Raising it lets a long piece of writing finish in one go; the cost is that a runaway answer runs further before anything stops it.',
         field: { kind: 'int', min: 256, max: 200_000 },
         envVar: 'BERNARD_MAX_TOKENS',
       },
       {
         key: 'shellTimeout',
         label: 'Shell timeout (ms)',
-        description: 'How long a shell command may run before Bernard gives up on it.',
+        description:
+          'How long a shell command may run before Bernard gives up on it. Long enough for your slowest ordinary command, short enough that one which will never finish does not hold the whole turn.',
         field: { kind: 'int', min: 1_000, max: 600_000 },
         envVar: 'BERNARD_SHELL_TIMEOUT',
       },
@@ -474,7 +488,7 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'tokenWindow',
         label: 'Context window override',
         description:
-          'How much Bernard can hold in mind at once. 0 reads the real limit from the model.',
+          'How much Bernard holds in mind before it compacts the conversation. 0 reads the real limit from the model, which is right unless your provider reports one Bernard cannot look up \u2014 set it by hand then.',
         field: { kind: 'int', min: 0, max: 2_000_000 },
         envVar: 'BERNARD_TOKEN_WINDOW',
       },

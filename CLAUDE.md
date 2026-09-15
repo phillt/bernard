@@ -1066,6 +1066,19 @@ coordinator)`, which translated one piece of jargon into another beside every
     `BERNARD_COORDINATOR_MODE`), but a bare `On` beside `Auto` invites the
     reading that `Auto` is somehow less on, and the word that distinguishes them
     is `Always`. It belongs in the label rather than being left for the note.
+  - **Every question owes the trade, not only the mechanism**, and the sweep to
+    make that true is what turned three one-off rewrites into a rule. The old
+    copy named what a setting was and stopped — `Integer 1-20.` was a real
+    description, and `Which colors the terminal uses.` was as much as most of
+    the rest said — which answers a question nobody is asking. A reader at a
+    settings page is asking "is this one for me", and that needs four things:
+    what it is for, what it buys, what it costs, and the condition under which
+    the cost is not worth paying. `settings-coverage.test.ts` asserts the SHAPE
+    rather than the judgement — a word floor that the type-naming descriptions
+    would fail, a second sentence (one sentence can only say what a thing is),
+    and no parenthetical gloss on any row label anywhere. Word counts land
+    between 21 and 62; the long end is a list question that has to name four
+    rows, and the short end is the theme picker, which genuinely has no trade.
   - **A description for a mode question owes the TRADE, not examples.** The
     question a reader brings is "which of these is right for me", and a list of
     examples cannot answer it — the examples are always someone else's work. So
