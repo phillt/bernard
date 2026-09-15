@@ -450,7 +450,10 @@ export function buildProviderHubSpec(ctx: SetupContext): WizardSpec {
         id: 'providers',
         section: 'Providers',
         question: 'Which providers should Bernard be able to use?',
-        hint: 'Pick one to add or replace its key. You need at least one; more can be mixed per tier by a lineup.',
+        // No mention of lineups or tiers: this screen is about keys, and a
+        // reader here has not met either idea yet — the lineup question comes
+        // two sections later and explains itself.
+        hint: 'Pick one to add or replace its key. You need at least one, and you can add more.',
         field: {
           kind: 'choice',
           choices: rows,

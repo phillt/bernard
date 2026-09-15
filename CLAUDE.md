@@ -823,6 +823,18 @@ true}` and the caller reopens whatever came before. A FLAG on the cancelled
     detail is usually the very thing that explains why the row cannot be picked
     (`xai ···· no key`), so branching it away left the reader with a dead row and
     no reason until they highlighted it.
+  - **`ctrl+n` does what the step's own forward BUTTON does**, which is not
+    always "hand back the selection". A step with its own `actions` draws the
+    first of them as that button — the provider hub's reads "Continue to the next
+    step" and resolves with that label — and a `pickAdvances` page carries no
+    selection at all, so a chord bound to `submitChosen` was advertised in the
+    key line and silently inert on the screen a fresh install starts on. It takes
+    the same branch `commit` takes for a tail row, so the chord and the button
+    cannot come to mean different things, and the hint is gated on the same value
+    so it is never offered on a page with no forward button (an `ask_user` menu,
+    where picking IS the act). `setup-walk.test.tsx` drives the chord through
+    every stage the flow really builds rather than a hand-written spec — the
+    shape that broke exists only in the builders.
   - **`ctrl+n` continues from any step kind, and it ACTS.** Symmetric with
     `ctrl+b`, which goes back rather than focusing Back — a pair where one
     commits and the other only points at a button would be two rules wearing one

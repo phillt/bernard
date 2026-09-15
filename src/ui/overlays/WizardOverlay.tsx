@@ -897,6 +897,29 @@ function WizardChoiceStep({
     onSubmit(label);
   };
 
+  /**
+   * Whatever the footer's forward button does — which is not always "hand back
+   * the selection".
+   *
+   * A step with its own ACTION rows draws the first of them as that button, and
+   * the provider hub is one: its button reads "Continue to the next step" and
+   * resolves with that label. `ctrl+n` bound straight to `submitChosen` did
+   * nothing there, because a `pickAdvances` page carries no selection to submit
+   * — the chord was advertised in the key line and silently inert on the one
+   * screen a fresh install starts on.
+   *
+   * `undefined` when the page has no forward button at all (an `ask_user` menu,
+   * where picking IS the act), and the hint is gated on the same value so it is
+   * never advertised where it cannot work.
+   */
+  const nextRow = tail.find((r) => r !== BACK_ROW);
+  const continueNow = (): void => {
+    if (nextRow === undefined) return;
+    // The same branch `commit` takes for a tail row, so the chord and the button
+    // cannot mean different things.
+    return nextRow === CONTINUE_LABEL ? submitChosen() : onSubmit(nextRow);
+  };
+
   const commit = (index: number): void => {
     if (!isOption(index)) {
       const row = allRows[index];
@@ -949,7 +972,7 @@ function WizardChoiceStep({
   useInput((input, key) => {
     if (isDismissKey(input, key)) return onCancel();
     if (canGoBack && isBackKey(input, key)) return onBack();
-    if (isNextKey(input, key)) return submitChosen();
+    if (isNextKey(input, key)) return continueNow();
     if (inControls) {
       // ↑ returns to the list, and to its END — the row the cursor left, not the
       // top, which is where it would land if this were a plain wrap.
@@ -1049,7 +1072,9 @@ function WizardChoiceStep({
           // a page with one button describes a key that does nothing.
           ...(inControls && canGoBack ? [{ key: '←/→', label: 'switch' }] : []),
           ...(canGoBack ? [BACK_HINT] : []),
-          NEXT_HINT,
+          // Never advertised on a page with no forward button: an `ask_user`
+          // menu resolves on the pick itself, so there is nothing to continue to.
+          ...(nextRow !== undefined ? [NEXT_HINT] : []),
           HINT_CANCEL,
         ]}
       >

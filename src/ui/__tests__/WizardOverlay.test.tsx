@@ -872,6 +872,25 @@ describe('WizardOverlay — ctrl+n continues from any step kind', () => {
     expect(onResolve).not.toHaveBeenCalled();
   });
 
+  it('is not advertised where there is no forward button', async () => {
+    // An `ask_user` menu resolves on the pick itself and draws no Continue, so
+    // naming the chord there would be a key line offering something that cannot
+    // happen — which is the whole defect this chord was fixed for, one page over.
+    const { lastFrame } = await mount(vi.fn(), {
+      skipReview: true,
+      steps: [
+        {
+          id: 'q',
+          question: 'Which?',
+          field: { kind: 'choice', choices: ['a', 'b'], pickAdvances: true },
+        },
+      ],
+    });
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toContain('↵');
+    expect(frame).not.toContain('ctrl+n');
+  });
+
   it('reaches Continue with → from an option row, where the arrow is free', async () => {
     const { stdin, lastFrame } = await mount(
       vi.fn(),
