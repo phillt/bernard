@@ -39,7 +39,6 @@ const CTX: SetupContext = {
     subagentPac: true,
     promptRewriter: true,
     recallFilter: true,
-    referenceLookup: true,
     memoryConsolidation: true,
     specialistRecall: true,
     scratchSubjectThreshold: 0.15,

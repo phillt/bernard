@@ -150,7 +150,6 @@ function makeConfig(overrides: Partial<BernardConfig> = {}): BernardConfig {
     autoCreateThreshold: 0.8,
     correctionEnabled: false,
     promptRewriter: false,
-    referenceLookup: false,
     confirmMode: 'auto',
     toolMode: 'write',
     maxConcurrentAgents: 4,

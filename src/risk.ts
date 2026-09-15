@@ -30,9 +30,8 @@ export type ConfirmThreshold = 'never' | 'high' | 'medium' | 'always';
 /**
  * Verbs that make an MCP tool a lookup-style call.
  *
- * Centralized here so the MCP wrapper (`mcp.ts`), the reference-resolver lookup
- * pass (`reference-tool-lookup.ts`) and the watcher probe (`watchers/probe.ts`)
- * agree on one definition of "read-only MCP tool".
+ * Centralized here so the MCP wrapper (`mcp.ts`) and the watcher probe
+ * (`watchers/probe.ts`) agree on one definition of "read-only MCP tool".
  */
 const READ_VERBS = new Set(['search', 'list', 'find', 'get', 'query', 'read', 'lookup']);
 

@@ -31,7 +31,6 @@ function ctx(over: Partial<SetupContext> = {}): SetupContext {
     subagentPac: true,
     promptRewriter: true,
     recallFilter: true,
-    referenceLookup: true,
     memoryConsolidation: true,
     specialistRecall: true,
     scratchSubjectThreshold: 0.3,

@@ -157,13 +157,12 @@ export async function normalizeSpeech(
     const system = SYSTEM_PROMPT;
 
     // The cache-key → getCachedLLM → abort-on-hit → traceLlm → usageRecordFromSite
-    // → setCachedLLM sequence below is the seventh copy of a block that
-    // `prompt-rewriter`, `recall-filter`, `reference-resolver`,
-    // `specialist-detector` and `reference-tool-lookup` (twice) also carry —
-    // and those have already drifted three ways (one omits the cache-hit abort
-    // guard entirely, another never forwards `abortSignal`). This copy follows
-    // `prompt-rewriter.ts` deliberately; extracting the shape is a six-file
-    // refactor that does not belong in this change.
+    // → setCachedLLM sequence below is the fifth copy of a block that
+    // `prompt-rewriter`, `recall-filter`, `reference-resolver` and
+    // `specialist-detector` also carry — and those have already drifted (one
+    // omits the cache-hit abort guard entirely, another never forwards
+    // `abortSignal`). This copy follows `prompt-rewriter.ts` deliberately;
+    // extracting the shape is a five-file refactor that does not belong here.
     const cacheOn = config.cacheEnabled !== false;
     const cacheKey: LLMCacheKey | null = cacheOn
       ? {

@@ -66,7 +66,6 @@ export interface ProfileSettings {
   autoCreateThreshold?: number;
   promptRewriter?: boolean;
   recallFilter?: boolean;
-  referenceLookup?: boolean;
   scratchSubjectThreshold?: number;
   conciseMode?: boolean;
   confirmMode?: 'off' | 'auto' | 'strict';
@@ -268,7 +267,6 @@ const LEGACY_BOOLEAN_KEYS = [
   'appletPlanning',
   'promptRewriter',
   'recallFilter',
-  'referenceLookup',
   'conciseMode',
 ] as const;
 

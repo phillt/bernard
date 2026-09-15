@@ -61,7 +61,7 @@ describe('llm-cache (#171)', () => {
 
   it('different siteName hashes to a different key', () => {
     setCachedLLM(baseKey, 'rewriter-result');
-    const otherSite: LLMCacheKey = { ...baseKey, siteName: 'reference-lookup:select' };
+    const otherSite: LLMCacheKey = { ...baseKey, siteName: 'reference-resolver' };
     expect(getCachedLLM(otherSite)).toBeUndefined();
   });
 

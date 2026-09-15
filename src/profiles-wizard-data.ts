@@ -196,14 +196,6 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         envVar: 'BERNARD_RECALL_FILTER',
       },
       {
-        key: 'referenceLookup',
-        label: 'Reference lookup',
-        description:
-          'When you mention someone Bernard does not know, let it check a tool such as your contacts before asking you.',
-        field: { kind: 'boolean' },
-        envVar: 'BERNARD_REFERENCE_LOOKUP',
-      },
-      {
         key: 'memoryConsolidation',
         label: 'Memory consolidation',
         description:

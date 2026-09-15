@@ -134,7 +134,7 @@ export interface BernardConfig {
   recallFilter: boolean;
   /**
    * Whether the in-process caching layer (#171) is active. Covers deterministic
-   * tool results, select LLM subcalls (rewriter, reference-lookup), and the
+   * tool results, select LLM subcalls (rewriter, reference-resolver), and the
    * per-turn RAG search cache. Default `true`; opt out via
    * `BERNARD_CACHE_ENABLED=false`. Not persisted to preferences — environment
    * toggle only.
@@ -235,9 +235,6 @@ export interface BernardConfig {
    */
   responseStyle: ResponseStyle;
   /** Whether the resolver attempts a tool-based lookup before prompting the user for unknown references. */
-  referenceLookup: boolean;
-  /** Extra tool-name allowlist for the reference-lookup pass (additive over built-in patterns). */
-  referenceLookupTools: string[];
   /**
    * Jaccard-similarity threshold (0-1) below which the scratch-lifecycle policy
    * (#169) treats a user turn as a subject change and clears all scratch.
@@ -548,7 +545,6 @@ export function savePreferences(prefs: {
   autoCreateThreshold?: number;
   promptRewriter?: boolean;
   recallFilter?: boolean;
-  referenceLookup?: boolean;
   scratchSubjectThreshold?: number;
   conciseMode?: boolean;
   confirmMode?: 'off' | 'auto' | 'strict';
@@ -609,7 +605,6 @@ export function loadPreferences(): {
   autoCreateThreshold?: number;
   promptRewriter?: boolean;
   recallFilter?: boolean;
-  referenceLookup?: boolean;
   scratchSubjectThreshold?: number;
   conciseMode?: boolean;
   confirmMode?: 'off' | 'auto' | 'strict';
@@ -667,8 +662,6 @@ export function loadPreferences(): {
       typeof parsed.autoCreateThreshold === 'number' ? parsed.autoCreateThreshold : undefined,
     promptRewriter: typeof parsed.promptRewriter === 'boolean' ? parsed.promptRewriter : undefined,
     recallFilter: typeof parsed.recallFilter === 'boolean' ? parsed.recallFilter : undefined,
-    referenceLookup:
-      typeof parsed.referenceLookup === 'boolean' ? parsed.referenceLookup : undefined,
     scratchSubjectThreshold:
       typeof parsed.scratchSubjectThreshold === 'number'
         ? parsed.scratchSubjectThreshold
@@ -1391,19 +1384,6 @@ export function loadConfig(overrides?: {
       ? DEFAULT_CONCISE_MODE
       : !(rawConcise === 'false' || rawConcise === '0'));
 
-  // Reference tool-lookup runs by default; users can opt out with BERNARD_REFERENCE_LOOKUP=false.
-  const rawReferenceLookup = process.env.BERNARD_REFERENCE_LOOKUP;
-  const referenceLookup =
-    prefs.referenceLookup ??
-    (rawReferenceLookup === undefined
-      ? true
-      : !(rawReferenceLookup === 'false' || rawReferenceLookup === '0'));
-
-  const referenceLookupTools = (process.env.BERNARD_LOOKUP_TOOLS ?? '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-
   // Unlike `autoCreateThreshold` we don't rescale: `scratchSubjectThreshold`
   // is documented as a 0-1 Jaccard score and the REPL prompt enforces the
   // same range, so silently treating 15 → 0.15 would mask misconfiguration.
@@ -1515,8 +1495,6 @@ export function loadConfig(overrides?: {
     toolMode,
     maxConcurrentAgents,
     responseStyle,
-    referenceLookup,
-    referenceLookupTools,
     scratchSubjectThreshold,
     conciseMode,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
@@ -1613,7 +1591,6 @@ const PROFILE_SCOPED_KEYS: ReadonlyArray<keyof BernardConfig> = [
   'toolMode',
   'maxConcurrentAgents',
   'responseStyle',
-  'referenceLookup',
   'scratchSubjectThreshold',
   'conciseMode',
   'activeLineupId',
@@ -1638,7 +1615,7 @@ const PROFILE_SCOPED_KEYS: ReadonlyArray<keyof BernardConfig> = [
  * Does not touch API keys, custom providers, the cached `providerBaseUrl`, or
  * env-only flags (`ragEnabled`, `cacheEnabled`, `promptCache`, `mcpDelegation`,
  * `mcpDelegateEscalation`, `mcpResultShaping`, `mcpResultShapingMaxChars`, `costGuardrailTokens`,
- * `semanticCache`, `correctionEnabled`, `referenceLookupTools`) — those are not
+ * `semanticCache`, `correctionEnabled`) — those are not
  * profile-scoped.
  *
  * @throws if the new profile selects a provider with no configured API key.

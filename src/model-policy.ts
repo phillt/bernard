@@ -26,7 +26,6 @@ export type ModelSite =
   | 'tool-wrapper'
   | 'rewriter'
   | 'reference-resolver'
-  | 'reference-lookup'
   | 'recall-filter'
   | 'compressor'
   | 'specialist-detector'
@@ -397,7 +396,6 @@ export function providersInUse(config: BernardConfig): string[] {
 const TEMPERATURE_ZERO_SITES: ReadonlySet<ModelSite> = new Set([
   'rewriter',
   'reference-resolver',
-  'reference-lookup',
   'recall-filter',
   'specialist-detector',
   'applet-detector',
