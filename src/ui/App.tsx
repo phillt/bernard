@@ -221,6 +221,7 @@ import {
   runsUnattended,
   type RemoteMessageMode,
 } from '../remote-messages.js';
+import { COORDINATOR_MODES } from '../coordinator-modes.js';
 import { TOOL_MODES, UNRESTRICTED, type ToolModeChoice } from '../tool-modes.js';
 import { setOutputSink } from '../framework/hooks/output-sink.js';
 import { setInkHandlers, type MenuResult } from './ink-handlers.js';
@@ -3520,23 +3521,12 @@ export function App({
   }
 
   async function runCoordinatorModePrompt(): Promise<void> {
-    const modes: Array<{ value: 'on' | 'off' | 'auto'; label: string; desc: string }> = [
-      // Bare labels, with the sentence under each row carrying the meaning.
-      // "Auto (qualifier picks per turn)" translated one piece of jargon into
-      // another: a reader who does not know what a coordinator is learns nothing
-      // from being told they always get one. Same wording as the setup wizard's
-      // version of this question, which is the other place it is asked.
-      {
-        value: 'auto',
-        label: 'Auto',
-        desc: 'Decide per message, by looking at what was asked.',
-      },
-      { value: 'on', label: 'On', desc: 'Always work out a plan first.' },
-      { value: 'off', label: 'Off', desc: 'Never plan; answer straight away.' },
-    ];
-    const entries: MenuEntry[] = modes.map((m) => ({
+    // The shared table, not this menu's own spelling of it — the wizard asks
+    // the same question, and two copies of three rows is how they came to
+    // disagree in the first place.
+    const entries: MenuEntry[] = COORDINATOR_MODES.map((m) => ({
       label: m.label,
-      description: m.desc,
+      description: m.description,
       active: config.coordinatorMode === m.value,
       value: m.value,
     }));
@@ -3842,7 +3832,7 @@ export function App({
           label: 'Planning',
           annotation: `= ${config.coordinatorMode}`,
           description:
-            'Whether Bernard works out a plan before it starts. Planning pays off on a job with several steps and wastes a call on a simple question.',
+            'On a task with several steps, planning makes the work markedly more reliable, at the cost of extra turns and time. It buys nothing on work that was only ever one step.',
         },
         action: runCoordinatorModePrompt,
       },

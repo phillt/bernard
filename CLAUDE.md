@@ -1059,6 +1059,23 @@ coordinator)`, which translated one piece of jargon into another beside every
     as a row is right (a mode you can set and then contradict on the next screen
     is not a mode), so the sentinel is written down once rather than invented
     per caller.
+  - **`src/coordinator-modes.ts` is the same treatment for the planning
+    question**, which had the same two hand-written copies plus a third
+    paraphrase on the menu's parent row. Its rows are `Auto` / `Always on` /
+    `Always off`: the VALUES stay `auto`/`on`/`off` (they are on disk and in
+    `BERNARD_COORDINATOR_MODE`), but a bare `On` beside `Auto` invites the
+    reading that `Auto` is somehow less on, and the word that distinguishes them
+    is `Always`. It belongs in the label rather than being left for the note.
+  - **A description for a mode question owes the TRADE, not examples.** The
+    question a reader brings is "which of these is right for me", and a list of
+    examples cannot answer it — the examples are always someone else's work. So
+    the coordinator question states what planning buys (reliability on a task
+    with several steps), what it costs (turns and time), and the condition under
+    which the cost buys nothing (work that was only ever one step). A reader who
+    knows the shape of their own work can then settle it, and the two `Always`
+    rows are the two ends of that same sentence. `coordinator-modes.test.ts`
+    asserts the four claims rather than the sentence, because the wording will
+    be revised and the obligation will not.
   - **The reserved note row is reserved as exactly ONE row, and had to be
     truncated to keep that true.** The comment above it already claimed the
     height could not depend on the cursor; it could, through the CONTENT — a

@@ -37,6 +37,7 @@
 import { MAX_CONCURRENT_AGENTS_LIMIT } from './tools/agent-pool.js';
 import { RESPONSE_STYLE_IDS, type ResponseStyle } from './agent-prompt.js';
 import { REMOTE_MESSAGE_MODES } from './remote-messages.js';
+import { COORDINATOR_MODES } from './coordinator-modes.js';
 import { TOOL_MODES } from './tool-modes.js';
 import { THEMES } from './theme.js';
 import { VOICE_BACKEND_VALUES } from './voice-service.js';
@@ -135,18 +136,19 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         // per turn)" and "On (always coordinator)", which translated one piece
         // of jargon into another beside every option — a reader who does not
         // know what a coordinator is learns nothing from being told they always
-        // get one. The sentence above carries it instead, and names all three
-        // rows so each one is already explained by the time it is read.
+        // get one. The sentence carries it instead.
+        //
+        // It has to do more than name the rows, because the question a reader
+        // brings is "which of these is right for ME", and no list of examples
+        // answers that — they will always be someone else's work. So it states
+        // the trade itself: what planning buys, what it costs, and the one
+        // condition under which the cost buys nothing. A reader who knows
+        // whether their own work has several steps can then settle it, and the
+        // two `Always` rows are the two ends of that same sentence.
         description:
-          'Whether Bernard works out a plan before it starts. Planning pays off on a job with several steps and wastes a call on a simple question. Auto decides per message, On always plans first, Off never does.',
-        field: {
-          kind: 'list',
-          options: [
-            { value: 'auto', label: 'Auto' },
-            { value: 'on', label: 'On' },
-            { value: 'off', label: 'Off' },
-          ],
-        },
+          'On a task with several steps, coordinator mode makes the work markedly more reliable: Bernard works out a plan and holds itself to it. The cost is the extra turns and time that takes, and it buys nothing on work that was only ever one step. Auto turns it on when it sees a multi-step task.',
+        // The shared table, not a second copy — see `coordinator-modes.ts`.
+        field: { kind: 'list', options: [...COORDINATOR_MODES] },
         envVar: 'BERNARD_COORDINATOR_MODE',
       },
       {

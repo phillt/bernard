@@ -152,7 +152,9 @@ describe('settingsPatch — only what changed is written', () => {
     const { spec, steps } = buildSettingsSpec(ctx());
     const answers = acceptAll(spec.steps.map((s) => ({ initial: s.initial ?? '' })));
     const at = spec.steps.findIndex((s) => s.id === 'coordinatorMode');
-    answers[at] = 'On';
+    // The label a reader picks and the value written to disk are deliberately
+    // different strings — `Always on` is the row, `on` is the setting.
+    answers[at] = 'Always on';
     expect(settingsPatch(steps, answers)).toEqual({ coordinatorMode: 'on' });
   });
 
