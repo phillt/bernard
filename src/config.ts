@@ -1,6 +1,7 @@
 import * as dotenv from 'dotenv';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import type { RemoteMessageMode } from './remote-messages.js';
 import { KEYS_PATH, ENV_PATH, LEGACY_DIR } from './paths.js';
 import { loadCustomProviders, validateBaseURL, type CustomProvider } from './custom-providers.js';
 import { type VoiceBackend, VOICE_BACKEND_VALUES } from './voice-service.js';
@@ -349,7 +350,7 @@ export interface BernardConfig {
    * was built. What makes persisting safe now is that a single keystroke acts on
    * one message, so nobody has to reach for the blanket setting to get work done.
    */
-  remoteMessages: 'ask' | 'prompts' | 'all';
+  remoteMessages: RemoteMessageMode;
 }
 
 const DEFAULT_PROVIDER = 'anthropic';
@@ -401,7 +402,7 @@ export function isConfirmMode(v: unknown): v is 'off' | 'auto' | 'strict' {
 }
 
 /** Type guard for `remoteMessages` string values (#462/#493). */
-export function isRemoteMessages(v: unknown): v is 'ask' | 'prompts' | 'all' {
+export function isRemoteMessages(v: unknown): v is RemoteMessageMode {
   return v === 'ask' || v === 'prompts' || v === 'all';
 }
 
@@ -551,7 +552,7 @@ export function savePreferences(prefs: {
   scratchSubjectThreshold?: number;
   conciseMode?: boolean;
   confirmMode?: 'off' | 'auto' | 'strict';
-  remoteMessages?: 'ask' | 'prompts' | 'all';
+  remoteMessages?: RemoteMessageMode;
   toolMode?: 'read-only' | 'write';
   maxConcurrentAgents?: number;
   responseStyle?: ResponseStyle;
@@ -612,7 +613,7 @@ export function loadPreferences(): {
   scratchSubjectThreshold?: number;
   conciseMode?: boolean;
   confirmMode?: 'off' | 'auto' | 'strict';
-  remoteMessages?: 'ask' | 'prompts' | 'all';
+  remoteMessages?: RemoteMessageMode;
   toolMode?: 'read-only' | 'write';
   maxConcurrentAgents?: number;
   responseStyle?: ResponseStyle;
@@ -1231,7 +1232,7 @@ export function loadConfig(overrides?: {
   const envRemotePrompts =
     process.env.BERNARD_ACCEPT_REMOTE_PROMPTS === 'true' ||
     process.env.BERNARD_ACCEPT_REMOTE_PROMPTS === '1';
-  const remoteMessages: 'ask' | 'prompts' | 'all' =
+  const remoteMessages: RemoteMessageMode =
     prefs.remoteMessages ?? (envRemotePrompts ? 'prompts' : 'ask');
   const theme = prefs.theme || 'bernard';
 

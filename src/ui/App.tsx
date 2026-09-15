@@ -213,16 +213,14 @@ import { Toast, type ToastVariant } from './Toast.js';
 import { persistAgentState } from './save.js';
 import { MessageStore } from './message-store.js';
 import { InboxWatcher } from '../inbox/watcher.js';
-import type { InboxMessage } from '../inbox/types.js';
 import { coalescedNotice, toNoticeData, type NoticeData } from './notice.js';
 import {
-  ACT_HINT,
-  ACT_KEY,
   REMOTE_MESSAGE_MODES,
   capabilitiesFor,
+  modeRow,
   runsUnattended,
   type RemoteMessageMode,
-} from './remote-messages.js';
+} from '../remote-messages.js';
 import { setOutputSink } from '../framework/hooks/output-sink.js';
 import { setInkHandlers, type MenuResult } from './ink-handlers.js';
 import { formatAskUserAnswers, injectAskUserHistoryMessages } from '../tools/ask-user-history.js';
@@ -778,9 +776,6 @@ export function App({
     text: string;
     sourceLabel: string;
   } | null>(null);
-  // Held only so the mode menu can re-advertise the session's capabilities; the
-  // watcher's lifecycle stays with its own mount-once effect.
-  const watcherRef = useRef<InboxWatcher | null>(null);
   // Mouse-wheel transcript scrolling is on when full-screen and not opted out.
   const mouseEnabled = fullScreen && config.mouse;
   // Append-only log of finalized turns, rendered through Ink's `<Static>` so
@@ -1033,14 +1028,25 @@ export function App({
    */
   const actOnPendingMessage = (): void => {
     if (!pendingMessage) return;
-    // Cleared first, so a second press cannot enqueue it twice while the queue
-    // drains — `requestTurn` is synchronous but the turn it starts is not.
-    setPendingMessage(null);
-    requestTurn({
-      text: pendingMessage.text,
-      source: { kind: 'remote', label: pendingMessage.sourceLabel },
-    });
+    // Only cleared once the queue actually took it. `requestTurn` refuses when
+    // the queue is full and says so in its return, and dropping the message on
+    // that branch would lose the one thing the keystroke exists to preserve —
+    // it stays pending, and the next press retries.
+    if (runRemote(pendingMessage.text, pendingMessage.sourceLabel)) setPendingMessage(null);
   };
+
+  /**
+   * Run a delivered message as a turn, through the queue.
+   *
+   * Never `runAgentTurn`: one arriving mid-turn must not hit `submittingRef` and
+   * vanish. #493 requires the mid-turn answer to be #200's or #202's rather than
+   * a third rule; this is #202's — a new top-level request, run after the
+   * current turn. That matters for the `^o` path and for an automatic mode,
+   * which can both fire while busy; the Enter path cannot, since `Prompt` is
+   * `disabled` for the whole turn.
+   */
+  const runRemote = (text: string, label: string): boolean =>
+    requestTurn({ text, source: { kind: 'remote', label } }).ok;
 
   /**
    * Act once, or stop being asked — at the moment you are looking at the message.
@@ -1063,7 +1069,7 @@ export function App({
         {
           label: 'Act on every message on this profile',
           value: 'profile',
-          description: REMOTE_MESSAGE_MODES[2].description,
+          description: modeRow('all').description,
         },
         { label: 'Dismiss it', value: 'dismiss' },
       ],
@@ -1091,9 +1097,11 @@ export function App({
    */
   const setRemoteMessages = (mode: RemoteMessageMode, persist: boolean): void => {
     config.remoteMessages = mode;
-    // So `say --run` from another process stops being refused at the sender the
-    // moment the mode allows it, rather than at the next launch.
-    watcherRef.current?.advertise(mode === 'ask' ? ['notice'] : ['notice', 'prompt']);
+    // Nothing re-advertises here: `InboxWatcher` reads the capability thunk on
+    // its own sweep, so what this session accepts follows the live config
+    // whether it moved from this menu, from `/agent-options`, or from a profile
+    // switch — the last of which had no call site and so had no chance of
+    // remembering.
     if (persist) saveActiveSettings({ remoteMessages: mode });
   };
 
@@ -1238,31 +1246,32 @@ export function App({
   }, []);
 
   useEffect(() => {
-    const push = (notice: NoticeData) => {
+    const push = (notice: NoticeData) =>
       setStaticItems((prev) => [
         ...prev,
         { key: String(itemKeyRef.current++), notice, toolDetails: false },
       ]);
-      // The one the keystroke acts on. A newer message replaces it rather than
-      // queueing behind it: this is an affordance on what is on screen, and a
-      // backlog of things Enter might mean is worse than none.
-      //
-      // Deliberately NOT cleared when an ordinary turn runs. That is the exact
-      // sequence this exists for — a message arrives, you say something about
-      // it, and THEN you want it acted on — and clearing there reproduces the
-      // failure. Enter on an empty prompt is otherwise a no-op, so holding the
-      // binding costs nothing, and the hint bar shows it only while it works.
+    /**
+     * Render it, and arm the keystroke on it.
+     *
+     * Split from `push` because `push` has a third caller that must NOT arm
+     * anything: `onCoalesced` renders "+3 more messages not shown.", and arming
+     * that made Enter submit *those words* as a turn. It also broke the rule the
+     * hint bar's else-if rests on — under `all` a notice never reaches here, but
+     * the coalesced summary still did, so a mode that runs everything could
+     * still show a pending message.
+     *
+     * A newer message replaces the pending one rather than queueing behind it:
+     * this is an affordance on what is on screen, and a backlog of things Enter
+     * might mean is worse than none.
+     *
+     * Deliberately NOT cleared when an ordinary turn runs. That is the exact
+     * sequence this exists for — a message arrives, you say something about it,
+     * and THEN you want it acted on — and clearing there reproduces the failure.
+     */
+    const offer = (notice: NoticeData) => {
+      push(notice);
       setPendingMessage({ text: notice.text, sourceLabel: notice.sourceLabel });
-    };
-    // Run it as a turn, through the queue. Never `runAgentTurn`: one arriving
-    // mid-turn must not hit `submittingRef` and vanish. #493 requires the
-    // mid-turn answer to be #200's or #202's rather than a third rule; this is
-    // #202's — a new top-level request, run after the current turn.
-    const run = (message: InboxMessage) => {
-      requestTurn({
-        text: message.text,
-        source: { kind: 'remote', label: message.sourceLabel },
-      });
     };
     const watcher = new InboxWatcher({
       sessionId: getSessionId(),
@@ -1270,11 +1279,13 @@ export function App({
       // that runs nothing by itself keeps the original guarantee and a `prompt`
       // sent to it is refused at the SENDER rather than arriving somewhere that
       // would not run it. A sender cannot upgrade itself: this record is written
-      // here. Read at mount, and re-written by `advertise` when the mode changes
-      // mid-session — otherwise turning the setting on would make plain messages
-      // run while `say --run` from another process still came back
-      // `not-accepted`, which reads as the setting not having taken.
-      ...capabilitiesFor(config.remoteMessages),
+      // here.
+      //
+      // A thunk, so the watcher re-reads it. `config` is mutated in place by the
+      // menu below AND by `applyProfileToConfig` on every profile switch, and a
+      // value captured here would pin what the session advertises to whatever
+      // was true at mount.
+      capabilities: () => capabilitiesFor(config.remoteMessages),
       onMessage: (message) => {
         // Read LIVE off the config object rather than captured: this effect is
         // mount-once and `config` is mutated in place by the menu below and by
@@ -1289,32 +1300,30 @@ export function App({
         // can write a message file"). Advertising alone meant a session that
         // never opted in would still run an arbitrary turn for any local writer.
         if (message.kind === 'prompt' && !runsUnattended(mode, 'prompt')) {
-          // Shown, never dropped — and no longer a dead end. Before the keystroke
-          // existed the only remedy this could name was "restart with a flag",
-          // which is the whole reason the flag was the only escape from retyping.
-          push(
+          // Shown, never dropped. The sentence states what happened and names no
+          // key: it is frozen in the transcript, and the hint bar is the only
+          // surface that can stop offering the keystroke once it stops working.
+          offer(
             toNoticeData({
               ...message,
               kind: 'notice',
               text: `${message.text}
 
-(Sent as a prompt. This session does not run them by itself — ${ACT_HINT}.)`,
+(Sent as a prompt. This session does not run them by itself.)`,
             }),
           );
           return;
         }
         // `all` is the only mode that runs a message nobody marked as a prompt.
-        if (runsUnattended(mode, message.kind)) return run(message);
-        push(toNoticeData(message));
+        if (runsUnattended(mode, message.kind)) {
+          return runRemote(message.text, message.sourceLabel);
+        }
+        offer(toNoticeData(message));
       },
       onCoalesced: (count, label) => push(coalescedNotice(count, label)),
     });
-    watcherRef.current = watcher;
     watcher.start();
-    return () => {
-      watcherRef.current = null;
-      watcher.stop();
-    };
+    return () => watcher.stop();
   }, []);
 
   // Per-session debug log boundaries. `session:start` captures the runtime
@@ -3850,7 +3859,9 @@ export function App({
         item: {
           label: 'Messages from other processes',
           annotation: `= ${config.remoteMessages}`,
-          description: `What \`bernard say\` may do. Ask me shows it and ${ACT_KEY} acts on it; the other two let a local process start a turn with nobody watching.`,
+          description:
+            modeRow('ask').description +
+            ' The other two let a local process start a turn with nobody watching.',
         },
         action: runRemoteMessagesPrompt,
       },

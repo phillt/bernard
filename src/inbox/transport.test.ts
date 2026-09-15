@@ -153,6 +153,49 @@ describe('the watcher', () => {
     return { watcher, seen, coalesced };
   }
 
+  /**
+   * What a session advertises follows the live setting (#462, found in review).
+   *
+   * Read once at `start()` it was correct exactly until the setting moved. An
+   * imperative `advertise()` fixed the one path that called it and left the four
+   * `applyProfileToConfig` sites, where a profile switch would run prompts while
+   * the record still said `['notice']` — so `bernard say --run` came back
+   * `not-accepted` and the setting looked like it had not taken.
+   */
+  describe('live capabilities', () => {
+    it('re-registers when the thunk starts answering differently', async () => {
+      const m = await load();
+      let mode: 'ask' | 'all' = 'ask';
+      const watcher = new m.InboxWatcher({
+        sessionId: 's-live',
+        capabilities: () => (mode === 'ask' ? ['notice'] : ['notice', 'prompt']),
+        onMessage: () => {},
+        onCoalesced: () => {},
+        // The sweep is what re-reads it, so drive it fast rather than waiting a
+        // second for the production floor.
+        pollMs: 10,
+      });
+      watcher.start();
+      const at = (): readonly string[] =>
+        m.listLiveSessions().find((r) => r.sessionId === 's-live')?.capabilities ?? [];
+      const startedAt = m.listLiveSessions().find((r) => r.sessionId === 's-live')?.startedAt;
+      expect(at()).toEqual(['notice']);
+
+      // Nothing calls the watcher — the setting simply changed, which is the
+      // whole point: there is no call site for a profile switch to forget.
+      mode = 'all';
+      await new Promise((r) => setTimeout(r, 60));
+      expect(at()).toEqual(['notice', 'prompt']);
+      // …and the session did not start again. `say --list` reports this field.
+      expect(m.listLiveSessions().find((r) => r.sessionId === 's-live')?.startedAt).toBe(startedAt);
+
+      mode = 'ask';
+      await new Promise((r) => setTimeout(r, 60));
+      expect(at()).toEqual(['notice']);
+      watcher.stop();
+    });
+  });
+
   it('drains what was already waiting when it starts', async () => {
     // The window a fast `bernard say` hits: the record exists, the watch is
     // not armed yet.

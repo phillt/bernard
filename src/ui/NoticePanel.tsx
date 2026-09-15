@@ -2,7 +2,6 @@ import { getThemeColors } from '../theme.js';
 import { TranscriptPanel } from './TranscriptPanel.js';
 import { formatFriendlyTimestamp } from '../output.js';
 import type { NoticeData } from './notice.js';
-import { ACT_HINT } from './remote-messages.js';
 
 /**
  * A message delivered from outside this session (#462).
@@ -21,17 +20,21 @@ import { ACT_HINT } from './remote-messages.js';
  * states the boundary in words.
  *
  * That footer is the load-bearing row. It is the only place a reader learns
- * that the message is **not in Bernard's context** — and, since #462's
- * follow-up, the one keystroke that changes that.
+ * that the message is **not in Bernard's context**.
  *
  * It used to read *"type to act on it"*, which was false: the text never enters
  * `agent.history`, so a reader who typed got an agent hunting for something it
  * could not see. Observed costing eight dispatches across two mail accounts and
  * a chat bridge before the user interrupted.
  *
- * The footer is frozen at arrival — Ink's `<Static>` never repaints an existing
- * item — so it records what was true when the message landed, the way its
- * timestamp does. `HintBar` carries the live half.
+ * **It states a fact and names no key**, which is a correction to the first fix
+ * for that. Naming one made the row a present-tense instruction on a panel that
+ * cannot take it back: every earlier notice still said "press ↵ to act on it"
+ * after it had been acted on, or superseded by a newer message. The defence
+ * offered was that `<Static>` never repaints — true of the legacy surface and
+ * false of the default one, since `TranscriptViewport` re-renders every item
+ * every frame. `HintBar` owns the affordance, because it is the only surface
+ * that can stop saying it.
  */
 export function NoticePanel({ data }: { data: NoticeData }) {
   const colors = getThemeColors();
@@ -45,7 +48,7 @@ export function NoticePanel({ data }: { data: NoticeData }) {
       body={data.text}
       hint={data.hint}
       hintColor={colors.accent}
-      footer={`Bernard has not seen this — ${ACT_HINT}.`}
+      footer="Bernard has not seen this."
     />
   );
 }

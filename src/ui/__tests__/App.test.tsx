@@ -143,6 +143,7 @@ function makeConfig(overrides: Partial<BernardConfig> = {}): BernardConfig {
     tokenWindow: 0,
     maxSteps: 25,
     coordinatorMode: 'off',
+    remoteMessages: 'ask',
     modelMode: 'balanced',
     subagentResultMaxChars: 4000,
     autoCreateSpecialists: false,
@@ -2166,7 +2167,7 @@ describe('<App> external messages', () => {
     await tick();
     await deliver('Action "now" failed: No datetime tool available', 'bernard app logs news');
     // The watcher polls; a tick past its interval is enough.
-    await tick(1200);
+    await tick(150);
     const frame = stripAnsi(lastFrame() ?? '');
     expect(frame).toContain('applet:news');
     expect(frame).toContain('No datetime tool available');
@@ -2183,7 +2184,7 @@ describe('<App> external messages', () => {
     await tick();
     const before = JSON.stringify(history);
     await deliver('something happened');
-    await tick(1200);
+    await tick(150);
     // Not billed: no turn was started.
     expect(agentSpy.processInput).not.toHaveBeenCalled();
     // Not visible to the model: the notice went to `staticItems` only.
@@ -2653,7 +2654,7 @@ describe('<App> acting on a delivered message', () => {
     const { stdin, lastFrame, agentSpy, unmount } = renderApp();
     await tick();
     await deliverNotice('the deploy finished, summarise the log');
-    await tick(1200);
+    await tick(150);
     // The affordance is advertised while it works — the footer is frozen at
     // arrival, so this row is the only live statement of it.
     expect(stripAnsi(lastFrame() ?? '')).toContain('act on message');
@@ -2685,7 +2686,7 @@ describe('<App> acting on a delivered message', () => {
     const { stdin, agentSpy, unmount } = renderApp();
     await tick();
     await deliverNotice('do the thing');
-    await tick(1200);
+    await tick(150);
     stdin.write(ENTER);
     await tick(50);
     stdin.write(ENTER);
@@ -2701,7 +2702,7 @@ describe('<App> acting on a delivered message', () => {
     const { stdin, lastFrame, agentSpy, unmount } = renderApp();
     await tick();
     await deliverNotice('the report is attached');
-    await tick(1200);
+    await tick(150);
     stdin.write('there it is.');
     await tick(50);
     stdin.write(ENTER);
@@ -2720,7 +2721,7 @@ describe('<App> acting on a delivered message', () => {
     const { stdin, lastFrame, agentSpy, unmount } = renderApp();
     await tick();
     await deliverNotice('summarise the log');
-    await tick(1200);
+    await tick(150);
     stdin.write(CTRL_O);
     await tick(100);
     const menu = stripAnsi(lastFrame() ?? '');
@@ -2732,6 +2733,34 @@ describe('<App> acting on a delivered message', () => {
     stdin.write(ENTER);
     await tick(400);
     expect(agentSpy.processInput).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+
+  it('does not arm the keystroke on a coalesced summary', async () => {
+    // `push` had been given a second job, and `onCoalesced` is its third caller:
+    // arming "+N more messages not shown." made Enter submit THOSE WORDS as a
+    // turn. It also broke the rule the hint bar rests on — under an automatic
+    // mode a notice never reaches the render path, but the summary still did.
+    const { stdin, lastFrame, agentSpy, unmount } = renderApp();
+    await tick();
+    const { sendToSessions, resetSendDedupe } = await import('../../inbox/send.js');
+    // Past MAX_RENDER_BURST, so the tail is folded into a summary.
+    for (let i = 0; i < 8; i++) {
+      resetSendDedupe();
+      sendToSessions({
+        text: `message ${i}`,
+        source: { kind: 'cli', label: 'ci' },
+        target: { all: true },
+      });
+    }
+    await tick(300);
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toMatch(/more message/);
+    stdin.write(ENTER);
+    await tick(300);
+    // Something was acted on — a real message, never the summary about them.
+    const ran = vi.mocked(agentSpy.processInput).mock.calls.map((c) => String(c[0]));
+    expect(ran.some((t) => /more message/.test(t))).toBe(false);
     unmount();
   });
 
@@ -2774,7 +2803,7 @@ describe('<App> acting on a delivered message', () => {
     const { agentSpy, unmount } = renderApp({ config: { remoteMessages: 'all' as const } });
     await tick();
     await deliverNotice('summarise the log');
-    await tick(1200);
+    await tick(150);
     expect(agentSpy.processInput).toHaveBeenCalledTimes(1);
     unmount();
   });
@@ -2891,10 +2920,10 @@ describe('<App> remote prompts — receive-side enforcement', () => {
     // Degraded to a notice rather than dropped: the text arrived, and silently
     // discarding it would make a refusal indistinguishable from a lost message.
     expect(lastFrame()).toMatch(/does not run them by itself/);
-    // …and it is no longer a dead end. The refusal used to be able to name only
-    // "restart with a flag", which is exactly why the flag was the sole escape
-    // from retyping the message.
-    expect(lastFrame()).toMatch(/act on it/);
+    // The sentence states what happened and names no key: it is frozen in the
+    // transcript, and only the hint bar can stop offering a keystroke once it
+    // stops working.
+    expect(lastFrame()).not.toMatch(/press ↵/);
     unmount();
   });
 

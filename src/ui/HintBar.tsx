@@ -1,6 +1,6 @@
 import { Box } from 'ink';
 import { HintRow, KEY, HINT_CLOSE, type KeyHint } from './hints.js';
-import { OPTIONS_KEY, type RemoteMessageMode } from './remote-messages.js';
+import { OPTIONS_KEY, isAutomatic, type RemoteMessageMode } from '../remote-messages.js';
 
 interface HintBarProps {
   busy: boolean;
@@ -16,7 +16,7 @@ interface HintBarProps {
    * true when the message landed, the way its timestamp does, and this row is
    * what says the keystroke works *right now*.
    */
-  pendingMessage?: boolean;
+  pendingMessage: boolean;
   /**
    * What this session does with a message that arrives (#462).
    *
@@ -27,7 +27,7 @@ interface HintBarProps {
    * mode runs everything, no message is ever pending, so the keystroke menu that
    * offered "…and on this profile" had nothing to open on.
    */
-  remoteMode?: RemoteMessageMode;
+  remoteMode: RemoteMessageMode;
 }
 
 /**
@@ -82,7 +82,7 @@ function pickHints(state: HintBarProps): KeyHint[] {
   // an automatic mode means nothing is ever pending.
   if (state.pendingMessage) {
     idle.push({ key: KEY.enter, label: 'act on message' }, { key: OPTIONS_KEY, label: 'options' });
-  } else if (state.remoteMode !== undefined && state.remoteMode !== 'ask') {
+  } else if (isAutomatic(state.remoteMode)) {
     idle.push({ key: OPTIONS_KEY, label: `messages: ${state.remoteMode}` });
   }
   idle.push({ key: '/', label: 'commands' }, { key: KEY.shiftTab, label: 'status' });

@@ -1,12 +1,15 @@
-import type { InboxKind } from '../inbox/types.js';
+import { DEFAULT_CAPABILITIES, type InboxKind } from './inbox/types.js';
 
 /**
  * What a delivered message is allowed to do, and how that is worded (#462/#493).
  *
- * A pure decision module in the `cost-guardrail.ts` / `memory-notice.ts` shape:
- * three surfaces render this same choice — the keystroke menu, `/agent-options`,
- * and the setup wizard — and a label written three times drifts into three
- * different claims about what the setting does.
+ * A pure decision module in the `cost-guardrail.ts` / `memory-notice.ts` shape,
+ * and at `src/` root beside them for a reason the first cut got wrong: four
+ * surfaces render this same choice — the keystroke menu, `/agent-options`, the
+ * setup wizard and `say-cli`'s refusal — and a label written four times drifts
+ * into four different claims. Under `src/ui/` the wizard could not import it
+ * (`profiles-wizard-data.ts` is host-agnostic by contract), so it hand-wrote its
+ * own rows and they had already disagreed on arrival.
  *
  * ## Why the keystroke is not one of the modes
  *
@@ -39,15 +42,18 @@ export const ACT_HINT = `press ${ACT_KEY} to act on it, ${OPTIONS_KEY} for optio
 /**
  * What the session advertises it can be asked to do.
  *
- * Spread into `InboxWatcherOptions`, because the field is optional there and
- * `DEFAULT_CAPABILITIES` is the honest value for `ask` — passing `['notice']`
- * explicitly would be a second place that constant is written down.
+ * Returns the LIST, not an options spread. The spread was meant to keep
+ * `DEFAULT_CAPABILITIES` from being written down twice, and achieved the
+ * opposite: a caller that needed a value — re-advertising on a mode change —
+ * could not use it, so it hand-wrote `mode === 'ask' ? ['notice'] : [...]`,
+ * which is both a second copy of the constant AND the negative predicate this
+ * module exists to refuse. A shape nobody can call is not a single source.
  */
-export function capabilitiesFor(mode: RemoteMessageMode): {
-  capabilities?: readonly InboxKind[];
-} {
-  return acceptsPrompts(mode) ? { capabilities: ['notice', 'prompt'] as const } : {};
+export function capabilitiesFor(mode: RemoteMessageMode): readonly InboxKind[] {
+  return acceptsPrompts(mode) ? PROMPT_CAPABILITIES : DEFAULT_CAPABILITIES;
 }
+
+const PROMPT_CAPABILITIES: readonly InboxKind[] = ['notice', 'prompt'];
 
 /**
  * Whether a message of this kind runs with nobody pressing anything.
@@ -67,8 +73,29 @@ export function runsUnattended(mode: RemoteMessageMode, kind: InboxKind): boolea
   return kind === 'prompt' && acceptsPrompts(mode);
 }
 
-function acceptsPrompts(mode: RemoteMessageMode): boolean {
+/**
+ * True when this mode runs something with nobody watching.
+ *
+ * Exported because a third surface needed it and tested `mode !== 'ask'`
+ * instead — the hint bar, which then announced `messages: undefined` on every
+ * session whose config literal omitted the field. That is the same fail-open
+ * this module's docstring is about, reached a third time by a caller who could
+ * not see the rule from outside. A predicate nobody can borrow gets rewritten.
+ */
+export function isAutomatic(mode: RemoteMessageMode): boolean {
   return mode === 'prompts' || mode === 'all';
+}
+
+const acceptsPrompts = isAutomatic;
+
+/** The row for one mode. By VALUE, never by index: the table's order is
+ *  documented as least- to most-permissive, so a reorder would silently
+ *  relabel a menu row that reached in positionally. */
+export function modeRow(value: RemoteMessageMode): { label: string; description: string } {
+  const hit = REMOTE_MESSAGE_MODES.find((m) => m.value === value);
+  // Unreachable through the type, and the table is the thing being indexed, so
+  // a throw here would be a worse failure than a blank description.
+  return hit ?? { label: value, description: '' };
 }
 
 /** One row per mode, for the settings menus. Order is least- to most-permissive. */

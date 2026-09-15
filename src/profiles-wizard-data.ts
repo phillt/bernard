@@ -13,6 +13,7 @@
 
 import { MAX_CONCURRENT_AGENTS_LIMIT } from './tools/agent-pool.js';
 import { RESPONSE_STYLE_IDS, type ResponseStyle } from './agent-prompt.js';
+import { REMOTE_MESSAGE_MODES } from './remote-messages.js';
 import { THEMES } from './theme.js';
 import type { ProfileSettings } from './profiles.js';
 
@@ -122,14 +123,11 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         label: 'Messages from other processes',
         description:
           'What `bernard say` may do. Ask me shows the message and one keystroke acts on it.',
-        field: {
-          kind: 'list',
-          options: [
-            { value: 'ask', label: 'Ask me (nothing runs on its own)' },
-            { value: 'prompts', label: 'Run messages sent with --run' },
-            { value: 'all', label: 'Run every message' },
-          ],
-        },
+        // The shared table, not a fourth copy of it. Hand-written here the rows
+        // had already disagreed with the menu's on arrival — which is the drift
+        // `remote-messages.ts` says it exists to prevent, happening in the one
+        // surface that could not import it while it lived under `src/ui/`.
+        field: { kind: 'list', options: [...REMOTE_MESSAGE_MODES] },
       },
     ],
   },

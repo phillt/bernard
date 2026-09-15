@@ -24,6 +24,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { PREFS_PATH, PROFILES_PATH, PROFILES_MIGRATED_MARKER } from './paths.js';
 import { atomicWriteFileSync } from './fs-utils.js';
+import type { RemoteMessageMode } from './remote-messages.js';
 import type { ResponseStyle } from './agent-prompt.js';
 import type { ToolPermissions, ToolPermissionRules } from './tool-permissions.js';
 import type { AppCspGrant } from './host/csp-grant.js';
@@ -80,7 +81,7 @@ export interface ProfileSettings {
    * `prompts` is exactly what `--accept-remote-prompts` has always meant: a
    * `bernard say --run` runs, a plain notice waits. `all` runs everything.
    */
-  remoteMessages?: 'ask' | 'prompts' | 'all';
+  remoteMessages?: RemoteMessageMode;
   toolMode?: 'read-only' | 'write';
   maxConcurrentAgents?: number;
   responseStyle?: ResponseStyle;

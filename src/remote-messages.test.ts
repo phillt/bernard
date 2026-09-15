@@ -7,7 +7,8 @@ import {
   capabilitiesFor,
   runsUnattended,
   type RemoteMessageMode,
-} from '../remote-messages.js';
+} from './remote-messages.js';
+import { DEFAULT_CAPABILITIES } from './inbox/types.js';
 
 /**
  * The mode → behaviour decision, away from Ink (#462/#493).
@@ -32,7 +33,7 @@ describe('remote-messages', () => {
       ['garbage', GARBAGE],
     ] as const) {
       it(`advertises no prompt capability for a ${name} mode`, () => {
-        expect(capabilitiesFor(mode)).toEqual({});
+        expect(capabilitiesFor(mode)).toEqual(['notice']);
       });
 
       it(`runs nothing unattended for a ${name} mode`, () => {
@@ -42,12 +43,13 @@ describe('remote-messages', () => {
     }
   });
 
-  it('advertises nothing under ask, and both kinds under the automatic modes', () => {
-    // Spread into an optional field, so `ask` contributes no key at all rather
-    // than re-stating `DEFAULT_CAPABILITIES`.
-    expect(capabilitiesFor('ask')).toEqual({});
-    expect(capabilitiesFor('prompts')).toEqual({ capabilities: ['notice', 'prompt'] });
-    expect(capabilitiesFor('all')).toEqual({ capabilities: ['notice', 'prompt'] });
+  it('advertises notice only under ask, and both kinds under the automatic modes', () => {
+    // Returns the LIST. The earlier spread shape could not be called by the one
+    // site that needed a value, which hand-wrote the mapping instead — and wrote
+    // it in the fail-open direction this module refuses.
+    expect(capabilitiesFor('ask')).toEqual(DEFAULT_CAPABILITIES);
+    expect(capabilitiesFor('prompts')).toEqual(['notice', 'prompt']);
+    expect(capabilitiesFor('all')).toEqual(['notice', 'prompt']);
   });
 
   it('runs exactly what each mode says, and nothing more', () => {

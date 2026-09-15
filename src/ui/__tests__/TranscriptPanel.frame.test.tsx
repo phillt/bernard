@@ -8,6 +8,9 @@ import { ErrorPanel } from '../ErrorPanel.js';
 import { NoticePanel } from '../NoticePanel.js';
 import { WakePanel } from '../WakePanel.js';
 import { hasPresentationChoice, presentationAmbiguousGlyphs } from '../glyph-width.js';
+import { PlanPanel } from '../PlanPanel.js';
+import { PlanStore } from '../../plan-store.js';
+import type { Agent } from '../../agent.js';
 import { tick } from './_keys.js';
 
 const WIDTH = 60;
@@ -121,6 +124,32 @@ describe('hasPresentationChoice', () => {
       expect(hasPresentationChoice(glyph)).toBe(false);
     },
   );
+
+  it('holds for the plan panel, inside the prompt border', async () => {
+    // The one bordered box on screen at all times, and the fixture the first
+    // cut of this test lacked: `PlanPanel`'s done-step icon was `✔` — flagged by
+    // this module's own predicate — so the PROMPT's border broke the moment a
+    // step completed. `glyph-width.ts` said as much and fixed three titles.
+    const store = new PlanStore();
+    store.create([
+      { description: 'a step that is done', verification: 'v' },
+      { description: 'a step still to do', verification: 'v' },
+    ]);
+    store.update(1, 'done');
+    const agent = {
+      getPlanSnapshot: () => store.view(),
+      subscribeToPlanStore: (cb: () => void) => store.subscribe(cb),
+    } as unknown as Agent;
+    const widths = await frameWidths(
+      createElement(
+        Box,
+        { flexDirection: 'column', borderStyle: 'round', paddingX: 1 },
+        createElement(PlanPanel, { agent, maxRows: 8, reserveColumns: 4 }),
+      ),
+    );
+    expect(widths.length).toBeGreaterThan(2);
+    expect([...new Set(widths)]).toEqual([WIDTH]);
+  });
 
   it('squares a frame that a flagged glyph would break', async () => {
     // Guard the guard: the predicate is only worth anything if the glyphs it
