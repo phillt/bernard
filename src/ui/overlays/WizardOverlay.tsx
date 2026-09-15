@@ -981,11 +981,17 @@ function WizardChoiceStep({
       if (key.leftArrow === true && canGoBack) return cursor.setIndex(backAt);
       if (key.rightArrow === true) return cursor.setIndex(continueAt);
     } else if (key.rightArrow === true) {
-      // From an option ROW, where the arrow has nothing else to mean. A text
-      // step spends it on the buffer, which is why `ctrl+n` exists and is the
-      // shortcut advertised — this is the cheap half that happens to be free
-      // here, not the rule.
+      // From an option ROW, where the arrows have nothing else to mean. A text
+      // step spends them on its buffer, which is why `ctrl+b`/`ctrl+n` exist and
+      // are the shortcuts advertised — these are the cheap half that happens to
+      // be free here, not the rule.
       return cursor.setIndex(continueAt);
+    } else if (key.leftArrow === true && canGoBack) {
+      // The other direction, because a reader who has just learned that → goes
+      // forward reaches for ← without being told. Both land ON the control
+      // rather than acting, which is what the controls being focusable is for —
+      // the chords are the ones that act.
+      return cursor.setIndex(backAt);
     }
     cursor.handleKey(input, key);
   });

@@ -891,6 +891,30 @@ describe('WizardOverlay — ctrl+n continues from any step kind', () => {
     expect(frame).not.toContain('ctrl+n');
   });
 
+  it('reaches Back with ← from an option row, the other direction', async () => {
+    // A reader who has just learned that → goes forward reaches for ← without
+    // being told, so it lands on Back rather than doing nothing.
+    const { stdin, lastFrame } = await mount(vi.fn(), {
+      skipReview: true,
+      // `backExits`, so Back exists on the FIRST step — otherwise this needs a
+      // preceding step, and the natural one to reach for is a text step, where
+      // ← belongs to the buffer and the assertion would fail for the wrong
+      // reason.
+      backExits: true,
+      steps: [
+        {
+          id: 'c',
+          question: 'Which?',
+          field: { kind: 'choice', choices: ['a', 'b'] },
+          initial: 'a',
+        },
+      ],
+    });
+    expect(stripAnsi(lastFrame() ?? '')).not.toContain('▸ ← Back');
+    await type(stdin, ARROW_LEFT);
+    expect(stripAnsi(lastFrame() ?? '')).toContain('▸ ← Back');
+  });
+
   it('reaches Continue with → from an option row, where the arrow is free', async () => {
     const { stdin, lastFrame } = await mount(
       vi.fn(),

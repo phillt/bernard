@@ -286,7 +286,10 @@ describe('the provider hub', () => {
     // and a decoder that had to strip a decorated suffix would be a second copy
     // of formatting that changes with the terminal width.
     expect(field.choices).toEqual(['anthropic', 'openai']);
-    expect(field.trailing?.['anthropic']).toEqual({ text: '····ter2', tick: true });
+    // Asterisks rather than middle dots: the leader dots that right-align the
+    // cell are `·`, so a `·`-masked key ran straight out of the alignment.
+    expect(field.trailing?.['anthropic']).toEqual({ text: '****ter2', tick: true });
+    expect(field.trailing?.['anthropic']?.text).not.toContain('·');
     expect(field.trailing?.['openai']).toEqual({ text: 'no key' });
   });
 
@@ -302,7 +305,7 @@ describe('the provider hub', () => {
     // The tick and the key hint are display. A decoder that re-derived the whole
     // decorated row would be a second copy of the formatting to keep in step.
     const c = ctx();
-    expect(providerFromHubRow(c, 'ollama  (custom)  ✓ key set ····abcd')).toBe('ollama');
+    expect(providerFromHubRow(c, 'ollama  (custom)  ✓ key set ****abcd')).toBe('ollama');
   });
 
   it('resolves on the pick, with no check-your-answers screen', () => {

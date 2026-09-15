@@ -434,6 +434,9 @@ export function buildWelcomeSpec(): WizardSpec {
  * and the key hints true: they describe what is on disk NOW, not what was there
  * when the wizard opened.
  */
+/** Stands in for the part of a stored key that is never shown. */
+const KEY_MASK = '****';
+
 export function buildProviderHubSpec(ctx: SetupContext): WizardSpec {
   // The label is the provider and nothing else — it is the answer vocabulary,
   // and a decoder that had to strip a decorated suffix back off would be a
@@ -442,7 +445,10 @@ export function buildProviderHubSpec(ctx: SetupContext): WizardSpec {
   const trailing: Record<string, { text: string; tick?: boolean }> = {};
   ctx.providers.forEach((p, i) => {
     trailing[rows[i]] = p.hasKey
-      ? { text: p.keyHint === undefined ? 'key set' : `····${p.keyHint}`, tick: true }
+      ? // Asterisks, not middle dots: the LEADER dots that right-align this cell
+        // are `·` too, so a masked key ran straight out of the alignment and the
+        // row read as one long run of dots with four characters at the end.
+        { text: p.keyHint === undefined ? 'key set' : `${KEY_MASK}${p.keyHint}`, tick: true }
       : { text: 'no key' };
   });
   return {

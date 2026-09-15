@@ -843,8 +843,12 @@ true}` and the caller reopens whatever came before. A FLAG on the cancelled
     door nothing else does. A chord rather than `→` because a text step spends
     the arrow keys on its buffer, and a shortcut that works on four step kinds
     and silently does nothing on the fifth is the inconsistency it replaces —
-    `→` does also reach Continue from an option ROW, where the arrow is free,
-    but that is the cheap half rather than the rule.
+    `←`/`→` do also reach Back and Continue from an option ROW, where the arrows
+    have nothing else to mean — a reader who has just learned that `→` goes
+    forward reaches for `←` without being told. Both land ON the control rather
+    than acting, which is what focusable controls are for; the chords are the
+    ones that act. That is the cheap half rather than the rule, and it does not
+    exist on a text step, where the arrows belong to the buffer.
   - **Chords are spelled `ctrl+b`, not `^b`.** The caret is terminal shorthand
     that readers of emacs and older CLIs know and nobody else does, and this row
     is read by someone being onboarded. `ctrlKey()` in `hints.tsx` is the one
@@ -902,6 +906,9 @@ true}` and the caller reopens whatever came before. A FLAG on the cancelled
   single walk can add a second and third. One page each is also what keeps the
   spec a flat array: "which do you want to add" followed by pages for the answers
   is branching, which `WizardSpec` deliberately cannot express.
+  - **A masked key is `\*\***`, not `····`.** The leader dots that right-align the
+cell are `·`, so a `·`-masked key ran straight out of the alignment and the
+    row read as one long run of dots with four characters on the end.
   - **`✓` marks the default in force, and nothing else.** It first shipped as a
     per-row `[✓ key set]` badge, which read as "this row is selected" and
     competed with the cursor marker for the same meaning — two markers, two
