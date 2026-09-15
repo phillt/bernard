@@ -228,7 +228,7 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'recallFilter',
         label: 'Recall filter',
         description:
-          "Bernard digs through its saved facts before every turn. This casts a wider net, then has a cheap model throw out whatever isn't relevant, so an unrelated memory can't drag the answer off course. Costs one small call a turn; without it you get the narrower search instead.",
+          "Bernard pulls in things it picked up from past conversations whenever they look related to what you're asking. This casts a wider net, then has a cheap model drop whatever doesn't bear on the question — fewer tokens spent, and less chance of a stray one dragging the answer off course. It only touches what Bernard picked up by itself, never the notes you asked it to keep. All for one small extra call a turn.",
         field: { kind: 'boolean' },
         envVar: 'BERNARD_RECALL_FILTER',
       },
@@ -236,7 +236,7 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'memoryConsolidation',
         label: 'Memory consolidation',
         description:
-          'At the end of a session, Bernard looks over the notes it has saved and flags the ones that look finished. Nothing goes without you — you see the list next time you start. Leave it off and memory only grows, and past a point the oldest notes stop reaching the model at all.',
+          'At the end of a session, Bernard looks over the notes you have asked it to keep and flags the ones that look finished. Nothing goes without you — you see the list next time you start. Leave it off and that pile only grows, and past a point the oldest notes stop reaching the model at all.',
         field: { kind: 'boolean' },
         envVar: 'BERNARD_MEMORY_CONSOLIDATION',
       },
@@ -244,7 +244,7 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'specialistRecall',
         label: 'Specialist recall',
         description:
-          'A specialist is a saved persona Bernard hands certain jobs to. This lets each one keep notes from its own runs, so it stops making the same mistake twice. The notes are private to that specialist and go when it does. Costs one small call per specialist at the end of a session.',
+          'A specialist is a saved persona Bernard hands certain jobs to. This lets each one keep its own notes from its own runs, so it stops making the same mistake twice. They are private to that specialist and go when it does — separate from yours. Costs one small call per specialist at the end of a session.',
         field: { kind: 'boolean' },
         envVar: 'BERNARD_SPECIALIST_RECALL',
       },
@@ -252,7 +252,7 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'scratchSubjectThreshold',
         label: 'Scratch subject-change threshold',
         description:
-          'Bernard keeps working notes across turns and throws them out when you change the subject. This is how close a new message has to be to the last one to count as the same subject. Higher throws them out more readily, which keeps a new task clean; lower carries them further, which keeps a long one coherent.',
+          'Bernard keeps rough working notes while it is on a task and throws them out when you change the subject. This is how close a new message has to be to the last one to count as the same subject. Higher throws them out more readily, which keeps a new task clean; lower carries them further, which keeps a long one coherent.',
         field: { kind: 'float01' },
         envVar: 'BERNARD_SCRATCH_SUBJECT_THRESHOLD',
       },

@@ -207,6 +207,30 @@ describe('every question says enough to decide on', () => {
     }
   });
 
+  it('never calls a recalled memory a fact', () => {
+    // `bernard facts` and `RAGStore` are what we call them, and the word claims
+    // something they have not earned: they are assertions a cheap model pulled
+    // out of past conversations, not truths. Worse, it collided — four
+    // questions across three different stores said "saved facts", "notes it has
+    // saved", "notes from its own runs" and "working notes", with no way for a
+    // reader to tell those were four different things.
+    for (const f of WIZARD_FIELDS) {
+      expect(f.description, f.key).not.toMatch(/\bfacts?\b/i);
+    }
+  });
+
+  it('says which pile the recall filter is filtering', () => {
+    // The one sentence that answers the question this copy exists to stop
+    // somebody asking: does turning this on throw away things I told Bernard to
+    // remember? It does not. The filter SELECTS among what Bernard picked up on
+    // its own; it also sees your saved notes, but only ever to decide their
+    // ORDER when they are already over their character budget — it never causes
+    // one to be dropped. Pinned because the sentence is easy to read as padding
+    // and cut.
+    const d = WIZARD_FIELDS.find((f) => f.key === 'recallFilter')!.description;
+    expect(d).toMatch(/never the notes you asked it to keep/i);
+  });
+
   it('explains a word that means something only here', () => {
     // `sub-agent`, `specialist`, `applet` and `lineup` are ours. Each is
     // glossed at the first question that uses it, so a reader walking the

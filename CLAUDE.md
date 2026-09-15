@@ -1073,6 +1073,27 @@ coordinator)`, which translated one piece of jargon into another beside every
     plus when that cost is not worth paying — the last only where there is a
     real cost. Casual register throughout: this is a first-run screen, not a
     reference page.
+  - **Three stores were all called "notes" or "facts", and the copy could not
+    tell them apart.** `recallFilter` said "saved facts" (the RAG store),
+    `memoryConsolidation` "notes it has saved" (the memory store),
+    `specialistRecall` "notes from its own runs" (a per-specialist RAG store
+    plus owned memory notes) and `scratchSubjectThreshold` "working notes"
+    (in-memory scratch). Four questions, three stores, one vocabulary. They now
+    name their own: what Bernard **picked up from past conversations**, the
+    notes **you asked it to keep**, a specialist's **own** notes, and **rough
+    working** notes.
+  - **"Facts" is banned outright**, by test. It is what we call the RAG store
+    (`bernard facts`, `RAGStore`) and the word claims something the contents
+    have not earned — they are assertions a cheap model extracted from past
+    conversations, with a TTL and a dedup threshold, not truths.
+  - **The recall filter filters the RAG side and never the memory side**, and
+    the copy now says so, because the inverse is the natural reading. `#371`
+    hands it the `MemoryStore` read-only and takes back `memoryPriority`, which
+    `renderPersistentMemory` consults ONLY as packing order, and only once
+    `packMemory` already reports a drop — so it decides WHICH note is dropped
+    when you are over budget and never THAT one is. The sentence is pinned,
+    because it reads as padding and is the one thing on the screen that answers
+    "will this throw away what I told it to remember".
   - **`sub-agent`, `specialist`, `applet` and `lineup` are ours**, and each is
     glossed at the FIRST question that uses it, so a reader walking the sections
     in order has met it before it is used plainly. The test asserts on the first
