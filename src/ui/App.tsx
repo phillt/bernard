@@ -3520,13 +3520,18 @@ export function App({
 
   async function runCoordinatorModePrompt(): Promise<void> {
     const modes: Array<{ value: 'on' | 'off' | 'auto'; label: string; desc: string }> = [
+      // Bare labels, with the sentence under each row carrying the meaning.
+      // "Auto (qualifier picks per turn)" translated one piece of jargon into
+      // another: a reader who does not know what a coordinator is learns nothing
+      // from being told they always get one. Same wording as the setup wizard's
+      // version of this question, which is the other place it is asked.
       {
         value: 'auto',
-        label: 'Auto (qualifier picks per turn)',
-        desc: 'Classifier inspects each ask and chooses Normal or ReAct.',
+        label: 'Auto',
+        desc: 'Decide per message, by looking at what was asked.',
       },
-      { value: 'on', label: 'On (always coordinator)', desc: 'Every turn runs ReAct.' },
-      { value: 'off', label: 'Off (always normal)', desc: 'Every turn runs single-shot Normal.' },
+      { value: 'on', label: 'On', desc: 'Always work out a plan first.' },
+      { value: 'off', label: 'Off', desc: 'Never plan; answer straight away.' },
     ];
     const entries: MenuEntry[] = modes.map((m) => ({
       label: m.label,
@@ -3846,9 +3851,10 @@ export function App({
       {
         kind: 'item',
         item: {
-          label: 'Coordinator (ReAct) mode',
+          label: 'Planning',
           annotation: `= ${config.coordinatorMode}`,
-          description: 'On = always coordinator; Off = always normal; Auto = per-turn qualifier.',
+          description:
+            'Whether Bernard works out a plan before it starts. Planning pays off on a job with several steps and wastes a call on a simple question.',
         },
         action: runCoordinatorModePrompt,
       },

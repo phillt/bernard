@@ -130,14 +130,20 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
       {
         key: 'coordinatorMode',
         label: 'Coordinator mode',
+        // The rows are bare on purpose. They used to read "Auto (qualifier picks
+        // per turn)" and "On (always coordinator)", which translated one piece
+        // of jargon into another beside every option — a reader who does not
+        // know what a coordinator is learns nothing from being told they always
+        // get one. The sentence above carries it instead, and names all three
+        // rows so each one is already explained by the time it is read.
         description:
-          'Whether Bernard plans before it acts. Planning helps on multi-step work and wastes a call on a simple question, so auto decides per message.',
+          'Whether Bernard works out a plan before it starts. Planning pays off on a job with several steps and wastes a call on a simple question. Auto decides per message, On always plans first, Off never does.',
         field: {
           kind: 'list',
           options: [
-            { value: 'auto', label: 'Auto (qualifier picks per turn)' },
-            { value: 'on', label: 'On (always coordinator)' },
-            { value: 'off', label: 'Off (always normal)' },
+            { value: 'auto', label: 'Auto' },
+            { value: 'on', label: 'On' },
+            { value: 'off', label: 'Off' },
           ],
         },
         envVar: 'BERNARD_COORDINATOR_MODE',

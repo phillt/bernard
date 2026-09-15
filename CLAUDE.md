@@ -1021,6 +1021,24 @@ true}` and the caller reopens whatever came before. A FLAG on the cancelled
   Branching and typed answers are still deliberately absent — setup keeps its own
   label↔value mapping rather than pushing its domain into the type every
   `ask_user` batch is built from.
+- **An option row says the answer; the sentence above says what it means.** The
+  coordinator rows read `Auto (qualifier picks per turn)` and `On (always
+coordinator)`, which translated one piece of jargon into another beside every
+  option — a reader who does not know what a coordinator is learns nothing from
+  being told they always get one. The rows are bare and the description names all
+  three, so each is explained by the time it is read. `/agent-options` asks the
+  same question and was given the same words, since two vocabularies for one
+  setting is the drift these questions keep being rewritten to remove.
+  - Parentheses elsewhere are NOT the same thing and stay: `Read-only (least
+privilege)` and `Strict (also medium-risk)` disambiguate an answer that is
+    genuinely ambiguous alone, rather than glossing a term the reader has not
+    met.
+- **An untouched value reads `(recommended)`, not `(default)`.** Both are true
+  and only one is useful: "default" says where the value came from, which the
+  reader can already see, while "recommended" answers the question they are
+  actually asking. The other two provenance branches keep naming their source —
+  a stored answer and an inherited `BERNARD_*` variable are both things the
+  reader may want to go and change somewhere else.
 - **Each question says what the setting is FOR, not only what it does.** The
   descriptions were one terse line apiece (`How aggressively to prompt before
 running risky tools.`), which tells a reader what the words mean and nothing

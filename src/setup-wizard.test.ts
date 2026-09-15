@@ -152,7 +152,7 @@ describe('settingsPatch — only what changed is written', () => {
     const { spec, steps } = buildSettingsSpec(ctx());
     const answers = acceptAll(spec.steps.map((s) => ({ initial: s.initial ?? '' })));
     const at = spec.steps.findIndex((s) => s.id === 'coordinatorMode');
-    answers[at] = 'On (always coordinator)';
+    answers[at] = 'On';
     expect(settingsPatch(steps, answers)).toEqual({ coordinatorMode: 'on' });
   });
 
@@ -225,8 +225,25 @@ describe('provenanceNote', () => {
     expect(note).not.toContain('BERNARD_MODEL_MODE');
   });
 
-  it('says default when neither applies', () => {
-    expect(provenanceNote(field, ctx())).toContain('(default)');
+  it('calls an untouched value recommended, not default', () => {
+    // Both are true and only one is useful: "default" says where the value came
+    // from, which the reader can already see, while "recommended" answers the
+    // question they are actually asking — should I change this?
+    const note = provenanceNote(field, ctx());
+    expect(note).toContain('(recommended)');
+    expect(note).not.toContain('(default)');
+  });
+
+  it('still says where a value came from when it did not come from us', () => {
+    // Guard the guard: the other two branches must keep naming their source,
+    // because a stored answer and an inherited variable are both things the
+    // reader may want to go and change somewhere else.
+    expect(provenanceNote(field, ctx({ explicit: new Set(['modelMode']) }))).toContain(
+      'saved in this profile',
+    );
+    expect(provenanceNote(field, ctx({ env: { BERNARD_MODEL_MODE: 'balanced' } }))).toContain(
+      'BERNARD_MODEL_MODE',
+    );
   });
 
   it('speaks a boolean in the vocabulary of its own rows', () => {

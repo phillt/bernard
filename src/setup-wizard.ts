@@ -160,7 +160,13 @@ export function provenanceNote(field: WizardFieldData, ctx: SetupContext): strin
   if (field.envVar !== undefined && ctx.env[field.envVar] !== undefined) {
     return `Currently ${value}, from ${field.envVar} — changing it here will override that.`;
   }
-  return `Currently ${value} (default).`;
+  // "(recommended)" rather than "(default)". Both are true, and only one is
+  // useful to a reader deciding whether to touch it: "default" says where the
+  // value came from, which they can already see, while "recommended" answers the
+  // question they are actually asking. The other two branches keep saying where
+  // a value came from, because a stored answer and an inherited variable are
+  // both things the reader may want to go and change elsewhere.
+  return `Currently ${value} (recommended).`;
 }
 
 /** The label a list step shows for a stored value, or `''` when nothing matches. */
