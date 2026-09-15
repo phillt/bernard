@@ -1040,12 +1040,17 @@ coordinator)`, which translated one piece of jargon into another beside every
 privilege)` and `Strict (also medium-risk)` disambiguate an answer that is
     genuinely ambiguous alone, rather than glossing a term the reader has not
     met.
-- **An untouched value reads `(recommended)`, not `(default)`.** Both are true
-  and only one is useful: "default" says where the value came from, which the
-  reader can already see, while "recommended" answers the question they are
-  actually asking. The other two provenance branches keep naming their source —
-  a stored answer and an inherited `BERNARD_*` variable are both things the
-  reader may want to go and change somewhere else.
+- **The provenance note says where a value came FROM, never what it IS.** It
+  read `Currently On, saved in this profile.` above a row already carrying a `✓`
+  on `On` — the same fact twice, and on a text step the buffer shows it too. A
+  sentence that has to point at what is already on screen is a sign the screen
+  was not obvious enough, not a fix for it. What is left is the half a reader
+  cannot see: `Saved in this profile.`, `Set by BERNARD_X — changing it here
+overrides that.`, or `Recommended.` — the last being useful where `(default)`
+  was not, since "default" repeats where the value came from and "recommended"
+  answers the question the reader is actually asking. `Not set.` survives as its
+  own case, because it is the one thing no row can show: a blank buffer looks the
+  same whether the value is empty or absent.
 - **Each question says what the setting is FOR, not only what it does.** The
   descriptions were one terse line apiece (`How aggressively to prompt before
 running risky tools.`), which tells a reader what the words mean and nothing

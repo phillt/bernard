@@ -183,7 +183,7 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'promptRewriter',
         label: 'Prompt rewriter',
         description:
-          'Reshape your message into the form the current model answers best. Costs one small call each turn.',
+          'Optimizes your message for the model that will answer it, before it is sent. Costs one small call each turn.',
         field: { kind: 'boolean' },
         envVar: 'BERNARD_PROMPT_REWRITER',
       },
@@ -327,7 +327,7 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
       {
         key: 'theme',
         label: 'Theme',
-        description: 'Which colours the terminal uses.',
+        description: 'Which colors the terminal uses.',
         field: {
           kind: 'list',
           options: Object.keys(THEMES).map((name) => ({ value: name, label: name })),

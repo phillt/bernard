@@ -145,28 +145,26 @@ const UNRESTRICTED = 'unrestricted';
  */
 export function provenanceNote(field: WizardFieldData, ctx: SetupContext): string {
   const shown = ctx.current[field.key];
-  // Spoken in the vocabulary of the rows below it. A boolean step offers On and
-  // Off, and a note reading "Currently false" makes the reader translate
-  // between two spellings of one answer to work out which row is live.
-  const value =
-    shown === undefined || shown === ''
-      ? '(unset)'
-      : field.field.kind === 'boolean'
-        ? shown === true
-          ? ON
-          : OFF
-        : String(shown);
-  if (ctx.explicit.has(field.key)) return `Currently ${value}, saved in this profile.`;
+  // The VALUE is deliberately not repeated. The rows below carry a `✓` on the
+  // one in force and a text step opens with it in the buffer, so "Currently On"
+  // sat above a ticked "On" saying the same thing twice — and a sentence that
+  // has to point at what is already on screen is a sign the screen was not
+  // obvious enough, not a fix for it. What is left is the half a reader cannot
+  // see: where the value came from, and so where else to go and change it.
+  if (ctx.explicit.has(field.key)) return 'Saved in this profile.';
   if (field.envVar !== undefined && ctx.env[field.envVar] !== undefined) {
-    return `Currently ${value}, from ${field.envVar} — changing it here will override that.`;
+    return `Set by ${field.envVar} — changing it here overrides that.`;
   }
+  // "Not set" is the one thing the rows cannot show: a blank buffer looks the
+  // same whether the value is empty or absent.
+  if (shown === undefined || shown === '') return 'Not set.';
   // "(recommended)" rather than "(default)". Both are true, and only one is
   // useful to a reader deciding whether to touch it: "default" says where the
   // value came from, which they can already see, while "recommended" answers the
   // question they are actually asking. The other two branches keep saying where
   // a value came from, because a stored answer and an inherited variable are
   // both things the reader may want to go and change elsewhere.
-  return `Currently ${value} (recommended).`;
+  return 'Recommended.';
 }
 
 /** The label a list step shows for a stored value, or `''` when nothing matches. */

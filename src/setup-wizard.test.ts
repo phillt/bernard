@@ -221,37 +221,49 @@ describe('provenanceNote', () => {
       field,
       ctx({ explicit: new Set(['modelMode']), env: { BERNARD_MODEL_MODE: 'balanced' } }),
     );
-    expect(note).toContain('saved in this profile');
+    expect(note).toContain('Saved in this profile');
     expect(note).not.toContain('BERNARD_MODEL_MODE');
   });
 
-  it('calls an untouched value recommended, not default', () => {
-    // Both are true and only one is useful: "default" says where the value came
-    // from, which the reader can already see, while "recommended" answers the
-    // question they are actually asking — should I change this?
-    const note = provenanceNote(field, ctx());
-    expect(note).toContain('(recommended)');
-    expect(note).not.toContain('(default)');
+  it('calls an untouched value recommended', () => {
+    // "Default" says where the value came from, which the reader can already
+    // see; "recommended" answers the question they are actually asking.
+    expect(provenanceNote(field, ctx())).toBe('Recommended.');
+  });
+
+  it('never repeats the value, which the rows already show', () => {
+    // The rows carry a `✓` on the one in force and a text step opens with it in
+    // the buffer, so naming it again put the same fact on screen twice — and a
+    // sentence that has to point at what is already there is a sign the screen
+    // was not obvious enough, not a fix for it.
+    for (const c of [
+      ctx(),
+      ctx({ explicit: new Set(['modelMode']) }),
+      ctx({ env: { BERNARD_MODEL_MODE: 'balanced' } }),
+    ]) {
+      const note = provenanceNote(field, c);
+      expect(note).not.toContain('Currently');
+      expect(note).not.toContain('balanced');
+    }
   });
 
   it('still says where a value came from when it did not come from us', () => {
-    // Guard the guard: the other two branches must keep naming their source,
-    // because a stored answer and an inherited variable are both things the
-    // reader may want to go and change somewhere else.
+    // Guard the guard: dropping the value must not take the provenance with it.
+    // A stored answer and an inherited variable are both things the reader may
+    // want to go and change somewhere else.
     expect(provenanceNote(field, ctx({ explicit: new Set(['modelMode']) }))).toContain(
-      'saved in this profile',
+      'Saved in this profile',
     );
     expect(provenanceNote(field, ctx({ env: { BERNARD_MODEL_MODE: 'balanced' } }))).toContain(
       'BERNARD_MODEL_MODE',
     );
   });
 
-  it('speaks a boolean in the vocabulary of its own rows', () => {
-    // The rows say On and Off; "Currently false" makes the reader translate
-    // between two spellings of one answer to find the live one.
-    const bool = WIZARD_FIELDS.find((f) => f.key === 'subagentPac')!;
-    expect(provenanceNote(bool, ctx())).toContain('Currently On');
-    expect(provenanceNote(bool, ctx())).not.toContain('true');
+  it('says a value is absent, which no row can show', () => {
+    // The one fact the rows cannot carry: a blank buffer looks the same whether
+    // the value is empty or never set.
+    const voice = WIZARD_FIELDS.find((f) => f.key === 'voiceVoice')!;
+    expect(provenanceNote(voice, ctx())).toBe('Not set.');
   });
 });
 
