@@ -378,7 +378,19 @@ const DEFAULT_AUTO_CREATE_SPECIALISTS = false;
 const DEFAULT_AUTO_CREATE_THRESHOLD = 0.8;
 const DEFAULT_COORDINATOR_MODE: 'on' | 'off' | 'auto' = 'auto';
 const DEFAULT_CONFIRM_MODE: 'off' | 'auto' | 'strict' = 'auto';
-const DEFAULT_TOOL_MODE: 'read-only' | 'write' = 'read-only';
+/**
+ * **Changed from `'read-only'` (#447), which reverses #179's least-privilege
+ * default.** That default is the safer posture in the abstract and was the
+ * wrong one to ship: a brand-new user meets a 🔒 block prompt on the first file
+ * Bernard tries to edit, which reads as broken rather than as careful, and the
+ * remedy — "Allow for this tool, this session" — is a thing they have to learn
+ * before they have done anything. `write` is not unguarded: `confirmMode`
+ * defaults to `auto`, so a dangerous shell command or anything reaching outside
+ * the machine still stops and asks. What it gives up is the prompt on an
+ * ORDINARY local write, which is the one nobody was reading anyway. Cron has
+ * defaulted to `write` since it existed, for the neighbouring reason.
+ */
+const DEFAULT_TOOL_MODE: 'read-only' | 'write' = 'write';
 const DEFAULT_MODEL_MODE: ModelMode = 'balanced';
 const DEFAULT_SCRATCH_SUBJECT_THRESHOLD = 0.15;
 const DEFAULT_CONCISE_MODE = true;
@@ -1349,7 +1361,7 @@ export function loadConfig(overrides?: {
     : undefined;
   const confirmMode = prefs.confirmMode ?? envConfirmMode ?? DEFAULT_CONFIRM_MODE;
 
-  // Least-privilege tool mode (#179). Precedence: pref > env > default 'read-only'.
+  // Tool mode (#179). Precedence: pref > env > default — see DEFAULT_TOOL_MODE.
   const envToolMode = isToolMode(process.env.BERNARD_TOOL_MODE)
     ? (process.env.BERNARD_TOOL_MODE as 'read-only' | 'write')
     : undefined;

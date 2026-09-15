@@ -272,7 +272,7 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         // option, where a sentence above has room to say what each one means by
         // the time the reader reaches it.
         description:
-          "How much Bernard can do on its own. Read-only lets it read anything but holds every change until you approve it, so nothing lands on your machine you haven't seen first. Write lets changes through, with a check before the risky ones. Unrestricted drops every check — quickest, and nothing stands between a mistake and your files.",
+          "How much Bernard can do on its own before it needs you. Stopping for every change is the safest and interrupts constantly once you're doing real work; stopping only at the dangerous calls — a shell command that deletes, anything reaching off your machine — keeps that out of your way while still catching what matters. Never asking is quickest and puts nothing between a mistake and your files.",
         // The shared table, not a fourth copy of it — see `tool-modes.ts` on the
         // three spellings this had already grown, one of them wrong.
         field: { kind: 'list', options: [...TOOL_MODES] },

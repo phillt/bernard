@@ -17,6 +17,29 @@
  * does. `write` lets a write RUN and leaves the confirm gate standing, so the
  * two rows a reader most needs to tell apart were described as the same thing.
  *
+ * ## The middle row is not true on its own, and that is a real seam
+ *
+ * `Ask only about risky things` describes a COMBINATION: `toolMode: 'write'`
+ * plus `confirmMode: 'auto'`, which is the default and so the common case. Set
+ * confirm mode to `off` on the very next screen and the label is a lie. The row
+ * note therefore points at where the rest of the answer lives rather than
+ * pretending the answer is here.
+ *
+ * The honest fix is to merge the two questions, because from a reader's seat
+ * they ARE one question — how much do I want to be asked — and only the
+ * implementation splits them into "is it allowed" and "do I get a prompt". Four
+ * rows would cover every coherent state (`read-only`; `write`+`strict`;
+ * `write`+`auto`; `unrestricted`), and the machinery exists: `covers` already
+ * lets one question write two settings keys, which is how the third row writes
+ * `skipPermissions`.
+ *
+ * Not done here, because it is a change to what the settings surface IS rather
+ * than to its wording: `confirmMode` would lose its own question while keeping
+ * its env var, its `/agent-options` row and its per-job cron field, and the
+ * first two rows are nearly indistinguishable to a reader (`read-only` blocks
+ * a write until allowed; `write`+`strict` runs it after a prompt) which is a
+ * finding about the two settings rather than about the copy.
+ *
  * ## `unrestricted` is a row here and two fields on disk
  *
  * `ProfileSettings.toolMode` is `'read-only' | 'write'`; the third answer is
@@ -62,21 +85,28 @@ export const TOOL_MODES: ReadonlyArray<{
 }> = [
   {
     value: 'read-only',
-    label: 'Read-only',
-    description: 'Allow a blocked tool once, or for the session.',
+    label: 'Ask before every change',
+    description: 'Each one waits for you, and can be allowed for the session.',
   },
   {
     value: 'write',
-    label: 'Write',
-    description: 'The confirm prompts still apply.',
+    label: 'Ask only about risky things',
+    // The one row whose label is not true on its own: WHICH calls are risky
+    // enough to stop for is `confirmMode`, the very next question, and setting
+    // that to `off` makes this label a lie. Rather than word around it — "let
+    // changes through" says nothing a reader can act on — the label states the
+    // common case (`confirmMode` defaults to `auto`) and the note points at
+    // where the rest of the answer lives. See the merge note in the module
+    // docstring.
+    description: 'How risky is the next question.',
   },
   {
     value: UNRESTRICTED,
-    label: '⚠ Unrestricted',
+    label: '⚠ Never ask',
     // `toolModePolicy` short-circuits on `skipPermissions` BEFORE every other
     // rule, so this does not merely relax the confirm gate — it makes the
     // confirm-mode answer inert. Said on the row, because the two questions are
     // asked on separate screens and nothing else connects them.
-    description: 'Nothing is blocked and nothing is confirmed.',
+    description: 'At your own risk: nothing blocked, nothing confirmed.',
   },
 ];

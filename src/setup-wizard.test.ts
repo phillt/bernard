@@ -13,6 +13,7 @@ import {
 } from './setup-wizard.js';
 import { nextLabelFor } from './ui/overlays/wizard-types.js';
 import { WIZARD_FIELDS } from './profiles-wizard-data.js';
+import { TOOL_MODES, UNRESTRICTED } from './tool-modes.js';
 import type { ProfileSettings } from './profiles.js';
 
 /**
@@ -174,6 +175,13 @@ describe('settingsPatch — only what changed is written', () => {
 });
 
 describe('tool mode folds skipPermissions in', () => {
+  // Read off the shared table rather than written out here. These cases pinned
+  // the LABELS — 'Read-only', '⚠ Unrestricted' — and so broke when the rows were
+  // reworded, which is a test asserting the copy while claiming to assert the
+  // decode. What is being checked is that a row maps onto two settings keys;
+  // which words are on the row is `tool-modes.test.ts`'s business.
+  const rowFor = (value: string) => TOOL_MODES.find((m) => m.value === value)!.label;
+
   function toolModeStep(c: SetupContext) {
     const { spec, steps } = buildSettingsSpec(c);
     const at = spec.steps.findIndex((s) => s.id === 'toolMode');
@@ -183,13 +191,13 @@ describe('tool mode folds skipPermissions in', () => {
   it('opens on "unrestricted" when skipPermissions is on', () => {
     const c = ctx();
     (c.current as Record<string, unknown>).skipPermissions = true;
-    expect(toolModeStep(c).step.initial).toContain('Unrestricted');
+    expect(toolModeStep(c).step.initial).toBe(rowFor(UNRESTRICTED));
   });
 
   it('sets both keys when unrestricted is chosen', () => {
     const { spec, steps, at } = toolModeStep(ctx());
     const answers = acceptAll(spec.steps.map((s) => ({ initial: s.initial ?? '' })));
-    answers[at] = '⚠ Unrestricted';
+    answers[at] = rowFor(UNRESTRICTED);
     expect(settingsPatch(steps, answers)).toEqual({ toolMode: 'write', skipPermissions: true });
   });
 
@@ -200,7 +208,7 @@ describe('tool mode folds skipPermissions in', () => {
     (c.current as Record<string, unknown>).skipPermissions = true;
     const { spec, steps, at } = toolModeStep(c);
     const answers = acceptAll(spec.steps.map((s) => ({ initial: s.initial ?? '' })));
-    answers[at] = 'Read-only';
+    answers[at] = rowFor('read-only');
     expect(settingsPatch(steps, answers)).toEqual({
       toolMode: 'read-only',
       skipPermissions: false,
@@ -465,7 +473,7 @@ describe('a question that another answer can make inert', () => {
     const { spec } = buildSettingsSpec(ctx());
     const step = spec.steps.find((s) => s.id === 'toolMode')!;
     const field = step.field as { choices: string[]; notes?: Record<string, string> };
-    const unrestricted = field.choices.find((c) => c.includes('Unrestricted'))!;
+    const unrestricted = TOOL_MODES.find((m) => m.value === UNRESTRICTED)!.label;
     // The CLAIM, not the sentence: the note has to say that confirming stops
     // happening, and the wording has since been shortened to fit the one row
     // the wizard reserves for it.
