@@ -1,5 +1,5 @@
 /**
- * What Bernard is allowed to do, and how that is worded (#144/#179/#212).
+ * What Bernard is allowed to do, and how that is worded (#144/#179/#212/#447).
  *
  * A pure table in the `remote-messages.ts` shape, at `src/` root for the reason
  * that module records: `profiles-wizard-data.ts` is host-agnostic by contract,
@@ -17,28 +17,49 @@
  * does. `write` lets a write RUN and leaves the confirm gate standing, so the
  * two rows a reader most needs to tell apart were described as the same thing.
  *
- * ## The middle row is not true on its own, and that is a real seam
+ * ## One question, because from the reader's seat it always was one
  *
- * `Ask only about risky things` describes a COMBINATION: `toolMode: 'write'`
- * plus `confirmMode: 'auto'`, which is the default and so the common case. Set
- * confirm mode to `off` on the very next screen and the label is a lie. The row
- * note therefore points at where the rest of the answer lives rather than
- * pretending the answer is here.
+ * `toolMode` and `confirmMode` were asked on consecutive screens, and the
+ * middle row's label — `Ask only about risky things` — described the PAIR:
+ * `write` plus `confirmMode: 'auto'`. Answer the next screen with `off` and the
+ * label a reader had just accepted became false, with nothing on either screen
+ * connecting them. The split is an implementation fact ("is it allowed to run"
+ * against "do I get a prompt"), not a distinction anybody is choosing between.
  *
- * The honest fix is to merge the two questions, because from a reader's seat
- * they ARE one question — how much do I want to be asked — and only the
- * implementation splits them into "is it allowed" and "do I get a prompt". Four
- * rows would cover every coherent state (`read-only`; `write`+`strict`;
- * `write`+`auto`; `unrestricted`), and the machinery exists: `covers` already
- * lets one question write two settings keys, which is how the third row writes
- * `skipPermissions`.
+ * So there is one question now, and {@link TOOL_MODE_SETTINGS} is its decode:
+ * every row writes all three keys, which is what makes a row that cannot be
+ * contradicted. `toolModeFor` is the inverse, and both live here rather than at
+ * the two call sites, because a decode written twice is two decodes.
  *
- * Not done here, because it is a change to what the settings surface IS rather
- * than to its wording: `confirmMode` would lose its own question while keeping
- * its env var, its `/agent-options` row and its per-job cron field, and the
- * first two rows are nearly indistinguishable to a reader (`read-only` blocks
- * a write until allowed; `write`+`strict` runs it after a prompt) which is a
- * finding about the two settings rather than about the copy.
+ * ### Three rows, not four — `read-only` and `write`+`strict` stop on the same calls
+ *
+ * The obvious merge has four rows, one per coherent combination. It collapses
+ * to three because of what `risk.ts` actually classifies: an ordinary local
+ * write is `medium`, an unclassified MCP tool is `medium`, a read is `low`. So
+ * "block every write until allowed" and "confirm at medium and up" select the
+ * IDENTICAL population — the difference is the wording of the prompt and the
+ * breadth of the allowance it offers (the block gate's session allowance is
+ * keyed on the tool NAME, the confirm gate's on `name:hash(args)`, so
+ * `read-only`'s is the coarser of the two, which is not an argument for keeping
+ * it as a row of its own). `toolModeFor` therefore reads `write`+`strict` back
+ * as the first row, which is the same claim stated as code.
+ *
+ * ### What the merge cost, stated rather than discovered
+ *
+ * `strict` and `off` lose their rows in setup. That was very nearly a silent
+ * capability removal: this registry is not `OPTIONS_REGISTRY` (four numeric
+ * settings) and `/agent-options` had no confirm-mode row at all, so dropping
+ * the question would have left `BERNARD_CONFIRM_MODE` and the per-job cron
+ * field as the only ways to reach either value. {@link CONFIRM_MODES} and the
+ * `/agent-options` row are what make "it stays reachable" true.
+ *
+ * And `write`+`off` — run everything, keep the write-scope and deny-rule
+ * machinery — is now a state no row represents. It is deliberately NOT folded
+ * into `⚠ Never ask`: `skipPermissions` short-circuits the profile's `deny`
+ * rules too, so reading it as that row would turn a bare Enter into an
+ * escalation. `toolModeFor` returns `null` and the step opens with nothing
+ * ticked, which is this wizard's existing answer to a value its rows cannot
+ * express — see `WizardChoiceStep`'s "never invents the answer it opens on".
  *
  * ## `unrestricted` is a row here and two fields on disk
  *
@@ -62,6 +83,59 @@ export type ToolModeChoice = 'read-only' | 'write' | typeof UNRESTRICTED;
  * and `'skip'` in the menu.
  */
 export const UNRESTRICTED = 'unrestricted';
+
+/** The settings one row decides. A subset of `ProfileSettings`, restated so
+ *  this module stays a leaf that `profiles.ts` can be imported beside. */
+export interface ToolModeSettings {
+  toolMode: 'read-only' | 'write';
+  skipPermissions: boolean;
+  confirmMode: 'off' | 'auto' | 'strict';
+}
+
+/**
+ * What each row writes. **All three keys, always.**
+ *
+ * Writing only what changed is how the old two-key decode could leave
+ * `skipPermissions: true` standing under a guarded mode — a mode that is set
+ * and not in force. The same reasoning now covers `confirmMode`: a row that
+ * leaves it alone is a row whose label the previous answer can still falsify.
+ *
+ * `⚠ Never ask` writes `confirmMode: 'auto'`, not `'off'`, even though the
+ * level is inert while `skipPermissions` is set. `'off'` looks like the honest
+ * spelling of that row and is the one thing here that must not be written: the
+ * level is what is left holding the answer when the safeguards come BACK, and
+ * `/tool-permissions` re-arms them by writing `skipPermissions` alone — so the
+ * row would hand a reader who turned the safeguards back on a session that
+ * still never asks, in the state `toolModeFor` calls un-representable. What an
+ * inert field should hold is whatever is correct the moment it stops being
+ * inert.
+ */
+export const TOOL_MODE_SETTINGS: Readonly<Record<ToolModeChoice, ToolModeSettings>> = {
+  'read-only': { toolMode: 'read-only', skipPermissions: false, confirmMode: 'auto' },
+  write: { toolMode: 'write', skipPermissions: false, confirmMode: 'auto' },
+  [UNRESTRICTED]: { toolMode: 'write', skipPermissions: true, confirmMode: 'auto' },
+};
+
+/**
+ * Which row is in force, or `null` when no row says what the stored triple does.
+ *
+ * `skipPermissions` is tested first because that is the order `toolModePolicy`
+ * itself short-circuits in: with it set, the other two decide nothing, so any
+ * pair beside it still reads as the last row.
+ *
+ * `confirmMode` is then ignored under `read-only`, because what asks there is
+ * the block gate, which the confirm level does not reach.
+ */
+export function toolModeFor(s: Partial<ToolModeSettings>): ToolModeChoice | null {
+  if (s.skipPermissions === true) return UNRESTRICTED;
+  if (s.toolMode === 'read-only') return 'read-only';
+  if (s.toolMode !== 'write') return null;
+  // The collapse argued in the module docstring: `strict` confirms at medium
+  // and up, which is every write, so it stops on the same calls the first row
+  // blocks on.
+  if (s.confirmMode === 'strict') return 'read-only';
+  return s.confirmMode === 'auto' ? 'write' : null;
+}
 
 /**
  * One row per answer, for every surface that asks.
@@ -91,22 +165,54 @@ export const TOOL_MODES: ReadonlyArray<{
   {
     value: 'write',
     label: 'Ask only about risky things',
-    // The one row whose label is not true on its own: WHICH calls are risky
-    // enough to stop for is `confirmMode`, the very next question, and setting
-    // that to `off` makes this label a lie. Rather than word around it — "let
-    // changes through" says nothing a reader can act on — the label states the
-    // common case (`confirmMode` defaults to `auto`) and the note points at
-    // where the rest of the answer lives. See the merge note in the module
-    // docstring.
-    description: 'How risky is the next question.',
+    // This used to point at the next question, because the label was only true
+    // in combination with it. The row writes `confirmMode` itself now, so the
+    // note can finally say which calls it means.
+    description: 'Dangerous shell, or anything leaving your machine.',
   },
   {
     value: UNRESTRICTED,
     label: '⚠ Never ask',
     // `toolModePolicy` short-circuits on `skipPermissions` BEFORE every other
-    // rule, so this does not merely relax the confirm gate — it makes the
-    // confirm-mode answer inert. Said on the row, because the two questions are
-    // asked on separate screens and nothing else connects them.
+    // rule, so this does not merely relax the confirm gate — it dissolves the
+    // block gate and the profile's own deny rules with it.
     description: 'At your own risk: nothing blocked, nothing confirmed.',
+  },
+];
+
+/**
+ * The finer control under the middle row, for `/agent-options` only.
+ *
+ * Not a setup question, and that is the merge: which calls count as risky is a
+ * refinement of an answer already given, and asking it as a peer is what let a
+ * reader contradict themselves one screen later. It stays here rather than in a
+ * fourth near-identical module because it is the same question at a second
+ * grain, and a surface that renders both should read them off one table.
+ *
+ * `Off` is deliberately offered even though it produces the state `toolModeFor`
+ * calls un-representable: it is a real posture for someone who wants the
+ * write-scope and deny-rule machinery without the prompts, and refusing to
+ * offer it from the one surface that can is how a setting becomes env-only by
+ * accident rather than by decision.
+ */
+export const CONFIRM_MODES: ReadonlyArray<{
+  value: 'auto' | 'strict' | 'off';
+  label: string;
+  description: string;
+}> = [
+  {
+    value: 'auto',
+    label: 'Auto',
+    description: 'Only the riskiest: dangerous shell, or leaving your machine.',
+  },
+  {
+    value: 'strict',
+    label: 'Strict',
+    description: 'Also stops before ordinary file writes.',
+  },
+  {
+    value: 'off',
+    label: 'Off',
+    description: 'Never prompts. Deny rules and write scopes still apply.',
   },
 ];

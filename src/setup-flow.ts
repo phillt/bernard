@@ -223,8 +223,21 @@ function readCurrent(config: BernardConfig | null): {
   // value. `false` is what `startupUpdateCheck(!!prefs.autoUpdate)` already
   // treats an absent one as.
   current.autoUpdate = prefs.autoUpdate ?? false;
-  // Tool mode's third row. Same reason: an absent value must still be a value.
-  current.skipPermissions = (source.skipPermissions as boolean | undefined) ?? false;
+  // The two keys Tool mode decides besides its own (#447). The loop above walks
+  // `WIZARD_FIELDS`, and neither has a field of its own, so both the effective
+  // value and its provenance have to be read here — and provenance matters:
+  // `covers` is how `storedExplicitly` knows this question has been answered,
+  // and it was inert for `skipPermissions` because nothing ever added it to the
+  // set the loop builds.
+  for (const key of ['skipPermissions', 'confirmMode'] as const) {
+    if (stored[key] !== undefined) explicit.add(key);
+    const effective = source[key] ?? stored[key];
+    if (effective !== undefined) current[key] = effective;
+  }
+  // An absent value must still be a value: `false` is what every gate reads an
+  // unset `skipPermissions` as, and `toolModeFor` needs it stated to tell the
+  // last row from the first.
+  current.skipPermissions = current.skipPermissions ?? false;
   return { current: current as Partial<ProfileSettings>, explicit };
 }
 

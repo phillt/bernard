@@ -222,7 +222,13 @@ import {
   type RemoteMessageMode,
 } from '../remote-messages.js';
 import { COORDINATOR_MODES } from '../coordinator-modes.js';
-import { TOOL_MODES, UNRESTRICTED, type ToolModeChoice } from '../tool-modes.js';
+import {
+  CONFIRM_MODES,
+  TOOL_MODES,
+  TOOL_MODE_SETTINGS,
+  toolModeFor,
+  type ToolModeChoice,
+} from '../tool-modes.js';
 import { setOutputSink } from '../framework/hooks/output-sink.js';
 import { setInkHandlers, type MenuResult } from './ink-handlers.js';
 import { formatAskUserAnswers, injectAskUserHistoryMessages } from '../tools/ask-user-history.js';
@@ -3626,33 +3632,76 @@ export function App({
     flashToast(`Remote messages → ${chosen}`, chosen === 'all' ? 'warning' : 'success');
   }
 
+  /**
+   * The merged permission question (#447), rendered the way setup renders it.
+   *
+   * The shared table, not this menu's own spelling of it: the three answers
+   * were worded three ways across this file and the setup wizard, and one of
+   * those — "Write (allow all tools)" — described `write` as what
+   * `unrestricted` does; see `tool-modes.ts`.
+   *
+   * `TOOL_MODE_SETTINGS` decides what a row writes, for the same reason. This
+   * menu wrote two keys while the wizard wrote three, and the row whose label
+   * they disagreed about is the one a reader most needs to trust.
+   */
   async function runToolModePrompt(): Promise<void> {
-    // The shared table, not this menu's own spelling of it. The three answers
-    // were worded three ways across this file and the setup wizard, and one of
-    // those — "Write (allow all tools)" — described `write` as what
-    // `unrestricted` does; see `tool-modes.ts`.
+    const inForce = toolModeFor(config);
     const entries: MenuEntry[] = TOOL_MODES.map((m) => ({
       label: m.label,
       description: m.description,
-      active:
-        m.value === UNRESTRICTED
-          ? config.skipPermissions
-          : !config.skipPermissions && config.toolMode === m.value,
+      active: inForce === m.value,
       value: m.value,
     }));
-    const current = config.skipPermissions ? UNRESTRICTED : config.toolMode;
-    const result = await requestMenu(entries, { title: `Tool mode: ${current}` });
+    // `null` is the state no row represents — `write` with the confirm level
+    // off, reachable from the row below and from `BERNARD_CONFIRM_MODE`. Named
+    // rather than rounded to a neighbour, so nothing here is ticked either.
+    const result = await requestMenu(entries, { title: `Tool mode: ${inForce ?? 'custom'}` });
     if (result.cancelled) return;
     const chosen = result.item.value as ToolModeChoice;
-    if (chosen === UNRESTRICTED) {
-      setSkipPermissions(true);
-      return;
-    }
-    // Picking a guarded mode always re-arms the safeguards.
-    config.toolMode = chosen;
-    config.skipPermissions = false;
-    saveActiveSettings({ toolMode: chosen, skipPermissions: false });
-    flashToast(`Tool mode → ${chosen}`, 'success');
+    const next = TOOL_MODE_SETTINGS[chosen];
+    config.toolMode = next.toolMode;
+    config.skipPermissions = next.skipPermissions;
+    config.confirmMode = next.confirmMode;
+    saveActiveSettings(next);
+    flashToast(
+      next.skipPermissions
+        ? '⚠ Permission checks and safeguards DISABLED for this profile.'
+        : `Tool mode → ${chosen}`,
+      next.skipPermissions ? 'error' : 'success',
+    );
+  }
+
+  /**
+   * Which calls count as risky enough to stop for (#144/#447).
+   *
+   * A refinement of the answer above rather than a peer of it — which is the
+   * merge: asked as a peer, it let a reader accept "ask only about risky
+   * things" and then, one screen later, answer what "risky" means with "never".
+   *
+   * It is also the ONLY interactive surface that reaches `strict` or `off`.
+   * `/options` is the four numeric settings and has never held this, so without
+   * this row the merge would have quietly made both env-only.
+   */
+  async function runConfirmModePrompt(): Promise<void> {
+    const entries: MenuEntry[] = CONFIRM_MODES.map((m) => ({
+      label: m.label,
+      description: m.description,
+      active: config.confirmMode === m.value,
+      value: m.value,
+    }));
+    const result = await requestMenu(entries, {
+      // `toolModePolicy` short-circuits on `skipPermissions` before this is
+      // consulted at all, so the title says so rather than presenting a
+      // question whose answer decides nothing.
+      title: config.skipPermissions
+        ? 'Confirm mode (ignored — tool mode is unrestricted)'
+        : `Confirm mode: ${config.confirmMode}`,
+    });
+    if (result.cancelled) return;
+    const chosen = result.item.value as BernardConfig['confirmMode'];
+    config.confirmMode = chosen;
+    saveActiveSettings({ confirmMode: chosen });
+    flashToast(`Confirm mode → ${chosen}`, chosen === 'off' ? 'warning' : 'success');
   }
 
   async function runScratchThresholdPrompt(): Promise<void> {
@@ -3860,11 +3909,24 @@ export function App({
         kind: 'item',
         item: {
           label: 'Tool mode',
-          annotation: `= ${config.skipPermissions ? '⚠ unrestricted' : config.toolMode}`,
+          annotation: `= ${config.skipPermissions ? '⚠ unrestricted' : (toolModeFor(config) ?? 'custom')}`,
+          // In the rows' own words, not a fourth paraphrase of them.
           description:
-            'How much Bernard can do on its own. Read-only stops it changing anything until you say so; write lets changes through, with a check first on the risky ones; unrestricted removes every check.',
+            'How much Bernard can do on its own before it needs you. Stop before every change, stop only at the dangerous calls, or never stop — which also removes the deny rules and write scopes, not just the prompts.',
         },
         action: runToolModePrompt,
+      },
+      {
+        kind: 'item',
+        item: {
+          label: 'Confirm mode',
+          annotation: `= ${config.skipPermissions ? 'ignored' : config.confirmMode}`,
+          // The finer grain under the row above (#447), which is why it reads
+          // as a refinement rather than as a second permission question.
+          description:
+            'Which calls count as dangerous enough to stop for. Auto means a destructive shell command or anything reaching off your machine; strict also stops before ordinary file writes; off never prompts, though deny rules and write scopes still apply.',
+        },
+        action: runConfirmModePrompt,
       },
       {
         kind: 'item',

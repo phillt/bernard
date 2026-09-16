@@ -271,31 +271,23 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         // parentheses translates one piece of jargon into another beside every
         // option, where a sentence above has room to say what each one means by
         // the time the reader reaches it.
+        // The last sentence is the merge showing through (#447). `confirmMode`
+        // used to be the next question, which is what made the middle row's
+        // label falsifiable one screen later; folding it in means a reader who
+        // wants to be stopped more often has nothing on this page to reach for,
+        // and would reasonably conclude it is not possible.
         description:
-          "How much Bernard can do on its own before it needs you. Stopping for every change is the safest and interrupts constantly once you're doing real work; stopping only at the dangerous calls — a shell command that deletes, anything reaching off your machine — keeps that out of your way while still catching what matters. Never asking is quickest and puts nothing between a mistake and your files.",
+          "How much Bernard can do on its own before it needs you. Stopping for every change is the safest and interrupts constantly once you're doing real work; stopping only at the dangerous calls — a shell command that deletes, anything reaching off your machine — keeps that out of your way while still catching what matters. Never asking is quickest and puts nothing between a mistake and your files. If you want it to stop before ordinary file edits too, /agent-options has a finer setting.",
         // The shared table, not a fourth copy of it — see `tool-modes.ts` on the
         // three spellings this had already grown, one of them wrong.
         field: { kind: 'list', options: [...TOOL_MODES] },
         envVar: 'BERNARD_TOOL_MODE',
-        covers: ['skipPermissions'],
-      },
-      {
-        key: 'confirmMode',
-        label: 'Confirm mode',
-        // Bare rows for the same reason as its neighbour above. `Auto` alone
-        // says nothing about a risk threshold, so the sentence has to name all
-        // three — which it could not while each row carried two words of it.
-        description:
-          'How often Bernard stops to check with you before it acts — your chance to catch a call before it happens, at the price of being interrupted. Auto only asks about the riskiest: a dangerous shell command, or anything reaching outside your machine. Strict also asks before ordinary file writes. Off never asks. Ignored while tool mode is unrestricted.',
-        field: {
-          kind: 'list',
-          options: [
-            { value: 'auto', label: 'Auto' },
-            { value: 'strict', label: 'Strict' },
-            { value: 'off', label: 'Off' },
-          ],
-        },
-        envVar: 'BERNARD_CONFIRM_MODE',
+        // Three keys, one question. `confirmMode` has no step of its own since
+        // the merge, and `covers` is what keeps it counted by
+        // `settings-coverage.test.ts` and read as answered by
+        // `storedExplicitly` — a profile storing only the confirm level HAS
+        // answered this question.
+        covers: ['skipPermissions', 'confirmMode'],
       },
       {
         // Beside the two tool gates rather than under Automation: those govern

@@ -1082,14 +1082,59 @@ coordinator)`, which translated one piece of jargon into another beside every
     coordinator question's rule and for the same reason: `Auto` says nothing
     alone so that one must name all three, while a row that is already a
     sentence would just be quoted back.
-    - **The middle row is not true on its own**, and that is a real seam rather
-      than a wording problem. `Ask only about risky things` describes
-      `toolMode: 'write'` PLUS `confirmMode: 'auto'` — the default, so the
-      common case — and setting confirm mode to `off` on the next screen makes
-      the label false. Its note points at where the rest of the answer lives.
-      The honest fix is to merge the two questions, since from a reader's seat
-      they are one question and only the implementation splits them; the
-      argument for and against is in `tool-modes.ts` beside the table.
+    - **Tool mode and confirm mode are one question now.** The middle row was
+      not true on its own: `Ask only about risky things` describes
+      `toolMode: 'write'` PLUS `confirmMode: 'auto'`, and the confirm question
+      was the very next screen, so a reader could accept that label and then
+      answer what "risky" means with "never" — with nothing on either screen
+      connecting them. The split is an implementation fact ("is it allowed to
+      run" against "do I get a prompt"), not a distinction anybody chooses
+      between. `TOOL_MODE_SETTINGS` is the decode and `toolModeFor` the
+      inverse, both in `tool-modes.ts`, because a decode written at each of the
+      two call sites is two decodes — and that had already happened, with the
+      `/agent-options` menu writing two keys where the wizard wrote three.
+      - **Three rows, not four.** The obvious merge has one row per coherent
+        combination. It collapses because of what `risk.ts` classifies: an
+        ordinary local write is `medium` and an unclassified MCP tool is
+        `medium`, so "block every write until allowed" (`read-only`) and
+        "confirm at medium and up" (`write`+`strict`) select the IDENTICAL
+        population. What differs is the prompt's wording and the breadth of
+        the allowance it offers — the block gate's session allowance is keyed
+        on the tool NAME, the confirm gate's on `name:hash(args)`, so
+        `read-only`'s is the coarser, which is not an argument for keeping it
+        as a row. `toolModeFor` reads `write`+`strict` back as the first row,
+        which is that claim stated as code rather than left in prose.
+      - **It was very nearly a silent capability removal.** `strict` and `off`
+        lose their setup rows, and the registry they left is the ONLY wizard
+        surface — `OPTIONS_REGISTRY` is the four numeric settings, and
+        `/agent-options` had no confirm-mode row at all. So dropping the
+        question would have left `BERNARD_CONFIRM_MODE` and the per-job cron
+        field as the only doors to either value. `CONFIRM_MODES` and the new
+        `/agent-options` row are what make "it stays reachable" true, and the
+        setup description names that door, because a reader who wants to be
+        stopped more often would otherwise conclude it is not possible.
+      - **`write`+`off` is a state no row represents**, and is deliberately not
+        folded into `⚠ Never ask`: `skipPermissions` short-circuits the
+        profile's own `deny` rules too, so reading it as that row would turn a
+        bare Enter on a ticked row into an escalation. `toolModeFor` returns
+        `null`, the step opens with nothing ticked, and the reader chooses —
+        this wizard's existing rule that a step never invents the answer it
+        opens on.
+      - **The last row leaves `confirmMode: 'auto'`, not `'off'`.** `'off'` is
+        what that row MEANS and is the one value it must not store, which is a
+        defect this shipped with for about ten minutes: the level is inert
+        while `skipPermissions` is set, and `/tool-permissions` re-arms the
+        safeguards by writing `skipPermissions` ALONE — so `'off'` would hand
+        someone who turned the safeguards back on a session that still never
+        asks, in exactly the un-representable state above. What an inert field
+        should hold is whatever is correct the moment it stops being inert, and
+        the property is pinned for every row rather than for the one that
+        failed.
+      - **`readCurrent`'s provenance loop walks `WIZARD_FIELDS`**, so a key
+        that is `covers`ed rather than asked is invisible to it. `confirmMode`
+        needed adding there beside `skipPermissions` — which had the same gap
+        and had therefore made `covers: ['skipPermissions']` inert since it was
+        written, because nothing ever added that key to the explicit set.
     - **Nothing pinned `DEFAULT_TOOL_MODE`** before this — a security-relevant
       default changeable with the whole suite green, which is exactly how it
       got changed during a copy pass. `tool-modes.test.ts` reads it out of the
@@ -1234,7 +1279,7 @@ running risky tools.`), which tells a reader what the words mean and nothing
     same reason: block lettering cannot reflow, so a banner that does not fit is
     worse present than absent. Measured with `stringWidth`, not `.length` — the
     rows are box-drawing today and a future banner need not be.
-- **The 37 questions are a starting point, not the answer.** This phase exists to
+- **The 36 questions are a starting point, not the answer.** This phase exists to
   be walked end to end so the day-one subset can be chosen from experience.
   Trimming, and the splash copy that says what Bernard is, are follow-ups.
 
@@ -1477,7 +1522,7 @@ On first run, files are auto-migrated from `~/.bernard/` to XDG locations. A `~/
 - `BERNARD_VOICE_WARMUP_MS` — Milliseconds of silence played through the audio sink immediately before each TTS utterance, to wake a suspended output device so the first words aren't clipped (default: 400; 0 disables). Linux-only effect: it requires a playback binary (`pw-play` / `paplay` / `aplay`) and is a no-op on macOS/Windows (those keep output devices responsive) or when none is installed. The mitigation exists because PipeWire/PulseAudio suspends idle sinks — HDMI links especially take a few hundred ms to re-establish — clipping leading audio; the silent buffer flows through the same audio layer to wake the device first. Profile-scoped. See `src/voice-service.ts` (`resolveWarmupPlayer` / `buildWarmupCommand` / `buildSilenceWav`).
 - `BERNARD_FULLSCREEN` — Render the REPL in the terminal's **alternate screen buffer** (full-screen, vim/htop style), default `true`. Set to `false` for the legacy inline rendering (Ink `<Static>` + native terminal scrollback) on dumb terminals / CI. Full-screen is only entered on a real TTY (`process.stdout.isTTY`); piped/non-TTY output always uses legacy rendering regardless of this flag. `src/ui/withFullScreen.ts` owns the enter/exit escapes (`?1049h/l` alt buffer, `?25l/h` cursor, plus mouse) and registers `exit`/`SIGINT`/`SIGTERM`/`SIGHUP`/`uncaughtException`/`unhandledRejection` handlers so the terminal is always restored; `src/index.ts` calls `teardown()` **before** `cleanup()` so post-unmount `printInfo`/`printError` land on the restored normal screen. Env-only (not profile-scoped).
 - `BERNARD_DISABLE_MOUSE` — Opt out of mouse-wheel transcript scrolling in full-screen (default off → wheel scrolling on). Enabling mouse tracking captures click-drag, so the terminal's native text selection requires holding the emulator's bypass modifier (Shift on most; Option on iTerm2; Fn on Terminal.app); set this if you'd rather keep native selection and scroll with the keyboard only. No effect when `BERNARD_FULLSCREEN=false`. The SGR wheel parser (`src/ui/mouse.ts`) reads `?1000h+?1006h` wheel reports (button 64/65) off a stdin `'data'` listener attached alongside Ink (`src/ui/useMouseWheel.ts`). Env-only.
-- `BERNARD_CONFIRM_MODE` — Risk-based confirmation policy (#144): `off | auto | strict` (default: `auto`). `off` never prompts; `auto` prompts only on **high**-risk calls (dangerous shell, write+external-api tools); `strict` also prompts on **medium**-risk calls (local writes, unclassified MCP). The Policy Engine's `toolMode.confirmThreshold` short-circuits to `never` on pure-question turns (rule-based `isPureQuestion` in `src/policy/tool-mode.ts`). REPL renders a three-option menu (Allow once / Allow for session / Cancel) with an in-memory per-`toolName:hash(args)` allowlist that clears on REPL restart. Cron jobs apply a per-job `confirmMode` field (`CronJob.confirmMode`): unset defaults to `'auto'` (auto-deny high-risk, pass medium/low — the legacy headless behavior); `'off'` approves all risk levels including dangerous shell; `'strict'` also denies medium-risk calls. Risk tiers derive from `ToolMeta.kind` + `sideEffect` via `src/risk.ts`; tools can declare `meta.risk` to override. MCP tools default to `kind: 'write', sideEffect: 'local'` (medium), opting `*_search` / `*_list` / `*_find` / `*_get` / `*_query` / `*_read` / `*_lookup` to `read` (low).
+- `BERNARD_CONFIRM_MODE` — Risk-based confirmation policy (#144): `off | auto | strict` (default: `auto`). **Set from `/agent-options → Confirm mode`, and no longer asked by `bernard setup`** — since #447 it is folded into the merged Tool mode question, whose three rows each write it; that row is what keeps `strict` and `off` reachable without an env var, and is the only interactive surface for either. `off` never prompts; `auto` prompts only on **high**-risk calls (dangerous shell, write+external-api tools); `strict` also prompts on **medium**-risk calls (local writes, unclassified MCP). The Policy Engine's `toolMode.confirmThreshold` short-circuits to `never` on pure-question turns (rule-based `isPureQuestion` in `src/policy/tool-mode.ts`). REPL renders a three-option menu (Allow once / Allow for session / Cancel) with an in-memory per-`toolName:hash(args)` allowlist that clears on REPL restart. Cron jobs apply a per-job `confirmMode` field (`CronJob.confirmMode`): unset defaults to `'auto'` (auto-deny high-risk, pass medium/low — the legacy headless behavior); `'off'` approves all risk levels including dangerous shell; `'strict'` also denies medium-risk calls. Risk tiers derive from `ToolMeta.kind` + `sideEffect` via `src/risk.ts`; tools can declare `meta.risk` to override. MCP tools default to `kind: 'write', sideEffect: 'local'` (medium), opting `*_search` / `*_list` / `*_find` / `*_get` / `*_query` / `*_read` / `*_lookup` to `read` (low).
 - `BERNARD_TOOL_MODE` — Tool mode (#179): `read-only | write` (**default `write` since #447**, reversing #179's least-privilege default — see `DEFAULT_TOOL_MODE` for the argument, and note `confirmMode: 'auto'` still stops a dangerous call, so what was given up is the prompt on an ordinary local write). In `read-only` mode any tool whose meta classifies it as a write (`kind` in `{'write','dangerous'}`) is blocked until the user picks **Allow once** or **Enable for this tool, this session** at the REPL block menu (rendered with the 🔒 prefix). `write` mode lets every tool run subject only to the `confirmMode` risk gate. The two settings are **orthogonal**: `toolMode` answers "is this allowed to run at all?" and `confirmMode` answers "do I want to be asked first?" — when both fire on the same call, the block gate runs first and the confirm gate may still fire on allowance. The per-tool session allowlist is owned by the REPL (`sessionToolAllowlist: Set<string>` on `ToolOptions`, threaded through to `augmentTools` in `src/tools/augment.ts`) so an "Enable for this tool, this session" decision survives across turns and across nested sub-agent / tool-wrapper dispatches; it clears on REPL restart. When no shared Set is provided (tests, cron), `augmentTools` falls back to a closure-local Set. Tools without classified meta (legacy / foreign) fall through the block gate so they don't get bricked silently — MCP tools already get `kind: 'write'` by default via `wrapMCPTool()` so unclassified MCP writes still trip the gate. Pure-question turns bypass both gates via the existing `isPureQuestion` short-circuit. Cron jobs apply a per-job `toolMode` field (`CronJob.toolMode`): unset defaults to `'write'` (legacy behavior — jobs opted in to writes at creation time); `'read-only'` blocks all write/dangerous tools headlessly (fail-closed, no Ink overlay prompt).
 - **Profile tool permissions (#212)** — persisted "always allow" grants that survive REPL restarts, stored in the active profile (`ProfileSettings.toolPermissions`, profile-scoped via `PROFILE_SCOPED_KEYS`). Keys come from `permissionKeyFor` (`src/tool-permissions.ts`): tool name for non-shell tools (MCP included), `shell:<primary-command>` for simple shell calls; complex command lines (pipes/redirects/subshells/newlines per `COMPLEX_RE`) have **no** stable key and never get a profile option. Both augment gates consult the grants (after the session allowlist, before prompting) via `ToolOptions.getToolPermissions` — a live reader of `config.toolPermissions` so mid-session grants and profile switches apply immediately; `allow` proceeds, `deny` refuses without prompting. The confirm/block dialogs (`ConfirmDialog.tsx`) append an "Always allow \`<cmd>\` for this profile" choice when `permissionKey` is non-null; persistence happens in `App.tsx` (`persistToolPermission` → `saveActiveSettings`). The block gate's `'allow-tool-for-profile'` outcome deliberately does NOT touch `sessionToolAllowlist` (name-keyed — would over-allow all of `shell` for a `shell:ls` grant). Inspect/remove grants via `/tool-permissions`. Cron never passes the getter — headless runs ignore profile grants. Related nag reduction: shell's `meta.isWriteAction` delegates to `isReadOnlyShellInvocation` (conservative allowlist: `ls`/`cat`/`git status`/…), and `riskFromMeta` checks `isWriteAction` _before_ the `kind === 'dangerous'` short-circuit, so simple read-only shell commands run at low risk (no confirm prompt) and pass the read-only block gate with no grant needed.
 - **Skip-permissions mode (#212)** — "Run Without Permission Checks or Safeguards": profile-scoped boolean `skipPermissions` (default false), selectable as the third mode under `/agent-options → Tool mode` (shown as `⚠ unrestricted`; picking read-only/write re-arms the safeguards) or toggled from `/tool-permissions`. Enforced in `toolModePolicy` (`src/policy/tool-mode.ts`) which short-circuits to `{mode: 'write', confirmThreshold: 'never', reason: 'skip-permissions'}` before every other rule, so both gates dissolve through existing plumbing. Cron jobs support a per-job `skipPermissions` field (`CronJob.skipPermissions`): when true, both the `toolMode` block gate and the `confirmMode` confirm gate are dissolved for that job — including dangerous-shell denial (the user explicitly opted the job in to "no safeguards"). Takes precedence over per-job `confirmMode` and `toolMode`. The global profile `skipPermissions` flag does NOT affect cron jobs (headless runs only honor the per-job field).

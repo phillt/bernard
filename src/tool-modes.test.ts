@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { TOOL_MODES, UNRESTRICTED } from './tool-modes.js';
+import {
+  CONFIRM_MODES,
+  TOOL_MODES,
+  TOOL_MODE_SETTINGS,
+  UNRESTRICTED,
+  toolModeFor,
+} from './tool-modes.js';
 import { WIZARD_FIELDS } from './profiles-wizard-data.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -98,15 +104,109 @@ describe('the tool-mode rows are written down once', () => {
     expect(field.description, 'the trade').toMatch(/safest|interrupt/i);
   });
 
-  it('does the same for the confirm question beside it', () => {
-    // Its rows went bare in the same pass; `Auto` alone says nothing about a
-    // risk threshold, so the sentence has to carry it.
-    const field = WIZARD_FIELDS.find((f) => f.key === 'confirmMode')!;
-    expect(field.field.kind).toBe('list');
-    if (field.field.kind !== 'list') return;
-    for (const o of field.field.options) expect(o.label, o.value).not.toMatch(/[()]/);
-    for (const word of ['Auto', 'Strict', 'Off']) {
-      expect(field.description, word).toContain(word);
+  it('is the only permission question setup asks', () => {
+    // The merge (#447). `confirmMode` had a step of its own on the screen
+    // after this one, and answering it `off` made this row's label false with
+    // nothing on either screen connecting the two. It is COVERED rather than
+    // asked, which is what keeps `settings-coverage.test.ts` counting it and
+    // `storedExplicitly` reading a stored confirm level as an answer.
+    const field = WIZARD_FIELDS.find((f) => f.key === 'toolMode')!;
+    expect(field.covers).toContain('confirmMode');
+    expect(field.covers).toContain('skipPermissions');
+    expect(WIZARD_FIELDS.some((f) => f.key === 'confirmMode')).toBe(false);
+  });
+});
+
+/**
+ * The merge, as a decode rather than as copy (#447).
+ *
+ * The middle row's label described a PAIR of settings and only one of them was
+ * written, so the next screen could falsify it. What makes that unrepresentable
+ * is that a row writes all three keys and that the inverse is the same table
+ * read backwards — not that the wording improved.
+ */
+describe('one question decides all three keys', () => {
+  it('writes every key on every row', () => {
+    // A patch of "what changed" is how a move off `unrestricted` left
+    // `skipPermissions: true` standing under a guarded mode. The same shape
+    // would let a row inherit a confirm level nobody chose for it.
+    for (const m of TOOL_MODES) {
+      expect(Object.keys(TOOL_MODE_SETTINGS[m.value]).sort(), m.value).toEqual([
+        'confirmMode',
+        'skipPermissions',
+        'toolMode',
+      ]);
     }
+  });
+
+  it('round-trips every row', () => {
+    // The property that makes a tick honest: what a row writes is read back as
+    // that same row, so a walk that changes nothing cannot move the answer.
+    for (const m of TOOL_MODES) {
+      expect(toolModeFor(TOOL_MODE_SETTINGS[m.value]), m.value).toBe(m.value);
+    }
+  });
+
+  it('leaves a level that survives the safeguards being re-armed', () => {
+    // `/tool-permissions` turns `skipPermissions` off by writing that ONE key,
+    // so whatever a row left in `confirmMode` is what the session comes back
+    // with. `off` is what the last row means and is the one value it must not
+    // store: re-armed, it would be a session that still never asks, sitting in
+    // the state no row represents. An inert field should hold whatever is
+    // correct the moment it stops being inert.
+    for (const m of TOOL_MODES) {
+      const rearmed = { ...TOOL_MODE_SETTINGS[m.value], skipPermissions: false };
+      expect(toolModeFor(rearmed), m.value).not.toBe(null);
+    }
+  });
+
+  it('reads write+strict back as "ask before every change"', () => {
+    // The collapse that makes this three rows rather than four: `strict`
+    // confirms at medium and up, and an ordinary local write is medium, so it
+    // stops on exactly the calls `read-only` blocks on. If this is wrong the
+    // merge is wrong, which is why it is asserted rather than left in prose.
+    expect(toolModeFor({ toolMode: 'write', skipPermissions: false, confirmMode: 'strict' })).toBe(
+      'read-only',
+    );
+  });
+
+  it('reads write+off back as no row at all', () => {
+    // Never-asking without removing the deny rules and write scopes. Folding it
+    // into `⚠ Never ask` would turn a bare Enter on the ticked row into an
+    // escalation, so nothing is ticked and the reader has to choose.
+    expect(toolModeFor({ toolMode: 'write', skipPermissions: false, confirmMode: 'off' })).toBe(
+      null,
+    );
+  });
+
+  it('reads unrestricted back whatever sits beside it', () => {
+    // `toolModePolicy` short-circuits on `skipPermissions` before consulting
+    // either of the others, so this follows the policy rather than the record.
+    for (const confirmMode of ['off', 'auto', 'strict'] as const) {
+      expect(toolModeFor({ toolMode: 'read-only', skipPermissions: true, confirmMode })).toBe(
+        UNRESTRICTED,
+      );
+    }
+  });
+
+  it('keeps the finer control reachable from a surface, not just an env var', () => {
+    // This was very nearly a silent capability removal. `OPTIONS_REGISTRY` is
+    // the four numeric settings and `/agent-options` had no confirm-mode row,
+    // so dropping the setup question would have left `BERNARD_CONFIRM_MODE` and
+    // the per-job cron field as the only doors to `strict` and `off`.
+    expect(CONFIRM_MODES.map((m) => m.value)).toEqual(['auto', 'strict', 'off']);
+    for (const m of CONFIRM_MODES) expect(m.label, m.value).not.toMatch(/[()]/);
+    const app = fs.readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), 'ui', 'App.tsx'),
+      'utf-8',
+    );
+    // A source scan because `/agent-options` is one of the commands
+    // `ui/__tests__/App.test.tsx` deliberately does not drive (it needs a
+    // mocked wizard), and `buildAgentOptionsMenu` lives inside the component
+    // closure. What is pinned is the WIRING, not the existence: asserting the
+    // function's NAME appears survived a mutation that unhooked the row and
+    // left the definition standing. The wording stays the table's business.
+    expect(app).toContain('CONFIRM_MODES');
+    expect(app).toContain('action: runConfirmModePrompt');
   });
 });

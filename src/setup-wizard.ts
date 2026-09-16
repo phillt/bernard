@@ -45,7 +45,7 @@ import {
   type WizardFieldData,
 } from './profiles-wizard-data.js';
 import type { ProfileSettings } from './profiles.js';
-import { UNRESTRICTED } from './tool-modes.js';
+import { TOOL_MODE_SETTINGS, toolModeFor, type ToolModeChoice } from './tool-modes.js';
 import type { WizardAnswer, WizardSpec, WizardStep } from './ui/overlays/wizard-types.js';
 
 /** A provider the user can pick, and whether a key is already stored for it. */
@@ -307,11 +307,13 @@ function buildStep(
     // a lineup list before any lineup exists, or a model list when the catalog
     // could not be read.
     if (options.length === 0) return null;
-    // Tool mode folds `skipPermissions` in as a third row, so its stored value
-    // is not simply `current`.
+    // Tool mode is the merged permission question (#447), so which row is in
+    // force is a fact about three stored keys rather than about `current` — and
+    // `toolModeFor` can answer NONE, which `labelFor` also spells `''`. A triple
+    // no row represents therefore opens with nothing ticked and makes the reader
+    // choose, rather than having a row invented for it.
     const isToolMode = field.key === 'toolMode';
-    const effective =
-      isToolMode && ctx.current.skipPermissions === true ? UNRESTRICTED : (current ?? '');
+    const effective = isToolMode ? (toolModeFor(ctx.current) ?? '') : (current ?? '');
     const initial = labelFor(options, effective);
     // Notes reach the screen. The registry has carried a `description` per
     // option since it was written and nothing rendered it, so the one row that
@@ -341,12 +343,12 @@ function buildStep(
           const value = options.find((o) => o.label === answer)?.value;
           if (value === undefined) return {};
           if (isToolMode) {
-            // Both keys, always. Writing only the one that changed would let a
-            // move away from `unrestricted` leave `skipPermissions: true`
-            // standing, which reads as a mode that is set and not in force.
-            return value === UNRESTRICTED
-              ? { toolMode: 'write', skipPermissions: true }
-              : { toolMode: value as ProfileSettings['toolMode'], skipPermissions: false };
+            // All three keys, always, from the shared table — never a patch of
+            // what changed. A move away from `unrestricted` that wrote only
+            // `toolMode` left `skipPermissions: true` standing, and a row that
+            // left `confirmMode` alone left its own label falsifiable by an
+            // answer given before the merge. See `tool-modes.ts`.
+            return { ...TOOL_MODE_SETTINGS[value as ToolModeChoice] };
           }
           return { [field.key]: value } as Partial<ProfileSettings>;
         },

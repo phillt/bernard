@@ -194,11 +194,19 @@ describe('tool mode folds skipPermissions in', () => {
     expect(toolModeStep(c).step.initial).toBe(rowFor(UNRESTRICTED));
   });
 
-  it('sets both keys when unrestricted is chosen', () => {
+  it('sets all three keys when unrestricted is chosen', () => {
     const { spec, steps, at } = toolModeStep(ctx());
     const answers = acceptAll(spec.steps.map((s) => ({ initial: s.initial ?? '' })));
     answers[at] = rowFor(UNRESTRICTED);
-    expect(settingsPatch(steps, answers)).toEqual({ toolMode: 'write', skipPermissions: true });
+    expect(settingsPatch(steps, answers)).toEqual({
+      toolMode: 'write',
+      skipPermissions: true,
+      // NOT `off`, though that is what this row means. The level is inert while
+      // `skipPermissions` is set, and `/tool-permissions` re-arms the
+      // safeguards by writing that one key — so `off` here would hand someone
+      // who turned them back on a session that still never asks.
+      confirmMode: 'auto',
+    });
   });
 
   it('clears skipPermissions when moving back off unrestricted', () => {
@@ -212,7 +220,33 @@ describe('tool mode folds skipPermissions in', () => {
     expect(settingsPatch(steps, answers)).toEqual({
       toolMode: 'read-only',
       skipPermissions: false,
+      confirmMode: 'auto',
     });
+  });
+
+  it('opens on nothing when the stored settings match no row', () => {
+    // `write` with the confirm level off is never-asking WITHOUT removing the
+    // deny rules and write scopes — reachable from `/agent-options` and from
+    // `BERNARD_CONFIRM_MODE`, and a state no row can honestly wear. A step that
+    // ticked its nearest neighbour would make a bare Enter an escalation, so
+    // the wizard's "never invents the answer it opens on" rule applies.
+    const c = ctx();
+    (c.current as Record<string, unknown>).toolMode = 'write';
+    (c.current as Record<string, unknown>).confirmMode = 'off';
+    expect(toolModeStep(c).step.initial).toBe('');
+  });
+
+  it('leaves a stored confirm level alone when the row is not changed', () => {
+    // The change test in `settingsPatch` is what protects someone who set
+    // `strict` deliberately: they accept the row already in force, the answer
+    // equals the initial, and nothing is emitted. A row that wrote its keys
+    // unconditionally would silently pull them back to `auto`.
+    const c = ctx();
+    (c.current as Record<string, unknown>).toolMode = 'write';
+    (c.current as Record<string, unknown>).confirmMode = 'strict';
+    const { spec, steps } = toolModeStep(c);
+    const answers = acceptAll(spec.steps.map((s) => ({ initial: s.initial ?? '' })));
+    expect(settingsPatch(steps, answers)).not.toHaveProperty('confirmMode');
   });
 });
 
@@ -480,10 +514,13 @@ describe('a question that another answer can make inert', () => {
     expect(field.notes?.[unrestricted]).toMatch(/confirmed/i);
   });
 
-  it('says it on the confirm-mode question too, which is asked first', () => {
+  it('no longer asks the question the warning was needed for', () => {
+    // That warning existed because `confirmMode` was a separate step: it could
+    // be answered into a state the previous screen had already made inert. The
+    // merge (#447) removes the step, so the note on the unrestricted row above
+    // is the whole of what is left to say.
     const { spec } = buildSettingsSpec(ctx());
-    const step = spec.steps.find((s) => s.id === 'confirmMode')!;
-    expect(step.hint).toMatch(/unrestricted/i);
+    expect(spec.steps.find((s) => s.id === 'confirmMode')).toBeUndefined();
   });
 
   it('adds no notes to a step whose options declare none', () => {
