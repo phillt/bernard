@@ -2,6 +2,10 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { contrastRatio } from './color.js';
+
+/** A representative dark terminal — the ground `host/tokens.ts` also assumes. */
+const DARK_TERMINAL = '#0d1117';
 import {
   THEMES,
   DEFAULT_THEME,
@@ -91,6 +95,32 @@ describe('theme', () => {
       // fallback, and a palette with no name is unreachable — no menu offers
       // it, no `setTheme` accepts it. The count this replaced caught neither.
       expect(paletteKeys().sort()).toEqual(getThemeKeys().sort());
+    });
+
+    it('never makes the accent brighter than the body text', () => {
+      // The invariant that would have caught `graphite`'s first cut, which
+      // paired a near-white accent (17.27 against a `#0d1117` terminal, more
+      // than double any other theme's) with dim text at 7.38 — inverted, and
+      // the reason it read as `high-contrast` rather than as a dark theme.
+      //
+      // Every theme built on hex puts text brighter than accent, and that is a
+      // property rather than a coincidence: the accent marks a few characters
+      // and the text is the page. A theme that inverts it is one where the
+      // chrome shouts over the prose.
+      //
+      // Named-colour themes (`bernard`, `high-contrast`) are skipped because
+      // `contrastRatio` cannot resolve 'white' or 'gray' — hence the floor
+      // below, so a version that measured nothing could not pass quietly.
+      let measured = 0;
+      for (const key of getThemeKeys()) {
+        const c = getThemeColorsFor(key);
+        const accent = contrastRatio(c.accent, DARK_TERMINAL);
+        const text = contrastRatio(c.text, DARK_TERMINAL);
+        if (accent === null || text === null) continue;
+        measured++;
+        expect(text, `${key}: accent must not outshine the prose`).toBeGreaterThan(accent);
+      }
+      expect(measured, 'no theme was actually measured').toBeGreaterThanOrEqual(5);
     });
 
     it('never paints an error in the accent colour', () => {

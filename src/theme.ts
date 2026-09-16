@@ -30,6 +30,7 @@ export const THEMES: Record<string, ThemeMeta> = {
   blossom: { name: 'Blossom' },
   ember: { name: 'Ember' },
   graphite: { name: 'Graphite' },
+  fantastic: { name: 'Fantastic' },
   'high-contrast': { name: 'High Contrast' },
   colorblind: { name: 'Colorblind' },
 };
@@ -94,6 +95,12 @@ const THEME_COLORS: Record<string, ThemeColors> = {
   // are the SAME hue, so they are separated by lightness instead: a deep ember
   // accent against a bright coral error, so the alarming one is the one that
   // jumps. Do not "tidy" these toward each other.
+  //
+  // The cost is measured and accepted: this accent is the dimmest of the nine
+  // (3.92 against a `#0d1117` terminal, where the rest run 5.4-8.3). Brightening
+  // it to the family band puts it within a shade of its own error, which is the
+  // thing that must not happen on a red theme. 3.92 clears the 3:1 floor for
+  // large and non-text, which is what an accent is used for here.
   ember: {
     accent: '#dc2626',
     muted: '#a8a29e',
@@ -104,26 +111,50 @@ const THEME_COLORS: Record<string, ThemeColors> = {
     warning: '#fbbf24',
     prefixColors: ['#dc2626', '#fb923c', '#fbbf24', '#f472b6'],
   },
-  // Dark, and the contrast runs the other way from every theme above it: a
-  // three-step ladder of near-white accent, dim body text, dimmer chrome. The
-  // first cut had accent and text a shade apart, which reads as restrained and
-  // leaves the accent doing no work — a heading indistinguishable from the
-  // paragraph under it.
+  // Dark: everything dimmer, and the ladder pointing the same way it does in
+  // every theme above.
   //
-  // `error` / `success` / `warning` keep their colours on purpose: a restrained
-  // theme is a choice about chrome, not a reason to stop signalling. And
-  // `toolCall` stays a hue rather than a fourth grey, so tool output is still
-  // tellable from prose — as is `prefixColors`, which four greys would make
-  // useless for what it is actually for, telling sub-agents apart.
+  // **Measured, because two cuts of this got it wrong in opposite directions.**
+  // Against a `#0d1117` terminal every shipped theme puts `text` BRIGHTER than
+  // `accent` (text 10.8-16.1, accent 5.4-8.3). The first cut had a near-white
+  // accent at 17.27 over text at 7.38 — brighter than any other theme's accent
+  // by more than double, and inverted — which is precisely why it read as
+  // `high-contrast` rather than as a dark theme. The cut before that had accent
+  // and text a shade apart, so the accent did no work at all.
+  //
+  // So this sits below the family on both (accent 6.40, text 7.50, muted 5.41)
+  // while keeping the order, and the accent is a HUE rather than a brightness —
+  // a muted violet reads as an accent against grey-blue prose without being the
+  // brightest thing on screen, which is the whole point of the theme.
+  //
+  // `error` / `success` / `warning` keep their vivid colours: a restrained
+  // theme is a choice about chrome, not a reason to stop signalling. Same for
+  // `toolCall` and `prefixColors` — four greys would make the latter useless
+  // for what it is actually for, telling sub-agents apart.
   graphite: {
-    accent: '#f1f5f9',
-    muted: '#64748b',
-    text: '#94a3b8',
-    toolCall: '#a5b4fc',
+    accent: '#9d8ec4',
+    muted: '#7f8a99',
+    text: '#9aa4b2',
+    toolCall: '#8fa9c4',
     error: '#f87171',
     success: '#4ade80',
     warning: '#fbbf24',
-    prefixColors: ['#f1f5f9', '#a5b4fc', '#94a3b8', '#64748b'],
+    prefixColors: ['#9d8ec4', '#8fa9c4', '#7f9f8a', '#b0a080'],
+  },
+  // The Fantastic Four, named for what it is rather than for whose it is: a
+  // cobalt uniform against the Torch's flame, on the white of the logo. Two
+  // colours carry it — `accent` blue and `toolCall` orange — which is why
+  // `error` is a rose rather than a red, so a failure does not read as more
+  // tool output.
+  fantastic: {
+    accent: '#4d97ff',
+    muted: '#8fa3bf',
+    text: '#e8eefc',
+    toolCall: '#ff7a1a',
+    error: '#f43f5e',
+    success: '#22c55e',
+    warning: '#fbbf24',
+    prefixColors: ['#4d97ff', '#ff7a1a', '#22d3ee', '#fbbf24'],
   },
   'high-contrast': {
     accent: 'whiteBright',
