@@ -20,6 +20,7 @@ import { breadthOptionsFor, type BreadthOption } from '../permissions/breadth.js
 import { WRITE_PATH_TOOLS } from '../permissions/matchers.js';
 import { checkWritePath } from '../permissions/write-scope.js';
 import { runOrdered } from './write-barrier.js';
+import { duplicateRefusal, recordSucceededCall } from './duplicate-guard.js';
 
 /**
  * The wrapper shim prepends `[failure: <category>] <playbook.model>` to
@@ -610,13 +611,20 @@ export function augmentTools(
     toolName: string,
     args: unknown,
     toolDef: any,
-  ): { refusal: string } | { grant: 'allow' | 'ask'; isWrite: boolean; argsJson: string } => {
+  ):
+    | { refusal: string }
+    | { grant: 'allow' | 'ask'; isWrite: boolean; nonIdempotent: boolean; argsJson: string } => {
     // Resolved once and handed back, for the reason the grant already is. Both
     // were being recomputed by their consumers — `isWrite` twice per call (a
     // second `isReadOnlyShellInvocation` parse of the command line for `shell`),
     // `argsJson` twice — and `write-barrier.ts` states the cost: two expressions
     // answering one question is how they drift apart.
     const isWrite = shouldBlockInReadOnly(readToolMeta(toolDef), args);
+    // A DIFFERENT question from `isWrite`, resolved here for the same reason it
+    // is: one expression, handed to the gate below and to the recorder at both
+    // success hooks. Asking `shouldBlockInReadOnly` instead is what got the
+    // first duplicate gate withdrawn — see `risk.ts`.
+    const nonIdempotent = readToolMeta(toolDef)?.nonIdempotent === true;
     const argsJson = fullArgsJson(args);
     const grant = resolveProfileGrant(toolName, args);
     if (grant === 'deny') {
@@ -629,7 +637,18 @@ export function augmentTools(
     }
     const outOfScope = runWriteScopeGate(toolName, args);
     if (outOfScope) return { refusal: outOfScope };
-    return { grant, isWrite, argsJson };
+    // Here rather than as a stanza at each of the two `execute` wrappers (#575).
+    // This helper exists precisely because "a gate only SOME call sites run is
+    // the shape that let the write-scope gate ship unwired" — and a duplicate
+    // refusal written twice is that shape, with the envelope copy being the one
+    // nothing exercises. It lands AHEAD of the block and confirm gates, the same
+    // ordering the write-scope gate takes: a call that is going to be refused
+    // should not first cost the user a prompt.
+    if (nonIdempotent) {
+      const duplicate = duplicateRefusal(toolName, argsJson);
+      if (duplicate) return { refusal: duplicate };
+    }
+    return { grant, isWrite, nonIdempotent, argsJson };
   };
 
   /**
@@ -911,6 +930,7 @@ export function augmentTools(
             // the model can cite it for verified claims. Errored / denied /
             // cancelled envelopes never become evidence.
             if (envelope.status === 'ok') {
+              if (gates.nonIdempotent) recordSucceededCall(toolName, gates.argsJson);
               const previewSrc =
                 typeof serialized === 'string' ? serialized : safeSerialize(serialized);
               registerEvidence(toolName, args, source.meta, previewSrc);
@@ -1010,6 +1030,13 @@ export function augmentTools(
             });
           }
           if (!looksLikeError) {
+            // Successes only. A failed write that is retried is the retry
+            // working as intended; gating it would turn a transient failure
+            // into a permanent one. `detectResultFailure` above is the one
+            // authority on what succeeded means here — it reads MCP's
+            // `isError`, the `{error}` shape and the `Error:` prefix — rather
+            // than a second guess at it.
+            if (gates.nonIdempotent) recordSucceededCall(toolName, gates.argsJson);
             const previewSrc =
               typeof capturedResult === 'string' ? capturedResult : safeSerialize(capturedResult);
             registerEvidence(toolName, args, meta, previewSrc);

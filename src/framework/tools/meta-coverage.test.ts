@@ -289,6 +289,47 @@ describe('tool meta coverage', () => {
     ).toEqual([]);
   });
 
+  /**
+   * `nonIdempotent` (#575) makes a repeated identical call refuse rather than
+   * run. Its failure directions are the mirror of `directInvocable`'s: omitting
+   * it lets a duplicate through, which is the status quo, while a mistaken
+   * `true` refuses real work.
+   *
+   * No Bernard-owned tool declares it today — the whole live population comes
+   * from `mcp.ts`, which derives it from `hasEmitVerb` — so this test reads as
+   * vacuous and is not: it is what makes adding the line to the wrong tool
+   * fail, and `shell` is one keystroke away exactly as it is for its neighbour
+   * above.
+   *
+   * `read` is refused because a lookup repeated is a lookup, and 138 of 187
+   * adjacent identical calls measured in the real corpus were reads. `dangerous`
+   * is refused because that is `shell`, whose command line this cannot reason
+   * about at all.
+   */
+  it('no read or dangerous tool is marked nonIdempotent', async () => {
+    const { createTools } = await import('../../tools/index.js');
+    const tools = await createTools(
+      { shellTimeout: 10_000, confirmDangerous: async () => false },
+      new (await import('../../memory.js')).MemoryStore() as any,
+    );
+
+    expect(Object.keys(tools).length).toBeGreaterThanOrEqual(MIN_EXPECTED_TOOLS);
+
+    const offenders: string[] = [];
+    for (const [name, def] of Object.entries(tools)) {
+      const meta = readToolMeta(def);
+      if (!meta?.nonIdempotent) continue;
+      if (meta.kind === 'read' || meta.kind === 'dangerous')
+        offenders.push(`${name} (${meta.kind})`);
+    }
+
+    expect(
+      offenders,
+      `Tools marked nonIdempotent that must not be — a read repeated is harmless, ` +
+        `and a dangerous tool's arguments cannot be reasoned about: ${offenders.join(', ')}`,
+    ).toEqual([]);
+  });
+
   it('meta survives augmentTools — non-enumerable __bernardMeta is re-attached after the spread', async () => {
     const { createTools } = await import('../../tools/index.js');
     const { augmentTools } = await import('../../tools/augment.js');

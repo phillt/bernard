@@ -20,6 +20,7 @@ import { initShellParser } from './permissions/shell-ast.js';
  * here because every existing caller addresses them by this module's name.
  */
 import { headlessToolOptions, type HeadlessPosture } from './headless-posture.js';
+import { clearDuplicateGuard } from './tools/duplicate-guard.js';
 
 export {
   resolvePosture,
@@ -210,6 +211,11 @@ export async function runHeadless<TInput, TFormatted>(
   if (posture.toolPermissions?.length) {
     await initShellParser();
   }
+
+  // One run is one piece of work (#575). A cron daemon runs many in one process
+  // and never exits between them, which is how the first cut of the duplicate
+  // guard refused a job's identical scheduled write on its second fire.
+  clearDuplicateGuard();
 
   const runId = opts.runId ?? crypto.randomUUID();
 

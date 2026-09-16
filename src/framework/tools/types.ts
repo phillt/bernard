@@ -153,6 +153,34 @@ export interface ToolMeta {
    * hash to the declared `new_hash`. Return `null` to skip (not applicable
    * for this call). Synchronous; should be fast and side-effect-free.
    */
+  /**
+   * Calling this again with identical arguments emits a SECOND time (#575).
+   *
+   * Not "does it mutate" — `risk.ts`'s `shouldBlockInReadOnly` answers that and
+   * carries a standing refusal to be asked this one, because measured against
+   * real logs it calls 44 of 46 identical `shell` repeats writes. The question
+   * here is whether a repeat is a second thing that happened: a message sent
+   * twice is two messages, while a value set twice is one value.
+   *
+   * **Opt-in, like `directInvocable`, and for the same reason**: declared on the
+   * meta rather than in a name list kept elsewhere, because a separate list can
+   * disagree with the tool it describes. Forgetting it fails OPEN — a duplicate
+   * gets through, which is the status quo — while a wrong `true` refuses real
+   * work, so the bar is "a second identical call produces a second artefact
+   * somebody receives".
+   *
+   * **No Bernard-owned tool declares it today**, deliberately. Every observed
+   * duplicate is an MCP send; `shell` will never carry it (the rule
+   * `directInvocable` follows); `file_write` with identical content is
+   * idempotent by definition and `file_edit_lines` is already guarded by
+   * `old_hash`. `mcp.ts` sets it from `hasEmitVerb`, which is where the whole
+   * live population comes from.
+   *
+   * `meta-coverage.test.ts` walks the constructed registry and refuses it on a
+   * `read` or `dangerous` tool.
+   */
+  nonIdempotent?: boolean;
+
   verifyOutput?: (args: unknown, result: unknown) => VerifyOutcome | null;
 }
 

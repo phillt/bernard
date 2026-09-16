@@ -13,7 +13,7 @@ import {
   mcpToolName,
 } from './mcp-names.js';
 import { attachMeta } from './framework/tools/adapter.js';
-import { isReadOnlyMCPToolName } from './risk.js';
+import { hasEmitVerb, isReadOnlyMCPToolName } from './risk.js';
 import type { ToolMeta } from './framework/tools/types.js';
 import { normalizeToolResult, foldTypographyDeep } from './text.js';
 import { shapeMCPResult, type MCPResultShapingConfig } from './mcp-result-shaper.js';
@@ -603,6 +603,13 @@ export class MCPManager {
           category: `mcp.${serverName}`,
           deterministic: false,
           sideEffect: isRead ? 'network' : 'local',
+          // Whether repeating it emits a second time (#575). ANDed with the
+          // read test rather than replacing it, so `list_drafts` stays a
+          // lookup. Deliberately NOT `!isRead` on its own: `focus_app` carries
+          // neither verb and so classifies as a write, and the dispatch that
+          // double-sent called it twice with identical args — once before each
+          // send — so a write-keyed rule refuses the wrong call.
+          nonIdempotent: !isRead && hasEmitVerb(raw),
         };
         converted[serverName][name] = attachMeta(wrapped, meta);
       }

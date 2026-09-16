@@ -249,6 +249,7 @@ import { notAskedLine, type PendingPermission } from '../apps/permission-consent
 import { isWildcardSource, type GrantableDirective } from '../host/csp-grant.js';
 import type { PermissionConsentRequest } from '../tools/types.js';
 import { deleteSpecialist } from '../specialist-lifecycle.js';
+import { clearDuplicateGuard } from '../tools/duplicate-guard.js';
 
 /**
  * Slash commands and overlays need direct access to the same stores the
@@ -1646,6 +1647,9 @@ export function App({
           if (submittingRef.current) return;
           submittingRef.current = true;
           setBusy(true);
+          // This block holds both of `runAgentTurn`'s guards itself rather than
+          // going through it, so it owns the turn-boundary resets too (#575).
+          clearDuplicateGuard();
           const clearAbort = new AbortController();
           turnAbortRef.current = clearAbort;
           // Counted in the outer scope so the result line can name it. It was
@@ -4702,6 +4706,11 @@ export function App({
     // Clear the previous turn's stream events so the in-flight
     // <StreamingAssistantMessage> renders only this turn's deltas.
     messageStore.reset();
+    // A repeat is only ever compared against calls from the same piece of work
+    // (#575). Here rather than in `runPreTurnPipeline`, which is where
+    // `clearTurnCache` sits: headless never reaches that, and this is the one
+    // true turn boundary.
+    clearDuplicateGuard();
     // A new turn supersedes the previous turn's unspoken readback (#432) — the
     // case that motivates the guard at all.
     cancelPendingSpeech();
