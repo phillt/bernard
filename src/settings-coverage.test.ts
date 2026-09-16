@@ -62,6 +62,13 @@ function declaredSettingKeys(): string[] {
  * would be a way to lose a grant by walking past it.
  */
 const NOT_IN_SETUP: Readonly<Record<string, string>> = {
+  // The only question in the walk you could not answer from the screen: a free
+  // text field wanting `Daniel` or `en-us+f3`, unanswerable without leaving to
+  // run `say -v ?` / `spd-say -L`, unvalidated, and silently breaking speech
+  // when wrong. `/voice` is where it belongs — its test row plays a phrase and
+  // surfaces the backend's rejection, so you set it and hear whether it took.
+  // A picker would earn it back; nothing else would.
+  voiceVoice: 'free-text voice name, only checkable by hearing it — `/voice`',
   toolPermissions: 'per-tool grants — `/tool-permissions`',
   appToolGrants: 'per-applet tool grants — `bernard app-grant`',
   appCspGrants: 'per-applet CSP grants — `bernard app csp`',

@@ -714,6 +714,9 @@ in force right now.
   unset numeric step is `optional` and its validator tolerates empty. Neither is
   visible from a hand-written context, which is why `setup-flow.test.ts` asserts
   it against the real one.
+- **A question you cannot answer from the screen does not belong in the wizard.** `voiceVoice` asked for a free-text voice name — `Daniel`, `en-us+f3` — which needs `say -v ?` or `spd-say -L` from outside Bernard to answer, is not validated, and silently produces no speech when wrong. Every other step offers rows or opens on a real value; this one offered a caret and a description admitting it could not check the answer. It is `/voice`'s, and `/voice` is strictly better at it: that menu's test row plays a phrase and surfaces the backend's rejection through `onError`, so you set the name and immediately hear whether it took. A picker built from the backend's own voice list would earn the question back; nothing short of that would.
+  - **Removing it made an existing invariant stronger rather than weaker.** `opens every step on a real value` carried a carve-out naming this one field as legitimately blank, so the rule had to be read before it could be trusted; it is now flat. And `provenanceNote`'s `Not set.` case had been leaning on this field being unset — a fixture that has to stay unset to keep a test meaningful is one waiting to be populated — so it drives a context that OMITS a field instead.
+  - **Still asked with speech off**, and worth knowing before the next pass: `voiceTts` defaults to `false`, so Voice backend, Speech rate and Audio warmup are three questions about a feature that is not running. The wizard cannot skip them — `WizardSpec.steps` is a frozen array with no branching, deliberately, because Back must not cross a boundary that invalidates later answers — so the fix is either dropping them to `/voice` as well or giving voice its own stage the way the model list already has one.
 - **`profiles-wizard-data.ts` covers every settable field, and a test says so.**
   It covered 22 of `ProfileSettings`' 40 — the other 18 were never a considered
   exclusion, so `provider`, `model`, the lineup, every voice setting and five
@@ -1296,7 +1299,7 @@ running risky tools.`), which tells a reader what the words mean and nothing
     same reason: block lettering cannot reflow, so a banner that does not fit is
     worse present than absent. Measured with `stringWidth`, not `.length` — the
     rows are box-drawing today and a future banner need not be.
-- **The 36 questions are a starting point, not the answer.** This phase exists to
+- **The 35 questions are a starting point, not the answer.** This phase exists to
   be walked end to end so the day-one subset can be chosen from experience.
   Trimming, and the splash copy that says what Bernard is, are follow-ups.
 

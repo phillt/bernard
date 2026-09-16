@@ -399,14 +399,6 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         envVar: 'BERNARD_VOICE_BACKEND',
       },
       {
-        key: 'voiceVoice',
-        label: 'Voice name',
-        description:
-          "Which named voice the backend speaks in. Leave it blank for the backend's own. The name isn't checked here — one it doesn't recognise just says nothing — so try it after you change it.",
-        field: { kind: 'text' },
-        envVar: 'BERNARD_VOICE_VOICE',
-      },
-      {
         key: 'voiceRate',
         label: 'Speech rate (wpm)',
         description:

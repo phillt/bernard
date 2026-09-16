@@ -46,7 +46,6 @@ function ctx(over: Partial<SetupContext> = {}): SetupContext {
     voiceTts: false,
     voiceNormalizer: true,
     voiceBackend: 'auto',
-    voiceVoice: '',
     voiceRate: 175,
     voiceWarmupMs: 400,
     autoCreateSpecialists: false,
@@ -100,9 +99,11 @@ describe('buildSettingsSpec', () => {
     // invisible in a walkthrough and permanent on disk.
     const { spec } = buildSettingsSpec(ctx());
     const blank = spec.steps.filter((s) => s.initial === '' || s.initial === undefined);
-    expect(blank.map((s) => s.id)).toEqual(['voiceVoice']);
-    // …and that one is blank because blank is its real value: no voice name set.
-    expect(spec.steps.find((s) => s.id === 'voiceVoice')?.optional).toBe(true);
+    // NO exceptions. There was one — `voiceVoice`, blank because blank was its
+    // real value — and it left this assertion carrying a carve-out that had to
+    // be read before it could be trusted. Dropping that question from the walk
+    // (it could not be answered from the screen) leaves the rule flat.
+    expect(blank.map((s) => s.id)).toEqual([]);
   });
 
   it('drops a list with nothing to choose from rather than asking an empty question', () => {
@@ -398,8 +399,15 @@ describe('provenanceNote', () => {
   it('says a value is absent, which no row can show', () => {
     // The one fact the rows cannot carry: a blank buffer looks the same whether
     // the value is empty or never set.
-    const voice = WIZARD_FIELDS.find((f) => f.key === 'voiceVoice')!;
-    expect(provenanceNote(voice, ctx())).toBe('Not set.');
+    //
+    // Driven through a context that OMITS the field rather than through a field
+    // that happens to be unset — this used to lean on `voiceVoice`, and lost
+    // its subject when that question left the walk. A fixture that has to stay
+    // unset to keep a test meaningful is a fixture waiting to be populated.
+    const rate = WIZARD_FIELDS.find((f) => f.key === 'voiceRate')!;
+    const without = ctx();
+    delete (without.current as Record<string, unknown>).voiceRate;
+    expect(provenanceNote(rate, without)).toBe('Not set.');
   });
 });
 
