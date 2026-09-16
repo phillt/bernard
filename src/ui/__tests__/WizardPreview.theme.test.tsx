@@ -35,7 +35,7 @@
 import { describe, it, expect, afterAll, vi } from 'vitest';
 import './_force-color.js';
 import { restoreForceColor } from './_force-color.js';
-import { CTRL_N, ARROW_DOWN, ENTER, ESC, tick } from './_keys.js';
+import { ARROW_DOWN, ARROW_RIGHT, ARROW_UP, CTRL_N, ENTER, ESC, tick } from './_keys.js';
 
 const { createElement } = await import('react');
 const { render } = await import('ink-testing-library');
@@ -197,30 +197,48 @@ describe('the theme question shows you the theme', () => {
     expect(borderRow(frame), 'the next question is still ocean').toContain(sgrOf(OCEAN.muted));
   });
 
-  it('reverts when you pass a theme without choosing it', async () => {
-    // The other half of the same rule, and the surprising-looking half: the
-    // screen goes ocean as the cursor passes, and Continue without an Enter
-    // keeps bernard — because bernard is still the answer, which the tick on
-    // its row has been saying the whole time.
-    const { stdin, lastFrame } = mount({
-      steps: [
-        themeStep(),
-        {
-          id: 'after',
-          section: 'Output',
-          question: 'Anything else',
-          field: { kind: 'choice' as const, choices: ['yes', 'no'], values: ['yes', 'no'] },
-          initial: 'yes',
-        },
-      ],
-    });
+  it('reverts to the SELECTED row the moment the cursor leaves the list', async () => {
+    // The reported bug: arrowing down previewed correctly, and moving onto
+    // Continue kept the last row the cursor had passed — so the screen claimed
+    // a theme the `✓` disagreed with, right at the moment you are deciding
+    // whether to commit. Off the list it must show what you are about to KEEP.
+    const { stdin, lastFrame } = mount({ steps: [themeStep()] });
     await tick(120);
     stdin.write(ARROW_DOWN);
     await tick(120);
-    expect(borderRow(lastFrame() ?? ''), 'previewing').toContain(sgrOf(OCEAN.muted));
-    stdin.write(CTRL_N);
-    await tick(160);
-    expect(borderRow(lastFrame() ?? ''), 'back on the real answer').toContain('\u001b[90m');
+    expect(borderRow(lastFrame() ?? ''), 'previewing ocean').toContain(sgrOf(OCEAN.muted));
+    // `→` from an option row reaches the footer controls.
+    stdin.write(ARROW_RIGHT);
+    await tick(120);
+    expect(borderRow(lastFrame() ?? ''), 'back on the selected row').toContain('\u001b[90m');
+  });
+
+  it('keeps the row you marked when the cursor leaves the list', async () => {
+    // The other side of the same rule: Enter marks, so once a row carries the
+    // `✓` stepping onto Continue must stay on it rather than snapping back.
+    const { stdin, lastFrame } = mount({ steps: [themeStep()] });
+    await tick(120);
+    stdin.write(ARROW_DOWN);
+    await tick(120);
+    stdin.write(ENTER); // marks ocean
+    await tick(120);
+    stdin.write(ARROW_RIGHT);
+    await tick(120);
+    expect(borderRow(lastFrame() ?? ''), 'still ocean').toContain(sgrOf(OCEAN.muted));
+  });
+
+  it('returns from a control to the end of the list, still previewing', async () => {
+    // `↑` from a control lands on the LAST option, not the one the cursor left
+    // — the wizard's own rule. The preview has to follow it there, which is the
+    // case a fix written only for "leaving the list" would miss.
+    const { stdin, lastFrame } = mount({ steps: [themeStep()] });
+    await tick(120);
+    stdin.write(ARROW_RIGHT);
+    await tick(120);
+    stdin.write(ARROW_UP);
+    await tick(120);
+    const forest = getThemeColorsFor('forest');
+    expect(borderRow(lastFrame() ?? ''), 'the last row, forest').toContain(sgrOf(forest.muted));
   });
 
   it('leaves a step that declares no preview exactly as it was', async () => {

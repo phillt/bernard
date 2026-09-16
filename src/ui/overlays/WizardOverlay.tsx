@@ -1238,15 +1238,27 @@ function WizardChoiceStep({
   // it would commit a different one. On a prepopulated walk most screens are the
   // former, and a bare "choose" reads as though nothing is selected yet.
   const highlighted = isOption(cursor.index) ? labels[cursor.index] : undefined;
-  // The value, never the label — see `WizardChoiceField.values`. `undefined`
-  // while the cursor sits on a control, and that case deliberately reports
-  // NOTHING rather than `null`: moving onto Continue would otherwise drop the
-  // preview back to the active theme mid-question.
-  const highlightedValue = isOption(cursor.index) ? (field.values?.[cursor.index] ?? null) : null;
+  // The value, never the label — see `WizardChoiceField.values`.
+  //
+  // On an option row it is that row. OFF the list — Continue, Back, one of the
+  // step's own actions — it is the row actually SELECTED, so stepping onto a
+  // control shows you what you are about to keep rather than the last thing you
+  // happened to pass. The first cut held the last highlight instead, which left
+  // the screen claiming an answer the `✓` disagreed with.
+  //
+  // `null` when nothing is selected, which the root then reads as "fall back to
+  // the recorded answer". Unreachable for the one field that previews today —
+  // `chosen` is seeded from the theme in force — but it is the honest value for
+  // a step whose current answer is not among its rows.
+  const previewValue = isOption(cursor.index)
+    ? (field.values?.[cursor.index] ?? null)
+    : chosen >= 0
+      ? (field.values?.[chosen] ?? null)
+      : null;
   useEffect(() => {
-    if (onHighlight === undefined || highlightedValue === null) return;
-    onHighlight(highlightedValue);
-  }, [onHighlight, highlightedValue]);
+    if (onHighlight === undefined) return;
+    onHighlight(previewValue);
+  }, [onHighlight, previewValue]);
   const blocked = unavailableReason(step, highlighted);
   const onBackControl = cursor.index === backAt && canGoBack;
   const onOption = isOption(cursor.index);

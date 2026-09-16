@@ -27,6 +27,9 @@ export const THEMES: Record<string, ThemeMeta> = {
   ocean: { name: 'Ocean' },
   forest: { name: 'Forest' },
   synthwave: { name: 'Synthwave' },
+  blossom: { name: 'Blossom' },
+  ember: { name: 'Ember' },
+  graphite: { name: 'Graphite' },
   'high-contrast': { name: 'High Contrast' },
   colorblind: { name: 'Colorblind' },
 };
@@ -73,6 +76,54 @@ const THEME_COLORS: Record<string, ThemeColors> = {
     success: '#34d399',
     warning: '#fde68a',
     prefixColors: ['#f472b6', '#818cf8', '#22d3ee', '#c084fc'],
+  },
+  // Pink. `error` is deliberately a plain red rather than a deeper pink: on a
+  // theme whose accent IS pink, an error picked from the same family stops
+  // reading as an error, which is the one colour that must never blend in.
+  blossom: {
+    accent: '#ec4899',
+    muted: '#a1a1aa',
+    text: '#fce7f3',
+    toolCall: '#f9a8d4',
+    error: '#ef4444',
+    success: '#34d399',
+    warning: '#fbbf24',
+    prefixColors: ['#ec4899', '#a78bfa', '#38bdf8', '#fb923c'],
+  },
+  // Red, and the same tension one step worse — here the accent and the error
+  // are the SAME hue, so they are separated by lightness instead: a deep ember
+  // accent against a bright coral error, so the alarming one is the one that
+  // jumps. Do not "tidy" these toward each other.
+  ember: {
+    accent: '#dc2626',
+    muted: '#a8a29e',
+    text: '#fee2e2',
+    toolCall: '#fb923c',
+    error: '#ff6b6b',
+    success: '#4ade80',
+    warning: '#fbbf24',
+    prefixColors: ['#dc2626', '#fb923c', '#fbbf24', '#f472b6'],
+  },
+  // Dark, and the contrast runs the other way from every theme above it: a
+  // three-step ladder of near-white accent, dim body text, dimmer chrome. The
+  // first cut had accent and text a shade apart, which reads as restrained and
+  // leaves the accent doing no work — a heading indistinguishable from the
+  // paragraph under it.
+  //
+  // `error` / `success` / `warning` keep their colours on purpose: a restrained
+  // theme is a choice about chrome, not a reason to stop signalling. And
+  // `toolCall` stays a hue rather than a fourth grey, so tool output is still
+  // tellable from prose — as is `prefixColors`, which four greys would make
+  // useless for what it is actually for, telling sub-agents apart.
+  graphite: {
+    accent: '#f1f5f9',
+    muted: '#64748b',
+    text: '#94a3b8',
+    toolCall: '#a5b4fc',
+    error: '#f87171',
+    success: '#4ade80',
+    warning: '#fbbf24',
+    prefixColors: ['#f1f5f9', '#a5b4fc', '#94a3b8', '#64748b'],
   },
   'high-contrast': {
     accent: 'whiteBright',
