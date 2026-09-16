@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { Text } from 'ink';
-import { getThemeColors } from '../theme.js';
+import { useThemeColors } from './ThemeContext.js';
 import { moreRowsLabel, windowBuffer } from './line-geometry.js';
 import { LineWithCursor } from './use-line-editor.js';
 import { useDimensionsCtx } from './DimensionsContext.js';
@@ -46,7 +46,7 @@ export function BoundedLine({
   reserveColumns,
   prefix,
 }: BoundedLineProps) {
-  const colors = getThemeColors();
+  const colors = useThemeColors();
   // Read from the context, not `useStdout` — under the test renderer these
   // disagree (context falls back to 80 columns, ink-testing-library's stdout
   // reports 100), and the context is the source every other component uses.

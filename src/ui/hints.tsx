@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { Text } from 'ink';
-import { getThemeColors } from '../theme.js';
+import { useThemeColors } from './ThemeContext.js';
 
 /**
  * The shared visual atoms for chrome legends — the bottom-left {@link HintBar},
@@ -22,7 +22,7 @@ export const HINT_DIVIDER = '  ·  ';
 
 /** The {@link HINT_DIVIDER} as a standalone node, for hand-built rows (StatusBar). */
 export function HintDivider() {
-  const colors = getThemeColors();
+  const colors = useThemeColors();
   return <Text color={colors.muted}>{HINT_DIVIDER}</Text>;
 }
 
@@ -33,7 +33,7 @@ export function HintDivider() {
  * the muted default.
  */
 export function HintEntry({ hintKey, label }: { hintKey: ReactNode; label: ReactNode }) {
-  const colors = getThemeColors();
+  const colors = useThemeColors();
   return (
     <Text color={colors.muted}>
       <Text color={colors.accent}>{hintKey}</Text> {label}

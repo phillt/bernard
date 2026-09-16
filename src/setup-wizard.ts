@@ -326,6 +326,12 @@ function buildStep(
         field: {
           kind: 'choice',
           choices: options.map((o) => o.label),
+          // Index-aligned with `choices`, and emitted for every list step
+          // rather than only the previewing one: the alignment is the contract,
+          // and a field present on some steps and absent on others is one a
+          // reader has to check before trusting. See `WizardChoiceField.values`
+          // on why the renderer must not infer these from the labels.
+          values: options.map((o) => o.value),
           ...(Object.keys(notes).length > 0 ? { notes } : {}),
           ...recommendedTrailing(
             field,
@@ -335,6 +341,7 @@ function buildStep(
           ),
         },
         initial,
+        ...(field.livePreview !== undefined ? { preview: field.livePreview } : {}),
       },
       setup: {
         key: field.key,

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { Box, Text } from 'ink';
-import { getThemeColors } from '../../theme.js';
+import { useThemeColors } from '../ThemeContext.js';
 
 /**
  * The single selection marker for every menu / list / confirm / grid highlight
@@ -38,7 +38,7 @@ interface MenuRowProps {
  * menu, confirm dialog, model-grid cell, slash-hint, and viewer tab.
  */
 export function MenuRow({ selected, label, trailing, width, dimUnselected }: MenuRowProps) {
-  const colors = getThemeColors();
+  const colors = useThemeColors();
   return (
     <Box width={width}>
       <Text color={colors.accent}>{selected ? MENU_MARKER : MENU_MARKER_BLANK}</Text>

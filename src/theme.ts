@@ -112,6 +112,24 @@ export function getActiveThemeKey(): string {
   return activeThemeKey;
 }
 
+/**
+ * One theme's colours, without touching the active one.
+ *
+ * The pure half of {@link getThemeColors}, added for the wizard's live theme
+ * preview (#447): showing you a theme you have not chosen must not involve
+ * choosing it, or every way out of that question — Esc, Back, an abandoned
+ * `/setup` — has to remember to put the real one back.
+ *
+ * Returns the module literal itself, never a copy, which is what preserves the
+ * per-theme **reference stability** `markdown.ts` uses as a parser cache key
+ * (`cachedColors === colors`). An unknown key falls back rather than throwing:
+ * this is reached from a render path, and a stored theme that no longer exists
+ * should look wrong, not take the frame down.
+ */
+export function getThemeColorsFor(key: string): ThemeColors {
+  return THEME_COLORS[key] ?? THEME_COLORS[DEFAULT_THEME];
+}
+
 export function getThemeColors(): ThemeColors {
-  return THEME_COLORS[activeThemeKey] ?? THEME_COLORS[DEFAULT_THEME];
+  return getThemeColorsFor(activeThemeKey);
 }

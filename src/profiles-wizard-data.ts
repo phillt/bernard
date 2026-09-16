@@ -115,6 +115,16 @@ export interface WizardFieldData {
    * next screen.
    */
   covers?: Array<keyof ProfileSettings>;
+  /**
+   * Something the question shows you as the cursor passes a row (#447).
+   *
+   * Host-agnostic like the rest of this file: it names WHAT to preview, and
+   * the renderer decides how. `'theme'` is the only value, and this is a
+   * declaration rather than `step.id === 'theme'` at the renderer because a
+   * special case keyed on a field name is the thing this registry exists to
+   * remove.
+   */
+  livePreview?: 'theme';
 }
 
 export interface WizardCategoryData {
@@ -350,6 +360,9 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
           kind: 'list',
           options: Object.keys(THEMES).map((name) => ({ value: name, label: name })),
         },
+        // The whole wizard repaints as the cursor moves, so the question's own
+        // answer is what it looks like. The only field that declares it.
+        livePreview: 'theme',
       },
     ],
   },

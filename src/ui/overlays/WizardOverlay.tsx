@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Box, Text, useInput } from 'ink';
 import stringWidth from 'string-width';
-import { getThemeColors } from '../../theme.js';
+import { getThemeColorsFor, type ThemeColors } from '../../theme.js';
+import { ThemePreviewProvider, useThemeColors } from '../ThemeContext.js';
 import { truncate } from '../../text.js';
 import { HintRow, KEY, HINT_CANCEL, HINT_MOVE, ctrlKey, type KeyHint } from '../hints.js';
 import { isDismissKey } from './overlay-contract.js';
@@ -38,6 +39,7 @@ import {
   type RailEntry,
   type WizardSpec,
   type WizardStep,
+  choiceValueOf,
 } from './wizard-types.js';
 
 /** Back. Not Esc — `overlay-contract.ts`'s rule is that Esc always dismisses. */
@@ -115,6 +117,11 @@ interface WizardOverlayProps {
  */
 export function WizardOverlay({ spec, onResolve, reserveRows = 0, fill }: WizardOverlayProps) {
   const [state, setState] = useState(() => initialWizardState(spec.steps));
+  // The row the cursor is on, while it is on the previewing step. Held HERE
+  // rather than in `WizardChoiceStep`, which is a child of `WizardCard`: state
+  // down there repaints the rows and leaves the border, the rail, the header
+  // and the footer on the old theme, so the frame comes out half-painted.
+  const [highlighted, setHighlighted] = useState<string | null>(null);
 
   // `answerStep` parks on `review` after the last answer, so a spec that opted
   // out of the review resolves from here. In an effect, not in render: this
@@ -126,6 +133,27 @@ export function WizardOverlay({ spec, onResolve, reserveRows = 0, fill }: Wizard
     // Keyed on `settled` alone, deliberately: the answers are frozen once the
     // state is terminal, and depending on their identity would resolve twice.
   }, [settled]);
+
+  // Which theme the wizard is painted in right now (#447).
+  //
+  // The highlighted row while the reader is ON that step, falling back to the
+  // answer it already holds — which is what makes a chosen theme stick for the
+  // rest of the walk, and what makes arrowing to `ocean` and back to `bernard`
+  // before Continue land on `bernard`. `null` at every other moment, which is
+  // the provider's "leave it on the active theme".
+  const previewAt = spec.steps.findIndex((s) => s.preview === 'theme');
+  const previewKey =
+    previewAt < 0
+      ? null
+      : ((state.index === previewAt ? highlighted : null) ??
+        choiceValueOf(spec.steps[previewAt], state.answers[previewAt]));
+  const previewColors = previewKey === null ? null : getThemeColorsFor(previewKey);
+  // Wrapped once around whichever branch renders, so the card and everything
+  // inside it agree. `null` renders the provider anyway: its presence is then
+  // not a second thing to keep in step with the preview state.
+  const framed = (node: ReactNode): ReactNode => (
+    <ThemePreviewProvider colors={previewColors}>{node}</ThemePreviewProvider>
+  );
 
   const cancel = (): void => onResolve({ cancelled: true, answered: answeredSoFar(state) });
   // Back off the front of a spec that declared `backExits` hands the journey
@@ -144,7 +172,7 @@ export function WizardOverlay({ spec, onResolve, reserveRows = 0, fill }: Wizard
   if (settled) return null;
 
   if (state.phase === 'review') {
-    return (
+    return framed(
       <WizardReview
         spec={spec}
         answers={state.answers}
@@ -156,7 +184,7 @@ export function WizardOverlay({ spec, onResolve, reserveRows = 0, fill }: Wizard
         onEdit={(index) => setState((s) => editStep(s, index))}
         onCommit={() => onResolve({ cancelled: false, answers: state.answers })}
         onCancel={cancel}
-      />
+      />,
     );
   }
 
@@ -169,7 +197,7 @@ export function WizardOverlay({ spec, onResolve, reserveRows = 0, fill }: Wizard
   const canGoBack = state.index > 0 || state.phase === 'editing' || state.freeform || exitsBack;
 
   if (!state.freeform && isInfoStep(step)) {
-    return (
+    return framed(
       <WizardInfoStep
         key={`${step.id}-info`}
         step={step}
@@ -180,44 +208,58 @@ export function WizardOverlay({ spec, onResolve, reserveRows = 0, fill }: Wizard
         onSubmit={submit}
         onBack={back}
         onCancel={cancel}
-      />
+      />,
     );
   }
 
-  return asText ? (
-    <WizardTextStep
-      // Keyed so the editor remounts with this step's own answer rather than
-      // carrying the previous one's buffer.
-      key={`${step.id}-text`}
-      step={step}
-      intro={header}
-      rail={rail}
-      initial={
-        typeof state.answers[state.index] === 'string' ? (state.answers[state.index] as string) : ''
-      }
-      canGoBack={canGoBack}
-      fill={fill}
-      masthead={masthead}
-      onSubmit={submit}
-      onBack={back}
-      onCancel={cancel}
-    />
-  ) : (
-    <WizardChoiceStep
-      key={`${step.id}-choice`}
-      step={step}
-      intro={header}
-      rail={rail}
-      current={state.answers[state.index]}
-      canGoBack={canGoBack}
-      fill={fill}
-      masthead={masthead}
-      onSubmit={submit}
-      onOther={() => setState(useFreeform)}
-      onBack={back}
-      onCancel={cancel}
-      reserveRows={reserveRows}
-    />
+  return framed(
+    asText ? (
+      <WizardTextStep
+        // Keyed so the editor remounts with this step's own answer rather than
+        // carrying the previous one's buffer.
+        key={`${step.id}-text`}
+        step={step}
+        intro={header}
+        rail={rail}
+        initial={
+          typeof state.answers[state.index] === 'string'
+            ? (state.answers[state.index] as string)
+            : ''
+        }
+        canGoBack={canGoBack}
+        fill={fill}
+        masthead={masthead}
+        onSubmit={submit}
+        onBack={back}
+        onCancel={cancel}
+      />
+    ) : (
+      <WizardChoiceStep
+        key={`${step.id}-choice`}
+        step={step}
+        intro={header}
+        rail={rail}
+        current={state.answers[state.index]}
+        canGoBack={canGoBack}
+        fill={fill}
+        masthead={masthead}
+        onSubmit={submit}
+        onOther={() => setState(useFreeform)}
+        onBack={back}
+        onCancel={cancel}
+        reserveRows={reserveRows}
+        // Only the declaring step reports. That is a saved root re-render per
+        // keystroke on every other question, NOT what makes the preview
+        // correct — a report from elsewhere is never read, because `previewKey`
+        // consults `highlighted` only while the walk is ON the previewing step.
+        // Said plainly because removing this conditional changes no behaviour,
+        // and a comment calling it a guard would be the misleading kind.
+        //
+        // `setHighlighted` is passed directly rather than wrapped: a fresh
+        // closure each render would re-fire the child's effect every render.
+        {...(step.preview === 'theme' ? { onHighlight: setHighlighted } : {})}
+      />
+    ),
   );
 }
 
@@ -319,10 +361,16 @@ function mastheadWidth(m: NonNullable<WizardSpec['masthead']>): number {
  * too wide for the card is worse present than absent — the rule the rail
  * follows, for the same reason.
  */
-function mastheadBlock(m: NonNullable<WizardSpec['masthead']>, cardCols: number): ReactNode {
+function mastheadBlock(
+  m: NonNullable<WizardSpec['masthead']>,
+  cardCols: number,
+  // Passed rather than read: this is a plain function called from JSX, not a
+  // component, so `useThemeColors()` here would be a hook outside a render —
+  // and one sitting after the early return above, which is worse.
+  colors: ThemeColors,
+): ReactNode {
   const block = mastheadWidth(m);
   if (block > cardCols) return null;
-  const colors = getThemeColors();
   return (
     // Centred in the card; the parts then align to the BLOCK's edges.
     <Box width={cardCols} justifyContent="center">
@@ -374,7 +422,7 @@ function contentWidth(columns: number, rail: RailEntry[] | undefined): number {
  * known, which is why a rail is honest where a bar was not.
  */
 function ProgressRail({ entries }: { entries: RailEntry[] }) {
-  const colors = getThemeColors();
+  const colors = useThemeColors();
   return (
     <Box flexDirection="column" width={RAIL_WIDTH} flexShrink={0}>
       {entries.map((entry) => {
@@ -446,7 +494,7 @@ function WizardCard({
   hints: KeyHint[];
   children: ReactNode;
 }) {
-  const colors = getThemeColors();
+  const colors = useThemeColors();
   const { columns, rows } = useDimensionsCtx();
   const withRail = showRail(columns, rail);
   const width = cardWidth(columns, withRail);
@@ -462,7 +510,9 @@ function WizardCard({
             whole when the banner would not fit — the same rule the rail
             follows, and for the same reason: block lettering that wraps is
             worse than block lettering that is absent. */}
-        {masthead !== undefined && masthead.banner.length > 0 && mastheadBlock(masthead, width)}
+        {masthead !== undefined &&
+          masthead.banner.length > 0 &&
+          mastheadBlock(masthead, width, colors)}
         <Box
           flexDirection="column"
           width={width}
@@ -599,7 +649,7 @@ function WizardInfoStep({
   onBack: () => void;
   onCancel: () => void;
 }) {
-  const colors = getThemeColors();
+  const colors = useThemeColors();
   const { columns } = useDimensionsCtx();
   // Wrapped here rather than left to Ink, which wraps with `trim: false` and so
   // keeps the break space at the START of every continuation line — a ragged
@@ -677,7 +727,7 @@ function StepHeader({
   intro?: string;
   rail?: RailEntry[];
 }) {
-  const colors = getThemeColors();
+  const colors = useThemeColors();
   const { columns } = useDimensionsCtx();
   const width = contentWidth(columns, rail);
   const lines = (text: string): string[] => wrapText(text, width);
@@ -728,7 +778,7 @@ function WizardTextStep({
   onBack: () => void;
   onCancel: () => void;
 }) {
-  const colors = getThemeColors();
+  const colors = useThemeColors();
   const { columns } = useDimensionsCtx();
   const editor = useLineEditor(initial);
   // Ink drops the Home/End key NAMES, so they reach the editor only through the
@@ -973,6 +1023,7 @@ function WizardChoiceStep({
   onBack,
   onCancel,
   reserveRows,
+  onHighlight,
 }: {
   step: WizardStep;
   intro?: string;
@@ -987,12 +1038,20 @@ function WizardChoiceStep({
   onBack: () => void;
   onCancel: () => void;
   reserveRows: number;
+  /**
+   * Reports the VALUE under the cursor, for a step that previews it (#447).
+   *
+   * Supplied only by a step declaring `preview`, so this is `undefined` for
+   * every other question and nothing below changes for them.
+   */
+  onHighlight?: (value: string | null) => void;
 }) {
-  const colors = getThemeColors();
+  const colors = useThemeColors();
   const { columns, rows } = useDimensionsCtx();
   const field = step.field as {
     kind: 'choice' | 'multi';
     choices: string[];
+    values?: readonly string[];
     allowOther?: boolean;
     otherLabel?: string;
   };
@@ -1179,6 +1238,15 @@ function WizardChoiceStep({
   // it would commit a different one. On a prepopulated walk most screens are the
   // former, and a bare "choose" reads as though nothing is selected yet.
   const highlighted = isOption(cursor.index) ? labels[cursor.index] : undefined;
+  // The value, never the label — see `WizardChoiceField.values`. `undefined`
+  // while the cursor sits on a control, and that case deliberately reports
+  // NOTHING rather than `null`: moving onto Continue would otherwise drop the
+  // preview back to the active theme mid-question.
+  const highlightedValue = isOption(cursor.index) ? (field.values?.[cursor.index] ?? null) : null;
+  useEffect(() => {
+    if (onHighlight === undefined || highlightedValue === null) return;
+    onHighlight(highlightedValue);
+  }, [onHighlight, highlightedValue]);
   const blocked = unavailableReason(step, highlighted);
   const onBackControl = cursor.index === backAt && canGoBack;
   const onOption = isOption(cursor.index);
@@ -1356,7 +1424,7 @@ function WizardReview({
   onCommit: () => void;
   onCancel: () => void;
 }) {
-  const colors = getThemeColors();
+  const colors = useThemeColors();
   const { columns, rows } = useDimensionsCtx();
   const title = spec.title ?? 'Here is what I heard';
   // One row per ANSWERABLE step, then the Continue control. Info pages carry no

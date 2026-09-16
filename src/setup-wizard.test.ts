@@ -14,6 +14,7 @@ import {
 import { nextLabelFor } from './ui/overlays/wizard-types.js';
 import { WIZARD_FIELDS } from './profiles-wizard-data.js';
 import { TOOL_MODES, UNRESTRICTED } from './tool-modes.js';
+import { THEMES } from './theme.js';
 import type { ProfileSettings } from './profiles.js';
 
 /**
@@ -247,6 +248,36 @@ describe('tool mode folds skipPermissions in', () => {
     const { spec, steps } = toolModeStep(c);
     const answers = acceptAll(spec.steps.map((s) => ({ initial: s.initial ?? '' })));
     expect(settingsPatch(steps, answers)).not.toHaveProperty('confirmMode');
+  });
+});
+
+describe('every list step carries its values', () => {
+  it('emits one value per choice, in the same order', () => {
+    // The renderer sees only labels by design — the caller owns the mapping —
+    // so `values` is how a step that previews a row the cursor is merely
+    // passing over can act on it (#447). The ALIGNMENT is the whole contract,
+    // and index-aligned arrays are the kind of thing that drifts silently.
+    const { spec } = buildSettingsSpec(ctx());
+    const lists = spec.steps.filter((s) => s.field.kind === 'choice');
+    expect(lists.length).toBeGreaterThan(5);
+    for (const step of lists) {
+      const field = step.field as { choices: string[]; values?: readonly string[] };
+      // Boolean and hatch-bearing steps build their rows elsewhere; what must
+      // never happen is a `values` that exists and disagrees.
+      if (field.values === undefined) continue;
+      expect(field.values, step.id).toHaveLength(field.choices.length);
+    }
+  });
+
+  it('gives the theme step values that are theme ids', () => {
+    // The step that previews. Asserted against `THEMES` rather than against the
+    // labels, because for this one field they are identical — which is exactly
+    // the coincidence the renderer must not lean on.
+    const { spec } = buildSettingsSpec(ctx());
+    const step = spec.steps.find((s) => s.id === 'theme')!;
+    expect(step.preview).toBe('theme');
+    const field = step.field as { values?: readonly string[] };
+    expect([...(field.values ?? [])]).toEqual(Object.keys(THEMES));
   });
 });
 

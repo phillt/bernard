@@ -71,6 +71,21 @@ export type WizardStepKind =
   | {
       kind: 'choice';
       choices: string[];
+      /**
+       * The value behind each row, index-aligned with {@link choices}.
+       *
+       * The renderer otherwise sees only labels — the caller owns the
+       * label-to-value mapping, and `setup-wizard.ts` keeps it in a closure.
+       * That is still true of every answer: this exists for {@link
+       * WizardStep.preview}, which has to act on a row the cursor is merely
+       * passing over, before any answer exists.
+       *
+       * Deliberately not inferred from the label even though the one field that
+       * previews today has `value === label` (`profiles-wizard-data.ts` maps the
+       * theme ids to themselves). That is a coincidence, and one that breaks
+       * silently the day the rows are given prettier names.
+       */
+      values?: readonly string[];
       allowOther?: boolean;
       otherLabel?: string;
       /**
@@ -226,6 +241,22 @@ export interface WizardStep {
    * for that, and it exists partly so this one does not become the tempting one.
    */
   validate?: (answer: WizardAnswer) => string | undefined;
+  /**
+   * Something this step shows you as the cursor passes a row, before you pick.
+   *
+   * A closed set of one, the `apps/manifest.ts` idiom rather than a boolean or a
+   * callback: there is exactly one thing a wizard can usefully live-preview, and
+   * an open hook here would be a side-effect channel on a type whose whole point
+   * is that it is inert data.
+   *
+   * `'theme'` paints the entire wizard in the highlighted row's theme — the one
+   * question in the walk whose answer the screen can simply BE. It reads {@link
+   * WizardChoiceField.values}, never the label, and it changes nothing outside
+   * the overlay: `ThemePreviewProvider` covers the card, so leaving the wizard
+   * is what reverts it. Choosing the theme for real still happens the ordinary
+   * way, through the saved answer.
+   */
+  preview?: 'theme';
   /**
    * An optional check the reader can run against the answer, on demand.
    *
@@ -561,6 +592,19 @@ export function stepsFromQuestions(questions: readonly AskUserQuestion[]): Wizar
         : { kind: 'choice' as const, ...opts, pickAdvances: true },
     };
   });
+}
+
+/**
+ * The value behind a recorded answer, or `null` when the step cannot say.
+ *
+ * Reads {@link WizardChoiceField.values}, never the label, even though the one
+ * field that previews today has them identical — see that field's own note on
+ * why leaning on the coincidence breaks silently.
+ */
+export function choiceValueOf(step: WizardStep, answer: WizardAnswer | undefined): string | null {
+  if (typeof answer !== 'string' || step.field.kind !== 'choice') return null;
+  const at = step.field.choices.indexOf(answer);
+  return at < 0 ? null : (step.field.values?.[at] ?? null);
 }
 
 /** A section in the progress rail, and where the walk is relative to it. */
