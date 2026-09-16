@@ -16,13 +16,14 @@ import {
 import { buildContextMessage, MAX_PERSISTENT_MEMORY_CHARS } from './context-message.js';
 import type { BernardConfig } from './config.js';
 import { MemoryStore } from './memory.js';
-import { printWarning, printInfo, type SpinnerStats } from './output.js';
+import { type SpinnerStats } from './output.js';
 import { computeTurnUsageReport } from './usage-report.js';
 import { SessionTelemetry } from './session-telemetry.js';
 import { getModelProfile } from './providers/index.js';
 import { assembleContext } from './framework/context.js';
 import * as modelPolicy from './model-policy.js';
 import { setOutputSink } from './framework/hooks/output-sink.js';
+import { PLAN_ENFORCEMENT_PREFIX } from './session-markers.js';
 
 vi.mock('node:fs', () => ({
   // `statSync` backs `MemoryStore`'s stat-validated read cache (#513): a
@@ -2102,9 +2103,15 @@ describe('Agent', () => {
         });
         await agent.processInput('do stuff');
         expect(mockGenerateText).toHaveBeenCalledTimes(2);
-        expect(vi.mocked(printWarning)).toHaveBeenCalledWith(
-          expect.stringContaining('Plan has 2 unresolved step'),
-        );
+        // Asserted on what the MODEL received, not on a log line. This used to
+        // pin a `printWarning` — a bare `console.log` fired mid-turn while Ink
+        // owns the screen, so the test was holding in place the thing that
+        // corrupts the frame. The re-prompt reaching the second call is the
+        // behaviour; the logging was never the point.
+        const second = mockGenerateText.mock.calls[1][0] as { messages: CoreMessage[] };
+        const reprompt = second.messages.filter((m) => m.role === 'user').at(-1);
+        expect(String(reprompt?.content)).toContain(PLAN_ENFORCEMENT_PREFIX);
+        expect(String(reprompt?.content)).toContain('gather');
       });
 
       it('does not re-prompt when plan is already complete', async () => {
@@ -2159,7 +2166,7 @@ describe('Agent', () => {
         expect(mockGenerateText).toHaveBeenCalledTimes(1);
       });
 
-      it('exhausts retries, auto-cancels remaining steps, and emits info when plan never resolves', async () => {
+      it('exhausts retries and auto-cancels the remaining steps', async () => {
         const agent = makeAgent(makeConfig({ coordinatorMode: 'on' }), toolOptions, store);
         const planStore = (agent as unknown as { planStore: any }).planStore;
         mockGenerateText.mockImplementation(async () => {
@@ -2169,9 +2176,9 @@ describe('Agent', () => {
         });
         await agent.processInput('try');
         expect(mockGenerateText).toHaveBeenCalledTimes(3);
-        expect(vi.mocked(printInfo)).toHaveBeenCalledWith(
-          expect.stringContaining('Auto-cancelled'),
-        );
+        // The `printInfo` assertion that was here said the same thing as the
+        // two below, through a `console.log` that had no business firing
+        // mid-turn. The store is the record.
         const steps = planStore.view();
         expect(steps.every((s: { status: string }) => s.status === 'cancelled')).toBe(true);
         expect(steps[0].note).toContain('enforcement retries exhausted');

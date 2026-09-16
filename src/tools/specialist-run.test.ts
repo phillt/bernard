@@ -23,7 +23,9 @@ vi.mock('../providers/index.js', () => ({
 }));
 
 vi.mock('../logger.js', () => ({
-  debugLog: vi.fn(),
+  // Deferred through an arrow, like the `output.js` mocks below: the factory is
+  // hoisted above the const, but the body only runs when the log is written.
+  debugLog: (...args: any[]) => mockDebugLog(...args),
   isDebugEnabled: () => false,
 }));
 
@@ -34,6 +36,8 @@ const mockPrintToolResult = vi.fn();
 const mockPrintAssistantText = vi.fn();
 const mockPrintWarning = vi.fn();
 const mockPrintInfo = vi.fn();
+/** The enforcement loop writes here now — see `plan-enforcement.ts`. */
+const mockDebugLog = vi.fn();
 const mockPrintPlan = vi.fn();
 const mockPrintThought = vi.fn();
 const mockPrintEvaluation = vi.fn();
@@ -820,7 +824,7 @@ describe('specialist-run tool', () => {
       )) as string;
 
       expect(mockGenerateText).toHaveBeenCalledTimes(2);
-      expect(mockPrintWarning).toHaveBeenCalled();
+      expect(mockDebugLog.mock.calls.map((c) => c[0])).toContain('plan:enforce');
       expect(result).toContain('All done');
     });
 
@@ -851,7 +855,7 @@ describe('specialist-run tool', () => {
       // 1 initial call + 2 enforcement retries = 3 total
       expect(mockGenerateText).toHaveBeenCalledTimes(3);
       // Auto-cancel notice printed
-      expect(mockPrintInfo).toHaveBeenCalledWith(expect.stringContaining('Auto-cancelled'));
+      expect(mockDebugLog.mock.calls.map((c) => c[0])).toContain('plan:auto-cancelled');
     });
 
     it('does not run plan-enforcement when reactMode is off', async () => {
@@ -877,7 +881,7 @@ describe('specialist-run tool', () => {
       );
 
       expect(mockGenerateText).toHaveBeenCalledTimes(1);
-      expect(mockPrintWarning).not.toHaveBeenCalled();
+      expect(mockDebugLog.mock.calls.map((c) => c[0])).not.toContain('plan:enforce');
     });
   });
 });

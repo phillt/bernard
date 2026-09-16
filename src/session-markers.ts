@@ -11,9 +11,12 @@
  * others silently start leaking scaffolding into their output. This module owns
  * the strings so that can't happen.
  *
- * Note the asymmetry: the `[bracketed]` notices are `user`-role and are matched
- * by *prefix* (most interpolate a summary or task hint after the marker), while
- * the acknowledgements are `assistant`-role and are fixed, whole strings.
+ * Note the asymmetry: the user-role notices are matched by *prefix* (most
+ * interpolate a summary, a task hint or a rendered plan after the marker),
+ * while the acknowledgements are `assistant`-role and are fixed, whole strings.
+ * Most are `[bracketed]`; the plan-enforcement pair is not, because that text is
+ * tuned prompt wording the model reads verbatim and bracketing it to match the
+ * others would change what every coordinator turn is told.
  */
 
 /** User-role notice injected by `compressHistory` ahead of a context summary. */
@@ -24,6 +27,18 @@ export const TRUNCATION_PREFIX = '[Earlier conversation was truncated';
 export const CONTINUATION_PREFIX = '[Your previous response was cut off';
 /** User-role notice injected by `--resume` to separate the restored session. */
 export const SESSION_BOUNDARY_PREFIX = '[Previous session ended';
+/**
+ * User-role re-prompt from the plan-enforcement loop, asking the model to
+ * resolve the steps it left pending.
+ *
+ * Unbracketed, unlike its neighbours, because the text is tuned prompt wording
+ * that reaches the model verbatim — bracketing it to match would change what
+ * every coordinator turn is told. `react.ts` interpolates this constant rather
+ * than repeating the sentence, so the producer and this detector cannot drift.
+ */
+export const PLAN_ENFORCEMENT_PREFIX = 'Your plan still has unresolved steps:';
+/** User-role re-prompt for a coordinator turn that never called `plan`. */
+export const MISSING_PLAN_PREFIX = 'You are operating in coordinator mode but did not call';
 
 /**
  * Full text of the `--resume` session-boundary pair. `src/index.ts` injects
@@ -46,6 +61,8 @@ export const BOUNDARY_PREFIXES = [
   SESSION_BOUNDARY_PREFIX,
   TRUNCATION_PREFIX,
   CONTINUATION_PREFIX,
+  PLAN_ENFORCEMENT_PREFIX,
+  MISSING_PLAN_PREFIX,
 ];
 
 /** Exact text of every assistant-role scaffolding acknowledgement. */

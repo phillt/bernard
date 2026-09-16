@@ -593,12 +593,33 @@ const LEGACY_INLINE_CHROME_ROWS = 5;
  * are namespaced so they can never collide with the numeric `itemKeyRef`
  * counter that drives live turns.
  */
+/**
+ * True when this message is prompt scaffolding rather than a turn (#447).
+ *
+ * ONE predicate for both transcript paths, which is the whole point: the live
+ * commit and `buildResumeSeed` disagreed, so the same message rendered or not
+ * depending on which one put it there. The plan-enforcement re-prompt is how
+ * that surfaced — `wrapIterate` pushes strategy extras into persistent history
+ * so the model sees them on the next iterate, and a whole rendered plan
+ * followed by "Resolve each remaining step" appeared as a right-aligned `❯`
+ * bubble. Bernard instructing itself, painted as something the user said.
+ *
+ * Exported so it can be driven directly: the live path is inside a component
+ * and cannot be reached without running a turn, which is exactly how it ended
+ * up as the untested half of a rule the other half tested.
+ */
+export function isScaffoldingMessage(message: CoreMessage): boolean {
+  if (message.role !== 'user' && message.role !== 'assistant') return false;
+  const text = extractText(message)?.trim();
+  return text !== undefined && text !== '' && isSessionScaffolding(text);
+}
+
 export function buildResumeSeed(history: CoreMessage[], toolDetails: boolean): StaticItem[] {
   const items: StaticItem[] = [];
   for (const message of history) {
     if (message.role !== 'user' && message.role !== 'assistant') continue;
     const text = extractText(message)?.trim();
-    if (!text || isSessionScaffolding(text)) continue;
+    if (!text || isScaffoldingMessage(message)) continue;
     // A woken turn replays as a panel, not as a `❯` bubble. Text forensics is
     // the only mechanism available — the persisted message is all there is, so
     // the watcher's name and reason are unrecoverable and the source degrades
@@ -4607,6 +4628,19 @@ export function App({
       // given, and the injector added it to history afterwards so the model
       // sees it next turn. The cursor still advances past it below.
       if (alreadyOnScreenRef.current.has(message)) continue;
+      // Scaffolding is addressed to the MODEL, never to the reader — the
+      // compression and truncation notices, and the plan-enforcement re-prompt
+      // that renders a whole plan back with "Resolve each remaining step".
+      // `wrapIterate` pushes strategy extras into persistent history so the
+      // model sees them on the next iterate, and everything `role: 'user'`
+      // landed in the transcript as a right-aligned `❯` bubble — Bernard
+      // instructing itself, painted as something the user said.
+      //
+      // The same predicate `buildResumeSeed` already uses, which is the point:
+      // it filtered on resume and not live, so the identical message rendered
+      // or not depending on which path put it there. `session-markers.ts`
+      // exists because every consumer that hand-rolled this list drifted.
+      if (isScaffoldingMessage(message)) continue;
       appended.push({
         key: String(itemKeyRef.current++),
         message,

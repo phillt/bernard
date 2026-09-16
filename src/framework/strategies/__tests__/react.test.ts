@@ -1,22 +1,27 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../../../output.js', () => ({
-  printInfo: vi.fn(),
-  printWarning: vi.fn(),
+// `debugLog`, not `output.js` — the enforcement loop writes there now. It used
+// to `console.log` mid-turn, which corrupts Ink's live frame, and these tests
+// were pinning that in place. See `plan-enforcement.ts`.
+vi.mock('../../../logger.js', async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  debugLog: vi.fn(),
 }));
 
 import { ReActStrategy } from '../react.js';
 import { NormalStrategy } from '../normal.js';
 import { PlanStore } from '../../../plan-store.js';
 import { REACT_COORDINATOR_PROMPT, REACT_ENFORCEMENT_MAX_RETRIES } from '../../../react.js';
-import { printInfo, printWarning } from '../../../output.js';
+import { debugLog } from '../../../logger.js';
 import { baseResult, toolUseResult, makeCtx } from './_harness.js';
 import type { IterateOpts } from '../types.js';
 
 beforeEach(() => {
-  vi.mocked(printInfo).mockClear();
-  vi.mocked(printWarning).mockClear();
+  vi.mocked(debugLog).mockClear();
 });
+
+/** Every `debugLog` event name seen so far, for the enforcement assertions. */
+const events = (): string[] => vi.mocked(debugLog).mock.calls.map((c) => String(c[0]));
 
 describe('ReActStrategy', () => {
   it('delegates to inner unchanged when reactMode is off', async () => {
@@ -63,8 +68,9 @@ describe('ReActStrategy', () => {
     });
     await new ReActStrategy(new NormalStrategy()).run(ctx);
     expect(ctx.iterate).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(printWarning)).toHaveBeenCalledWith(
-      expect.stringContaining('ended without a plan'),
+    expect(vi.mocked(debugLog)).toHaveBeenCalledWith(
+      'plan:enforce',
+      expect.objectContaining({ planMissing: true }),
     );
     const enforcementOpts = ctx.iterate.mock.calls[1][0] as IterateOpts;
     const lastMsg = enforcementOpts.extra?.[enforcementOpts.extra.length - 1];
@@ -73,16 +79,14 @@ describe('ReActStrategy', () => {
     );
   });
 
-  it('exhausts retries when model never creates a plan and logs the give-up', async () => {
+  it('exhausts retries when the model never creates a plan, and records giving up', async () => {
     const planStore = new PlanStore();
     const ctx = makeCtx({ planStore });
     // iterate always runs tools but returns without creating a plan.
     ctx.iterate.mockImplementation(async () => toolUseResult);
     await new ReActStrategy(new NormalStrategy()).run(ctx);
     expect(ctx.iterate).toHaveBeenCalledTimes(1 + REACT_ENFORCEMENT_MAX_RETRIES);
-    expect(vi.mocked(printInfo)).toHaveBeenCalledWith(
-      expect.stringContaining('without a plan after'),
-    );
+    expect(events()).toContain('plan:none-after-retries');
     expect(planStore.view().length).toBe(0);
   });
 
@@ -93,7 +97,7 @@ describe('ReActStrategy', () => {
     // nothing to coordinate, so enforcement would only burn LLM calls.
     await new ReActStrategy(new NormalStrategy()).run(ctx);
     expect(ctx.iterate).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(printWarning)).not.toHaveBeenCalled();
+    expect(events()).not.toContain('plan:enforce');
   });
 
   it('re-prompts when plan has unresolved steps, exits when resolved', async () => {
@@ -108,12 +112,13 @@ describe('ReActStrategy', () => {
     });
     await new ReActStrategy(new NormalStrategy()).run(ctx);
     expect(ctx.iterate).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(printWarning)).toHaveBeenCalledWith(
-      expect.stringContaining('1 unresolved step'),
+    expect(vi.mocked(debugLog)).toHaveBeenCalledWith(
+      'plan:enforce',
+      expect.objectContaining({ unresolved: 1 }),
     );
   });
 
-  it('exhausts retries, auto-cancels remaining steps, prints info', async () => {
+  it('exhausts retries and auto-cancels the remaining steps', async () => {
     const planStore = new PlanStore();
     const ctx = makeCtx({ planStore });
     ctx.iterate.mockImplementation(async () => {
@@ -123,7 +128,10 @@ describe('ReActStrategy', () => {
     });
     await new ReActStrategy(new NormalStrategy()).run(ctx);
     expect(ctx.iterate).toHaveBeenCalledTimes(1 + REACT_ENFORCEMENT_MAX_RETRIES);
-    expect(vi.mocked(printInfo)).toHaveBeenCalledWith(expect.stringContaining('Auto-cancelled'));
+    expect(vi.mocked(debugLog)).toHaveBeenCalledWith(
+      'plan:auto-cancelled',
+      expect.objectContaining({ steps: 1 }),
+    );
     const steps = planStore.view();
     expect(steps.every((s) => s.status === 'cancelled')).toBe(true);
   });
@@ -180,7 +188,7 @@ describe('ReActStrategy', () => {
     expect((ctx.iterate.mock.calls[1][0] as IterateOpts).maxStepsOverride).toBe(21);
   });
 
-  it('prefixes warnings/info with ctx.prefix when provided', async () => {
+  it('tags every enforcement event with ctx.prefix when provided', async () => {
     const planStore = new PlanStore();
     const ctx = makeCtx({ planStore, prefix: 'spec:1' });
     ctx.iterate.mockImplementation(async () => {
@@ -189,8 +197,13 @@ describe('ReActStrategy', () => {
       return baseResult;
     });
     await new ReActStrategy(new NormalStrategy()).run(ctx);
-    expect(vi.mocked(printWarning)).toHaveBeenCalledWith(expect.stringContaining('[spec:1]'));
-    expect(vi.mocked(printInfo)).toHaveBeenCalledWith(expect.stringContaining('[spec:1]'));
+    // The prefix still travels; it is a field on the event rather than a
+    // bracket glued onto a printed string.
+    for (const call of vi.mocked(debugLog).mock.calls) {
+      expect(call[1]).toMatchObject({ prefix: 'spec:1' });
+    }
+    expect(events()).toContain('plan:enforce');
+    expect(events()).toContain('plan:auto-cancelled');
   });
 
   it('does not enforce when stepLimitHit is true', async () => {

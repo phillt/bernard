@@ -8,7 +8,6 @@ import {
   shouldEnforcePlan,
 } from '../../react.js';
 import { truncateToolResults } from '../../context.js';
-import { printInfo, printWarning } from '../../output.js';
 import { debugLog } from '../../logger.js';
 import type { PlanStore } from '../../plan-store.js';
 import type { AgentResult } from '../runner.js';
@@ -83,7 +82,6 @@ export async function enforcePlan(opts: PlanEnforcementOpts): Promise<AgentResul
     return result;
   }
 
-  const prefixTag = ctx.prefix ? `[${ctx.prefix}] ` : '';
   // A missing plan only counts as unfinished when this caller enforces it;
   // otherwise the loop would spin on a Normal turn that legitimately has none.
   const isUnfinished = (): boolean =>
@@ -95,11 +93,20 @@ export async function enforcePlan(opts: PlanEnforcementOpts): Promise<AgentResul
     attempts++;
     const unresolved = planStore.unresolvedCount();
     const planMissing = !planStore.hasSteps();
-    printWarning(
-      planMissing
-        ? `${prefixTag}Coordinator turn ended without a plan. Prompting to create one... (${attempts}/${REACT_ENFORCEMENT_MAX_RETRIES})`
-        : `${prefixTag}Plan has ${unresolved} unresolved step(s). Prompting to resolve... (${attempts}/${REACT_ENFORCEMENT_MAX_RETRIES})`,
-    );
+    // `debugLog`, not `printWarning` — that one is a bare `console.log`, and
+    // this runs MID-TURN while Ink owns the alternate screen buffer, so it
+    // corrupts the live frame and is painted over on the next ~32 ms render:
+    // the line deliberately made loud is the one least likely to be read. The
+    // exact trade `mcp.ts`'s reconnect notice already made. The cost is that a
+    // headless cron run no longer records it without `BERNARD_DEBUG`, which is
+    // the right side of a diagnostic about the MODEL's behaviour rather than
+    // about the job's work.
+    debugLog('plan:enforce', {
+      attempt: attempts,
+      of: REACT_ENFORCEMENT_MAX_RETRIES,
+      ...(planMissing ? { planMissing: true } : { unresolved }),
+      ...(ctx.prefix ? { prefix: ctx.prefix } : {}),
+    });
 
     const feedback = planMissing
       ? buildMissingPlanFeedback()
@@ -125,17 +132,19 @@ export async function enforcePlan(opts: PlanEnforcementOpts): Promise<AgentResul
   // so its count doubles as the "did anything need cancelling" test.
   const cancelled = planStore.cancelAllUnresolved(REACT_AUTO_CANCEL_NOTE);
   if (cancelled > 0) {
-    printInfo(
-      `${prefixTag}Auto-cancelled ${cancelled} unresolved plan step(s) after enforcement retries.`,
-    );
+    debugLog('plan:auto-cancelled', {
+      steps: cancelled,
+      ...(ctx.prefix ? { prefix: ctx.prefix } : {}),
+    });
   } else if (
     enforceMissingPlan &&
     !planStore.hasSteps() &&
     attempts >= REACT_ENFORCEMENT_MAX_RETRIES
   ) {
-    printInfo(
-      `${prefixTag}Coordinator turn finished without a plan after ${REACT_ENFORCEMENT_MAX_RETRIES} re-prompt(s).`,
-    );
+    debugLog('plan:none-after-retries', {
+      retries: REACT_ENFORCEMENT_MAX_RETRIES,
+      ...(ctx.prefix ? { prefix: ctx.prefix } : {}),
+    });
   }
 
   return result;
