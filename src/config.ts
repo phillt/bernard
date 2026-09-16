@@ -374,7 +374,17 @@ const DEFAULT_MAX_TOKENS = 4096;
 export const DEFAULT_SHELL_TIMEOUT = 30000;
 const DEFAULT_TOKEN_WINDOW = 0;
 const DEFAULT_MAX_STEPS = 25;
-const DEFAULT_AUTO_CREATE_SPECIALISTS = false;
+/**
+ * Promote a specialist without asking, above `autoCreateThreshold` (#447).
+ *
+ * ON, and the asymmetry with `autoCreateApplets` beside it is the argument:
+ * promoting a specialist is one JSON write, visible in `/specialists` and
+ * deletable there, while an applet is a manifest, a page, a bound agent, an
+ * origin and a launcher. The detector already runs in the detached exit worker
+ * and already scores against a 0.8 threshold; what this decides is only whether
+ * the result waits for a yes.
+ */
+const DEFAULT_AUTO_CREATE_SPECIALISTS = true;
 const DEFAULT_AUTO_CREATE_THRESHOLD = 0.8;
 const DEFAULT_COORDINATOR_MODE: 'on' | 'off' | 'auto' = 'auto';
 const DEFAULT_CONFIRM_MODE: 'off' | 'auto' | 'strict' = 'auto';

@@ -40,7 +40,6 @@ import { REMOTE_MESSAGE_MODES } from './remote-messages.js';
 import { COORDINATOR_MODES } from './coordinator-modes.js';
 import { TOOL_MODES } from './tool-modes.js';
 import { THEMES } from './theme.js';
-import { VOICE_BACKEND_VALUES } from './voice-service.js';
 import type { ProfileSettings } from './profiles.js';
 
 /**
@@ -379,41 +378,6 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         field: { kind: 'boolean' },
         envVar: 'BERNARD_VOICE',
       },
-      {
-        key: 'voiceNormalizer',
-        label: 'Natural speech',
-        description:
-          "Written answers don't read aloud well: a link comes out character by character, a table cell by cell, a phone number as one enormous number. This rewrites the answer into what a person would actually say, so you can follow it by ear. Costs one small call per spoken reply; off strips the markup but leaves the rest as written.",
-        field: { kind: 'boolean' },
-        envVar: 'BERNARD_VOICE_NORMALIZER',
-      },
-      {
-        key: 'voiceBackend',
-        label: 'Voice backend',
-        description:
-          'Which program does the talking. Auto picks whichever one is installed, which is the right answer unless you have more than one and want a particular voice from a particular one.',
-        field: {
-          kind: 'list',
-          options: VOICE_BACKEND_VALUES.map((b) => ({ value: b, label: b })),
-        },
-        envVar: 'BERNARD_VOICE_BACKEND',
-      },
-      {
-        key: 'voiceRate',
-        label: 'Speech rate (wpm)',
-        description:
-          'How fast Bernard talks, in words per minute. Higher gets through a long answer sooner and is harder to follow while your attention is elsewhere, which is where spoken replies usually land.',
-        field: { kind: 'int', min: 50, max: 500 },
-        envVar: 'BERNARD_VOICE_RATE',
-      },
-      {
-        key: 'voiceWarmupMs',
-        label: 'Audio warmup (ms)',
-        description:
-          'Plays a moment of silence before speaking, so a sleeping speaker is awake by the first word. Linux only — macOS and Windows keep audio devices ready. Turn it up if words still get clipped; 0 turns it off.',
-        field: { kind: 'int', min: 0, max: 5_000 },
-        envVar: 'BERNARD_VOICE_WARMUP_MS',
-      },
     ],
   },
   {
@@ -473,7 +437,7 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         key: 'autoUpdate',
         label: 'Auto-update',
         description:
-          'Installs a new version of Bernard at startup when there is one. On keeps you current without thinking about it; off keeps a version you have tested in place until you decide to move.',
+          'Installs a new version of Bernard when you close the session, if one turned up while you were working. On keeps you current without thinking about it; off just tells you an update exists and leaves the install to you, which is what you want if you are on a version you have tested.',
         field: { kind: 'boolean' },
       },
     ],

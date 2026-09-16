@@ -76,7 +76,12 @@ import { listMCPServers, removeMCPServer, MCPManager, setActiveMCPManager } from
 import { ToolProfileStore } from './tool-profiles.js';
 import { runSetupHost } from './ui/SetupHost.js';
 import { describeOutcome } from './setup-flow.js';
-import { getLocalVersion, startupUpdateCheck, interactiveUpdate } from './update.js';
+import {
+  getLocalVersion,
+  startupUpdateCheck,
+  applyPendingUpdate,
+  interactiveUpdate,
+} from './update.js';
 import { factsList, factsSearch, clearFacts } from './facts-cli.js';
 import { migrateFromLegacy } from './migrate.js';
 import { MCP_CONFIG_PATH, PROFILES_PATH, PREFS_PATH, RAG_DIR } from './paths.js';
@@ -292,7 +297,10 @@ The user has been notified and this session is open for them to review and act o
       }
 
       const prefs = loadPreferences();
-      startupUpdateCheck(!!prefs.autoUpdate);
+      // Default ON, like `autoOpenApplets` and its neighbours: an agent that
+      // silently runs an old build is the worse failure. Safe to default only
+      // because the install now happens at EXIT — see `update.ts`.
+      startupUpdateCheck(prefs.autoUpdate ?? true);
 
       await runInkRepl({
         config,
@@ -820,6 +828,10 @@ async function runInkRepl(args: {
   // screen, not the about-to-be-discarded alt screen.
   fullScreen?.teardown();
   await cleanup();
+  // After teardown, so npm's own output lands on the restored normal screen and
+  // the blocking install cannot freeze a live REPL. Nothing is left running to
+  // interrupt, and the user is already on their way out.
+  applyPendingUpdate();
 }
 
 program

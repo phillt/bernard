@@ -194,22 +194,63 @@ export function applyUpdate(version: string): void {
 /**
  * Non-blocking startup check. Never throws, never blocks the REPL.
  */
+/**
+ * A version found mid-session and waiting for the session to end.
+ *
+ * Module-level and taken exactly once, the `providers/request-counter.ts`
+ * shape: the check is fired before Ink mounts and resolves long after, so there
+ * is no handle to thread an answer back through.
+ */
+let pendingUpdate: string | null = null;
+
+/**
+ * The update to apply now that the REPL is down, or `null`.
+ *
+ * Taking it clears it, so a second caller cannot install twice.
+ */
+export function takePendingUpdate(): string | null {
+  const v = pendingUpdate;
+  pendingUpdate = null;
+  return v;
+}
+
+/**
+ * Installs whatever the session found, once the session is over. Never throws.
+ *
+ * The blocking half of the old inline path, moved to where blocking is free.
+ */
+export function applyPendingUpdate(): void {
+  const version = takePendingUpdate();
+  if (version === null) return;
+  try {
+    printInfo(`\n  Applying update to v${version}...`);
+    applyUpdate(version);
+    printInfo(`  Updated bernard to v${version}.`);
+    printInfo(`  What's new: ${releaseNotesUrl(version)}\n`);
+  } catch {
+    printInfo(`\n  Update to v${version} failed. Run: bernard update\n`);
+  }
+}
+
 export function startupUpdateCheck(autoUpdate: boolean): void {
   checkForUpdate()
     .then((result) => {
       if (!result.updateAvailable) return;
 
       if (autoUpdate) {
-        try {
-          printInfo(`\n  Applying update to v${result.latestVersion}...`);
-          applyUpdate(result.latestVersion);
-          printInfo(
-            `  Updated bernard to v${result.latestVersion}. Restart to use the new version.`,
-          );
-          printInfo(`  What's new: ${releaseNotesUrl(result.latestVersion)}\n`);
-        } catch {
-          printInfo(`\n  Update to v${result.latestVersion} failed. Run: bernard update\n`);
-        }
+        // Recorded, NOT applied. `applyUpdate` is an `execSync` of a global npm
+        // install with `stdio: 'inherit'` — so applying it here would block the
+        // event loop for the length of that install and write npm's output
+        // straight into the alternate screen buffer Ink owns, which is the
+        // exact class of bug `mcp.ts`'s reconnect notice was fixed for. This
+        // check is fired before Ink mounts and its promise settles well after,
+        // so "here" is always mid-session.
+        //
+        // The message was already "Restart to use the new version", so applying
+        // at exit costs the user nothing and removes the freeze. `index.ts`
+        // drains it after `fullScreen.teardown()`, where output lands on the
+        // restored normal screen.
+        pendingUpdate = result.latestVersion;
       } else {
         printInfo(`\n  Update available: v${result.currentVersion} → v${result.latestVersion}`);
         printInfo(`  What's new: ${releaseNotesUrl(result.latestVersion)}`);

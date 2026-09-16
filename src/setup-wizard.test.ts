@@ -400,14 +400,17 @@ describe('provenanceNote', () => {
     // The one fact the rows cannot carry: a blank buffer looks the same whether
     // the value is empty or never set.
     //
-    // Driven through a context that OMITS the field rather than through a field
-    // that happens to be unset — this used to lean on `voiceVoice`, and lost
-    // its subject when that question left the walk. A fixture that has to stay
-    // unset to keep a test meaningful is a fixture waiting to be populated.
-    const rate = WIZARD_FIELDS.find((f) => f.key === 'voiceRate')!;
+    // Driven through a context that OMITS the field, and the field is arbitrary
+    // — which is the honest shape now. This used to lean on `voiceVoice` being
+    // genuinely unset, and lost its subject when that question left the walk;
+    // with the voice details gone too, every field the registry still asks
+    // about resolves to a value, so this branch is defensive rather than
+    // routine. A test that needs a particular field to stay empty is one
+    // waiting to be broken by someone populating it.
+    const field = WIZARD_FIELDS.find((f) => f.key === 'maxSteps')!;
     const without = ctx();
-    delete (without.current as Record<string, unknown>).voiceRate;
-    expect(provenanceNote(rate, without)).toBe('Not set.');
+    delete (without.current as Record<string, unknown>).maxSteps;
+    expect(provenanceNote(field, without)).toBe('Not set.');
   });
 });
 

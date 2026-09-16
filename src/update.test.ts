@@ -50,6 +50,8 @@ import {
   applyUpdate,
   interactiveUpdate,
   startupUpdateCheck,
+  applyPendingUpdate,
+  takePendingUpdate,
   releaseNotesUrl,
 } from './update.js';
 
@@ -384,13 +386,32 @@ describe('startupUpdateCheck', () => {
     expect(outputMock.printInfo).toHaveBeenCalledWith(expect.stringContaining('bernard update'));
   });
 
-  it('applies update when autoUpdate is on', async () => {
+  it('records the update instead of installing it mid-session', async () => {
+    // The install is an `execSync` of a global npm install with
+    // `stdio: 'inherit'`. This check fires before Ink mounts and settles well
+    // after, so doing it here froze the event loop for the length of that
+    // install and wrote npm's output into the alternate screen buffer Ink owns.
+    // Asserting `execSync` was NOT called is the whole point — the old test
+    // asserted the opposite, which is what made the default unsafe to flip.
     fsMock.readFileSync.mockReturnValue(JSON.stringify({ version: '1.0.0' }));
     mockHttpsGet(JSON.stringify({ version: '2.0.0' }));
     cpMock.execSync.mockReturnValue(undefined);
 
     startupUpdateCheck(true);
     await new Promise((r) => setTimeout(r, 50));
+
+    expect(cpMock.execSync).not.toHaveBeenCalled();
+    expect(takePendingUpdate()).toBe('2.0.0');
+  });
+
+  it('installs what the session recorded, once the session is over', async () => {
+    fsMock.readFileSync.mockReturnValue(JSON.stringify({ version: '1.0.0' }));
+    mockHttpsGet(JSON.stringify({ version: '2.0.0' }));
+    cpMock.execSync.mockReturnValue(undefined);
+
+    startupUpdateCheck(true);
+    await new Promise((r) => setTimeout(r, 50));
+    applyPendingUpdate();
 
     expect(cpMock.execSync).toHaveBeenCalledWith('npm install -g bernard-agent@2.0.0', {
       stdio: 'inherit',
@@ -399,5 +420,21 @@ describe('startupUpdateCheck', () => {
     expect(outputMock.printInfo).toHaveBeenCalledWith(
       expect.stringContaining("What's new: https://phillt.github.io/bernard/releases.html#v2.0.0"),
     );
+  });
+
+  it('takes the pending update exactly once', async () => {
+    // Or a second drain — an exit path that runs twice, a test file that
+    // forgets to reset — reinstalls the same version.
+    fsMock.readFileSync.mockReturnValue(JSON.stringify({ version: '1.0.0' }));
+    mockHttpsGet(JSON.stringify({ version: '2.0.0' }));
+    cpMock.execSync.mockReturnValue(undefined);
+
+    startupUpdateCheck(true);
+    await new Promise((r) => setTimeout(r, 50));
+    applyPendingUpdate();
+    cpMock.execSync.mockClear();
+    applyPendingUpdate();
+
+    expect(cpMock.execSync).not.toHaveBeenCalled();
   });
 });

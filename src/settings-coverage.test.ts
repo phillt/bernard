@@ -68,7 +68,17 @@ const NOT_IN_SETUP: Readonly<Record<string, string>> = {
   // when wrong. `/voice` is where it belongs — its test row plays a phrase and
   // surfaces the backend's rejection, so you set it and hear whether it took.
   // A picker would earn it back; nothing else would.
+  // The whole voice section past the on/off, for the reason above generalised:
+  // none of them can be judged without HEARING the result, which the wizard
+  // cannot do and `/voice` does on every row. They are also asked of an install
+  // where `voiceTts` defaults to false, so they configure a feature that is not
+  // running — and the wizard cannot skip them, because `WizardSpec.steps` is a
+  // frozen array with no branching.
   voiceVoice: 'free-text voice name, only checkable by hearing it — `/voice`',
+  voiceNormalizer: 'only judgeable by ear — `/voice`',
+  voiceBackend: '`auto` is right until it is not, and then you are debugging — `/voice`',
+  voiceRate: 'words per minute means nothing unheard — `/voice`',
+  voiceWarmupMs: 'a PipeWire troubleshooting knob, not a first-run choice — `/voice`',
   toolPermissions: 'per-tool grants — `/tool-permissions`',
   appToolGrants: 'per-applet tool grants — `bernard app-grant`',
   appCspGrants: 'per-applet CSP grants — `bernard app csp`',

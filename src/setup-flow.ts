@@ -220,9 +220,10 @@ function readCurrent(config: BernardConfig | null): {
     if (effective !== undefined) current[key] = effective;
   }
   // Not a `BernardConfig` key, so the loop above can only ever see the stored
-  // value. `false` is what `startupUpdateCheck(!!prefs.autoUpdate)` already
-  // treats an absent one as.
-  current.autoUpdate = prefs.autoUpdate ?? false;
+  // value. The fallback must match what `index.ts` passes
+  // `startupUpdateCheck` for an absent one, or the question opens on a row
+  // that is not in force and the `(recommended)` marker lands on the wrong one.
+  current.autoUpdate = prefs.autoUpdate ?? true;
   // The two keys Tool mode decides besides its own (#447). The loop above walks
   // `WIZARD_FIELDS`, and neither has a field of its own, so both the effective
   // value and its provenance have to be read here — and provenance matters:
