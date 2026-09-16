@@ -57,6 +57,13 @@ export function normalizeColor(color: string): ChalkInstance {
   return NAMED_COLORS[color] ?? chalk.white;
 }
 
+/**
+ * Columns a code block is indented by. Ours as well as marked-terminal's,
+ * because the `code` renderer below reproduces the indent for the one case it
+ * takes over — see there.
+ */
+const CODE_TAB = 2;
+
 function buildTerminalOptions(
   colors: ThemeColors,
   width: number,
@@ -96,7 +103,7 @@ function buildTerminalOptions(
     table: chalk.reset,
     width,
     reflowText: false, // Ink owns wrapping; width only sizes tables/rules
-    tab: 2,
+    tab: CODE_TAB,
     showSectionPrefix: false,
     emoji: false,
     unescape: true,
@@ -123,6 +130,7 @@ function getParser(colors: ThemeColors, width: number): Marked {
   // top: parse inline children when present, fall through (`false`) to
   // marked-terminal's renderer for plain text tokens.
   const accent = normalizeColor(colors.accent);
+  const code = normalizeColor(colors.toolCall);
   parser.use({
     renderer: {
       text(token) {
@@ -139,6 +147,45 @@ function getParser(colors: ThemeColors, width: number): Marked {
           return accent.underline(token.text);
         }
         return false;
+      },
+      /**
+       * A block that declares no language is not guessed at.
+       *
+       * marked-terminal hands every code block to `cli-highlight`, which does
+       * `options.language ? hljs.highlight(...) : hljs.highlightAuto(...)` — so
+       * an undeclared block is auto-detected, and English prose is duly
+       * detected as source code. The reported symptom was an apostrophe turning
+       * the rest of a paragraph red: `'` opens a string literal, and the span
+       * runs to the next apostrophe or to the end of the block. Keywords go
+       * blue in the same pass, which is the other half of the same tell.
+       *
+       * Reachable from ordinary prose, which is what makes it worth fixing
+       * rather than a curiosity about code blocks: four spaces of indentation
+       * IS an indented code block in markdown, so a drafted email with indented
+       * paragraphs becomes one. A fenced block with no info string — shell
+       * output, a log, a directory listing — lands here too.
+       *
+       * The block still renders AS a block, in the theme's code colour, which
+       * is what marked-terminal's own error path falls back to (`style(code)`).
+       * What is given up is only the guess. A declared language returns `false`
+       * and keeps real highlighting, so ```ts is unaffected.
+       *
+       * Styled per line rather than once around the whole block: the transcript
+       * is sliced into lines by `MarkdownLines`, and a span that opens on one
+       * line and closes on another survives that only by accident. The indent
+       * sits OUTSIDE the styling, where marked-terminal's own `indentify` puts
+       * it, so nothing is painted into the left margin.
+       */
+      code(token) {
+        if (token.lang !== undefined && token.lang !== '') return false;
+        const pad = ' '.repeat(CODE_TAB);
+        const body = token.text
+          .split('\n')
+          .map((line) => (line === '' ? '' : pad + code(line)))
+          .join('\n');
+        // `section()`'s trailing blank line, which every other block renderer
+        // in marked-terminal emits and `renderMarkdown` trims off the end.
+        return `${body}\n\n`;
       },
     },
   });
