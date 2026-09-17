@@ -181,6 +181,36 @@ export interface ToolOptions {
    */
   confirmAction?: (input: ConfirmActionInput, signal?: AbortSignal) => Promise<boolean>;
   /**
+   * True when nobody is present to answer a confirmation.
+   *
+   * Set only by `headlessToolOptions` — cron, `bernard script`, applet actions.
+   * It changes no decision: {@link confirmAction} already auto-denies, because
+   * headless it is `!shouldConfirm(risk, threshold)`, so the predicate that
+   * decides whether to ASK also decides the ANSWER.
+   *
+   * What it changes is what the model is TOLD. Without it the refusal reads
+   * `Action cancelled by user.` — a user who does not exist, cancelling
+   * something nobody was offered — and a model that reads it as written
+   * retries, which is exactly what one cron job did across ten scheduled runs
+   * and 934,805 tokens. A flag rather than a richer `confirmAction` return
+   * because the callback has several implementors and none of them has more to
+   * say: the fact worth carrying is a property of the RUN, not of the answer.
+   */
+  unattended?: boolean;
+  /**
+   * Called when a gate refuses a call with nobody present to have decided it.
+   *
+   * Reporting only — it changes no verdict and must never throw. It exists
+   * because an unattended run that was refused its core tool looked, from
+   * every surface outside it, like a clean success: one cron job reported
+   * `lastRunStatus: 'success'` ten times in a row while doing nothing, and
+   * Bernard's own summary read "ran cleanly 10×".
+   *
+   * Optional, so a caller that does not care is not obliged to collect; the
+   * REPL supplies none, because a person who cancels a prompt already knows.
+   */
+  onDenied?: (denial: { tool: string; permissionKey: string | null; risk: string }) => void;
+  /**
    * Read-only mode block callback (issue #179). Invoked by the augment layer
    * before each write/dangerous tool call when `policyDecision.toolMode.mode`
    * is `'read-only'`. The callback returns the user's enable decision; on

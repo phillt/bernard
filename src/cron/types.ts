@@ -1,5 +1,6 @@
 import type { ScopeSelection } from '../framework/agents/dispatch-profile.js';
 import type { ToolErrorType } from '../framework/tools/types.js';
+import type { PermissionRule } from '../tool-permissions.js';
 
 /**
  * A recurring task that Bernard executes on a cron schedule.
@@ -67,6 +68,28 @@ export interface CronJob extends ScopeSelection {
    * and `toolMode`.
    */
   skipPermissions?: boolean;
+  /**
+   * Per-job tool grants, written only by `bernard cron-grant --allow`.
+   *
+   * The precise lever for "this job may run one thing it otherwise could not".
+   * `runGate` opens with `if (grant === 'allow') return true`, so a rule of
+   * `allow shell:gh` clears the confirm gate for `gh` **and nothing else** —
+   * where `confirmMode: 'off'`, the only other reachable knob, dissolves every
+   * confirmation including `rm -rf`.
+   *
+   * It exists because a job that needed `gh issue create` could not be
+   * expressed at all: cron's default denies every write-shaped shell command,
+   * and one real job burned ten scheduled runs and 934,805 tokens discovering
+   * that, with no way for anyone to fix it short of hand-editing `jobs.json`.
+   *
+   * **Not the user's profile grants**, which `resolveCronJobPosture` still
+   * passes as `null` — those belong to a session the user is watching. These
+   * are the job's own, named for the job. And deliberately absent from the
+   * `cron` tool: `cli.ts` already states the rule for write paths — letting an
+   * agent widen its own authority is the escalation the gate exists to
+   * prevent — and it applies identically here.
+   */
+  toolPermissions?: PermissionRule[];
   /**
    * Per-job wall clock in milliseconds (#326). Falls back to
    * `BERNARD_CRON_JOB_TIMEOUT_MS`, then to a 30-minute default; `0` disables

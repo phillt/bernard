@@ -6,7 +6,7 @@ import { readBernardSource, readToolMeta, preserveMeta } from '../framework/tool
 import { isCacheable, type ToolResult } from '../framework/tools/types.js';
 import { stripFailureMarker, classifyError } from '../error-taxonomy.js';
 import type { BlockActionInput, BlockOutcome, ConfirmActionInput, ToolOptions } from './types.js';
-import type { ConfirmThreshold } from '../risk.js';
+import type { ConfirmThreshold, RiskLevel } from '../risk.js';
 import { riskFromMeta, shouldBlockInReadOnly, shouldConfirm } from '../risk.js';
 import { CACHE_MISS, getCachedResult, setCachedResult } from '../framework/tools/result-cache.js';
 import { boundedStringify, redactArgs, REDACTED } from '../framework/tools/redact.js';
@@ -252,6 +252,10 @@ export interface AugmentOptions {
   profileStore: ToolProfileStore;
   confirmThreshold?: ConfirmThreshold;
   confirmAction?: ToolOptions['confirmAction'];
+  /** See {@link ToolOptions.unattended} — it changes the refusal, not the verdict. */
+  unattended?: ToolOptions['unattended'];
+  /** See {@link ToolOptions.onDenied} — reporting only. */
+  onDenied?: ToolOptions['onDenied'];
   toolMode?: 'read-only' | 'write';
   blockAction?: ToolOptions['blockAction'];
   /**
@@ -349,19 +353,52 @@ function buildConfirmReason(toolName: string, args: unknown): string {
 }
 
 /**
- * Cancelled-shape result returned when the user denies a confirmation prompt.
- * Mirrors the `{output, is_error}` legacy shape for tools that historically
- * returned that (shell, file edit); for migrated `BernardTool`s the envelope's
- * `serializeForModel` decides how the cancellation is rendered.
+ * What a human pressing Escape produces.
  *
- * `is_error: true` is intentional — the model must distinguish a cancelled
- * call from a successful one, otherwise it will continue the turn assuming
- * the action took effect (e.g. that an email was sent or a file was deleted).
+ * A bare string, where a `{output, is_error}` constant used to sit. That shape
+ * could only ever say one thing, which is how every unattended refusal — cron,
+ * `bernard script`, applet actions — came to be reported as a user cancelling
+ * something nobody was offered. Both branches now build the result from
+ * whatever `runGate` hands back.
+ *
+ * `is_error: true` at each call site is still intentional: the model must
+ * distinguish a refused call from a successful one, or it continues the turn
+ * assuming the action took effect.
  */
-const CANCELLED_LEGACY_RESULT = {
-  output: 'Action cancelled by user.',
-  is_error: true,
-};
+const CANCELLED_MESSAGE = 'Action cancelled by user.';
+
+/**
+ * What an UNATTENDED refusal produces, which is a different event entirely.
+ *
+ * `headlessToolOptions`' `confirmAction` is `!shouldConfirm(risk, threshold)` —
+ * the same predicate that decides whether to ASK also decides the ANSWER, and
+ * with nobody present the answer is always no. So cron, `bernard script` and
+ * applet actions were all being told `Action cancelled by user.`: a user who
+ * does not exist, cancelling something nobody was offered.
+ *
+ * A model reads that exactly as written. One real cron job read it, wrote
+ * "shell still cancelled — retry next run" in its notes, and retried across ten
+ * scheduled runs and 934,805 tokens, varying the command each time because the
+ * cron prompt tells it to change something after a failure. Every variation was
+ * refused by the same rule.
+ *
+ * So the text carries the three facts the old one hid: WHY (the risk tier, and
+ * the threshold it crossed), that NOBODY CAN APPROVE IT, and that it WILL NOT
+ * CHANGE — which is what makes retrying with different flags visibly pointless
+ * rather than the obvious next move. The remedy names the grant, because the
+ * one thing a model can usefully do is tell the user which command to run.
+ */
+function unattendedDenialMessage(risk: RiskLevel, key: string | null): string {
+  const what = key ?? 'this tool';
+  return (
+    `Action denied automatically: it is ${risk}-risk and this unattended run ` +
+    `confirms at that level. No one is present to approve it, and the answer ` +
+    `will be the same for every call in this run — a permission verdict is not ` +
+    `a command error, so changing the flags or the approach will not help. ` +
+    `Report that \`${what}\` is not granted here; the user can allow it with ` +
+    `\`bernard cron-grant <job-id> --allow ${what}\` if this is a cron job.`
+  );
+}
 
 /**
  * Legacy cancellation shape returned when a write call is denied under
@@ -718,7 +755,11 @@ export function augmentTools(
     toolDef: any,
     execOptions: unknown,
     grant: 'allow' | 'ask',
-  ): Promise<boolean> => {
+    // `true` to proceed, or the refusal to hand the model. A boolean cannot
+    // say WHY, and the caller has neither the risk nor the permission key in
+    // scope to reconstruct it — which is how every headless refusal came to
+    // read "cancelled by user" regardless of what actually happened.
+  ): Promise<true | { refusal: string }> => {
     if (!confirmAction) return true;
     const meta = readToolMeta(toolDef);
     const risk = riskFromMeta(meta, args);
@@ -735,8 +776,19 @@ export function augmentTools(
       breadthOptions: computeBreadthOptions(toolName, args, dangerousShell, meta),
     };
     const signal = (execOptions as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+    const refusal = (): { refusal: string } => {
+      if (!opts.unattended) return { refusal: CANCELLED_MESSAGE };
+      // Reported, never allowed to throw: a reporting hook that can take down
+      // the gate it reports on is worse than no reporting.
+      try {
+        opts.onDenied?.({ tool: toolName, permissionKey, risk });
+      } catch {
+        /* reporting only */
+      }
+      return { refusal: unattendedDenialMessage(risk, permissionKey) };
+    };
     try {
-      return await confirmAction(input, signal);
+      return (await confirmAction(input, signal)) ? true : refusal();
     } catch (err) {
       // A throwing confirmAction is a wiring bug — fail closed (deny) so
       // the model gets a clear cancellation rather than silently bypassing.
@@ -744,7 +796,7 @@ export function augmentTools(
         `augment:${toolName}:confirm:threw`,
         err instanceof Error ? err.message : String(err),
       );
-      return false;
+      return refusal();
     }
   };
 
@@ -783,10 +835,11 @@ export function augmentTools(
               };
               return source.serializeForModel(denied);
             }
-            if (!(await runGate(toolName, args, toolDef, execOptions, gates.grant))) {
+            const gate = await runGate(toolName, args, toolDef, execOptions, gates.grant);
+            if (gate !== true) {
               const cancelled: ToolResult<unknown> = {
                 status: 'error',
-                error: { type: 'cancelled', message: 'Action cancelled by user.' },
+                error: { type: 'cancelled', message: gate.refusal },
               };
               return source.serializeForModel(cancelled);
             }
@@ -960,8 +1013,14 @@ export function augmentTools(
           if (!(await runBlockGate(toolName, args, toolDef, execOptions, gates.grant))) {
             return DENIED_LEGACY_RESULT;
           }
-          if (!(await runGate(toolName, args, toolDef, execOptions, gates.grant))) {
-            return CANCELLED_LEGACY_RESULT;
+          // `!== true`, never a truthiness test: `runGate` returns the refusal
+          // as an OBJECT now, and an object is truthy — so `if (!(await …))`
+          // stopped denying entirely while still type-checking. Caught by the
+          // gate's own tests within a minute of the change, which is the only
+          // reason this reads as a comment rather than as a shipped hole.
+          const gate = await runGate(toolName, args, toolDef, execOptions, gates.grant);
+          if (gate !== true) {
+            return { output: gate.refusal, is_error: true };
           }
           let result: unknown;
           const execStartedAt = Date.now();

@@ -1330,9 +1330,13 @@ program
 
 program
   .command('cron-grant <id> [paths...]')
-  .description('Show or set the folders a cron job may write to, beyond its own workspace')
-  .option('--clear', 'Remove all extra write paths, leaving only the job workspace')
-  .action(async (id: string, paths: string[], options: { clear?: boolean }) => {
+  .description('Show or set what a cron job may do beyond its defaults — write paths and tools')
+  .option('--clear', 'Remove all extra write paths and tool grants')
+  .option(
+    '--allow <specifier...>',
+    "Let this job run a tool it otherwise cannot, e.g. 'shell:gh *'",
+  )
+  .action(async (id: string, paths: string[], options: { clear?: boolean; allow?: string[] }) => {
     try {
       await cronGrant(id, paths ?? [], options);
     } catch (err: unknown) {

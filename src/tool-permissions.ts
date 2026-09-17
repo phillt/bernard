@@ -192,6 +192,24 @@ const READONLY_COMMANDS = new Set([
 ]);
 
 /**
+ * The read-only allowlist, rendered for a prompt.
+ *
+ * Exported so `cron.ts` can STATE the rule rather than describe it from
+ * memory. It described it from memory, and had drifted into being false: it
+ * promised that "dangerous commands (rm -rf, sudo, etc.)" are denied and that
+ * "safe, read-oriented commands" run, while in fact `echo hello` is denied and
+ * so is any line carrying a pipe, an `&&` or a redirect. A model told the old
+ * sentence will reach for exactly the shapes that are refused.
+ *
+ * Same treatment as `APPLET_STYLED_SELECTORS`, and for the same reason: a
+ * prompt that lists an artefact is a second copy of it, and copies do not fail,
+ * they diverge. `cron.test.ts` pins the prompt against this.
+ */
+export function readOnlyShellSummary(): string {
+  return [...READONLY_COMMANDS].sort().join(', ');
+}
+
+/**
  * Read-only git subcommands. Excludes bare `branch`/`tag`/`remote`/`stash` —
  * each lists when bare but writes with args, and a first-two-token check
  * can't tell the difference safely.

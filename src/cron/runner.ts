@@ -14,6 +14,7 @@ import { verdictOf, type Check, type Verdict } from '../rubric.js';
 import type { AgentContext } from '../framework/context.js';
 import { runHeadless, resolvePosture, type HeadlessPosture } from '../headless.js';
 import { declaredScope } from '../framework/agents/dispatch-profile.js';
+import type { ToolErrorType } from '../framework/tools/types.js';
 
 export {
   /** Re-exported so existing imports against the runner module keep working. */
@@ -54,10 +55,13 @@ export function resolveCronJobPosture(job: CronJob): CronJobPermissionPosture {
     toolMode: job.toolMode ?? 'write',
     confirmMode: job.confirmMode ?? 'auto',
     skipPermissions: job.skipPermissions,
-    // Cron has never honoured persisted profile grants, and `null` says so
-    // rather than leaving it to a default. The user's own grants must not
-    // apply to an unattended run they are not watching.
-    toolPermissions: null,
+    // The user's PROFILE grants are still `null` here, and the reason is
+    // unchanged: they belong to a session the user is watching, and must not
+    // leak into an unattended run. What is passed instead is the job's OWN
+    // grants, named for this job by `bernard cron-grant --allow` — which is
+    // what makes a job that needs `gh` expressible at all. `null` when there
+    // are none, so `getToolPermissions` stays omitted and nothing is read.
+    toolPermissions: job.toolPermissions?.length ? job.toolPermissions : null,
     // Path-scoped writes (#340). Every job gets its own workspace with no
     // configuration; `writePaths` adds locations the user named via
     // `bernard cron-grant`. This is what lets cron have the write-capable
@@ -138,6 +142,114 @@ function rubricChecksOf(ctx: AgentContext): Check[] {
  * @param job - The cron job definition to execute.
  * @param log - Callback for daemon-level logging.
  */
+/**
+ * The category a refused unattended run is filed under.
+ *
+ * `permission` from the shared taxonomy rather than a cron-only value: that is
+ * exactly what happened, and widening `ToolErrorType` for one caller would put
+ * a category in the table that `classifyError` can never produce. Doubles as
+ * the repeat-alert key, since `lastErrorCategory` already records it.
+ *
+ * The taxonomy rates `permission` `critical`; this site rates the alert
+ * `normal`, for the reason the timeout branch below states in reverse — cron
+ * owns cron alerting, and a job that needs one grant is a task for later, not
+ * an emergency.
+ */
+const DENIED_CATEGORY: ToolErrorType = 'permission';
+
+/**
+ * Finishes a run that completed but was refused a tool it needed (#447).
+ *
+ * Logged `success: false` with a `fail` check naming the tool, so the run log
+ * and `cron-list` agree with what happened. The alert is raised only when the
+ * previous run ended on a different category — see the call site for why.
+ */
+function finishDeniedRun(a: {
+  job: CronJob;
+  res: { denied: { tool: string; permissionKey: string | null; risk: string }[] };
+  steps: CronLogStep[];
+  runId: string;
+  startedAt: string;
+  completedAt: string;
+  ctx: AgentContext;
+  log: (msg: string) => void;
+  logStore: CronLogStore;
+  key: string;
+  repeat: boolean;
+}): RunJobResult {
+  const store = new CronStore();
+  const tools = [...new Set(a.res.denied.map((d) => d.permissionKey ?? d.tool))];
+  const remedy = `bernard cron-grant ${a.job.id} --allow '${a.key}'`;
+  const message =
+    `Denied ${a.res.denied.length} tool call(s) this run: ${tools.join(', ')}. ` +
+    `Nobody is present to approve them, so the answer will not change on the next fire. ` +
+    `To let this job run it: ${remedy}`;
+
+  try {
+    a.logStore.appendEntry({
+      runId: a.runId,
+      jobId: a.job.id,
+      jobName: a.job.name,
+      prompt: a.job.prompt,
+      startedAt: a.startedAt,
+      completedAt: a.completedAt,
+      durationMs: 0,
+      success: false,
+      finalOutput: message,
+      steps: a.steps,
+      totalUsage: totalUsageOf(a.steps),
+      verdict: 'fail',
+      rubricChecks: [
+        ...rubricChecksOf(a.ctx),
+        {
+          id: 'tools_denied',
+          label: 'a tool this job needed was refused',
+          status: 'fail',
+          evidence: tools.join(', '),
+        },
+      ],
+    });
+  } catch (logErr: unknown) {
+    a.log(
+      `Warning: failed to write execution log: ${logErr instanceof Error ? logErr.message : String(logErr)}`,
+    );
+  }
+
+  try {
+    store.updateJob(a.job.id, {
+      lastErrorCategory: DENIED_CATEGORY,
+      lastRunStatus: 'error',
+      lastResult: message.slice(0, 2000),
+    });
+    if (a.repeat) {
+      // Still `error`, just quiet. The first occurrence already said it, and
+      // the remedy has not changed.
+      a.log(`Job '${a.job.name}' denied ${tools.join(', ')} again — alert suppressed.`);
+    } else {
+      const alertRecord = store.createAlert({
+        jobId: a.job.id,
+        jobName: a.job.name,
+        message,
+        prompt: a.job.prompt,
+        response: '',
+      });
+      sendNotification({
+        title: `Bernard cron blocked: ${a.job.name}`,
+        message: `${tools.join(', ')} denied — run: ${remedy}`,
+        severity: 'normal',
+        alertId: alertRecord.id,
+        log: a.log,
+      });
+    }
+  } catch (alertErr) {
+    a.log(
+      `Warning: failed to record denial: ${alertErr instanceof Error ? alertErr.message : String(alertErr)}`,
+    );
+  }
+
+  return { success: false, output: `Error: ${message}` };
+}
+
 export async function runJob(job: CronJob, log: (msg: string) => void): Promise<RunJobResult> {
   const store = new CronStore();
   const logStore = new CronLogStore();
@@ -196,6 +308,35 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
   const { env, startedAt, timings } = res;
   const { ctx, runId } = env;
   const completedAt = new Date().toISOString();
+
+  // A run that was refused its tools did not succeed, whatever the dispatch
+  // did (#447). `success` elsewhere means "nothing threw", and for cron that
+  // was indistinguishable from working: one job reported success ten times
+  // while doing nothing, so nothing alerted, `cron-list` read clean, and
+  // Bernard's own summary said "ran cleanly 10×".
+  //
+  // The alert is raised once per CATEGORY, not once per run. A read-only job
+  // that merely probes a write would otherwise shout on every fire forever;
+  // `lastErrorCategory` is already recorded, so a repeat still shows `error`
+  // in `cron-list` and simply stops notifying. A changed category alerts again.
+  if (res.ok && res.denied.length > 0) {
+    const first = res.denied[0];
+    const key = first.permissionKey ?? first.tool;
+    const repeat = job.lastErrorCategory === DENIED_CATEGORY;
+    return finishDeniedRun({
+      job,
+      res,
+      steps,
+      runId,
+      startedAt,
+      completedAt,
+      ctx,
+      log,
+      logStore,
+      key,
+      repeat,
+    });
+  }
 
   if (res.ok) {
     const output = res.formatted;

@@ -2476,3 +2476,112 @@ describe('augmentTools refuses a repeated successful emit', () => {
     expect(String(refused)).toMatch(/already SUCCEEDED/);
   });
 });
+
+/**
+ * The refusal an unattended run gets, and why its wording is the fix (#447).
+ *
+ * A cron job needed `gh issue create`. Cron's default posture auto-denies every
+ * write-shaped shell command, so the call was refused — and the model was told
+ * `Action cancelled by user.` There was no user, nothing was cancelled, and the
+ * decision was permanent for the run. The model read it as written, wrote
+ * "shell still cancelled — retry next run" in its notes, and retried across ten
+ * scheduled runs and 934,805 tokens, varying the command each time because the
+ * cron prompt tells it to change something after a failure.
+ *
+ * These pin the two halves of the fix: the text says what actually happened,
+ * and the run can report that it was refused at all.
+ */
+describe('an unattended denial does not claim a user cancelled it', () => {
+  function shellish(name = 'sh') {
+    const execute = vi.fn(async () => ({ output: 'ran', is_error: false }));
+    const t = { description: 'd', parameters: z.object({}), execute } as never;
+    attachMeta(t, { name, kind: 'dangerous', deterministic: false, sideEffect: 'local' });
+    return { t, execute };
+  }
+  // `!shouldConfirm(...)` is what `headlessToolOptions` builds — the same
+  // predicate deciding whether to ask AND what the answer is.
+  const autoDeny = async (i: { risk: string }) => i.risk !== 'high';
+
+  it('says what decided it, and that retrying will not help', async () => {
+    const { t, execute } = shellish();
+    const augmented = augmentTools(
+      { sh: t },
+      {
+        profileStore: createMockStore() as never,
+        confirmThreshold: 'high',
+        confirmAction: autoDeny as never,
+        unattended: true,
+      },
+    );
+    const out = String((await augmented.sh.execute!({}, {} as never)).output);
+
+    expect(out, 'must not invent a user').not.toContain('cancelled by user');
+    // The three facts the old text hid.
+    expect(out, 'why').toMatch(/high-risk/);
+    expect(out, 'nobody can approve it').toMatch(/no one is present/i);
+    expect(out, 'it will not change').toMatch(/will not help|same for every call/i);
+    // …and the remedy, which is the only useful thing the model can report.
+    expect(out).toContain('bernard cron-grant');
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('still says a user cancelled when a user actually did', async () => {
+    // Guard the guard, and the direction that would be a lie: an interactive
+    // Escape must keep reading as an Escape. `unattended` is what separates
+    // them, and without it this assertion and the one above cannot both hold.
+    const { t } = shellish();
+    const augmented = augmentTools(
+      { sh: t },
+      {
+        profileStore: createMockStore() as never,
+        confirmThreshold: 'high',
+        confirmAction: (async () => false) as never,
+      },
+    );
+    const out = String((await augmented.sh.execute!({}, {} as never)).output);
+    expect(out).toBe('Action cancelled by user.');
+  });
+
+  it('reports the refusal so the run can stop calling itself a success', async () => {
+    const { t } = shellish();
+    const denied: { tool: string; permissionKey: string | null; risk: string }[] = [];
+    const augmented = augmentTools(
+      { sh: t },
+      {
+        profileStore: createMockStore() as never,
+        confirmThreshold: 'high',
+        confirmAction: autoDeny as never,
+        unattended: true,
+        onDenied: (d) => denied.push(d),
+      },
+    );
+    await augmented.sh.execute!({}, {} as never);
+    expect(denied).toHaveLength(1);
+    expect(denied[0]).toMatchObject({ tool: 'sh', risk: 'high' });
+  });
+
+  it('a grant for that command clears the gate, and nothing else does', async () => {
+    // The precise lever: `runGate` opens with `if (grant === 'allow') return
+    // true`, so a per-job rule scoped to one command runs THAT command —
+    // where `confirmMode: 'off'` would dissolve every confirmation.
+    const { t, execute } = shellish('shell');
+    const augmented = augmentTools(
+      { shell: t },
+      {
+        profileStore: createMockStore() as never,
+        confirmThreshold: 'high',
+        confirmAction: autoDeny as never,
+        unattended: true,
+        getToolPermissions: () => [{ effect: 'allow', tool: 'shell', specifier: 'gh *', _v: 2 }],
+      },
+    );
+    await augmented.shell.execute!({ command: 'gh issue create --repo a/b' }, {} as never);
+    expect(execute, 'the granted command runs').toHaveBeenCalledTimes(1);
+
+    const out = String(
+      (await augmented.shell.execute!({ command: 'curl https://x' }, {} as never)).output,
+    );
+    expect(out, 'and nothing else is widened').toMatch(/no one is present/i);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+});

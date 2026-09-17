@@ -290,6 +290,12 @@ export async function runDefinition<TInput, TFormatted>(
     // `ctx`, so a scope set on `toolOptions` and not passed on is a scope that
     // silently never applies.
     writeScope: ctx.toolOptions.writeScope,
+    // Same hazard the comment above names, one field over: this list is
+    // enumerated, not spread, so a `toolOptions` field that is not forwarded
+    // silently never applies. It changes no verdict — only what an
+    // auto-denied call tells the model. See `ToolOptions.unattended`.
+    unattended: ctx.toolOptions.unattended,
+    onDenied: ctx.toolOptions.onDenied,
     // Grants persisted before MCP tools were namespaced (#413) name a bare
     // tool. Built from the whole live MCP surface, never from `rawTools` —
     // see `mcpAliasResolverFor`.

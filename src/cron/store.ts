@@ -131,6 +131,7 @@ export class CronStore {
         | 'toolMode'
         | 'skipPermissions'
         | 'writePaths'
+        | 'toolPermissions'
       >
     >,
   ): CronJob | undefined {
