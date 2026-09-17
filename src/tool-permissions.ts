@@ -316,3 +316,54 @@ export function isReadOnlyShellInvocation(command: string): boolean {
 export function permissionKeyLabel(key: string): string {
   return key.startsWith('shell:') ? key.slice('shell:'.length) : key;
 }
+
+/**
+ * The `bernard cron-grant --allow` specifier that would actually clear this
+ * call's gate, or `null` when no per-call grant can cover it.
+ *
+ * The sibling of {@link permissionKeyFor} and deliberately NOT the same string.
+ * A key is an IDENTITY — what to show a user, what to store a decision under —
+ * and printing one as a remedy was wrong for every shape it can take, verified
+ * against the real `resolveGrant`:
+ *
+ * - `shell:gh` resolves to `ask`. `matchShellSpecifier` treats a specifier with
+ *   no trailing `*` as an EXACT token match, so it covers a bare `gh` and not
+ *   `gh issue create`, which is the only form anyone runs. `gh *` is a prefix
+ *   match and covers both, so it strictly dominates the key.
+ * - `cron:delete` resolves to `ask`. The engine's action arm requires the
+ *   specifier itself to read `action:delete`, so through
+ *   `parseGrantSpecifier`'s first-colon split the grant must be spelled
+ *   `cron:action:delete`.
+ * - A compound shell line has no key at all, and the message rendered that as
+ *   `--allow this tool` — two bare words that word-split into grants for two
+ *   tools that do not exist.
+ *
+ * `null` is therefore a real answer rather than a gap: `shellSubcommands`
+ * returns `null` for a pipe, a redirect or an `&&`, so no SPECIFIER can ever
+ * match one. The only grant that reaches such a call is the whole tool, which
+ * is a broader thing to hand out and has to be named as one — see
+ * {@link unattendedDenialMessage}, which is what puts this in front of a user.
+ *
+ * Every row above is pinned by `grant-spec.test.ts` driving the real engine,
+ * because a remedy is a claim about what another module will do and the four
+ * defects here were all of the form "looks right, resolves to `ask`".
+ */
+export function grantSpecFor(
+  toolName: string,
+  args: unknown,
+  meta?: { actionScoped?: boolean } | null,
+): string | null {
+  if (meta?.actionScoped) {
+    const action = actionOf(args, meta);
+    return action ? `${toolName}:action:${action}` : null;
+  }
+  if (toolName === 'shell') {
+    const cmd = (args as Record<string, unknown> | undefined)?.command;
+    if (typeof cmd !== 'string') return null;
+    const primary = primaryShellCommand(cmd);
+    // Trailing `*` is the prefix form: it covers the bare command and every
+    // invocation carrying arguments, which is what a job actually runs.
+    return primary ? `shell:${primary} *` : null;
+  }
+  return toolName;
+}

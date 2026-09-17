@@ -13,7 +13,7 @@ import { boundedStringify, redactArgs, REDACTED } from '../framework/tools/redac
 import type { ProvenanceStore } from '../provenance.js';
 import type { ToolMeta } from '../framework/tools/types.js';
 import { isDangerous, isSafelisted } from './shell.js';
-import { permissionKeyFor } from '../tool-permissions.js';
+import { grantSpecFor, permissionKeyFor } from '../tool-permissions.js';
 import { mcpProfileKey, parseMCPToolName } from '../mcp-names.js';
 import { resolveGrant, type ToolNameAliasResolver } from '../permissions/engine.js';
 import { breadthOptionsFor, type BreadthOption } from '../permissions/breadth.js';
@@ -387,16 +387,47 @@ const CANCELLED_MESSAGE = 'Action cancelled by user.';
  * CHANGE — which is what makes retrying with different flags visibly pointless
  * rather than the obvious next move. The remedy names the grant, because the
  * one thing a model can usefully do is tell the user which command to run.
+ *
+ * **The remedy has to be a command that works**, which the first cut was not:
+ * it printed the permission KEY, and a key is an identity rather than a grant.
+ * `--allow shell:gh` resolves to `ask` (an exact token match covers a bare
+ * `gh`, never `gh issue create`); `--allow cron:delete` resolves to `ask` (the
+ * engine's action arm wants `cron:action:delete`); and a compound line has no
+ * key at all, which rendered as `--allow this tool` — two bare words that
+ * word-split into grants for two tools that do not exist. A remedy that looks
+ * typed-and-fixed while still being denied is worse than none, because it
+ * spends the user's one intervention and sends them back to the same loop.
+ * {@link grantSpecFor} mints the working form; `null` from it is a real answer.
+ *
+ * `null` means no SPECIFIER can reach this call — `shellSubcommands` gives up
+ * on a pipe, a redirect or an `&&`, and that is exactly the population that
+ * produced the 934,805-token loop. The message must not invent a per-call
+ * grant there; it says the call cannot be granted on its own and names the one
+ * lever that does reach it, the whole tool, marked as the broader thing it is.
  */
-function unattendedDenialMessage(risk: RiskLevel, key: string | null): string {
-  const what = key ?? 'this tool';
-  return (
+function unattendedDenialMessage(risk: RiskLevel, toolName: string, spec: string | null): string {
+  const why =
     `Action denied automatically: it is ${risk}-risk and this unattended run ` +
     `confirms at that level. No one is present to approve it, and the answer ` +
     `will be the same for every call in this run — a permission verdict is not ` +
-    `a command error, so changing the flags or the approach will not help. ` +
-    `Report that \`${what}\` is not granted here; the user can allow it with ` +
-    `\`bernard cron-grant <job-id> --allow ${what}\` if this is a cron job.`
+    `a command error, so changing the flags or the approach will not help. `;
+  // Quoted: a shell specifier carries a space and a `*`, so an unquoted
+  // `--allow shell:gh *` both word-splits and globs against the cwd.
+  if (spec !== null) {
+    return (
+      why +
+      `Report that \`${spec}\` is not granted here; the user can allow it with ` +
+      `\`bernard cron-grant <job-id> --allow '${spec}'\` if this is a cron job.`
+    );
+  }
+  return (
+    why +
+    `This particular call cannot be granted on its own — a grant is scoped to ` +
+    `one command, and this one combines several (a pipe, a redirect or \`&&\`), ` +
+    `so no scoped grant matches it. Report that, and say the options are to run ` +
+    `the parts as separate simple commands — each of which CAN be granted — or ` +
+    `for the user to allow the whole tool with ` +
+    `\`bernard cron-grant <job-id> --allow ${toolName}\`, which is much broader.`
   );
 }
 
@@ -785,7 +816,9 @@ export function augmentTools(
       } catch {
         /* reporting only */
       }
-      return { refusal: unattendedDenialMessage(risk, permissionKey) };
+      return {
+        refusal: unattendedDenialMessage(risk, toolName, grantSpecFor(toolName, args, meta)),
+      };
     };
     try {
       return (await confirmAction(input, signal)) ? true : refusal();
