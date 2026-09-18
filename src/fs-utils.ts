@@ -278,6 +278,35 @@ function removeTree(target: string): void {
 }
 
 /**
+ * Removes every tombstone sitting directly in `dir`.
+ *
+ * @internal Exported for testing only.
+ *
+ * **This is the second half of {@link atomicRemoveDirectorySync}'s contract, and
+ * it lives in the helper rather than at the call sites deliberately.** It did
+ * not, briefly, and the result is worth recording because it is the exact shape
+ * a "shared primitive" fails in: the JSDoc named `pruneSubdirectoriesByAge` as
+ * the collector, which was true of the one call site under `WORKSPACES_DIR` and
+ * false of `deleteApplet`, whose tombstone lands in `DATA_DIR/applet-data/`
+ * where nothing sweeps — so a failed removal there would have held an applet's
+ * whole SQLite database forever, under a name no human or tool looks for. A
+ * second call site could have repeated that silently, because the obligation
+ * existed only in prose.
+ *
+ * Collecting here removes the obligation instead of documenting it: every
+ * removal cleans up whatever a previous interrupted removal left beside it, so
+ * a call site cannot get it wrong by omission. The residual is honest and
+ * small — a directory that sees no further removal and no age sweep keeps its
+ * tombstone until one happens — and it is strictly less than the alternative,
+ * which leaks the same bytes under the live name.
+ */
+export function collectRemovalTombstones(dir: string): void {
+  for (const name of listSubdirectories(dir)) {
+    if (isRemovalTombstone(name)) removeTree(path.join(dir, name));
+  }
+}
+
+/**
  * Removes a directory so that it is gone *by name* the instant this returns,
  * whatever happens to the rest of the walk.
  *
@@ -287,7 +316,15 @@ function removeTree(target: string): void {
  * workspace, which the next run then adopts as though it were its own output. A
  * same-directory rename *is* atomic, so the disappearance is atomic even though
  * the removal is not, and a failed walk leaves a `.<name>.<pid>.<hex>.removing`
- * tombstone that {@link pruneSubdirectoriesByAge} collects unconditionally.
+ * tombstone instead.
+ *
+ * **Every call first collects the tombstones already in that directory**, so
+ * the leftovers of an interrupted removal are picked up by the next removal
+ * beside them — see {@link collectRemovalTombstones} for why that belongs here
+ * and not in the callers. An age sweep collects them too
+ * ({@link pruneSubdirectoriesByAge}), which is what makes a workspace tombstone
+ * hourly rather than "whenever the next job is deleted"; a caller with no such
+ * sweep still gets the first guarantee.
  *
  * The rename can itself fail (a permission the caller does not have; a directory
  * that was already gone). Removing in place is then strictly better than
@@ -299,8 +336,13 @@ function removeTree(target: string): void {
  * renaming.
  */
 export function atomicRemoveDirectorySync(dir: string): void {
+  const parent = path.dirname(dir);
+  // Before minting one, not after: the point is to clear the PREVIOUS failure,
+  // and doing it first means a slow or failing collection cannot delay this
+  // removal's own rename — which is the part that carries the guarantee.
+  collectRemovalTombstones(parent);
   const tombstone = path.join(
-    path.dirname(dir),
+    parent,
     `.${path.basename(dir)}.${process.pid}.${randomBytes(4).toString('hex')}${REMOVING_SUFFIX}`,
   );
   try {
@@ -343,7 +385,10 @@ export function pruneSubdirectoriesByAge(
     const full = path.join(dir, name);
     if (isRemovalTombstone(name)) {
       // Already renamed out of the way, so it is nobody's workspace — remove it
-      // in place rather than minting a second tombstone for the same tree.
+      // in place rather than minting a second tombstone for the same tree. This
+      // is the PERIODIC collector; `atomicRemoveDirectorySync` is the
+      // on-every-removal one, and a directory wants both for the reason that
+      // function's doc gives.
       removeTree(full);
       continue;
     }

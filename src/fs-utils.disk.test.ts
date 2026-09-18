@@ -115,6 +115,50 @@ describe('atomicRemoveDirectorySync', () => {
     expect(() => atomicRemoveDirectorySync(path.join(root, 'absent'))).not.toThrow();
     expect(fs.existsSync(root)).toBe(true);
   });
+
+  /**
+   * The other half of the contract, and the half that was carried in prose and
+   * therefore wrong at one of two call sites.
+   *
+   * A tombstone must be collected by something the CALLER does not have to
+   * arrange, or a helper used outside `WORKSPACES_DIR` leaks whatever the failed
+   * walk was holding — for `deleteApplet` that is an applet's whole SQLite
+   * store, under a name nothing looks for. `root` here is swept by nothing:
+   * only the removal itself can clear it.
+   */
+  it('collects a leftover tombstone on the next removal beside it', () => {
+    const orphan = path.join(root, '.earlier.4242.a1b2c3d4.removing');
+    fs.mkdirSync(orphan, { recursive: true });
+    fs.writeFileSync(path.join(orphan, 'data.db'), 'leaked');
+    seedDir('later');
+
+    atomicRemoveDirectorySync(path.join(root, 'later'));
+
+    expect(fs.readdirSync(root)).toEqual([]);
+  });
+
+  // Collection must not depend on an age sweep ever visiting the directory, so
+  // it happens whatever the tombstone's age — a fresh one is just as orphaned.
+  it('collects a tombstone regardless of its age', () => {
+    const orphan = path.join(root, '.earlier.1.deadbeef.removing');
+    fs.mkdirSync(orphan, { recursive: true });
+    seedDir('later');
+
+    atomicRemoveDirectorySync(path.join(root, 'later'));
+
+    expect(fs.existsSync(orphan)).toBe(false);
+  });
+
+  it('leaves ordinary siblings alone while collecting', () => {
+    const orphan = path.join(root, '.earlier.1.deadbeef.removing');
+    fs.mkdirSync(orphan, { recursive: true });
+    seedDir('keep');
+    seedDir('go');
+
+    atomicRemoveDirectorySync(path.join(root, 'go'));
+
+    expect(fs.readdirSync(root)).toEqual(['keep']);
+  });
 });
 
 describe('isRemovalTombstone', () => {

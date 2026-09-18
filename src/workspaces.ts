@@ -80,8 +80,30 @@ function ensureSwept(): void {
  * dormant workspace being picked up again is, at the moment it is picked up,
  * older than the bound — so sweeping first would delete the very output the run
  * is re-using, then hand it a fresh empty directory, silently. Stamping first
- * removes that case by construction rather than by an exclusion the next editor
- * can drop.
+ * removes that case **within this process** by construction, rather than by an
+ * exclusion the next editor can drop.
+ *
+ * **Across two processes it is a narrow residual, not a guarantee**, and this
+ * module states its residuals rather than leaving them implicit (see the
+ * `skipPermissions` orphans in the module doc, which are strictly less harmful
+ * than this). A sweep decides from a `statSync` and acts with a `renameSync`
+ * that never re-reads the mtime, so another process's stamp landing between the
+ * two changes nothing:
+ *
+ * ```
+ * A: mkdirSync(W)          W is a 31-day-dormant monthly job's workspace
+ * B:   statSync(W)         past the bound
+ * A: utimesSync(W, now)    the stamp lands
+ * B:   renameSync(W, …)    decided before the stamp; never re-checks
+ * ```
+ *
+ * It needs a workspace already past 30 days, picked up in the microseconds
+ * between one `stat` and one `rename`, while another process's hourly window
+ * happens to be open. Deliberately not chased: re-`stat`ing after the rename
+ * catches only the half where the stamp lands first — the other half fails
+ * `ENOENT` into an existing empty catch and the run proceeds into a deleted
+ * directory — so it would be a narrowing wearing the shape of a fix, and the
+ * next editor would read it as closing the window.
  */
 export function ensureRunWorkspace(workspace: string): string | null {
   let error: string | null = null;

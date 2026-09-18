@@ -18,6 +18,14 @@ import { removeRunWorkspace } from '../workspaces.js';
  * every door, and `CronNotesStore.clear` had no production caller at all. Three
  * copies of a sweep is how one of them ends up a row short; one module is what
  * makes a fourth artifact a single edit.
+ *
+ * **`CronStore.deleteJob` now has exactly one caller in the tree — this one —
+ * and that is what makes the sweep unbypassable rather than merely applied.** A
+ * module every caller happens to use today is a convention; a method with one
+ * caller is a property, and it is the property worth preserving: a fifth door
+ * that wants to drop a job has to come through here. `saveJobs` is public and
+ * could in principle write a shorter array, but `deleteJob` is the only
+ * filter-and-save that drops a row, so there is no store-layer bypass today.
  */
 
 /**

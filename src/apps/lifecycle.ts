@@ -54,6 +54,19 @@ export function deleteApplet(appId: string): DeleteResult {
 
   // 2. Release the SQLite handle before touching the file. `closeAppletStore`
   //    is idempotent and safe when the daemon already closed it.
+  //
+  //    Through the shared remover rather than a bare `rmSync`, and this is the
+  //    site with the most to gain from it: the handle may be held by the DAEMON
+  //    rather than this process (which is what the line above can only
+  //    best-effort), and on Windows an open handle blocks removal outright. WAL
+  //    means the store is `data.db` + `-wal` + `-shm`, so a walk that dies
+  //    part-way can leave an orphan WAL beside a deleted database — which a
+  //    re-added applet of the same id would then open. The rename makes that
+  //    unrepresentable; it never half-exists under the live name.
+  //
+  //    The tombstone it may leave is collected by the remover itself, not by
+  //    anything here — see `collectRemovalTombstones`, which exists because
+  //    this call site had no collector when the contract lived in prose.
   closeAppletStore(appId);
   atomicRemoveDirectorySync(appletDataDir(appId));
 
