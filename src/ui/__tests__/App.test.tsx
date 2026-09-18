@@ -118,7 +118,18 @@ const TMP_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'bernard-app-test-'));
 process.env.BERNARD_HOME = TMP_HOME;
 
 // ── Imports under test (after mocks + env) ──────────────────────────────
-import { App, buildResumeSeed, isScaffoldingMessage, type AppStores } from '../App.js';
+import {
+  App,
+  acceptInRange,
+  acceptInteger,
+  acceptNumber,
+  buildResumeSeed,
+  isScaffoldingMessage,
+  pickGenerationParamsInk,
+  pickWizardField,
+  type AppStores,
+} from '../App.js';
+import { WIZARD_FIELDS } from '../../profiles-wizard-data.js';
 import { resolveReferences, shouldSkipResolver } from '../../reference-resolver.js';
 import { INTERRUPT_CANCEL_NOTE } from '../../react.js';
 import { INTERRUPTED_MARKER } from '../../session-markers.js';
@@ -135,6 +146,8 @@ import type { RoutineStore } from '../../routines.js';
 import type { SpecialistStore } from '../../specialists.js';
 import type { CandidateStore } from '../../specialist-candidates.js';
 import type { RAGStore } from '../../rag.js';
+import type { SpinnerStats } from '../../output.js';
+import type { UsageRecord } from '../../framework/hooks/token-stats.js';
 import { promoteCandidate } from '../../candidate-bootstrap.js';
 import { CronStore } from '../../cron/store.js';
 import { generateText } from 'ai';
@@ -794,6 +807,288 @@ describe('<App> /voice menu (#432)', () => {
   });
 });
 
+/**
+ * `parseInt('8192abc', 10)` is `8192`. Four of the file's numeric prompts
+ * guarded against that and the registry-driven one did not, so `/options`
+ * stored half of what was typed and said nothing (#440).
+ *
+ * Two layers, because the defect had two halves: WHAT the decision is (here,
+ * with no overlay — driving the Ink tree for each row of the table below would
+ * cost a quarter-second apiece to assert something that has nothing to do with
+ * rendering), and WHICH decision a call site reaches for, which only the real
+ * wiring can be wrong about (the describe after this one).
+ */
+describe('acceptInteger / acceptInRange (#440)', () => {
+  it.each([
+    ['8192', 8192],
+    ['0', 0],
+    ['-3', -3],
+    // The defect: `parseInt` reads a prefix and the four hand-spelled guards
+    // disagreed about whether that counts.
+    ['8192abc', null],
+    ['1e3', null],
+    ['8192.5', null],
+    ['+8192', null],
+    ['007', null],
+    ['', null],
+    ['   ', null],
+    // `String(NaN) === 'NaN'`, so the round trip alone admits this and only the
+    // finite check refuses it.
+    ['NaN', null],
+    ['Infinity', null],
+    // Not reachable through `TextInputOverlay`, which trims on commit — the
+    // helper trims so its contract does not rest on which producer called it.
+    ['  8192  ', 8192],
+  ])('reads %j as %j', (raw, expected) => {
+    expect(acceptInteger(raw as string)).toBe(expected);
+  });
+
+  it('applies the bounds it is given, inclusively', () => {
+    expect(acceptInteger('1', 1, 20)).toBe(1);
+    expect(acceptInteger('20', 1, 20)).toBe(20);
+    expect(acceptInteger('0', 1, 20)).toBeNull();
+    expect(acceptInteger('21', 1, 20)).toBeNull();
+    // An omitted bound is no bound, which is what `/options` relies on.
+    expect(acceptInteger('999999', 0)).toBe(999999);
+  });
+
+  // The fractional half. `Number` is the predicate the integer round trip
+  // cannot be: it keeps `0.50`, which `String(parsed) !== raw` would refuse,
+  // and refuses `0.15abc`, which `parseFloat` silently reads as `0.15`.
+  it.each([
+    ['0.50', 0.5],
+    ['.5', 0.5],
+    ['0', 0],
+    ['1', 1],
+    ['0.15abc', null],
+    ['80%', null],
+    // `Number('')` is 0, which is IN range at a 0-1 field — so a blank entry
+    // would be stored as a real setting rather than refused. Guarded in the
+    // helper, not at the three callers that each happen to be safe today by a
+    // different accident.
+    ['', null],
+    ['   ', null],
+    ['nope', null],
+    ['Infinity', null],
+  ])('reads %j as %j, fractionally', (raw, expected) => {
+    expect(acceptNumber(raw as string, 0, 1)).toBe(expected);
+  });
+
+  it('refuses trailing junk in the profile wizard too', async () => {
+    // The third swap, and a mutation check found it was the one nothing could
+    // see: this file's header records `/profiles` as deliberately not driven
+    // through Ink, so the only route to it is calling it with its two injected
+    // dependencies. The field is the REAL registry entry, so the test also
+    // fails if `scratchSubjectThreshold` stops being a `float01`.
+    const field = WIZARD_FIELDS.find((f) => f.field.kind === 'float01');
+    expect(field, 'no float01 field in the wizard registry').toBeDefined();
+    const menu = vi.fn();
+    const answer = (raw: string) =>
+      pickWizardField(
+        field!,
+        0.5,
+        menu as never,
+        (async () => ({
+          cancelled: false,
+          raw,
+        })) as never,
+      );
+
+    await expect(answer('0.15abc')).resolves.toBeUndefined();
+    await expect(answer('0.15')).resolves.toBe(0.15);
+    // A float01 row is a free-text prompt, never a menu — if this fired, the
+    // assertions above would be about a branch they do not mean to test.
+    expect(menu).not.toHaveBeenCalled();
+  });
+
+  it('refuses trailing junk at temperature, which is the field this is really about', async () => {
+    // The site the review named: a swallowed suffix here silently runs the
+    // model at a number nobody chose, and `80%` means nothing at a 0-2 box —
+    // so unlike `runThresholdPrompt` there is no reading worth preserving.
+    // Driven directly; the only other route is the whole `/model` chain.
+    const answer = async (raw: string) => {
+      let call = 0;
+      const menu = (async (entries: { label?: string }[]) => {
+        // First pass pick Temperature, second pass leave — the loop re-shows
+        // its menu until told to stop, so a stub that always picks never ends.
+        const want = call++ === 0 ? 'Temperature' : 'Done';
+        const index = entries.findIndex((e) => e.label === want);
+        expect(index, `no ${want} row`).toBeGreaterThanOrEqual(0);
+        return { cancelled: false, item: entries[index], index };
+      }) as never;
+      return pickGenerationParamsInk(
+        'openai',
+        'gpt-4o',
+        undefined,
+        undefined,
+        menu,
+        (async () => ({ cancelled: false, raw })) as never,
+        vi.fn() as never,
+      );
+    };
+
+    await expect(answer('0.15abc')).resolves.toBeUndefined();
+    // Guard-the-guard, and the exact entry the integer round trip would have
+    // refused: `String(Number.parseFloat('0.50'))` is `'0.5'`.
+    await expect(answer('0.50')).resolves.toEqual({ temperature: 0.5 });
+  });
+
+  it('leaves the parse to the caller, which is what lets one prompt stay lenient', () => {
+    // `runThresholdPrompt` is the single exception and calls `acceptInRange`
+    // directly: it is a 0-100 box whose own toast offers `0.8 or 80`, so a
+    // trailing `%` is a reading someone plausibly meant. Nowhere else does a
+    // suffix mean anything, which is why every other float prompt is strict.
+    expect(acceptInRange(Number.parseFloat('80%'), 0, 100)).toBe(80);
+    expect(acceptNumber('80%', 0, 100)).toBeNull();
+    expect(acceptInRange(Number.POSITIVE_INFINITY, 0)).toBeNull();
+  });
+});
+
+/**
+ * The wiring half: `/options` → row → value prompt, asserted on what the
+ * SETTING ended up as. `buildOptionsMenu` had no test of any kind before this,
+ * which is how four spellings of the same five lines drifted apart unnoticed.
+ */
+describe('<App> /options numeric entry (#440)', () => {
+  beforeEach(() => {
+    process.env.BERNARD_HOME = TMP_HOME;
+  });
+
+  /** Open `/options`, land on the nth option row, and answer its value prompt. */
+  async function answerOption(
+    stdin: { write: (s: string) => void },
+    row: number,
+    text: string,
+  ): Promise<void> {
+    await submit(stdin, '/options');
+    for (let i = 0; i < row; i += 1) {
+      stdin.write(ARROW_DOWN);
+      await tick();
+    }
+    stdin.write(ENTER);
+    await tick(40);
+    stdin.write(text);
+    await tick(20);
+    stdin.write(ENTER);
+    await tick(60);
+  }
+
+  it('refuses trailing junk instead of storing the prefix', async () => {
+    const { stdin, lastFrame, config, unmount } = renderApp();
+    await tick();
+    await answerOption(stdin, 0, '8192abc');
+
+    expect(config.maxTokens).toBe(1024);
+    // The menu is rebuilt from `config` after the action, so the row is the
+    // user-visible half: it must not read back a value nobody typed.
+    expect(stripAnsi(lastFrame() ?? '')).toMatch(/max-tokens\s+= 1024/);
+    unmount();
+  });
+
+  it('still stores an ordinary value', async () => {
+    // The guard-the-guard case. Every assertion above is a refusal, and a
+    // helper that refused everything would satisfy all of them.
+    const { stdin, config, unmount } = renderApp();
+    await tick();
+    await answerOption(stdin, 0, '8192');
+
+    expect(config.maxTokens).toBe(8192);
+    unmount();
+  });
+
+  it('still accepts 0 where 0 is the option’s own "off" value', async () => {
+    // `token-window` is the one registry entry whose minimum is 0, and 0 is
+    // falsy — so a guard written as `if (!value)` rejects the exact entry the
+    // field documents. `acceptInteger` returns `null` for a refusal precisely
+    // so this is expressible; the call sites test `=== null`, never falsiness.
+    const { stdin, config, unmount } = renderApp({ config: { tokenWindow: 999 } });
+    await tick();
+    await answerOption(stdin, 2, '0');
+
+    expect(config.tokenWindow).toBe(0);
+    unmount();
+  });
+});
+
+/**
+ * The float half of the same defect, and the one prompt deliberately left out
+ * of it (#440). Both rows live on the `/agent-options` tab.
+ */
+describe('<App> /agent-options numeric entry (#440)', () => {
+  beforeEach(() => {
+    process.env.BERNARD_HOME = TMP_HOME;
+  });
+
+  /**
+   * Land on a row and answer its value prompt. The row is asserted by LABEL
+   * before Enter: an arrow count is the only way to reach a row and it goes
+   * stale the moment one is inserted above, so without this the test would
+   * quietly start exercising a different setting.
+   */
+  async function answerAgentOption(
+    stdin: { write: (s: string) => void },
+    lastFrame: () => string | undefined,
+    row: number,
+    label: string,
+    text: string,
+  ): Promise<void> {
+    await submit(stdin, '/agent-options');
+    for (let i = 0; i < row; i += 1) {
+      stdin.write(ARROW_DOWN);
+      await tick();
+    }
+    expect(stripAnsi(lastFrame() ?? '')).toMatch(new RegExp(`>\\s+\\d+\\.\\s+${label}`));
+    stdin.write(ENTER);
+    await tick(40);
+    stdin.write(text);
+    await tick(20);
+    stdin.write(ENTER);
+    await tick(60);
+  }
+
+  it('refuses trailing junk at the scratch threshold', async () => {
+    // Measured before the fix: this stored `0.15` and reported it back as a
+    // success. `parseFloat` reads the prefix exactly as `parseInt` does; only
+    // the integer half of #440 was ever noticed.
+    const { stdin, lastFrame, config, unmount } = renderApp({
+      config: { scratchSubjectThreshold: 0.5 },
+    });
+    await tick();
+    await answerAgentOption(stdin, lastFrame, 13, 'Scratch subject-change threshold', '0.15abc');
+
+    expect(config.scratchSubjectThreshold).toBe(0.5);
+    unmount();
+  });
+
+  it('still stores an ordinary fraction', async () => {
+    // Guard-the-guard, and the case the strict integer predicate could not
+    // have served: `String(Number.parseFloat('0.50'))` is `'0.5'`.
+    const { stdin, lastFrame, config, unmount } = renderApp({
+      config: { scratchSubjectThreshold: 0.5 },
+    });
+    await tick();
+    await answerAgentOption(stdin, lastFrame, 13, 'Scratch subject-change threshold', '0.15');
+
+    expect(config.scratchSubjectThreshold).toBe(0.15);
+    unmount();
+  });
+
+  it('keeps reading 80% as 80 at the one box where that means something', async () => {
+    // The deliberate exception, pinned so a later sweep toward consistency has
+    // to argue with a failing test rather than with a comment. This field is
+    // dual-scale — its own toast offers `0.8 or 80` — and runs through
+    // `normalizeThreshold`, so `80%` lands on 0.8.
+    const { stdin, lastFrame, config, unmount } = renderApp({
+      config: { autoCreateThreshold: 0.5 },
+    });
+    await tick();
+    await answerAgentOption(stdin, lastFrame, 2, 'Auto-create threshold', '80%');
+
+    expect(config.autoCreateThreshold).toBe(0.8);
+    unmount();
+  });
+});
+
 describe('<App> /clear', () => {
   beforeEach(() => {
     process.env.BERNARD_HOME = TMP_HOME;
@@ -1163,6 +1458,68 @@ describe('<App> /clear --save (#228)', () => {
     // No crash — history still cleared
     expect(agentSpy.clearHistory).toHaveBeenCalled();
     expect(lastFrame()).toContain('Cleared');
+    unmount();
+  });
+
+  it('puts what it spent into the session total, not a ledger nothing prices (#439)', async () => {
+    // `/clear --save` makes two LLM calls and is NOT a turn: it holds
+    // `runAgentTurn`'s guards itself, so `beginTurnStats()` /
+    // `finalizeTurnStats()` never bracket it — and `finalizeTurnStats()` is the
+    // only thing that prices `turnLedger` into `sessionCostUsd`. So a row
+    // written to that ledger is dropped outright (`agent.clearHistory()`, a few
+    // lines later in the same handler, clears it), and the spend vanished from
+    // the status bar's session `~$` while still showing up in `bernard usage`.
+    //
+    // Driven through the real `/clear --save` path rather than by calling the
+    // recorder directly, because the defect was never in either recorder — both
+    // do exactly what they say. It was in which one this call site reaches for,
+    // and only the real wiring can be wrong about that.
+    const spent: UsageRecord = {
+      bucket: 'cheap',
+      site: 'compressor',
+      provider: 'anthropic',
+      modelName: 'claude-haiku-4-5-20251001',
+      promptTokens: 1000,
+      completionTokens: 500,
+    };
+    // The default mock resolves without ever invoking the recorder it is
+    // handed, which is why no existing test in this describe could see this.
+    // `Once`, so it pops itself rather than outliving the describe that resets
+    // it — this is the last case in that describe, so nothing else would.
+    mockExtractDomainFacts.mockImplementationOnce(async (...args: unknown[]) => {
+      (args[2] as ((r: UsageRecord) => void) | undefined)?.(spent);
+      return [];
+    });
+    const spinnerStats = {
+      startTime: 0,
+      turnPromptTokens: 0,
+      turnCompletionTokens: 0,
+      turnCacheReadTokens: 0,
+      turnCacheWriteTokens: 0,
+      latestPromptTokens: 0,
+      model: 'claude-haiku-4-5-20251001',
+      turnLedger: new Map(),
+      sessionCostUsd: 0,
+      sessionCostPartial: false,
+    } as unknown as SpinnerStats;
+
+    const { stdin, unmount } = renderApp({
+      history: makeHistory(),
+      config: { ragEnabled: true },
+      stores: { rag: ragStub() },
+      agent: { spinnerStats },
+    });
+    await tick();
+    await submit(stdin, '/clear --save');
+    await tick(120);
+
+    expect(mockExtractDomainFacts).toHaveBeenCalledTimes(1);
+    // The property: the cost is in the number the footer reports. Priced from
+    // the vendored catalog snapshot, so this holds offline.
+    expect(spinnerStats.sessionCostUsd).toBeGreaterThan(0);
+    // And the discriminator, since both recorders reach the durable sink: the
+    // per-turn ledger is left alone, because nothing was ever going to read it.
+    expect(spinnerStats.turnLedger!.size).toBe(0);
     unmount();
   });
 });
