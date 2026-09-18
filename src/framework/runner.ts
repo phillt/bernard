@@ -612,9 +612,23 @@ async function runStreaming(
 ): Promise<AgentResult> {
   // `streamText` accepts a subset of `generateText` settings — no
   // `experimental_prepareStep`. The main agent (the only `streaming: true`
-  // definition) doesn't use prepareStep, so this is sound. If a future
-  // streaming-capable definition needs prepareStep, the AI SDK has
-  // `experimental_continueSteps` for the equivalent steering on this path.
+  // definition) doesn't use prepareStep, so this is sound.
+  //
+  // The sentence that used to follow this one was FALSE, and #200 was filed on
+  // it: it said `experimental_continueSteps` is "the equivalent steering on
+  // this path". That option is a boolean whose documented meaning is "perform
+  // additional steps if the finish reason is 'length'" — it steers nothing and
+  // rewrites nothing.
+  //
+  // Nor would `experimental_prepareStep` have helped if it were accepted here.
+  // In ai@4.3.19 it returns `{model, toolChoice, experimental_activeTools}`
+  // and cannot touch `messages`, so there is no hook on EITHER branch that
+  // rewrites a request mid-run. `onStepFinish` cannot stand in for one: it
+  // runs inside `eventProcessor`, a transform piped onto the consumer-facing
+  // stream, while the step recursion (`await streamStep(...)`) happens on the
+  // producer side with no user hook in between — so awaiting there gates our
+  // read and not the next HTTP request. There is no yield point in this SDK
+  // version; CLAUDE.md's `+ <request>` entry records what that leaves #200.
   const stream = streamText({
     model: spec.model,
     providerOptions: spec.providerOptions,
