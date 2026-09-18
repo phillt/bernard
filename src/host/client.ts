@@ -116,7 +116,7 @@ export async function isHostRunning(): Promise<boolean> {
 }
 
 /**
- * Forks the detached host if it is not already serving.
+ * Starts the detached host if it is not already serving.
  *
  * Requires a build: `daemon.js` does not exist under `tsx`, so `npm run dev`
  * cannot start one. Same limitation the cron daemon has, stated rather than
@@ -134,8 +134,10 @@ export async function startHost(): Promise<boolean> {
   // keeps the PARENT's event loop alive even after `child.unref()` — observed
   // as `bernard applet-host start` printing nothing and never exiting. We
   // never talk to this process, so it should not have a channel to talk on.
-  // (`src/cron/client.ts` forks; it survives because its callers keep running
-  // anyway, but the same hazard is latent there.)
+  // (`src/cron/client.ts` carried the same `fork` until #586; both daemons
+  // spawn now, so there is no remaining copy of this hazard in the tree.)
+  // `spawn` also drops `process.execArgv`, which `fork` inherits — inert in
+  // both daemons, measured and argued at the cron call site rather than twice.
   const child = spawn(process.execPath, [daemonPath], {
     detached: true,
     stdio: 'ignore',
