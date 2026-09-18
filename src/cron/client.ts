@@ -69,6 +69,20 @@ export function startDaemon(): boolean {
   //
   // Naming `process.execPath` also states what `fork` only implied: the child
   // is a Node script run with the same executable.
+  //
+  // It is not a COMPLETE substitution, and the difference that is not the
+  // channel is `execArgv`: `fork` defaults the child's to the parent's, and
+  // `spawn` passes none. Measured — a parent run under
+  // `--enable-source-maps --max-old-space-size=3000` forks a child that reports
+  // both flags and spawns one that reports `[]`. Inert here: nothing in the tree
+  // sets `execArgv`, `NODE_OPTIONS` still reaches the child through the
+  // inherited environment, and the `tsx` dev path where flags are likeliest
+  // cannot start a daemon at all (the throw two lines up). `host/client.ts` has
+  // made the identical trade since #421. Written down because the next person
+  // wondering why a long-lived daemon ignores a heap flag they set will land on
+  // these lines. Restoring it is `execArgv: process.execArgv` in the options —
+  // but the flags a REPL wants and the flags an unattended daemon wants are not
+  // obviously one set, so inheriting them would be a decision, not a repair.
   const child = spawn(process.execPath, [daemonPath], {
     detached: true,
     stdio: 'ignore',

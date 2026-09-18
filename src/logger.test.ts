@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
+// `logger.ts` imports the DEFAULT export, and under Vite's CJS interop the
+// namespace and the default hold different function identities — a spy on one
+// is invisible to the other. This is the handle the truncation actually calls
+// through, and the plain `fs` above is deliberately the other one, so the
+// test's own file writes cannot trip the spy.
+import fsDefault from 'node:fs';
 import * as path from 'node:path';
 
 /**
@@ -146,6 +152,58 @@ describe('session sidecars are bounded within a session (#587)', () => {
     const lines = fs.readFileSync(file, 'utf-8').split('\n');
     expect(lines[0]).toMatch(/^--- bernard: dropped/);
     expect(lines[1]).toBe('LINE ' + 'y'.repeat(60));
+  });
+
+  /**
+   * The restore is truncate-then-write, which cannot be made atomic on a
+   * descriptor somebody else is appending to — so the window is inherent and
+   * the only question is how wide. Two writes made it as wide as the tail: a
+   * child append landing between the header and the block was stranded at the
+   * top of the file with half a megabyte of OLDER output after it, which is the
+   * inversion the tail-keeping policy exists to prevent. One write narrows the
+   * stranding to the header's own length.
+   *
+   * Reproduced rather than asserted on a syscall count: the concurrent append
+   * is injected after the first write of the restore, through a second real
+   * descriptor on the same file, which is exactly where a real MCP child would
+   * land — `mcpStderrTarget` hands one fd to every stdio server, so several of
+   * them append here at once.
+   */
+  it('does not strand a concurrent append between the header and the tail', async () => {
+    const logger = await loadLogger();
+    const fd = logger.openSessionSidecarFd('test-stderr.log')!;
+    const file = await sidecarPath(logger, 'test-stderr.log');
+
+    fs.writeSync(fd, 'x\n'.repeat(MAX_BYTES));
+
+    const original = fsDefault.writeSync.bind(fsDefault) as (...a: unknown[]) => number;
+    let injected = false;
+    const spy = vi.spyOn(fsDefault, 'writeSync').mockImplementation(((...args: unknown[]) => {
+      const written = original(...args);
+      if (!injected) {
+        injected = true;
+        const child = fs.openSync(file, 'a');
+        fs.writeSync(child, 'CHILD-NEWEST-LINE-WRITTEN-MID-RESTORE\n');
+        fs.closeSync(child);
+      }
+      return written;
+    }) as typeof fsDefault.writeSync);
+
+    vi.advanceTimersByTime(CHECK_MS);
+    spy.mockRestore();
+
+    const lines = fs
+      .readFileSync(file, 'utf-8')
+      .split('\n')
+      .filter((l) => l !== '');
+    const at = lines.indexOf('CHILD-NEWEST-LINE-WRITTEN-MID-RESTORE');
+
+    // It has to have been injected at all, or this asserts nothing.
+    expect(injected).toBe(true);
+    expect(at).toBeGreaterThanOrEqual(0);
+    // Not stranded: the newest line is not sitting above the retained block
+    // with older output beneath it.
+    expect(at).toBe(lines.length - 1);
   });
 
   it('leaves a sidecar within budget byte-identical', async () => {

@@ -233,12 +233,31 @@ function watchSidecars(): void {
  * open on half a stack frame, and the dropped bytes are named at the head:
  * a bounded thing says so.
  *
- * **The race is real and accepted.** A write landing between the read and the
- * truncate is lost. It is bounded by the two syscalls between them, and this
- * is debug output from which we have just deliberately discarded seven eighths
- * — refusing to bound the file to protect that window would be the worse
- * trade. `O_APPEND` keeps each individual write atomic at the offset, so
- * nothing interleaves mid-line.
+ * **Two race windows, both real, neither closable in place.** The descriptor is
+ * SHARED: `mcpStderrTarget` hands the same fd to every stdio MCP server, so
+ * several children append here concurrently and both windows are likelier than
+ * one server makes them look.
+ *
+ * A write landing between the read and the truncate is lost — and is also
+ * missing from the dropped-bytes count, which is computed from the pre-truncate
+ * `fstat`. Re-`fstat`ing just before the truncate would narrow that count's
+ * window without closing it, which is more syscalls for a precision the number
+ * still would not have.
+ *
+ * A write landing between the truncate and the restore survives, but lands
+ * BEFORE the restored block. That is why the restore is **one** `writeSync` of
+ * header+tail rather than two: with two, such a write landed between them —
+ * newest line at the top of the file with half a megabyte of older output after
+ * it, which is precisely the inversion the tail-keeping policy exists to
+ * prevent. One write narrows the stranding to the header's own length. It does
+ * **not** close it, because truncate-then-restore cannot be made atomic on a
+ * descriptor somebody else is appending to.
+ *
+ * Both are accepted rather than solved: each is bounded by a syscall or two, on
+ * debug output from which we have just deliberately discarded seven eighths, and
+ * refusing to bound the file to protect those windows would be the worse trade.
+ * `O_APPEND` keeps each individual write atomic at the offset, so nothing
+ * interleaves mid-line either way.
  */
 function boundSidecar(fd: number): void {
   try {
@@ -253,12 +272,13 @@ function boundSidecar(fd: number): void {
     const nl = tail.indexOf(0x0a);
     const from = nl >= 0 && nl + 1 < read ? nl + 1 : 0;
 
-    fs.ftruncateSync(fd, 0);
-    fs.writeSync(
-      fd,
+    const head = Buffer.from(
       `--- bernard: dropped ${size - (read - from)} earlier bytes to keep this sidecar under ${SIDECAR_MAX_BYTES} ---\n`,
     );
-    fs.writeSync(fd, tail, from, read - from);
+    fs.ftruncateSync(fd, 0);
+    // ONE write, not two — see the race note above. The concat copies the kept
+    // block, on the branch that already decided to discard seven eighths of it.
+    fs.writeSync(fd, Buffer.concat([head, tail.subarray(from, read)]));
   } catch {
     // Same contract as everything else here: never let housekeeping on a debug
     // file break, or even be noticed by, the caller's real work.

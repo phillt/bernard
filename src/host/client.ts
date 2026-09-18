@@ -136,6 +136,8 @@ export async function startHost(): Promise<boolean> {
   // never talk to this process, so it should not have a channel to talk on.
   // (`src/cron/client.ts` carried the same `fork` until #586; both daemons
   // spawn now, so there is no remaining copy of this hazard in the tree.)
+  // `spawn` also drops `process.execArgv`, which `fork` inherits — inert in
+  // both daemons, measured and argued at the cron call site rather than twice.
   const child = spawn(process.execPath, [daemonPath], {
     detached: true,
     stdio: 'ignore',
