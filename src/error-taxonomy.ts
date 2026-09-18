@@ -344,6 +344,20 @@ function isAuthoritativeLabel(label: string): label is ToolErrorType {
  * production emits the sentence above. Only a test fixture carries `result: ''`
  * there.)
  *
+ * **Known and unchanged: trusting a label is model-reachable.** `parse_failed`
+ * is the one label BOTH Bernard and a specialist may write — that is the whole
+ * reason for the first tier — but nothing stops a model writing any of the
+ * three. Writing `pool_exhausted` makes `wrap-with-specialist` fall through to
+ * the raw tool, skipping its own wrapper's validation. Verified not to be a
+ * regression: label-first (before #565), flat prose-first (#565's first cut,
+ * whose fallback consults the label when prose is unrecognised) and this tier
+ * all reach `pool_exhausted` for that input, so it is the behaviour the shim
+ * has always had. No test pins it here precisely because it is not new — one
+ * would misattribute it to this change. Closing it needs the envelope to
+ * distinguish a Bernard-minted category from a model-written one, which it
+ * cannot express today; that is #365's typed-channel territory, and the raw
+ * tool it falls through to carries the same permission gates either way.
+ *
  * Distinct from {@link classifyToolFailure}, which reads an already-annotated
  * result STRING and trusts the marker embedded in it. This one runs earlier, on
  * the envelope, and is what mints that marker.
