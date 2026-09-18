@@ -211,12 +211,27 @@ export interface WizardFieldData {
    *
    * **`model` is deliberately NOT here, and it is the one that looks essential.**
    * `SITE_ROLE.main` is `orchestrator`, whose `balanced` tier is `premium`, so
-   * on a default install `config.model` decides nothing — it is the fallback for
-   * when model mode is OFF. A reader who picked the cheap model on a quick path
-   * to save money would still be billed for the premium one, which is worse than
-   * not being asked. `activeLineupId` is out for the second clause instead: the
-   * fallback (`resolveActiveLineup`) is already correct, and nobody can judge a
-   * lineup before using one.
+   * on a default install `config.model` decides nothing for the turn a reader is
+   * having. A reader who picked the cheap model on a quick path to save money
+   * would still be billed for the premium one, which is worse than not being
+   * asked — and answering the question correctly would require knowing the tier
+   * mapping exists, so it fails the second clause too.
+   *
+   * What `config.model` IS, precisely, because the loose version of this
+   * sentence supports a stronger claim than the code makes. `resolveSiteModel`
+   * reaches it for `main` on exactly one branch: the resolved lineup slot's
+   * provider has **no key**, so it falls through to the session global with
+   * `source: 'fallback'` — and that is true **at any mode**, not only where mode
+   * is off. It cannot fire on a first run, which has one key and a
+   * provider-named lineup, which is what keeps "on a default install" the
+   * correct scope; it becomes reachable the moment a mixed lineup exists. Note
+   * also that `'off'` is a LEGACY mode value — `normalizeStoredModelMode`
+   * migrates it to `'optimize-performance'` at the read boundary — so there is
+   * no mode-is-off branch at the resolver to appeal to.
+   *
+   * `activeLineupId` is out for the second clause instead: the fallback
+   * (`resolveActiveLineup`) is already correct, and nobody can judge a lineup
+   * before using one.
    */
   tier?: 'quick';
   /**

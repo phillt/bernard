@@ -1412,15 +1412,28 @@ running risky tools.`), which tells a reader what the words mean and nothing
     screen IS the answer, and no default serves high-contrast or colorblind).
   - **`model` is the one that looks essential and is a TRAP.** `SITE_ROLE.main`
     is `orchestrator`, whose `balanced` tier — the default `modelMode` — is
-    `premium`, so on a default install `config.model` decides nothing; it is the
-    fallback for when model mode is OFF. A reader who picked the cheap model on
-    a short walk to save money would still be billed for the premium one, which
-    is worse than not being asked. That is also the positive argument for
-    `modelMode` being quick instead: it is the only one of the three
-    model-family questions whose answer changes anything given the other
-    defaults. `activeLineupId` fails the second clause — the fallback
-    (`resolveActiveLineup`) is already correct and nobody can judge a lineup
-    before using one.
+    `premium`, so on a default install `config.model` decides nothing for the
+    turn a reader is having. A reader who picked the cheap model on a short walk
+    to save money would still be billed for the premium one, which is worse than
+    not being asked. That is also the positive argument for `modelMode` being
+    quick instead: it is the only one of the three model-family questions whose
+    answer changes anything given the other defaults. `activeLineupId` fails the
+    second clause — the fallback (`resolveActiveLineup`) is already correct and
+    nobody can judge a lineup before using one.
+    - **What `config.model` is, exactly**, because the loose version of that
+      sentence — "the fallback for when model mode is OFF" — supports a stronger
+      claim than the code makes, and the stronger claim is what a later reader
+      would act on. `resolveSiteModel` reaches it for `main` on exactly one
+      branch: the resolved lineup slot's provider has **no key**, so it falls
+      through to the session global with `source: 'fallback'` — **at any mode**.
+      That branch cannot fire on a first run, which has one key and a
+      provider-named lineup, so "on a default install" is the correct scope; it
+      becomes reachable the moment a mixed lineup exists. And `'off'` is a
+      LEGACY mode value that `normalizeStoredModelMode` migrates to
+      `'optimize-performance'` at the read boundary, so there is no
+      mode-is-off branch at the resolver to appeal to at all. Both directions
+      strengthen the drop rather than weakening it: `config.model` decides even
+      less than the original sentence claimed.
   - **The frozen-array objection does not survive contact.** #582 assumed
     branching was the constraint; `buildSettingsSpec` already builds a fresh
     array per call from a filter over the registry and already drops steps
