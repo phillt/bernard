@@ -574,7 +574,7 @@ bernard applet-host uninstall
 
 ## Custom Providers
 
-Users can register named **custom providers** that wrap one of the installed SDKs (`openai`, `anthropic`, `xai`) and point it at a non-default endpoint — Ollama, LM Studio, OpenRouter, internal proxies, etc. Multiple custom providers can coexist with the built-ins.
+Users can register named **custom providers** that wrap one of the installed SDKs (`openai`, `anthropic`, `xai`) and point it at a non-default endpoint — Ollama, LM Studio, OpenRouter, internal gateways, etc. Multiple custom providers can coexist with the built-ins.
 
 ```bash
 # CLI:
