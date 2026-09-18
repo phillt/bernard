@@ -164,20 +164,13 @@ describe('the unattended posture actually reaches the gate', () => {
     expect(seen).toHaveLength(1);
   });
 
-  it('forwards both to augmentTools from the runner', async () => {
-    // A source scan, and named as the weak assertion it is. `run.ts` builds
-    // that options object inside `runDefinition`, so reaching it needs a whole
-    // dispatch; what this catches is the one-line omission, which is the
-    // mutation that survived everything else and is the documented failure
-    // mode of an enumerated bag.
-    const src = await import('node:fs').then((fs) =>
-      fs.readFileSync(new URL('../framework/agents/run.ts', import.meta.url).pathname, 'utf-8'),
-    );
-    const call = src.slice(src.indexOf('augmentTools(rawTools, {'));
-    const bag = call.slice(0, call.indexOf('\n  });'));
-    expect(bag).toContain('unattended: ctx.toolOptions.unattended');
-    expect(bag).toContain('onDenied: ctx.toolOptions.onDenied');
-  });
+  // The source scan that used to sit here is gone. It asserted the literal
+  // `unattended: ctx.toolOptions.unattended` appeared in `run.ts`, which
+  // pinned the MECHANISM: it broke on a reformat, needed a hand-written string
+  // per field, and could say nothing about a field that did not exist yet.
+  // `run.ts` spreads `ctx.toolOptions` now, so forwarding is total by
+  // construction, and the property is pinned behaviourally at the real seam by
+  // `framework/agents/__tests__/tool-options-forwarding.test.ts`.
 
   it('gives a job its own grants, and still withholds the profile’s', async () => {
     const { resolveCronJobPosture } = await import('./runner.js');

@@ -81,7 +81,7 @@
  * missed, because the failure mode without it is a long-lived process refusing
  * forever, which fails closed in the wrong direction.
  */
-import { createHash } from 'node:crypto';
+import { sha256Hex } from '../hash.js';
 
 import { debugLog } from '../logger.js';
 
@@ -130,8 +130,24 @@ const seen = new Map<string, number>();
  * One shipped that way here and was caught only because a mutation anchor failed
  * to match.
  */
-function keyOf(toolName: string, argsJson: string): string {
-  return `${toolName}\0${createHash('sha256').update(argsJson).digest('hex')}`;
+/**
+ * The identity of one call, hashed ONCE per call.
+ *
+ * Exported and taken as a parameter below rather than derived inside each
+ * entry point, because the two entry points run on the same call in sequence
+ * — refuse-or-not, then record-on-success — and each hashing `argsJson`
+ * independently pays twice. Measured: ~1.6 µs for a typical MCP send, and
+ * **2.1 ms for a 2 MB attachment** — and `upload` is in `EMIT_VERBS`, so
+ * attachment-carrying tools are squarely in the gated population. It is
+ * resolved in `runUnconditionalGates` beside `isWrite` / `nonIdempotent` /
+ * `argsJson`, which that file already does for exactly this reason.
+ *
+ * `sha256Hex` rather than a local `createHash`: `hash.ts` is the `node:crypto`
+ * leaf whose docstring asks for the fourth caller to come here, and it passes
+ * an explicit `'utf-8'` this copy omitted.
+ */
+export function duplicateKeyFor(toolName: string, argsJson: string): string {
+  return `${toolName}\0${sha256Hex(argsJson)}`;
 }
 
 /** Drops entries past the window so a long session does not grow without bound. */
@@ -158,10 +174,9 @@ function sweep(now: number): void {
  */
 export function duplicateRefusal(
   toolName: string,
-  argsJson: string,
+  key: string,
   now: number = Date.now(),
 ): string | null {
-  const key = keyOf(toolName, argsJson);
   const succeededAt = seen.get(key);
   if (succeededAt === undefined) return null;
   // Forgotten either way — the difference is only whether the model is told.
@@ -194,13 +209,9 @@ export function duplicateRefusal(
  * `isError`, the `{error}` shape and the `Error:` prefix — is the one authority
  * on what "succeeded" means here rather than a second guess at it.
  */
-export function recordSucceededCall(
-  toolName: string,
-  argsJson: string,
-  now: number = Date.now(),
-): void {
+export function recordSucceededCall(key: string, now: number = Date.now()): void {
   sweep(now);
-  seen.set(keyOf(toolName, argsJson), now);
+  seen.set(key, now);
 }
 
 /**

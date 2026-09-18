@@ -38,6 +38,14 @@ export function readAppletLog(appId: string, limit = 20): InvocationLogRow[] {
 export function formatLogRow(row: InvocationLogRow): string {
   const when = row.completedAt ?? row.startedAt;
   const head = `${when}  ${row.ok ? 'ok' : 'FAILED'}  ${row.action}  ${row.durationMs}ms`;
+  // A DENIED run is reported before the `ok` early-out, because it is the one
+  // diagnostic that only ever appears on a successful row: the action ran,
+  // answered, and was refused the capability it existed for (#447). That is
+  // the "ten clean successes" shape this whole log was built to explain, so
+  // returning `head` alone for `ok` rows would make the field write-only.
+  if (row.denied?.length) {
+    return `${head}\n    Denied: ${row.denied.join(', ')} — the action ran without it.`;
+  }
   if (row.ok) return head;
 
   const lines = [`${head}  [${row.errorCode ?? 'unknown'}]`];

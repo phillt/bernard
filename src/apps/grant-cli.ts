@@ -1,5 +1,9 @@
 import { printError, printInfo } from '../output.js';
-import type { PermissionRule, ToolPermissionEffect } from '../tool-permissions.js';
+import {
+  parseGrantSpec,
+  type PermissionRule,
+  type ToolPermissionEffect,
+} from '../tool-permissions.js';
 import { loadAppGrants, saveAppGrants } from './app-grants.js';
 import { AppRegistry } from './registry.js';
 
@@ -11,25 +15,6 @@ import { AppRegistry } from './registry.js';
  * gate exists to prevent. Same reasoning, and the same shape, as
  * `bernard cron-grant` (#340).
  */
-
-/**
- * Splits a `<tool>` or `<tool>:<specifier>` argument into a rule.
- *
- * The colon form is the one the rest of the system already prints —
- * `permissionKeyFor` renders `shell:git` and `cron:delete` — so a user can
- * paste back what they were shown. Only the FIRST colon splits, because an
- * action-scoped rule's specifier is itself `action:<value>`.
- */
-export function parseGrantSpec(spec: string, effect: ToolPermissionEffect): PermissionRule | null {
-  const trimmed = spec.trim();
-  if (trimmed === '') return null;
-  const colon = trimmed.indexOf(':');
-  if (colon === -1) return { effect, tool: trimmed, _v: 2 };
-  const tool = trimmed.slice(0, colon);
-  const specifier = trimmed.slice(colon + 1);
-  if (tool === '' || specifier === '') return null;
-  return { effect, tool, specifier, _v: 2 };
-}
 
 function describe(rule: PermissionRule): string {
   const scope = rule.specifier === undefined ? '(any invocation)' : rule.specifier;

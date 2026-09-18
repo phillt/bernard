@@ -50,6 +50,7 @@ import {
   applyUpdate,
   interactiveUpdate,
   startupUpdateCheck,
+  flushPendingUpdateNotice,
   applyPendingUpdate,
   takePendingUpdate,
   releaseNotesUrl,
@@ -372,18 +373,39 @@ describe('startupUpdateCheck', () => {
     expect(outputMock.printInfo).not.toHaveBeenCalled();
   });
 
-  it('prints notification when update available and autoUpdate off', async () => {
+  it('records the notification instead of printing it mid-session', async () => {
+    // The same reason the INSTALL was moved to exit, one branch over: this
+    // check settles long after Ink has mounted, so a `printInfo` here lands in
+    // the alternate screen buffer Ink owns and is painted over on the next
+    // ~32 ms render. The line deliberately made loud was the one least likely
+    // to be read — and only for users who declined auto-update, i.e. exactly
+    // the ones who have to act on it by hand.
     fsMock.readFileSync.mockReturnValue(JSON.stringify({ version: '1.0.0' }));
     mockHttpsGet(JSON.stringify({ version: '2.0.0' }));
 
     startupUpdateCheck(false);
     await new Promise((r) => setTimeout(r, 50));
+    expect(outputMock.printInfo).not.toHaveBeenCalled();
 
+    // Drained at exit, past `fullScreen.teardown()`, onto the restored screen.
+    flushPendingUpdateNotice();
     expect(outputMock.printInfo).toHaveBeenCalledWith(expect.stringContaining('Update available'));
     expect(outputMock.printInfo).toHaveBeenCalledWith(
       expect.stringContaining("What's new: https://phillt.github.io/bernard/releases.html#v2.0.0"),
     );
     expect(outputMock.printInfo).toHaveBeenCalledWith(expect.stringContaining('bernard update'));
+  });
+
+  it('clears as it reads, so a second drain cannot print it twice', async () => {
+    fsMock.readFileSync.mockReturnValue(JSON.stringify({ version: '1.0.0' }));
+    mockHttpsGet(JSON.stringify({ version: '2.0.0' }));
+    startupUpdateCheck(false);
+    await new Promise((r) => setTimeout(r, 50));
+
+    flushPendingUpdateNotice();
+    const after = outputMock.printInfo.mock.calls.length;
+    flushPendingUpdateNotice();
+    expect(outputMock.printInfo.mock.calls.length).toBe(after);
   });
 
   it('records the update instead of installing it mid-session', async () => {

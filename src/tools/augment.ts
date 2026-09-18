@@ -20,7 +20,7 @@ import { breadthOptionsFor, type BreadthOption } from '../permissions/breadth.js
 import { WRITE_PATH_TOOLS } from '../permissions/matchers.js';
 import { checkWritePath } from '../permissions/write-scope.js';
 import { runOrdered } from './write-barrier.js';
-import { duplicateRefusal, recordSucceededCall } from './duplicate-guard.js';
+import { duplicateKeyFor, duplicateRefusal, recordSucceededCall } from './duplicate-guard.js';
 
 /**
  * The wrapper shim prepends `[failure: <category>] <playbook.model>` to
@@ -405,10 +405,10 @@ const CANCELLED_MESSAGE = 'Action cancelled by user.';
  * grant there; it says the call cannot be granted on its own and names the one
  * lever that does reach it, the whole tool, marked as the broader thing it is.
  */
-function unattendedDenialMessage(risk: RiskLevel, toolName: string, spec: string | null): string {
+function unattendedDenialMessage(cause: string, toolName: string, spec: string | null): string {
   const why =
-    `Action denied automatically: it is ${risk}-risk and this unattended run ` +
-    `confirms at that level. No one is present to approve it, and the answer ` +
+    `Action denied automatically: ${cause}. ` +
+    `No one is present to approve it, and the answer ` +
     `will be the same for every call in this run — a permission verdict is not ` +
     `a command error, so changing the flags or the approach will not help. `;
   // Quoted: a shell specifier carries a space and a `*`, so an unquoted
@@ -432,18 +432,17 @@ function unattendedDenialMessage(risk: RiskLevel, toolName: string, spec: string
 }
 
 /**
- * Legacy cancellation shape returned when a write call is denied under
- * read-only mode (#179). Kept separate from {@link CANCELLED_LEGACY_RESULT}
- * so the model's next turn can distinguish "user denied write at the
- * least-privilege gate" from "user cancelled this specific confirmation."
+ * What a write call denied under read-only mode is told when a USER is present
+ * (#179). Kept distinct from {@link CANCELLED_MESSAGE} so the model's next turn
+ * can tell "denied at the least-privilege gate" from "cancelled at this
+ * specific confirmation" — the two offer different remedies.
+ *
+ * Unattended, this is the wrong sentence and {@link refuse} substitutes one
+ * that names a grant instead of a user; the pre-built legacy result object that
+ * used to sit beside it is gone, because the message is no longer fixed.
  */
 const READ_ONLY_DENIED_MESSAGE =
   'Action denied — read-only mode. Ask the user to allow this tool or switch toolMode to write.';
-
-const DENIED_LEGACY_RESULT = {
-  output: READ_ONLY_DENIED_MESSAGE,
-  is_error: true,
-};
 
 /**
  * Wraps every tool's `execute` function to observe results and record
@@ -627,6 +626,49 @@ export function augmentTools(
    * Keyed off `WRITE_PATH_TOOLS` rather than `FILE_TOOLS` so a read tool in
    * that set is not gated: this bounds writes, not reads.
    */
+  /**
+   * The one place an unattended refusal is minted, for every gate.
+   *
+   * #447 fixed "cancelled by user" with nobody present, and fixed it inside
+   * the CONFIRM gate only — so the three sibling refusal paths in this file
+   * kept the defect. That is not a corner: `headlessToolOptions` omits
+   * `blockAction`, and `apps/manifest.ts` defaults an action to `read-only`,
+   * so the BLOCK gate is the primary denial path for applet actions and
+   * `bernard script` — the two least-trusted unattended callers. They were
+   * being handed `READ_ONLY_DENIED_MESSAGE`, which tells a user who does not
+   * exist to allow the tool, and `onDenied` never fired for them, so
+   * `RunHeadlessResult.denied` could not see the refusal either. Cron escaped
+   * only because it defaults `toolMode: 'write'`.
+   *
+   * `cause` is the half that legitimately differs per gate; everything after
+   * it — nobody can approve, the verdict will not change, the grant that would
+   * fix it — is identical, and was written once per gate before this.
+   */
+  const refuse = (
+    cause: string,
+    attendedMessage: string,
+    toolName: string,
+    args: unknown,
+    meta: ToolMeta | undefined,
+    risk: RiskLevel,
+  ): { refusal: string } => {
+    if (!opts.unattended) return { refusal: attendedMessage };
+    // Reported, never allowed to throw: a reporting hook that can take down
+    // the gate it reports on is worse than no reporting.
+    try {
+      opts.onDenied?.({
+        tool: toolName,
+        permissionKey: permissionKeyFor(toolName, args, meta),
+        risk,
+      });
+    } catch {
+      /* reporting only */
+    }
+    return {
+      refusal: unattendedDenialMessage(cause, toolName, grantSpecFor(toolName, args, meta)),
+    };
+  };
+
   const runWriteScopeGate = (toolName: string, args: unknown): string | null => {
     if (!writeScope) return null;
     if (!WRITE_PATH_TOOLS.has(toolName)) return null;
@@ -681,22 +723,41 @@ export function augmentTools(
     toolDef: any,
   ):
     | { refusal: string }
-    | { grant: 'allow' | 'ask'; isWrite: boolean; nonIdempotent: boolean; argsJson: string } => {
+    | {
+        grant: 'allow' | 'ask';
+        isWrite: boolean;
+        nonIdempotent: boolean;
+        argsJson: string;
+        /** Hashed once here, for the gate below and the success recorder both. */
+        dupKey: string | null;
+      } => {
     // Resolved once and handed back, for the reason the grant already is. Both
     // were being recomputed by their consumers — `isWrite` twice per call (a
     // second `isReadOnlyShellInvocation` parse of the command line for `shell`),
     // `argsJson` twice — and `write-barrier.ts` states the cost: two expressions
     // answering one question is how they drift apart.
-    const isWrite = shouldBlockInReadOnly(readToolMeta(toolDef), args);
+    // Read once: this runs on every tool call in the product, and the three
+    // consumers below were each calling `readToolMeta` again.
+    const meta = readToolMeta(toolDef);
+    const isWrite = shouldBlockInReadOnly(meta, args);
     // A DIFFERENT question from `isWrite`, resolved here for the same reason it
     // is: one expression, handed to the gate below and to the recorder at both
     // success hooks. Asking `shouldBlockInReadOnly` instead is what got the
     // first duplicate gate withdrawn — see `risk.ts`.
-    const nonIdempotent = readToolMeta(toolDef)?.nonIdempotent === true;
+    const nonIdempotent = meta?.nonIdempotent === true;
     const argsJson = fullArgsJson(args);
     const grant = resolveProfileGrant(toolName, args);
     if (grant === 'deny') {
-      const key = permissionKeyFor(toolName, args, readToolMeta(toolDef));
+      const key = permissionKeyFor(toolName, args, meta);
+      // Reported like every other denial: without this an unattended run that
+      // was stopped by the user's own rule reports `denied: []`, so the one
+      // field that says "this run was refused the capability it existed for"
+      // is blind to the most deliberate refusal of the four.
+      try {
+        opts.onDenied?.({ tool: toolName, permissionKey: key, risk: riskFromMeta(meta, args) });
+      } catch {
+        /* reporting only */
+      }
       return {
         refusal:
           `\`${key ?? toolName}\` is denied for this dispatch by a permission rule. ` +
@@ -712,11 +773,12 @@ export function augmentTools(
     // nothing exercises. It lands AHEAD of the block and confirm gates, the same
     // ordering the write-scope gate takes: a call that is going to be refused
     // should not first cost the user a prompt.
-    if (nonIdempotent) {
-      const duplicate = duplicateRefusal(toolName, argsJson);
+    const dupKey = nonIdempotent ? duplicateKeyFor(toolName, argsJson) : null;
+    if (dupKey !== null) {
+      const duplicate = duplicateRefusal(toolName, dupKey);
       if (duplicate) return { refusal: duplicate };
     }
-    return { grant, isWrite, nonIdempotent, argsJson };
+    return { grant, isWrite, nonIdempotent, argsJson, dupKey };
   };
 
   /**
@@ -737,7 +799,12 @@ export function augmentTools(
     // this runs — so only 'allow' and 'ask' can arrive, and there is no second
     // resolution (or second shell parse) here.
     grant: 'allow' | 'ask',
-  ): Promise<boolean> => {
+    // `true` to proceed, or the refusal to hand the model — the shape `runGate`
+    // already returns, for the same reason: the message has to be minted where
+    // `unattended`, the meta and the args are in scope. Minted at the two call
+    // sites instead, it was `READ_ONLY_DENIED_MESSAGE` for everyone, which asks
+    // a user to act on the path where there is no user (#447 follow-up).
+  ): Promise<true | { refusal: string }> => {
     if (toolMode !== 'read-only') return true;
     const meta = readToolMeta(toolDef);
     if (!shouldBlockInReadOnly(meta, args)) return true;
@@ -745,9 +812,18 @@ export function augmentTools(
     if (grant === 'allow') return true;
     const dangerousShell = isDangerousShellCall(toolName, args);
     const permissionKey = permissionKeyFor(toolName, args, meta);
+    const denied = (): { refusal: string } =>
+      refuse(
+        'this unattended run is read-only and the call writes',
+        READ_ONLY_DENIED_MESSAGE,
+        toolName,
+        args,
+        meta,
+        riskFromMeta(meta, args),
+      );
     if (!blockAction) {
       debugLog(`augment:${toolName}:block:fail-closed`, { toolMode });
-      return false;
+      return denied();
     }
     const input: BlockActionInput = {
       toolName,
@@ -764,9 +840,9 @@ export function augmentTools(
       // A throwing blockAction is a wiring bug — fail closed (deny) so the
       // model gets a clear cancellation rather than silently bypassing.
       debugLog(`augment:${toolName}:block:threw`, err instanceof Error ? err.message : String(err));
-      return false;
+      return denied();
     }
-    if (outcome === 'deny') return false;
+    if (outcome === 'deny') return denied();
     if (outcome === 'allow-tool-for-session') sessionToolAllowlist.add(toolName);
     // 'allow-tool-for-profile': the UI layer persisted the grant before
     // resolving; the live getToolPermissions reader covers later calls.
@@ -807,19 +883,15 @@ export function augmentTools(
       breadthOptions: computeBreadthOptions(toolName, args, dangerousShell, meta),
     };
     const signal = (execOptions as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
-    const refusal = (): { refusal: string } => {
-      if (!opts.unattended) return { refusal: CANCELLED_MESSAGE };
-      // Reported, never allowed to throw: a reporting hook that can take down
-      // the gate it reports on is worse than no reporting.
-      try {
-        opts.onDenied?.({ tool: toolName, permissionKey, risk });
-      } catch {
-        /* reporting only */
-      }
-      return {
-        refusal: unattendedDenialMessage(risk, toolName, grantSpecFor(toolName, args, meta)),
-      };
-    };
+    const refusal = (): { refusal: string } =>
+      refuse(
+        `it is ${risk}-risk and this unattended run confirms at that level`,
+        CANCELLED_MESSAGE,
+        toolName,
+        args,
+        meta,
+        risk,
+      );
     try {
       return (await confirmAction(input, signal)) ? true : refusal();
     } catch (err) {
@@ -858,13 +930,18 @@ export function augmentTools(
               };
               return source.serializeForModel(refused);
             }
-            if (!(await runBlockGate(toolName, args, toolDef, execOptions, gates.grant))) {
+            // `!== true`, never a truthiness test — the same trap `runGate`
+            // records two lines down: this gate returns the refusal as an
+            // OBJECT now, and an object is truthy, so `if (!(await …))` would
+            // stop denying entirely while still type-checking.
+            const block = await runBlockGate(toolName, args, toolDef, execOptions, gates.grant);
+            if (block !== true) {
               const denied: ToolResult<unknown> = {
                 status: 'error',
                 // Distinct from 'cancelled' so envelope consumers that branch
                 // on error.type can tell "user denied write under read-only
                 // mode" apart from "user cancelled this specific confirm."
-                error: { type: 'denied', message: READ_ONLY_DENIED_MESSAGE },
+                error: { type: 'denied', message: block.refusal },
               };
               return source.serializeForModel(denied);
             }
@@ -1016,7 +1093,7 @@ export function augmentTools(
             // the model can cite it for verified claims. Errored / denied /
             // cancelled envelopes never become evidence.
             if (envelope.status === 'ok') {
-              if (gates.nonIdempotent) recordSucceededCall(toolName, gates.argsJson);
+              if (gates.dupKey !== null) recordSucceededCall(gates.dupKey);
               const previewSrc =
                 typeof serialized === 'string' ? serialized : safeSerialize(serialized);
               registerEvidence(toolName, args, source.meta, previewSrc);
@@ -1043,8 +1120,9 @@ export function augmentTools(
         execute: async (args: unknown, execOptions: unknown) => {
           const gates = runUnconditionalGates(toolName, args, toolDef);
           if ('refusal' in gates) return `Error: ${gates.refusal}`;
-          if (!(await runBlockGate(toolName, args, toolDef, execOptions, gates.grant))) {
-            return DENIED_LEGACY_RESULT;
+          const block = await runBlockGate(toolName, args, toolDef, execOptions, gates.grant);
+          if (block !== true) {
+            return { output: block.refusal, is_error: true };
           }
           // `!== true`, never a truthiness test: `runGate` returns the refusal
           // as an OBJECT now, and an object is truthy — so `if (!(await …))`
@@ -1128,7 +1206,7 @@ export function augmentTools(
             // authority on what succeeded means here — it reads MCP's
             // `isError`, the `{error}` shape and the `Error:` prefix — rather
             // than a second guess at it.
-            if (gates.nonIdempotent) recordSucceededCall(toolName, gates.argsJson);
+            if (gates.dupKey !== null) recordSucceededCall(gates.dupKey);
             const previewSrc =
               typeof capturedResult === 'string' ? capturedResult : safeSerialize(capturedResult);
             registerEvidence(toolName, args, meta, previewSrc);

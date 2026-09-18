@@ -127,9 +127,6 @@ export const WELCOME_BODY: readonly string[] = [
   'Setup has two parts: your providers and their API keys, then the settings. Every question opens on its current value, so you can move straight past it — and only what you change is saved. Esc stops at any point.',
 ];
 
-/** Shown once the questions start, so the day-one commands land after the tour. */
-export const WELCOME_FOOTER = 'Once you are in: /help lists everything, /setup reopens this.';
-
 /** How the wizard spells a boolean. One place, so a decode cannot miss a variant. */
 const ON = 'On';
 const OFF = 'Off';
@@ -499,6 +496,9 @@ export function buildWelcomeSpec(): WizardSpec {
   };
 }
 
+/** Stands in for the part of a stored key that is never shown. */
+const KEY_MASK = '****';
+
 /**
  * The provider hub: every provider, what it has, and a way onward.
  *
@@ -511,9 +511,6 @@ export function buildWelcomeSpec(): WizardSpec {
  * and the key hints true: they describe what is on disk NOW, not what was there
  * when the wizard opened.
  */
-/** Stands in for the part of a stored key that is never shown. */
-const KEY_MASK = '****';
-
 export function buildProviderHubSpec(ctx: SetupContext): WizardSpec {
   // The label is the provider and nothing else — it is the answer vocabulary,
   // and a decoder that had to strip a decorated suffix back off would be a

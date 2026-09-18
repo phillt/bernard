@@ -176,8 +176,10 @@ function finishDeniedRun(a: {
   logStore: CronLogStore;
   key: string;
   repeat: boolean;
+  /** `runJob`'s own, not a second one: the constructor `mkdirSync`s twice. */
+  store: CronStore;
 }): RunJobResult {
-  const store = new CronStore();
+  const { store } = a;
   const tools = [...new Set(a.res.denied.map((d) => d.permissionKey ?? d.tool))];
   const remedy = `bernard cron-grant ${a.job.id} --allow '${a.key}'`;
   const message =
@@ -325,6 +327,7 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
     const repeat = job.lastErrorCategory === DENIED_CATEGORY;
     return finishDeniedRun({
       job,
+      store,
       res,
       steps,
       runId,

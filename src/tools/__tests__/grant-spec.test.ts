@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { grantSpecFor, permissionKeyFor } from '../../tool-permissions.js';
+import { grantSpecFor, parseGrantSpec, permissionKeyFor } from '../../tool-permissions.js';
 import { resolveGrant } from '../../permissions/engine.js';
 import { initShellParser } from '../../permissions/shell-ast.js';
 import type { PermissionRule } from '../../tool-permissions.js';
@@ -20,17 +20,18 @@ import type { PermissionRule } from '../../tool-permissions.js';
  * see. Asserting the text would have passed against every one of them.
  */
 
-/** `cli.ts`'s `parseGrantSpecifier`, which is what the printed line goes through. */
+/**
+ * The REAL parser both CLIs use, not a local restatement of it.
+ *
+ * It was a hand-copied one here, which is the same duplication the production
+ * code carried: `cron/cli.ts` had its own copy that dropped the validation.
+ * Driving the shared function is what makes this a round-trip test —
+ * `grantSpecFor` mints, `parseGrantSpec` reads back, `resolveGrant` decides.
+ */
 function parseGrantSpecifier(raw: string): PermissionRule {
-  const at = raw.indexOf(':');
-  const tool = at === -1 ? raw.trim() : raw.slice(0, at).trim();
-  const specifier = at === -1 ? undefined : raw.slice(at + 1).trim();
-  return {
-    effect: 'allow',
-    tool,
-    ...(specifier !== undefined && specifier !== '' ? { specifier } : {}),
-    _v: 2,
-  };
+  const rule = parseGrantSpec(raw, 'allow');
+  if (rule === null) throw new Error(`refused: ${raw}`);
+  return rule;
 }
 
 const CRON_META = { actionScoped: true };
@@ -213,6 +214,109 @@ describe('the refusal a model receives carries the working remedy', () => {
   it('still says the verdict will not change, in both branches', async () => {
     for (const cmd of ['gh issue create --title x', 'cd /repo && npm test']) {
       expect(await refusalFor(cmd), cmd).toMatch(/will be the same for every call/);
+    }
+  });
+});
+
+/**
+ * The block gate is the applet and script path, and it had the defect #447
+ * fixed one gate over.
+ *
+ * `headlessToolOptions` omits `blockAction`, and `apps/manifest.ts` defaults an
+ * action to `read-only` — so for `bernard script` and every applet button the
+ * BLOCK gate, not the confirm gate, is what refuses. It was handing back
+ * `READ_ONLY_DENIED_MESSAGE` ("Ask the user to allow this tool"), to nobody,
+ * and never firing `onDenied` — so `RunHeadlessResult.denied` came back empty
+ * and the run reported a clean success. That is the 934,805-token shape with
+ * none of #447's machinery firing, on the two least-trusted callers.
+ */
+describe('an unattended read-only refusal names a grant, not a user', () => {
+  async function blockedRefusal(): Promise<{ text: string; denied: unknown[] }> {
+    const { augmentTools } = await import('../augment.js');
+    const { attachMeta } = await import('../../framework/tools/adapter.js');
+    const { resolvePosture, headlessToolOptions } = await import('../../headless-posture.js');
+
+    const tool = attachMeta(
+      {
+        description: 'w',
+        parameters: {} as never,
+        execute: async () => ({ ok: true }),
+      } as never,
+      { name: 'file_write', kind: 'write', deterministic: false, sideEffect: 'local' },
+    );
+    // Exactly what an applet action resolves to: read-only, nobody to ask.
+    const posture = resolvePosture({
+      toolMode: 'read-only',
+      confirmMode: 'auto',
+      writeScope: null,
+      toolPermissions: null,
+    });
+    const denied: unknown[] = [];
+    const store = {
+      get: () => undefined,
+      getAll: () => [],
+      list: () => [],
+      recordSuccess() {},
+      recordBadExample() {},
+      patchLastBadWithFix() {},
+    };
+    const tools = augmentTools({ file_write: tool } as never, {
+      profileStore: store as never,
+      toolMode: posture.toolMode,
+      confirmThreshold: posture.confirmThreshold,
+      ...headlessToolOptions(posture, 30_000, (d) => denied.push(d)),
+    });
+    const r = await (
+      tools.file_write as { execute: (a: unknown, o: unknown) => Promise<unknown> }
+    ).execute({ path: '/tmp/x', content: 'y' }, {});
+    return { text: String((r as { output: unknown }).output), denied };
+  }
+
+  it('does not tell a nonexistent user to allow the tool', async () => {
+    const { text } = await blockedRefusal();
+    expect(text).not.toMatch(/Ask the user/);
+    expect(text).toMatch(/No one is present to approve it/);
+    // The half that stops the retry loop: the verdict is fixed for the run.
+    expect(text).toMatch(/will be the same for every call in this run/);
+  });
+
+  it('names the grant that would actually fix it', async () => {
+    const { text } = await blockedRefusal();
+    expect(text).toContain("--allow 'file_write'");
+  });
+
+  it('reports the denial, so the run can be marked denied', async () => {
+    // Without this `RunHeadlessResult.denied` is empty and the caller reports
+    // a clean success — which is what made the original loop invisible.
+    const { denied } = await blockedRefusal();
+    expect(denied).toHaveLength(1);
+    expect(denied[0]).toMatchObject({ tool: 'file_write', permissionKey: 'file_write' });
+  });
+});
+
+describe('a grant argument that addresses nothing is refused, not stored', () => {
+  // The half `cron/cli.ts`'s copy had dropped. Each of these used to mint a
+  // rule — `{tool: ''}` or `{tool: 'gh'}` with the specifier silently gone —
+  // and persist it on the one path with no operator watching, so the grant
+  // read as accepted and matched nothing forever.
+  it.each([':foo', 'gh:', '', '   ', ':'])('refuses %o', (spec) => {
+    expect(parseGrantSpec(spec, 'allow')).toBeNull();
+  });
+
+  it('still accepts the two real shapes', () => {
+    expect(parseGrantSpec('shell', 'allow')).toEqual({ effect: 'allow', tool: 'shell', _v: 2 });
+    expect(parseGrantSpec('shell:gh *', 'allow')).toEqual({
+      effect: 'allow',
+      tool: 'shell',
+      specifier: 'gh *',
+      _v: 2,
+    });
+  });
+
+  it('round-trips what grantSpecFor mints, for every shape it can mint', () => {
+    // The pair's actual contract: anything the refusal prints must parse back.
+    for (const spec of ['shell:gh *', 'cron:action:delete', 'web_read', 'shell']) {
+      expect(parseGrantSpec(spec, 'allow'), spec).not.toBeNull();
     }
   });
 });

@@ -274,28 +274,28 @@ export async function runDefinition<TInput, TFormatted>(
   // shim-routing happens upstream in `def.tools(ctx, input)` so `augmentTools`
   // sees the shimmed tools and wraps them once.
   const tools = augmentTools(rawTools, {
+    // SPREAD, not enumerated field by field.
+    //
+    // This bag listed each `toolOptions` pass-through by hand, and the hazard
+    // was diagnosed here twice and patched here twice: #340 paid for it with
+    // `writeScope` ("a scope set on `toolOptions` and not passed on is a scope
+    // that silently never applies"), and #447 paid for it again with
+    // `onDenied`, which had never been forwarded at all — so the denial
+    // reporting the whole change rests on could not have fired in production.
+    // The remedy both times was one more enumerated line plus a source-scan
+    // test asserting the literal was present, which needs a new hand-written
+    // string per field and catches nothing a reformat would not break.
+    //
+    // Spreading makes forwarding TOTAL by construction: every current and
+    // future `ToolOptions` field arrives, and the seven that `AugmentOptions`
+    // declares are all plain `ToolOptions['…']` aliases. The explicit fields
+    // below stay AFTER it and therefore still win — which is what keeps
+    // `toolMode` and `confirmThreshold` coming from the policy decision rather
+    // than from a same-named field a future `ToolOptions` might grow.
+    ...ctx.toolOptions,
     profileStore: ctx.stores.toolProfiles,
     confirmThreshold: ctx.policyDecision?.toolMode?.confirmThreshold,
-    confirmAction: ctx.toolOptions.confirmAction,
     toolMode: ctx.policyDecision?.toolMode?.mode,
-    blockAction: ctx.toolOptions.blockAction,
-    sessionToolAllowlist: ctx.toolOptions.sessionToolAllowlist,
-    // Profile-persisted grants (#212). Live reader so mid-session grants and
-    // profile switches apply immediately. Cron's toolOptions omit it.
-    getToolPermissions: ctx.toolOptions.getToolPermissions,
-    // Path scoping for writes (#340). Absent for the interactive REPL, which
-    // is what leaves a user's own writes unrestricted; supplied by
-    // `runHeadless` for every unattended dispatch. Forwarding it here is what
-    // makes the gate real — `augmentTools` reads it from ITS options, not from
-    // `ctx`, so a scope set on `toolOptions` and not passed on is a scope that
-    // silently never applies.
-    writeScope: ctx.toolOptions.writeScope,
-    // Same hazard the comment above names, one field over: this list is
-    // enumerated, not spread, so a `toolOptions` field that is not forwarded
-    // silently never applies. It changes no verdict — only what an
-    // auto-denied call tells the model. See `ToolOptions.unattended`.
-    unattended: ctx.toolOptions.unattended,
-    onDenied: ctx.toolOptions.onDenied,
     // Grants persisted before MCP tools were namespaced (#413) name a bare
     // tool. Built from the whole live MCP surface, never from `rawTools` —
     // see `mcpAliasResolverFor`.

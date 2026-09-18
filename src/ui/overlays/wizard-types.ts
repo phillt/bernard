@@ -560,6 +560,9 @@ export function summarizeAnswer(answer: WizardAnswer | undefined, max = 60): str
   return flat.length === 0 ? '(not answered)' : truncate(flat, max);
 }
 
+/** The label of the control that moves a select-then-continue page on. */
+export const CONTINUE_LABEL = 'Continue';
+
 /**
  * Converts `ask_user`'s question shape into wizard steps.
  *
@@ -568,9 +571,6 @@ export function summarizeAnswer(answer: WizardAnswer | undefined, max = 60): str
  * wizard, so every batch of two or more gains back, edit and review without any
  * caller changing.
  */
-/** The label of the control that moves a select-then-continue page on. */
-export const CONTINUE_LABEL = 'Continue';
-
 export function stepsFromQuestions(questions: readonly AskUserQuestion[]): WizardStep[] {
   return questions.map((q, i) => {
     const base = {

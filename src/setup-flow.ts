@@ -32,13 +32,13 @@ import {
   loadPreferences,
   loadConfig,
   getDefaultModel,
+  PROVIDER_MODELS,
   type BernardConfig,
 } from './config.js';
 import { loadCustomProviders, SUPPORTED_SDKS } from './custom-providers.js';
 import { checkProviderKey, keyCheckEndpoint, tidyKey } from './provider-key-check.js';
 import { saveActiveSettings, type ProfileSettings } from './profiles.js';
-import { getCatalogForProvider } from './providers/catalog.js';
-import type { BuiltinProvider, SupportedSdk } from './providers/types.js';
+import type { SupportedSdk } from './providers/types.js';
 import { listLineups, loadLineups, resolveActiveLineup } from './lineups.js';
 import { resolveSiteModel } from './model-policy.js';
 import { validateModel, type ModelProbeResult } from './model-validate.js';
@@ -183,9 +183,24 @@ function keyCheckFor(provider: string, config: BernardConfig | null) {
 }
 
 /** Model ids to offer for a provider. Empty for a custom one — we have no catalog. */
+/**
+ * The models this provider offers, in the order every other surface shows them.
+ *
+ * `PROVIDER_MODELS`, not a second `getCatalogForProvider` walk. Two differences
+ * that both mattered: it sorts newest-first, so entry 0 is the suggested
+ * default and the list reads the same here as under `/model`; and it falls back
+ * to `FALLBACK_PROVIDER_MODELS` when the catalog cannot be read. The raw walk
+ * returned `[]` there, and `buildStep` drops a choice step with no options — so
+ * a fresh install with no catalog lost the model question entirely while
+ * `/model` still offered the three curated ids. That install is the case #447
+ * exists for.
+ *
+ * Empty stays meaningful for a custom provider, which the catalog does not
+ * represent: the step is dropped rather than inventing rows for it.
+ */
 function readModels(provider: string): string[] {
   try {
-    return getCatalogForProvider(provider as BuiltinProvider).map((e) => e.model);
+    return Object.hasOwn(PROVIDER_MODELS, provider) ? PROVIDER_MODELS[provider] : [];
   } catch {
     return [];
   }
@@ -212,29 +227,31 @@ function readCurrent(config: BernardConfig | null): {
   const source = (config ?? {}) as unknown as Record<string, unknown>;
   const stored = prefs as unknown as Record<string, unknown>;
 
+  // `covers` is walked with the field's own key, not re-spelled below it. A
+  // question can decide settings that have no field of their own (Tool mode
+  // decides `skipPermissions` and `confirmMode`), and both the effective value
+  // and its PROVENANCE have to be read for them — provenance because `covers`
+  // is how `storedExplicitly` knows the question has been answered at all.
+  //
+  // This was a hand-written literal of those two keys, which is the bug it
+  // carried a comment about having just fixed: `covers` was declared,
+  // `settings-coverage.test.ts` counted it as asked, and a third covered key
+  // would have been absent from `current`, absent from `explicit`, and
+  // undecoded — so the step opens on the wrong row, marks `(recommended)` on
+  // the wrong row, and reports "Not set." for a setting the profile holds.
   for (const field of WIZARD_FIELDS) {
-    const key = field.key as string;
-    const fromProfile = stored[key];
-    if (fromProfile !== undefined) explicit.add(field.key);
-    const effective = source[key] ?? fromProfile;
-    if (effective !== undefined) current[key] = effective;
+    for (const key of [field.key, ...(field.covers ?? [])]) {
+      const fromProfile = stored[key as string];
+      if (fromProfile !== undefined) explicit.add(key);
+      const effective = source[key as string] ?? fromProfile;
+      if (effective !== undefined) current[key as string] = effective;
+    }
   }
   // Not a `BernardConfig` key, so the loop above can only ever see the stored
   // value. The fallback must match what `index.ts` passes
   // `startupUpdateCheck` for an absent one, or the question opens on a row
   // that is not in force and the `(recommended)` marker lands on the wrong one.
   current.autoUpdate = prefs.autoUpdate ?? true;
-  // The two keys Tool mode decides besides its own (#447). The loop above walks
-  // `WIZARD_FIELDS`, and neither has a field of its own, so both the effective
-  // value and its provenance have to be read here — and provenance matters:
-  // `covers` is how `storedExplicitly` knows this question has been answered,
-  // and it was inert for `skipPermissions` because nothing ever added it to the
-  // set the loop builds.
-  for (const key of ['skipPermissions', 'confirmMode'] as const) {
-    if (stored[key] !== undefined) explicit.add(key);
-    const effective = source[key] ?? stored[key];
-    if (effective !== undefined) current[key] = effective;
-  }
   // An absent value must still be a value: `false` is what every gate reads an
   // unset `skipPermissions` as, and `toolModeFor` needs it stated to tell the
   // last row from the first.

@@ -5,6 +5,7 @@ import {
   TOOL_MODE_SETTINGS,
   UNRESTRICTED,
   toolModeFor,
+  toolModeLabel,
 } from './tool-modes.js';
 import { WIZARD_FIELDS } from './profiles-wizard-data.js';
 import * as fs from 'node:fs';
@@ -208,5 +209,34 @@ describe('one question decides all three keys', () => {
     // left the definition standing. The wording stays the table's business.
     expect(app).toContain('CONFIRM_MODES');
     expect(app).toContain('action: runConfirmModePrompt');
+  });
+});
+
+/**
+ * The annotation and the row it opens say the same thing.
+ *
+ * `/agent-options` hand-wrote `⚠ unrestricted` for the skip-permissions case,
+ * re-implementing `toolModeFor`'s first line in order to disagree with the
+ * label the row itself shows. That is the drift this module exists to end,
+ * inside the file that adopted it.
+ */
+describe('toolModeLabel', () => {
+  it('answers with a label that is actually on a row', () => {
+    for (const m of TOOL_MODES) {
+      const label = toolModeLabel(TOOL_MODE_SETTINGS[m.value]);
+      expect(label, m.value).toBe(m.label);
+    }
+  });
+
+  it('answers with the unrestricted ROW for skipPermissions, not a synonym', () => {
+    const label = toolModeLabel({ toolMode: 'write', skipPermissions: true, confirmMode: 'auto' });
+    expect(label).toBe(TOOL_MODES[2].label);
+    expect(label).not.toBe('⚠ unrestricted');
+  });
+
+  it('answers null for a combination no row represents', () => {
+    // `write` + `off` — reachable, and deliberately not folded into the last
+    // row, since `skipPermissions` also dissolves the profile's deny rules.
+    expect(toolModeLabel({ toolMode: 'write', confirmMode: 'off' })).toBeNull();
   });
 });

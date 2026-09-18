@@ -7,7 +7,7 @@ import { runJob } from './runner.js';
 import { isDaemonRunning, startDaemon, stopDaemon } from './client.js';
 import { printInfo, printError } from '../output.js';
 import { runWorkspace } from '../paths.js';
-import type { PermissionRule } from '../tool-permissions.js';
+import { parseGrantSpec, type PermissionRule } from '../tool-permissions.js';
 
 /** Stops the daemon automatically when no enabled jobs remain. */
 function stopIfNoEnabledJobs(store: CronStore): void {
@@ -312,31 +312,6 @@ export async function cronBounce(ids?: string[]): Promise<void> {
  * its own write scope, which is the escalation the whole gate exists to
  * prevent — a grant has to come from the person, not the process.
  */
-/**
- * `shell:gh *` → an allow rule for `gh` with any arguments.
- *
- * Split on the FIRST colon: everything before is the tool, everything after is
- * the `specifier`, which for `shell` is a glob (`gh` matches the bare command,
- * `gh *` matches it with arguments) and for other tools follows
- * `PermissionRule.specifier`. No colon means the whole tool, which is the
- * broadest grant available here and still narrower than `confirmMode: 'off'`.
- *
- * Deliberately not validated against the live registry: MCP tool names are a
- * property of whichever servers happen to be connected, and refusing a grant
- * for a server that is merely offline right now would be worse than storing a
- * rule that matches nothing.
- */
-function parseGrantSpecifier(raw: string): PermissionRule {
-  const at = raw.indexOf(':');
-  const tool = at === -1 ? raw.trim() : raw.slice(0, at).trim();
-  const specifier = at === -1 ? undefined : raw.slice(at + 1).trim();
-  return {
-    effect: 'allow',
-    tool,
-    ...(specifier !== undefined && specifier !== '' ? { specifier } : {}),
-    _v: 2,
-  };
-}
 
 export async function cronGrant(
   id: string,
@@ -369,7 +344,20 @@ export async function cronGrant(
   // the other reachable knob, would dissolve every confirmation including
   // `rm -rf`.
   if (opts.allow && opts.allow.length > 0) {
-    const rules: PermissionRule[] = opts.allow.map(parseGrantSpecifier);
+    // `parseGrantSpec`, not a local copy. The copy dropped the validation
+    // half — it minted `{tool: ''}` for `:foo` and `{tool:'gh'}` for `gh:` —
+    // so a typo persisted a rule that matches nothing, unattended, which is
+    // the shape of the very deny-loop `--allow` exists to end. The shared one
+    // returns `null` for all three and the caller refuses.
+    const parsed = opts.allow.map((a) => [a, parseGrantSpec(a, 'allow')] as const);
+    const bad = parsed.filter(([, r]) => r === null).map(([a]) => a);
+    if (bad.length > 0) {
+      printError(`Not a tool spec: ${bad.join(', ')}`);
+      printInfo("Expected `<tool>` or `<tool>:<specifier>`, e.g. 'shell:gh *'.");
+      process.exitCode = 1;
+      return;
+    }
+    const rules: PermissionRule[] = parsed.map(([, r]) => r as PermissionRule);
     store.updateJob(id, { toolPermissions: [...(job.toolPermissions ?? []), ...rules] });
     printInfo(`Job "${job.name}" may now run:`);
     for (const a of opts.allow) printInfo(`  ${a}`);

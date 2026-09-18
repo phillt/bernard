@@ -367,3 +367,32 @@ export function grantSpecFor(
   }
   return toolName;
 }
+
+/**
+ * The inverse of {@link grantSpecFor}: a typed `<tool>[:<specifier>]` argument
+ * back into a rule, or `null` when it is not one.
+ *
+ * Here rather than in either CLI because it is the round trip's other half and
+ * a `PermissionRule` is this module's type — and because the copy that lived in
+ * `cron/cli.ts` had already dropped the validation: it minted `{tool: ''}` for
+ * `:foo` and `{tool: 'gh'}` for `gh:`, persisting a rule that matches nothing
+ * on the one path with no operator watching. Importing the app CLI's copy
+ * instead would have pulled `AppRegistry` onto `bernard cron-grant`, measured
+ * at 59 ms against 0 for this leaf.
+ *
+ * Only the FIRST colon splits, because an action-scoped specifier is itself
+ * `action:<value>`. Deliberately NOT validated against the live registry: MCP
+ * tool names depend on which servers happen to be connected, and refusing a
+ * grant for one that is merely offline is worse than storing a rule that
+ * matches nothing today.
+ */
+export function parseGrantSpec(spec: string, effect: ToolPermissionEffect): PermissionRule | null {
+  const trimmed = spec.trim();
+  if (trimmed === '') return null;
+  const colon = trimmed.indexOf(':');
+  if (colon === -1) return { effect, tool: trimmed, _v: 2 };
+  const tool = trimmed.slice(0, colon);
+  const specifier = trimmed.slice(colon + 1);
+  if (tool === '' || specifier === '') return null;
+  return { effect, tool, specifier, _v: 2 };
+}

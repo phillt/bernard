@@ -227,6 +227,7 @@ import {
   TOOL_MODES,
   TOOL_MODE_SETTINGS,
   toolModeFor,
+  toolModeLabel,
   type ToolModeChoice,
 } from '../tool-modes.js';
 import { setOutputSink } from '../framework/hooks/output-sink.js';
@@ -3934,7 +3935,11 @@ export function App({
         kind: 'item',
         item: {
           label: 'Tool mode',
-          annotation: `= ${config.skipPermissions ? '⚠ unrestricted' : (toolModeFor(config) ?? 'custom')}`,
+          // The row's own label, from the shared table — never a second
+          // spelling of it. `toolModeFor` already answers UNRESTRICTED for
+          // `skipPermissions`, so the branch this replaces was re-implementing
+          // its first line in order to disagree with it.
+          annotation: `= ${toolModeLabel(config) ?? 'custom'}`,
           // In the rows' own words, not a fourth paraphrase of them.
           description:
             'How much Bernard can do on its own before it needs you. Stop before every change, stop only at the dangerous calls, or never stop — which also removes the deny rules and write scopes, not just the prompts.',

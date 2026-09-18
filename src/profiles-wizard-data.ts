@@ -133,9 +133,6 @@ export interface WizardCategoryData {
   fields: WizardFieldData[];
 }
 
-/** `on` / `off` as the wizard shows them, so one spelling reaches every step. */
-export const BOOLEAN_LABELS = { on: 'On', off: 'Off' } as const;
-
 export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
   {
     id: 'model',

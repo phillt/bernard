@@ -204,6 +204,20 @@ export function applyUpdate(version: string): void {
 let pendingUpdate: string | null = null;
 
 /**
+ * An update the user has NOT opted into installing, to tell them about at exit.
+ *
+ * The auto-install half was moved off the mid-session path because
+ * `startupUpdateCheck` fires before Ink mounts and settles long after, so
+ * writing there lands in the alternate screen buffer Ink owns and is painted
+ * over on the next ~32 ms render — `mcp.ts`'s reconnect-notice class. The
+ * `else` branch three lines below kept printing two lines from that same
+ * promise, at that same moment, into that same buffer: so the notice was
+ * corrupted and immediately erased for exactly the population that has to act
+ * on it by hand. It is recorded and drained beside the install.
+ */
+let pendingUpdateNotice: string | null = null;
+
+/**
  * The update to apply now that the REPL is down, or `null`.
  *
  * Taking it clears it, so a second caller cannot install twice.
@@ -219,6 +233,22 @@ export function takePendingUpdate(): string | null {
  *
  * The blocking half of the old inline path, moved to where blocking is free.
  */
+/**
+ * Prints the "update available" notice recorded at startup, if there is one.
+ *
+ * Drained beside {@link applyPendingUpdate}, after the alternate screen buffer
+ * has been torn down — see {@link pendingUpdateNotice}. Clears as it reads, so
+ * a second drain cannot print it twice.
+ */
+export function flushPendingUpdateNotice(): void {
+  const version = pendingUpdateNotice;
+  pendingUpdateNotice = null;
+  if (version === null) return;
+  printInfo(`\n  Update available: v${version}`);
+  printInfo(`  What's new: ${releaseNotesUrl(version)}`);
+  printInfo(`  Run: bernard update\n`);
+}
+
 export function applyPendingUpdate(): void {
   const version = takePendingUpdate();
   if (version === null) return;
@@ -252,9 +282,7 @@ export function startupUpdateCheck(autoUpdate: boolean): void {
         // restored normal screen.
         pendingUpdate = result.latestVersion;
       } else {
-        printInfo(`\n  Update available: v${result.currentVersion} → v${result.latestVersion}`);
-        printInfo(`  What's new: ${releaseNotesUrl(result.latestVersion)}`);
-        printInfo(`  Run: bernard update\n`);
+        pendingUpdateNotice = result.latestVersion;
       }
     })
     .catch(() => {

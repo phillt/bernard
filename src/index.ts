@@ -80,6 +80,7 @@ import {
   getLocalVersion,
   startupUpdateCheck,
   applyPendingUpdate,
+  flushPendingUpdateNotice,
   interactiveUpdate,
 } from './update.js';
 import { factsList, factsSearch, clearFacts } from './facts-cli.js';
@@ -831,6 +832,10 @@ async function runInkRepl(args: {
   // After teardown, so npm's own output lands on the restored normal screen and
   // the blocking install cannot freeze a live REPL. Nothing is left running to
   // interrupt, and the user is already on their way out.
+  // Both drained here, after `fullScreen.teardown()`, so each lands on the
+  // restored normal screen: the notice for a user who declined auto-update,
+  // the install for one who did not.
+  flushPendingUpdateNotice();
   applyPendingUpdate();
 }
 

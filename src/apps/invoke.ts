@@ -232,6 +232,18 @@ export interface InvocationLogRow {
   toolsGranted?: string[];
   mcpConnectMs?: number;
   stepLimitHit?: boolean;
+  /**
+   * Permission keys the run was refused, if any (#447).
+   *
+   * A run can complete, answer, and still have been denied the one capability
+   * the action existed for — `runHeadless` returns `denied` on BOTH arms for
+   * exactly that reason, and cron acts on it. Here the envelope stays `ok`
+   * (an applet button that degrades is not a broken request, and flipping the
+   * exit code is its own decision), so without this row the log says a clean
+   * success and `bernard app logs` — the surface #461 built to explain a dead
+   * button — has nothing to show.
+   */
+  denied?: string[];
 }
 
 /**
@@ -535,6 +547,10 @@ export async function invokeAction(opts: InvokeActionOptions): Promise<Invocatio
       stepLimitHit: run.stepLimitHit,
       mcpConnectMs: run.timings.mcpConnectMs,
     },
-    dispatched,
+    // Deduped: one refused tool called six times is one missing capability,
+    // and the log row answers "what could this action not do", not "how often".
+    run.denied.length > 0
+      ? { ...dispatched, denied: [...new Set(run.denied.map((d) => d.permissionKey ?? d.tool))] }
+      : dispatched,
   );
 }

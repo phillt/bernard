@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 
 import {
+  duplicateKeyFor,
   duplicateRefusal,
   recordSucceededCall,
   clearDuplicateGuard,
@@ -25,12 +26,16 @@ beforeEach(clearDuplicateGuard);
 
 describe('duplicateRefusal', () => {
   it('lets a first call through', () => {
-    expect(duplicateRefusal('send_message', ARGS, T0)).toBeNull();
+    expect(duplicateRefusal('send_message', duplicateKeyFor('send_message', ARGS), T0)).toBeNull();
   });
 
   it('refuses an identical call that already succeeded', () => {
-    recordSucceededCall('send_message', ARGS, T0);
-    const refusal = duplicateRefusal('send_message', ARGS, T0 + 3_700);
+    recordSucceededCall(duplicateKeyFor('send_message', ARGS), T0);
+    const refusal = duplicateRefusal(
+      'send_message',
+      duplicateKeyFor('send_message', ARGS),
+      T0 + 3_700,
+    );
     expect(refusal).toMatch(/already SUCCEEDED/);
     // The elapsed time is the part that makes it checkable rather than a scold.
     expect(refusal).toMatch(/4s ago/);
@@ -41,54 +46,80 @@ describe('duplicateRefusal', () => {
     // identical call was made" confirms what it already thinks and it retries
     // anyway; the fact it was missing — and could not get from a result that
     // says nothing — is that the call worked.
-    recordSucceededCall('send_message', ARGS, T0);
-    const refusal = duplicateRefusal('send_message', ARGS, T0 + 1_000)!;
+    recordSucceededCall(duplicateKeyFor('send_message', ARGS), T0);
+    const refusal = duplicateRefusal(
+      'send_message',
+      duplicateKeyFor('send_message', ARGS),
+      T0 + 1_000,
+    )!;
     expect(refusal).toMatch(/it did not/i);
     expect(refusal).toMatch(/make the identical call again/i);
   });
 
   it('runs the call that follows a refusal — re-issuing IS the confirmation', () => {
-    recordSucceededCall('send_message', ARGS, T0);
-    expect(duplicateRefusal('send_message', ARGS, T0 + 1_000)).not.toBeNull();
-    expect(duplicateRefusal('send_message', ARGS, T0 + 2_000)).toBeNull();
+    recordSucceededCall(duplicateKeyFor('send_message', ARGS), T0);
+    expect(
+      duplicateRefusal('send_message', duplicateKeyFor('send_message', ARGS), T0 + 1_000),
+    ).not.toBeNull();
+    expect(
+      duplicateRefusal('send_message', duplicateKeyFor('send_message', ARGS), T0 + 2_000),
+    ).toBeNull();
   });
 
   it('does not re-arm on the confirmed call', () => {
     // Otherwise the call AFTER the confirmed one is refused on the strength of
     // a success the model has already been told about and deliberately
     // repeated — an endless alternation rather than a gate.
-    recordSucceededCall('send_message', ARGS, T0);
-    duplicateRefusal('send_message', ARGS, T0 + 1_000);
-    duplicateRefusal('send_message', ARGS, T0 + 2_000);
-    expect(duplicateRefusal('send_message', ARGS, T0 + 3_000)).toBeNull();
+    recordSucceededCall(duplicateKeyFor('send_message', ARGS), T0);
+    duplicateRefusal('send_message', duplicateKeyFor('send_message', ARGS), T0 + 1_000);
+    duplicateRefusal('send_message', duplicateKeyFor('send_message', ARGS), T0 + 2_000);
+    expect(
+      duplicateRefusal('send_message', duplicateKeyFor('send_message', ARGS), T0 + 3_000),
+    ).toBeNull();
   });
 
   it('ignores a success older than the window', () => {
     // 102 of 103 real repeated-write pairs fall inside it; the straggler is 93
     // minutes apart, which is a separate decision rather than a retry.
-    recordSucceededCall('send_message', ARGS, T0);
-    expect(duplicateRefusal('send_message', ARGS, T0 + DUPLICATE_WINDOW_MS + 1)).toBeNull();
+    recordSucceededCall(duplicateKeyFor('send_message', ARGS), T0);
+    expect(
+      duplicateRefusal(
+        'send_message',
+        duplicateKeyFor('send_message', ARGS),
+        T0 + DUPLICATE_WINDOW_MS + 1,
+      ),
+    ).toBeNull();
   });
 
   it('never gates a call that FAILED', () => {
     // Nothing records a failure, so a retry after one is untouched. Gating it
     // would turn a transient failure into a permanent one — the opposite of
     // what a retry is for.
-    expect(duplicateRefusal('send_message', ARGS, T0)).toBeNull();
-    expect(duplicateRefusal('send_message', ARGS, T0 + 1_000)).toBeNull();
-    expect(duplicateRefusal('send_message', ARGS, T0 + 2_000)).toBeNull();
+    expect(duplicateRefusal('send_message', duplicateKeyFor('send_message', ARGS), T0)).toBeNull();
+    expect(
+      duplicateRefusal('send_message', duplicateKeyFor('send_message', ARGS), T0 + 1_000),
+    ).toBeNull();
+    expect(
+      duplicateRefusal('send_message', duplicateKeyFor('send_message', ARGS), T0 + 2_000),
+    ).toBeNull();
   });
 
   it('keys on the arguments, so a different message is not a duplicate', () => {
-    recordSucceededCall('send_message', ARGS, T0);
+    recordSucceededCall(duplicateKeyFor('send_message', ARGS), T0);
     expect(
-      duplicateRefusal('send_message', '{"chatID":"29","text":"different"}', T0 + 1_000),
+      duplicateRefusal(
+        'send_message',
+        duplicateKeyFor('send_message', '{"chatID":"29","text":"different"}'),
+        T0 + 1_000,
+      ),
     ).toBeNull();
   });
 
   it('keys on the tool, so two tools do not shadow each other', () => {
-    recordSucceededCall('send_message', ARGS, T0);
-    expect(duplicateRefusal('other_tool', ARGS, T0 + 1_000)).toBeNull();
+    recordSucceededCall(duplicateKeyFor('send_message', ARGS), T0);
+    expect(
+      duplicateRefusal('other_tool', duplicateKeyFor('other_tool', ARGS), T0 + 1_000),
+    ).toBeNull();
   });
 
   it('keys on the WHOLE arguments, not a prefix', () => {
@@ -97,8 +128,12 @@ describe('duplicateRefusal', () => {
     // second was refused as a duplicate. A false refusal on a write is the
     // failure this module otherwise exists to avoid.
     const long = (tail: string) => `{"path":"/tmp/x","content":"${'y'.repeat(400)}${tail}"}`;
-    recordSucceededCall('file_write', long('A'), T0);
-    expect(duplicateRefusal('file_write', long('B'), T0 + 1_000)).toBeNull();
-    expect(duplicateRefusal('file_write', long('A'), T0 + 1_000)).not.toBeNull();
+    recordSucceededCall(duplicateKeyFor('file_write', long('A')), T0);
+    expect(
+      duplicateRefusal('file_write', duplicateKeyFor('file_write', long('B')), T0 + 1_000),
+    ).toBeNull();
+    expect(
+      duplicateRefusal('file_write', duplicateKeyFor('file_write', long('A')), T0 + 1_000),
+    ).not.toBeNull();
   });
 });

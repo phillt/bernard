@@ -216,3 +216,17 @@ export const CONFIRM_MODES: ReadonlyArray<{
     description: 'Never prompts. Deny rules and write scopes still apply.',
   },
 ];
+
+/**
+ * The label of the row in force, for an annotation that opens this question.
+ *
+ * `toolModeFor` answers with the VALUE, and a caller wanting something to show
+ * has to map it — which `/agent-options` did by hand, producing `⚠ unrestricted`
+ * against the row's own `⚠ Never ask`. That is exactly the drift this module
+ * exists to end, surviving inside the file that adopted it. `null` for a
+ * combination no row represents, which the caller renders as `custom`.
+ */
+export function toolModeLabel(settings: Partial<ToolModeSettings>): string | null {
+  const value = toolModeFor(settings);
+  return value === null ? null : (TOOL_MODES.find((m) => m.value === value)?.label ?? null);
+}

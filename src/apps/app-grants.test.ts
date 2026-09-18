@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { useTempHome } from '../__tests__/temp-home.js';
-import { parseGrantSpec } from './grant-cli.js';
+import { parseGrantSpec } from '../tool-permissions.js';
 
 async function loadModule() {
   vi.resetModules();
