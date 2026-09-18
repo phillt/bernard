@@ -1,4 +1,10 @@
-import { FRAME_CHROME_ROWS, MIN_TRANSCRIPT_ROWS, PROMPT_CHROME_ROWS } from './plan-window.js';
+import stringWidth from 'string-width';
+import {
+  FRAME_CHROME_ROWS,
+  MIN_TRANSCRIPT_ROWS,
+  PROMPT_CHROME_ROWS,
+  planPanelMaxRows,
+} from './plan-window.js';
 
 /**
  * Pure geometry for the slash-command picker (#589) — no React, no Ink.
@@ -61,13 +67,18 @@ const MAX_PICKER_ROWS = SLASH_PICKER_CHROME_ROWS + 8;
  * fallback size, and the one most people run — it leaves the picker two
  * command rows out of 38.
  *
- * **The slack this spends is already reserved.** `planPanelMaxRows` charges
- * that same input its cap while the real input is one row, so when a plan and
- * the picker are both up the picker's under-charge comes out of the plan
- * budget's over-charge rather than out of the frame. That is why
- * `planPanelMaxRows` needs no parameter for the picker and the plan does not
- * flicker away when the popover opens — checked at every terminal height by
- * `slash-picker.test.ts` and, on the rendered frame, by `Prompt.test.tsx`.
+ * It is NOT an argument that the picker may then ignore the plan panel. An
+ * earlier cut of this claimed the plan's over-charge of that same input was
+ * slack the picker could spend for free, so the two budgets could be taken
+ * independently. That holds only while `planPanelMaxRows` is clamped by its
+ * `quarter`; the moment it is clamped by `room` the plan has already taken the
+ * whole remainder, and there is no over-charge left. Measured against the real
+ * functions, the transcript got **0 rows at 22 and 23** and **1 at 24** — the
+ * fallback height, the one this comment calls the one most people run —
+ * against `MIN_TRANSCRIPT_ROWS` of 3, recovering only at 27. That is the
+ * #392/#396 failure class every bound in this family exists to end, and
+ * borrowing below a floor another module is enforcing while a comment says the
+ * overlap is free is worse than not having the bound.
  */
 const SLASH_INPUT_ROWS = 1;
 
@@ -85,6 +96,22 @@ function clamp(n: number, lo: number, hi: number): number {
  * `reserveColumns`: the caller owns it because only the caller knows what it
  * sits in.
  *
+ * **The picker fits into what the plan left; the plan does not resize when the
+ * popover opens.** `planPanelMaxRows(termRows)` is charged in full, whether or
+ * not a plan exists — the panel owns its own store subscription, so `Prompt`
+ * has its budget and not its height, and charging the budget is the
+ * conservative direction. The ordering is the one `FRAME_CHROME_ROWS` already
+ * argues for one module over: resizing the plan panel because an unrelated
+ * surface appeared is a worse artifact than one row of over-reservation, and
+ * the plan is the surface that is ALREADY on screen when the picker opens.
+ * Taking its rows would make it move, and give them back on Esc. The picker
+ * has no "before" state to disturb — it is sized once, at the moment it opens.
+ *
+ * It also makes the result a function of `termRows` alone, so the popover does
+ * not change size when a plan appears or completes mid-session. The cost,
+ * stated: with no plan on screen the picker is smaller than the frame could
+ * afford — six command rows at 24 rather than eight.
+ *
  * **It never returns 0, which is the one place it diverges from
  * `planPanelMaxRows`.** That function yields the plan panel entirely on a short
  * terminal, and can, because a plan is reference material the user can do
@@ -96,7 +123,12 @@ function clamp(n: number, lo: number, hi: number): number {
  * between this surface and a persistent one.
  */
 export function slashPickerMaxRows(termRows: number): number {
-  const spoken = SLASH_INPUT_ROWS + PROMPT_CHROME_ROWS + FRAME_CHROME_ROWS + MIN_TRANSCRIPT_ROWS;
+  const spoken =
+    SLASH_INPUT_ROWS +
+    PROMPT_CHROME_ROWS +
+    FRAME_CHROME_ROWS +
+    MIN_TRANSCRIPT_ROWS +
+    planPanelMaxRows(termRows);
   return clamp(termRows - spoken, MIN_PICKER_ROWS, MAX_PICKER_ROWS);
 }
 
@@ -123,6 +155,67 @@ const MARKER_COLUMNS = 2;
 
 /** Between a command name and its description. */
 export const SLASH_ROW_SEPARATOR = ' — ';
+
+/**
+ * Display columns `s` occupies, which is **not** `s.length`.
+ *
+ * Every width decision in this file used to count UTF-16 units while Ink lays
+ * out in columns, and the rows are not a closed set: `App.tsx` synthesizes a
+ * completion per saved routine whose description is `${kind} · ${r.name}`, and
+ * `RoutineStore` stores `name` raw — no validation anywhere, unlike the id,
+ * which `ID_PATTERN` holds to ASCII. A CJK routine name is two columns per code
+ * unit, so a description passed the budget and rendered at twice it: measured
+ * through the real component, a 40-character CJK gloss made the popover **6
+ * rows where its budget said 5**, one past the `maxRows` it was handed — and
+ * with it the "one command is one row" invariant that lets the window run over
+ * command INDICES, so `clampOffset` and `listPosition` were both quietly
+ * describing something else. Same class as `glyph-width.ts`, which exists
+ * because it bit the bordered panels once already.
+ *
+ * The ASCII fast path is not micro-optimisation: `stringWidth` is regex-heavy
+ * (measured 0.068 ms on a 52-character string) and this runs over every match
+ * on every keystroke, which for the 38-entry catalogue is the difference
+ * between a rounding error and most of a millisecond inside Ink's 32 ms frame.
+ * Every built-in name and description is ASCII, so the slow path is reached
+ * only by the user-supplied text that made it necessary.
+ */
+export function widthOf(s: string): number {
+  return /^[\x20-\x7e]*$/.test(s) ? s.length : stringWidth(s);
+}
+
+/**
+ * `s` cut to at most `max` display COLUMNS, with `…` marking the cut.
+ *
+ * `text.truncate`'s shape — cut, trim the ragged edge, append the ellipsis —
+ * measured in columns and walked by code POINT, so a budget can neither be
+ * overrun by a wide glyph nor land between the halves of a surrogate pair.
+ *
+ * Not in `src/text.ts` beside its sibling: that file's own docstring calls it a
+ * zero-import leaf, and `string-width` is an import. Not Ink's
+ * `wrap="truncate"` either — `CLAUDE.md` records that path as a second broken
+ * copy of `slice-ansi` which over-runs rather than over-cuts, which is the
+ * dangerous direction for exactly this invariant.
+ */
+export function truncateToWidth(s: string, max: number): string {
+  if (max <= 0) return '';
+  if (widthOf(s) <= max) return s;
+  // One column for the ellipsis, which is one column wide.
+  const budget = max - 1;
+  let out = '';
+  let used = 0;
+  for (const ch of s) {
+    const w = widthOf(ch);
+    if (used + w > budget) break;
+    out += ch;
+    used += w;
+  }
+  return out.trimEnd() + '…';
+}
+
+/** `s` padded to `width` display COLUMNS, so a name cell aligns its gloss. */
+export function padToWidth(s: string, width: number): string {
+  return s + ' '.repeat(Math.max(0, width - widthOf(s)));
+}
 
 /**
  * Below this a description is noise rather than a gloss, so the row drops it
@@ -167,6 +260,6 @@ export function splitSlashRowWidth(
 ): { name: number; description: number } {
   const available = Math.max(1, width - MARKER_COLUMNS);
   const name = Math.max(1, Math.min(nameWidth, available));
-  const rest = available - name - SLASH_ROW_SEPARATOR.length;
+  const rest = available - name - widthOf(SLASH_ROW_SEPARATOR);
   return { name, description: rest >= MIN_DESCRIPTION_COLUMNS ? rest : 0 };
 }

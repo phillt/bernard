@@ -1,5 +1,4 @@
 import { Box, Text } from 'ink';
-import { truncate } from '../text.js';
 import { useThemeColors } from './ThemeContext.js';
 import { useDimensionsCtx } from './DimensionsContext.js';
 import { MenuRow } from './overlays/MenuRow.js';
@@ -7,9 +6,12 @@ import { clampOffset, formatPosition, listPosition } from './overlays/viewer-uti
 import {
   SLASH_PICKER_CHROME_COLUMNS,
   SLASH_ROW_SEPARATOR,
+  padToWidth,
   slashPickerListRows,
   slashPickerTextWidth,
   splitSlashRowWidth,
+  truncateToWidth,
+  widthOf,
 } from './slash-picker.js';
 import { type SlashCommand } from './slash-commands.js';
 
@@ -80,8 +82,11 @@ export function SlashHints({ matches, selectedIndex, offset, maxRows }: SlashHin
   // One name cell for the whole popover, so the glosses line up into a column
   // instead of stepping in and out with each name's length. Measured over the
   // WHOLE match list rather than the visible slice, or the column would shift
-  // as the window scrolls.
-  const nameWidth = matches.reduce((w, c) => Math.max(w, c.name.length), 0);
+  // as the window scrolls — and in display COLUMNS rather than UTF-16 units,
+  // because a routine completion's text is the user's and may be CJK. See
+  // `widthOf`: counting units let a row render at twice its budget and wrap,
+  // which breaks the one-row-per-index invariant the window runs on.
+  const nameWidth = matches.reduce((w, c) => Math.max(w, widthOf(c.name)), 0);
   const budget = splitSlashRowWidth(width, nameWidth);
 
   const position = listPosition(start, size, matches.length);
@@ -111,10 +116,10 @@ export function SlashHints({ matches, selectedIndex, offset, maxRows }: SlashHin
         <MenuRow
           key={cmd.name}
           selected={start + i === selectedIndex}
-          label={truncate(cmd.name, budget.name).padEnd(budget.name)}
+          label={padToWidth(truncateToWidth(cmd.name, budget.name), budget.name)}
           trailing={
             budget.description > 0
-              ? `${SLASH_ROW_SEPARATOR}${truncate(cmd.description, budget.description)}`
+              ? `${SLASH_ROW_SEPARATOR}${truncateToWidth(cmd.description, budget.description)}`
               : undefined
           }
         />

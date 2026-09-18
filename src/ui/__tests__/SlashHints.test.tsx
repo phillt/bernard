@@ -118,6 +118,54 @@ describe('<SlashHints>', () => {
   });
 
   /**
+   * The same invariant against a fixture that is wide rather than merely long.
+   * Width decisions here used to count UTF-16 units while Ink lays out in
+   * columns, and the rows are not a closed set — `App.tsx` synthesizes one per
+   * saved routine from `RoutineStore`, whose `name` has no validation at all
+   * (unlike the id, which `ID_PATTERN` holds to ASCII). Measured before the
+   * fix: 40 CJK characters is 80 columns against a description budget of ~58,
+   * and the popover rendered **6 rows where its budget said 5**.
+   *
+   * The `'x'.repeat(400)` fixture above cannot catch it — every character is
+   * one column — and neither can the equal-width test below, because Ink wraps
+   * INSIDE the fixed-width box: every line is still 74 columns, there is just
+   * one more of them. Only a row count sees it.
+   */
+  it('cuts a WIDE description too, not just a long one', () => {
+    const cjk = '\u4f5c\u696d\u30ed\u30b0\u3092\u6bce\u671d\u307e\u3068\u3081'.repeat(4);
+    expect(stringWidth(cjk)).toBeGreaterThan(cjk.length);
+    const matches: SlashCommand[] = [
+      { name: '/routine-\u65e5\u5831', description: `routine \u00b7 ${cjk}` },
+      { name: '/short', description: 'y' },
+    ];
+    const frame = show(matches);
+    expect(rowsOf(frame)).toBe(SLASH_PICKER_CHROME_ROWS + 2);
+  });
+
+  it('keeps a wide name from pushing its own row over the budget', () => {
+    // The name cell is padded to the widest name, and the pad is a column
+    // count too — `padEnd` would add one space per missing UTF-16 unit and
+    // overshoot by the same factor the truncate did.
+    const matches: SlashCommand[] = [
+      { name: '/\u6f22\u5b57\u30eb\u30fc\u30c1\u30f3'.repeat(3), description: 'a' },
+      { name: '/b', description: 'b'.repeat(80) },
+    ];
+    expect(rowsOf(show(matches))).toBe(SLASH_PICKER_CHROME_ROWS + 2);
+  });
+
+  it('shows a wide name in full when the cell has room for it', () => {
+    // The sibling of the row-count assertions, and the one that catches
+    // `nameWidth` counting units: UNDER-measuring the name column cannot
+    // overflow a row — it cuts the name shorter than the popover can afford
+    // and mis-aligns every gloss beside it. A CJK routine name would lose half
+    // its characters to a cell that had the columns for all of them.
+    const name = '/\u65e5\u5831\u307e\u3068\u3081';
+    const frame = show([{ name, description: 'routine' }]);
+    expect(frame).toContain(name);
+    expect(frame).not.toContain('\u2026');
+  });
+
+  /**
    * The border breaks if any row measures differently from its neighbours —
    * which is why the header may hold no emoji glyph (`glyph-width.ts`: Ink 5
    * pads a bordered row against the larger figure, so an emoji title renders a
