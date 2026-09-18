@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fork } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { CronStore } from './store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -42,7 +42,8 @@ export function getDaemonPid(): number | null {
 }
 
 /**
- * Forks the daemon process in the background if it is not already running.
+ * Starts the daemon as a detached background process if it is not already
+ * running.
  *
  * @returns `true` if the daemon is now running (already was or just started).
  * @throws {Error} If the compiled daemon script is missing (build required).
@@ -55,7 +56,20 @@ export function startDaemon(): boolean {
     throw new Error(`Daemon script not found at ${daemonPath}. Run "npm run build" first.`);
   }
 
-  const child = fork(daemonPath, [], {
+  // `spawn`, not `fork`. `fork` always opens an IPC channel, and that channel
+  // keeps the PARENT's event loop alive past `child.unref()` — `unref()`
+  // releases the child handle, not the channel. Latent here rather than
+  // observed, because every caller today keeps running anyway (the REPL is
+  // long-lived; the `bernard cron` subcommands do more work afterwards), but a
+  // caller whose only job is "start the daemon and exit" would hang with no
+  // error — the worst shape for something on the automation path. #421 hit
+  // exactly this on the applet host and fixed it there; this is the copy that
+  // did not get the fix. We never talk to this process, so it should not have
+  // a channel to talk on.
+  //
+  // Naming `process.execPath` also states what `fork` only implied: the child
+  // is a Node script run with the same executable.
+  const child = spawn(process.execPath, [daemonPath], {
     detached: true,
     stdio: 'ignore',
   });
