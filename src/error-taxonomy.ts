@@ -231,6 +231,77 @@ export function classifyToolFailure(input: { snippet: string; toolName?: string 
     : classifyError({ message: input.snippet, toolName: input.toolName });
 }
 
+/**
+ * Renders a `WrapperResult.result` for classification, the way
+ * `formatWrappedResult` renders it for display — so the classifier reads the
+ * same bytes the user and the model are shown, rather than a second rendering
+ * that could disagree with it.
+ *
+ * Guarded because `result` is `unknown` and reaches us from a model-authored
+ * envelope: a circular structure would otherwise throw out of a classifier that
+ * every wrapper failure passes through.
+ */
+function proseOf(result: unknown): string {
+  if (typeof result === 'string') return result;
+  if (result === null || result === undefined) return '';
+  try {
+    return JSON.stringify(result) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Classifies a failed `WrapperResult` from its DIAGNOSTIC, falling back to its
+ * label (#565).
+ *
+ * `WrapperResult.error` is a label the specialist writes freely — the
+ * structured-output rules tell it to "put the cause in `error`", and
+ * `ReasoningLogEntry.status` is typed `string` for exactly that reason — while
+ * `result` carries the prose. Both call sites used to prefer the label, so a
+ * retryable provider stall arriving as `{error: 'runtime_error', result:
+ * 'Provider timed out — no response headers within 90s.'}` classified
+ * `unknown`: not retryable, severity dropped, and the playbook "the error did
+ * not match any known pattern" printed directly above the sentence naming the
+ * cause. The agent retried anyway, which means the guidance was not merely
+ * wrong, it was ignored.
+ *
+ * **The fallback is by OUTCOME, not by emptiness**, and its honest scope is
+ * narrow. Exactly three `ToolErrorType` names are spelled literally in
+ * {@link classifyError}'s patterns — `pool_exhausted`, `step_limit`,
+ * `parse_failed` — and each is there because Bernard itself emits it. A
+ * free-form label does not classify: `rate_limit` misses, because the pattern
+ * is `rate[\s-]?limit` and has no underscore. So consulting the label second
+ * preserves Bernard's own three and little else, which is precisely why
+ * consulting it FIRST was a defect rather than a defensible second-best.
+ *
+ * What the fallback is really for is the case with no prose at all: the pool
+ * refusal in `wrap-with-specialist` puts its signal only in the label, with
+ * `result: ''`. A plain `result || error` would cover that one too — the
+ * outcome test additionally covers a specialist that wrote prose the taxonomy
+ * cannot read while labelling it correctly.
+ *
+ * **Bernard's own three labels survive either order, by construction rather
+ * than luck.** Those same first three patterns match both the label and the
+ * prose it ships with — "Maximum concurrent agents", "ran out of steps", "did
+ * not produce valid structured output" — so the two spellings cannot disagree.
+ *
+ * Distinct from {@link classifyToolFailure}, which reads an already-annotated
+ * result STRING and trusts the marker embedded in it. This one runs earlier, on
+ * the envelope, and is what mints that marker.
+ */
+export function classifyWrapperFailure(input: {
+  result: unknown;
+  error?: string;
+  toolName?: string;
+}): Classification {
+  const { error, toolName } = input;
+  const fromProse = classifyError({ message: proseOf(input.result), toolName });
+  if (fromProse.category !== 'unknown' || !error) return fromProse;
+  const fromLabel = classifyError({ message: error, toolName });
+  return fromLabel.category === 'unknown' ? fromProse : fromLabel;
+}
+
 function pickCategory(input: ClassifyInput): ToolErrorType {
   const { httpStatus, errno, message } = input;
 

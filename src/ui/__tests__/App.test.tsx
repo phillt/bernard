@@ -35,7 +35,11 @@ import type { PendingPermission } from '../../apps/permission-consent.js';
 vi.mock('../../reference-resolver.js', () => ({
   resolveReferences: vi.fn(async () => ({ status: 'noop' as const })),
   stripToolResolvableTokens: (s: string) => s,
-  shouldSkipResolver: () => true,
+  // A `vi.fn` rather than a plain arrow so a test can open the pre-turn
+  // pipeline. Skipped by default, which is every other test's assumption —
+  // the window before `processInput` is otherwise unreachable from here and
+  // #478's defect lives entirely inside it.
+  shouldSkipResolver: vi.fn(() => true),
 }));
 
 vi.mock('../../prompt-rewriter.js', () => ({
@@ -115,6 +119,8 @@ process.env.BERNARD_HOME = TMP_HOME;
 
 // ── Imports under test (after mocks + env) ──────────────────────────────
 import { App, buildResumeSeed, isScaffoldingMessage, type AppStores } from '../App.js';
+import { resolveReferences, shouldSkipResolver } from '../../reference-resolver.js';
+import { INTERRUPT_CANCEL_NOTE } from '../../react.js';
 import { DimensionsProvider } from '../DimensionsContext.js';
 import type { CoreMessage } from 'ai';
 import type { BernardConfig } from '../../config.js';
@@ -172,6 +178,11 @@ interface AgentSpy {
   processInput: ReturnType<typeof vi.fn>;
   clearHistory: ReturnType<typeof vi.fn>;
   compactHistory: ReturnType<typeof vi.fn>;
+  // Anything else on the stub, so a test can stand in one accessor without a
+  // bespoke harness. Spread LAST in `makeAgent`, so an override wins over the
+  // hard-coded default beside it — `getPlanSnapshot` was previously pinned to
+  // `[]` with no way past it.
+  [key: string]: unknown;
 }
 
 function makeAgent(
@@ -198,6 +209,15 @@ function makeAgent(
     // stub whose `processInput` pushes nothing correctly answers null — there is
     // no message to suppress.
     getLastUserMessage: () => [...box.current].reverse().find((m) => m.role === 'user') ?? null,
+    // Mirrors the real contract (#478): pushes the raw input plus the marker
+    // and hands the user message back. A stub that pushed nothing would let
+    // the pre-turn-abort test pass while the transcript stayed empty.
+    recordInterruptedInput: vi.fn((input: string) => {
+      if (!input.trim()) return null;
+      const msg = { role: 'user' as const, content: input };
+      box.current.push(msg, { role: 'assistant', content: '[interrupted by user]' });
+      return msg;
+    }),
     clearHistory: stubs.clearHistory,
     compactHistory: stubs.compactHistory,
     processInput: stubs.processInput,
@@ -219,6 +239,7 @@ function makeAgent(
     beginTurnStats: () => {},
     finalizeTurnStats: () => undefined,
     spinnerStats: null,
+    ...spy,
   } as unknown as Agent;
 }
 
@@ -316,8 +337,9 @@ function renderApp(opts: HarnessOptions = {}) {
   const sessionToolAllowlist = new Set<string>();
   const stores = makeStores(opts.stores);
   const config = makeConfig(opts.config);
+  const agent = makeAgent(agentSpy, opts.history, opts.holder);
   const appEl = createElement(App, {
-    agent: makeAgent(agentSpy, opts.history, opts.holder),
+    agent,
     config,
     historyStore,
     provenanceHistoryStore,
@@ -334,6 +356,9 @@ function renderApp(opts: HarnessOptions = {}) {
   const utils = render(opts.fullScreen ? createElement(DimensionsProvider, null, appEl) : appEl);
   return {
     ...utils,
+    // The constructed stub, not just the spy bag: tests that assert on what
+    // reached `agent.history` need the object App was actually handed.
+    agent,
     agentSpy,
     onExit,
     historyStore,
@@ -1266,13 +1291,22 @@ describe('<App> interrupted turn leaves a durable record (#403)', () => {
   });
   afterEach(() => {
     vi.clearAllMocks();
+    // `clearAllMocks` clears CALLS, not implementations, so the pre-turn
+    // pipeline this block opens would stay open — and a resolver left hanging
+    // means `processInput` is never reached in any test that follows. Restored
+    // to the module mock's defaults rather than left to the next describe.
+    vi.mocked(shouldSkipResolver).mockReturnValue(true);
+    vi.mocked(resolveReferences).mockImplementation(async () => ({ status: 'noop' as const }));
   });
 
   /**
    * Submits, presses Esc mid-turn, then lets `processInput` settle — the shape
    * a real Esc takes, where the abort lands while the turn promise is pending.
    */
-  async function interruptedTurn(history: CoreMessage[] = []) {
+  async function interruptedTurn(
+    history: CoreMessage[] = [],
+    agentOverrides: Partial<AgentSpy> = {},
+  ) {
     let release: (() => void) | undefined;
     const processInput = vi.fn(
       () =>
@@ -1280,7 +1314,7 @@ describe('<App> interrupted turn leaves a durable record (#403)', () => {
           release = resolve;
         }),
     );
-    const harness = renderApp({ history, agent: { processInput } });
+    const harness = renderApp({ history, agent: { processInput, ...agentOverrides } });
     await tick();
     harness.stdin.write('a long question');
     await tick();
@@ -1292,6 +1326,126 @@ describe('<App> interrupted turn leaves a durable record (#403)', () => {
     await tick(40);
     return harness;
   }
+
+  /**
+   * The #478 shape: Esc lands while the PRE-TURN pipeline is still running, so
+   * `agent.processInput` is never reached. Every other test in this file has
+   * the pipeline skipped (`shouldSkipResolver` returns true, `promptRewriter`
+   * is off, `ragEnabled` is off), which is exactly why this window had no
+   * coverage — Esc there always arrived after the pipeline had finished.
+   */
+  async function interruptedBeforeProcessInput() {
+    vi.mocked(shouldSkipResolver).mockReturnValue(false);
+    let release: (() => void) | undefined;
+    vi.mocked(resolveReferences).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ status: 'noop' as const });
+        }) as ReturnType<typeof resolveReferences>,
+    );
+    const processInput = vi.fn(async () => {});
+    const harness = renderApp({ agent: { processInput } });
+    await tick();
+    harness.stdin.write('a long question');
+    await tick();
+    harness.stdin.write(ENTER);
+    await tick(40);
+    harness.stdin.write(ESC);
+    await tick();
+    // The resolver settles only after the abort, the way a real LLM call in
+    // flight does — the pipeline then trips its own `signal.aborted` gate.
+    release?.();
+    await tick(40);
+    return { ...harness, processInput };
+  }
+
+  it('keeps what you typed when Esc lands before processInput (#478)', async () => {
+    const { lastFrame, processInput, unmount } = await interruptedBeforeProcessInput();
+
+    // The premise: the turn really did abort in the pre-turn window.
+    expect(processInput).not.toHaveBeenCalled();
+
+    const frame = stripAnsi(lastFrame() ?? '');
+    // Before this, the notice named a turn with no visible prompt above it.
+    expect(frame).toContain('a long question');
+    expect(frame).toContain('Turn interrupted after');
+    unmount();
+  });
+
+  it('tells the model something was asked, not that the turn never happened (#478)', async () => {
+    // #403's reasoning, applied one stage earlier: a user message with no reply
+    // reads on a later resume as a turn the model simply never answered, and
+    // "please continue" has nothing to continue from. Here there was not even a
+    // user message.
+    const { agent, unmount } = await interruptedBeforeProcessInput();
+    const history = agent.getHistory();
+    expect(history).toHaveLength(2);
+    expect(history[0]).toEqual({ role: 'user', content: 'a long question' });
+    expect(history[1]).toEqual({ role: 'assistant', content: '[interrupted by user]' });
+    unmount();
+  });
+
+  it('does not double-record when the abort lands after processInput', async () => {
+    // The guard is a flag set at the `processInput` call, so the ordinary
+    // interrupt path must be untouched — recording there would push a second
+    // copy of the user message beside the one `processInput` already pushed.
+    const { agent, unmount } = await interruptedTurn();
+    const recorder = (agent as unknown as { recordInterruptedInput: ReturnType<typeof vi.fn> })
+      .recordInterruptedInput;
+    expect(recorder).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it('names where the plan stopped, so it survives the next turn wiping it (#478)', async () => {
+    // `PlanStore` is per-turn — `processInput` clears it at the top of the NEXT
+    // turn — so the `✘` the abort writes is erased by whatever the user says
+    // next. The notice is a `staticItem`, which is the half that survives.
+    const { stdin, lastFrame, unmount } = await interruptedTurn(undefined, {
+      getPlanSnapshot: () => [
+        {
+          id: 1,
+          description: 'read the config',
+          verification: 'contents printed',
+          status: 'done' as const,
+        },
+        {
+          id: 2,
+          description: 'apply the edit',
+          verification: 'diff shown',
+          status: 'cancelled' as const,
+          note: INTERRUPT_CANCEL_NOTE,
+        },
+      ],
+    });
+
+    expect(stripAnsi(lastFrame() ?? '')).toContain('Plan stopped at: apply the edit');
+
+    // And it is durable: the live panel is gone on the next turn, this is not.
+    await submit(stdin, 'never mind');
+    await tick(40);
+    expect(stripAnsi(lastFrame() ?? '')).toContain('Plan stopped at: apply the edit');
+    unmount();
+  });
+
+  it('says nothing about a plan when there was not one', async () => {
+    // A step cancelled by the enforcement loop carries a different note, and
+    // must not be reported as something the user stopped.
+    const { lastFrame, unmount } = await interruptedTurn(undefined, {
+      getPlanSnapshot: () => [
+        {
+          id: 1,
+          description: 'some step',
+          verification: 'checked',
+          status: 'cancelled' as const,
+          note: 'auto-cancelled: enforcement retries exhausted',
+        },
+      ],
+    });
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toContain('Turn interrupted after');
+    expect(frame).not.toContain('Plan stopped at');
+    unmount();
+  });
 
   it('commits an interrupt entry that survives the next submit', async () => {
     // The `⏹ you interrupted` chrome renders off a boolean and is never pushed

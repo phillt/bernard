@@ -226,8 +226,59 @@ describe('wrapToolWithSpecialist', () => {
     expect(output).toContain('Error (');
     expect(output).toContain('exit_code_1');
     expect(output).toContain('permission denied');
-    expect(output).toContain('[failure:');
+    // The exact category, not merely "a marker" (#565). `exit_code_1` is a
+    // label the specialist wrote and classifies as nothing; the prose beside
+    // it is what the verdict has to come from. Asserting only `[failure:` here
+    // is what let the label-first precedence survive its own test.
+    expect(output).toContain('[failure: permission]');
     expect(JSON.stringify(result)).not.toContain('should not leak');
+  });
+
+  it('classifies a wrapper failure from the diagnostic, not the label (#565)', async () => {
+    // The motivating session: a provider stall came back labelled
+    // `runtime_error`, classified `unknown`, and reached the model as "the
+    // error did not match any known pattern. … Do not blindly retry" printed
+    // directly above the sentence naming the cause. It is `timeout`, which is
+    // retryable and carries concrete advice.
+    const base = makeBaseTool(async () => 'should not run');
+    const ctx = makeCtx();
+    ctx.stores.specialists.get.mockReturnValue({ name: 'Web Wrapper', kind: 'tool-wrapper' });
+    vi.mocked(dispatchToolWrapper).mockResolvedValue({
+      status: 'error',
+      result: 'Provider timed out — no response headers within 90s.',
+      error: 'runtime_error',
+    });
+
+    const wrapped = wrapToolWithSpecialist(base, 'web_read', 'web-wrapper', ctx);
+    const result = await wrapped.execute({ url: 'https://example.com' }, {});
+
+    const output = String(result);
+    expect(output).toContain('[failure: timeout]');
+    expect(output).not.toContain('[failure: unknown]');
+    // The marker and the prose beside it must agree — the whole complaint was
+    // that they contradicted each other in the same string.
+    expect(output).toContain('Provider timed out');
+    expect(base.execute).not.toHaveBeenCalled();
+  });
+
+  it('still falls through to the raw tool when the pool is full', async () => {
+    // The pool refusal puts its signal ONLY in the label (`result: ''`), so it
+    // is the guard on the label fallback: a prose-only rule would classify it
+    // `unknown` and stop an ordinary batched file read degrading gracefully.
+    const base = makeBaseTool(async () => ({ lines: ['raw tool ran'] }));
+    const ctx = makeCtx();
+    ctx.stores.specialists.get.mockReturnValue({ name: 'File Wrapper', kind: 'tool-wrapper' });
+    vi.mocked(dispatchToolWrapper).mockResolvedValue({
+      status: 'error',
+      result: '',
+      error: 'pool_exhausted',
+    });
+
+    const wrapped = wrapToolWithSpecialist(base, 'file_read_lines', 'file-wrapper', ctx);
+    const result = await wrapped.execute({ path: '/tmp/x' }, {});
+
+    expect(base.execute).toHaveBeenCalledOnce();
+    expect(result).toEqual({ lines: ['raw tool ran'] });
   });
 
   it('preserves a structured shell success result so detectToolError sees native shape', async () => {

@@ -6,6 +6,7 @@ import {
   failureMarker,
   parseFailureMarker,
   classifyToolFailure,
+  classifyWrapperFailure,
 } from './error-taxonomy.js';
 
 describe('classifyError', () => {
@@ -331,5 +332,134 @@ describe('an error with no tool behind it', () => {
     // set, and the set has no production consumer at all — only a doc comment
     // referring to `ToolError.retryable`. Widening it here would be a claim
     // nothing reads, decided on the way past. Left alone on purpose.
+  });
+});
+
+describe('classifyWrapperFailure — the diagnostic decides, not the label (#565)', () => {
+  // `WrapperResult.error` is a label the specialist writes freely; `result`
+  // carries the prose. Preferring the label sent a retryable provider stall to
+  // the model as "unknown, do not retry", with the real cause printed on the
+  // next line.
+  //
+  // Mutation check: restoring `error ?? String(result)` as the classified
+  // string must fail the first row and only the first row — which is also why
+  // the internal-label rows are here, as the guard on the fallback.
+  it.each([
+    [
+      'a provider stall reported under a runtime_error label',
+      'runtime_error',
+      'Provider timed out — no response headers within 90s.',
+      'timeout',
+      true,
+    ],
+    [
+      'a shell failure reported under an exit-code label',
+      'exit_code_1',
+      'permission denied',
+      'permission',
+      false,
+    ],
+    // Bernard's own three labels, each beside the prose it really ships with.
+    // `pickCategory`'s first three patterns match BOTH spellings, so these
+    // cannot regress whichever way the precedence runs — which is the property
+    // that makes prose-first safe rather than lucky.
+    [
+      'a pool refusal',
+      'pool_exhausted',
+      'Maximum concurrent agents (4) reached.',
+      'pool_exhausted',
+      true,
+    ],
+    ['a step-limited run', 'step_limit', 'web-wrapper ran out of steps (13).', 'step_limit', true],
+    [
+      'an unparseable wrapper',
+      'parse_failed',
+      'Specialist did not produce valid structured output',
+      'parse_failed',
+      true,
+    ],
+  ])('reads %s as %s', (_name, error, result, category, retryable) => {
+    const cls = classifyWrapperFailure({ result, error, toolName: 'shell' });
+    expect(cls.category).toBe(category);
+    expect(cls.retryable).toBe(retryable);
+  });
+
+  it('falls back to the label when the prose says nothing recognisable', () => {
+    // The pool fall-through in `wrap-with-specialist` puts its signal ONLY in
+    // the label, with `result: ''` — so a strict prose-only rule would stop an
+    // ordinary batched file read from degrading to the raw tool.
+    expect(classifyWrapperFailure({ result: '', error: 'pool_exhausted' }).category).toBe(
+      'pool_exhausted',
+    );
+    // And an internal label beside prose the taxonomy cannot read.
+    expect(
+      classifyWrapperFailure({ result: 'the API said no', error: 'pool_exhausted' }).category,
+    ).toBe('pool_exhausted');
+  });
+
+  it('does not pretend a free-form label is a category', () => {
+    // Only three `ToolErrorType` names are spelled literally in the patterns —
+    // `pool_exhausted`, `step_limit`, `parse_failed`, each because Bernard
+    // itself emits them. `rate_limit` is NOT one: the pattern is
+    // `rate[\s-]?limit`, which has no underscore. So the fallback preserves
+    // Bernard's own labels and little else, which is the honest scope of it —
+    // and is exactly why classifying the label FIRST was the defect rather
+    // than a defensible second-best.
+    expect(classifyWrapperFailure({ result: '', error: 'rate_limit' }).category).toBe('unknown');
+    expect(classifyWrapperFailure({ result: '', error: 'invalid_args' }).category).toBe('unknown');
+  });
+
+  it('prefers the prose even when the label is also a category', () => {
+    // Not merely "use whichever is non-empty": the label is consulted only
+    // after the prose has failed. A specialist mislabelling a timeout as
+    // `invalid_args` must not make the model retry with a different shape.
+    const cls = classifyWrapperFailure({
+      result: 'Provider timed out — no response headers within 90s.',
+      error: 'invalid_args',
+    });
+    expect(cls.category).toBe('timeout');
+  });
+
+  it('stays unknown when neither says anything, and does not invent a category', () => {
+    const cls = classifyWrapperFailure({ result: 'something odd', error: 'runtime_error' });
+    expect(cls.category).toBe('unknown');
+  });
+
+  it('survives a result that is not a string', () => {
+    // `result` is `unknown` and arrives from a model-authored envelope. It is
+    // rendered the way `formatWrappedResult` renders it for display, so the
+    // classifier reads the same bytes the reader is shown.
+    expect(classifyWrapperFailure({ result: { detail: 'ETIMEDOUT' } }).category).toBe('timeout');
+    expect(classifyWrapperFailure({ result: undefined, error: 'step_limit' }).category).toBe(
+      'step_limit',
+    );
+
+    // A circular structure must not throw out of a classifier that every
+    // wrapper failure passes through; it degrades to the label.
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(classifyWrapperFailure({ result: circular, error: 'pool_exhausted' }).category).toBe(
+      'pool_exhausted',
+    );
+  });
+
+  it('keeps the toolName-sensitive half of the classification', () => {
+    // `not_found` is correctable for shell (a command-not-found the model can
+    // fix) and not for the web tools. The prose is what carries it now, so the
+    // tool flavour has to survive the new path.
+    const shell = classifyWrapperFailure({
+      result: 'bash: fooo: command not found',
+      error: 'runtime_error',
+      toolName: 'shell',
+    });
+    expect(shell.category).toBe('not_found');
+    expect(shell.correctable).toBe(true);
+
+    const web = classifyWrapperFailure({
+      result: 'HTTP 404 not found',
+      error: 'runtime_error',
+      toolName: 'web_read',
+    });
+    expect(web.correctable).toBe(false);
   });
 });

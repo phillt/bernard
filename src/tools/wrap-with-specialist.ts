@@ -2,7 +2,7 @@ import { dispatchToolWrapper } from './tool-wrapper-run.js';
 import type { AgentContext } from '../framework/context.js';
 import { debugLog } from '../logger.js';
 import { preserveMeta } from '../framework/tools/adapter.js';
-import { failureMarker, classifyError } from '../error-taxonomy.js';
+import { failureMarker, classifyWrapperFailure } from '../error-taxonomy.js';
 
 /**
  * Builds the natural-language input handed to a wrapper specialist when the
@@ -112,12 +112,16 @@ export function wrapToolWithSpecialist<TArgs>(
           ctx,
         );
         if (wrapped.status === 'error') {
-          // Use the same fallback for display that the classifier consumes, so
-          // wrappers that report the diagnostic via `result` (parse_failed
-          // paths etc.) still surface a usable snippet to the user instead of
-          // an empty line. PR #189 review feedback.
-          const snippet = wrapped.error ?? String(wrapped.result ?? '');
-          const cls = classifyError({ message: snippet, toolName });
+          // Classify the DIAGNOSTIC, never the label (#565). `wrapped.error` is
+          // free-form text the specialist writes; `result` carries the prose.
+          // Display is built separately by `formatWrappedResult`, which reads
+          // both fields — so this string has exactly one consumer and no
+          // display fallback to preserve.
+          const cls = classifyWrapperFailure({
+            result: wrapped.result,
+            error: wrapped.error,
+            toolName,
+          });
           // A full pool is a fact about Bernard, not about this request, and
           // the raw tool is right here. Falling through is the shim's own
           // contract — it already does exactly this when the specialist is

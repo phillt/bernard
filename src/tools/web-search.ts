@@ -28,10 +28,61 @@ const FETCH_TIMEOUT_MS = 12_000;
 const USER_AGENT =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
-/** Try Brave Search API. Returns `undefined` when the provider is unavailable or errors. */
-async function searchBrave(query: string, limit: number): Promise<SearchResult[] | undefined> {
+/**
+ * What one provider did — three states, not two (#565).
+ *
+ * These functions used to return `undefined` for both "there is no key for this
+ * provider" and "it was tried and it failed", and the caller had no way to tell
+ * them apart. With neither key set that made a search report `brave` and
+ * `tavily` as providers it had *tried*, and — once the DuckDuckGo fallback then
+ * answered with nothing — discard them entirely and tell the model to rephrase.
+ * It rephrased four times in one observed turn, including with a `site:`
+ * operator, against the one provider that was never going to improve.
+ *
+ * The distinction is the caller's to report, so it has to survive the return.
+ * Same shape and same reasoning as `KnowledgeSearchResult.skipped`, which
+ * separates "nothing matched" from "that library could not be read" so the
+ * difference is legible to the model and not just to a human.
+ *
+ * `answered` carries an empty array for a genuine zero-match: whether that is
+ * interesting is the caller's question, not the provider's.
+ */
+type ProviderOutcome =
+  | { status: 'answered'; results: SearchResult[] }
+  | { status: 'unconfigured' }
+  | { status: 'failed' };
+
+/**
+ * A provider that needs a key, and the variable that holds it. Keyless
+ * providers are absent, which is what makes "could any real provider have run?"
+ * answerable from the table rather than from a hard-coded provider name.
+ */
+const PROVIDER_ENV_VAR: Record<string, string> = {
+  brave: 'BRAVE_API_KEY',
+  tavily: 'TAVILY_API_KEY',
+};
+
+/**
+ * `a`, `a and b`, `a, b or c` — the conjunction is the caller's, because the two
+ * uses here mean opposite things. A list of providers that are all missing is a
+ * statement of fact about every one of them ("brave and tavily are not
+ * configured"); a list of variables is a menu of remedies, any one of which
+ * helps ("set BRAVE_API_KEY or TAVILY_API_KEY"). Getting that backwards tells
+ * the reader to do both, or that only one provider is really missing.
+ *
+ * Local rather than a fourth entry in `text.ts`: `nameList` truncates and
+ * `scopeList` is comma-joined with an empty-set sentinel, so neither fits, and
+ * a shared helper with one caller is the worse trade.
+ */
+function conjoin(items: readonly string[], word: 'and' | 'or'): string {
+  if (items.length <= 1) return items[0] ?? '';
+  return `${items.slice(0, -1).join(', ')} ${word} ${items[items.length - 1]}`;
+}
+
+/** Try Brave Search API. */
+async function searchBrave(query: string, limit: number): Promise<ProviderOutcome> {
   const apiKey = process.env.BRAVE_API_KEY;
-  if (!apiKey) return undefined;
+  if (!apiKey) return { status: 'unconfigured' };
   try {
     const url = new URL('https://api.search.brave.com/res/v1/web/search');
     url.searchParams.set('q', query);
@@ -43,10 +94,10 @@ async function searchBrave(query: string, limit: number): Promise<SearchResult[]
         'X-Subscription-Token': apiKey,
       },
     });
-    if (!res.ok) return undefined;
+    if (!res.ok) return { status: 'failed' };
     const data = (await res.json()) as { web?: { results?: Array<Record<string, string>> } };
     const results = data.web?.results ?? [];
-    return results.slice(0, limit).map((r) => ({
+    const mapped = results.slice(0, limit).map((r) => ({
       title: String(r.title ?? ''),
       url: String(r.url ?? ''),
       snippet: String(r.description ?? ''),
@@ -54,15 +105,16 @@ async function searchBrave(query: string, limit: number): Promise<SearchResult[]
       // ("2 days ago"); prefer the machine-readable one.
       ...(r.page_age || r.age ? { publishedAt: String(r.page_age ?? r.age) } : {}),
     }));
+    return { status: 'answered', results: mapped };
   } catch {
-    return undefined;
+    return { status: 'failed' };
   }
 }
 
-/** Try Tavily search API. Returns `undefined` when the provider is unavailable or errors. */
-async function searchTavily(query: string, limit: number): Promise<SearchResult[] | undefined> {
+/** Try Tavily search API. */
+async function searchTavily(query: string, limit: number): Promise<ProviderOutcome> {
   const apiKey = process.env.TAVILY_API_KEY;
-  if (!apiKey) return undefined;
+  if (!apiKey) return { status: 'unconfigured' };
   try {
     const res = await fetch('https://api.tavily.com/search', {
       method: 'POST',
@@ -75,17 +127,20 @@ async function searchTavily(query: string, limit: number): Promise<SearchResult[
         search_depth: 'basic',
       }),
     });
-    if (!res.ok) return undefined;
+    if (!res.ok) return { status: 'failed' };
     const data = (await res.json()) as { results?: Array<Record<string, string>> };
     const results = data.results ?? [];
-    return results.slice(0, limit).map((r) => ({
-      title: String(r.title ?? ''),
-      url: String(r.url ?? ''),
-      snippet: String(r.content ?? r.snippet ?? ''),
-      ...(r.published_date ? { publishedAt: String(r.published_date) } : {}),
-    }));
+    return {
+      status: 'answered',
+      results: results.slice(0, limit).map((r) => ({
+        title: String(r.title ?? ''),
+        url: String(r.url ?? ''),
+        snippet: String(r.content ?? r.snippet ?? ''),
+        ...(r.published_date ? { publishedAt: String(r.published_date) } : {}),
+      })),
+    };
   } catch {
-    return undefined;
+    return { status: 'failed' };
   }
 }
 
@@ -94,7 +149,7 @@ async function searchTavily(query: string, limit: number): Promise<SearchResult[
  * changes. Used as a last-resort fallback so specialist-creator can still do
  * rough research without any paid API.
  */
-async function searchDuckDuckGo(query: string, limit: number): Promise<SearchResult[] | undefined> {
+async function searchDuckDuckGo(query: string, limit: number): Promise<ProviderOutcome> {
   try {
     const url = new URL('https://html.duckduckgo.com/html/');
     url.searchParams.set('q', query);
@@ -102,7 +157,7 @@ async function searchDuckDuckGo(query: string, limit: number): Promise<SearchRes
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       headers: { 'User-Agent': USER_AGENT, Accept: 'text/html' },
     });
-    if (!res.ok) return undefined;
+    if (!res.ok) return { status: 'failed' };
     const html = await res.text();
     const root = parse(html);
     const results: SearchResult[] = [];
@@ -126,9 +181,9 @@ async function searchDuckDuckGo(query: string, limit: number): Promise<SearchRes
       const snippet = snippetEl?.text.trim() ?? '';
       if (title && href) results.push({ title, url: href, snippet });
     }
-    return results;
+    return { status: 'answered', results };
   } catch {
-    return undefined;
+    return { status: 'failed' };
   }
 }
 
@@ -172,19 +227,30 @@ export function createWebSearchTool(provenance?: ProvenanceStore) {
       }),
       execute: async ({ query, limit }): Promise<string> => {
         const cappedLimit = Math.min(Math.max(1, limit ?? DEFAULT_LIMIT), MAX_LIMIT);
-        const attempts: Array<[string, () => Promise<SearchResult[] | undefined>]> = [
+        const attempts: Array<[string, () => Promise<ProviderOutcome>]> = [
           ['brave', () => searchBrave(query, cappedLimit)],
           ['tavily', () => searchTavily(query, cappedLimit)],
           ['duckduckgo', () => searchDuckDuckGo(query, cappedLimit)],
         ];
-        // Two states the old single string conflated. Every provider returns
-        // `undefined` when it is unavailable or threw, and `[]` when it
-        // answered with nothing — so the split needs no provider change.
-        const errored: string[] = [];
+        // Which of the attempted providers need a key, derived from the chain
+        // rather than from `PROVIDER_ENV_VAR`'s size. A provider added to that
+        // table and not to this chain would otherwise make the
+        // "nothing real ran" test permanently false — a dead branch that fails
+        // in the wrong direction, telling the model to rephrase when no real
+        // provider was ever available.
+        const keyedProviders = attempts.map(([name]) => name).filter((n) => n in PROVIDER_ENV_VAR);
+
+        // Three states, not two (#565). `empty` is the only one that says
+        // anything about the QUERY; the other two are facts about this install
+        // and are the difference between advice that can work and advice that
+        // cannot.
         const empty: string[] = [];
-        for (const [name, fn] of attempts) {
-          const results = await fn();
-          if (results && results.length > 0) {
+        const failed: string[] = [];
+        const unconfigured: string[] = [];
+        for (const [name, run] of attempts) {
+          const outcome = await run();
+          if (outcome.status === 'answered' && outcome.results.length > 0) {
+            const results = outcome.results;
             const ids = provenance
               ? results.map((r) =>
                   provenance.add({
@@ -198,24 +264,59 @@ export function createWebSearchTool(provenance?: ProvenanceStore) {
               : undefined;
             return `Provider: ${name}\n\n${formatResults(results, ids)}`;
           }
-          (results === undefined ? errored : empty).push(name);
+          if (outcome.status === 'answered') empty.push(name);
+          else if (outcome.status === 'unconfigured') unconfigured.push(name);
+          else failed.push(name);
         }
+
+        // Named here rather than inlined twice: both messages below owe the
+        // user the variable to set, and the exact variable — telling someone to
+        // set BRAVE_API_KEY when it is Tavily that is missing is the same class
+        // of wrong advice this change exists to remove.
+        const missingKeys = unconfigured
+          .map((name) => PROVIDER_ENV_VAR[name])
+          .filter((v): v is string => v !== undefined);
+        const keyHint =
+          missingKeys.length > 0 ? ` Set ${conjoin(missingKeys, 'or')} to enable it.` : '';
+
         // A provider answered and the web simply has nothing. That is a real,
         // citable observation and a successful call — deliberately NOT
         // `Error:`-prefixed (#364). Marking it a failure would teach the tool
         // profile that an obscure query is a usage mistake, and would suppress
         // evidence registration for a search that genuinely ran.
         if (empty.length > 0) {
+          const head = `No results for "${query}" (searched: ${empty.join(', ')}).`;
+          // Whether rephrasing is worth trying depends on whether a provider
+          // that could plausibly have answered ever ran. With every keyed
+          // provider unconfigured the only thing that searched was the
+          // unauthenticated scrape, and no wording of the query changes that —
+          // so the advice has to name the install, not the query.
+          if (keyedProviders.length > 0 && unconfigured.length === keyedProviders.length) {
+            return (
+              `${head} Only the keyless DuckDuckGo fallback ran — ` +
+              `${conjoin(unconfigured, 'and')} ${unconfigured.length === 1 ? 'is' : 'are'} not configured, ` +
+              'so this is a gap in search coverage rather than a bad query.' +
+              `${keyHint} Rephrasing is unlikely to help; if you know a likely URL, call web_read directly.`
+            );
+          }
+          const alsoFailed =
+            failed.length > 0 ? ` (${conjoin(failed, 'and')} could not be reached.)` : '';
           return (
-            `No results for "${query}" (searched: ${empty.join(', ')}). ` +
+            `${head}${alsoFailed} ` +
             'Try different or broader terms, or call web_read with a known URL.'
           );
         }
         // Nothing answered at all. Retrying is pointless, so say so.
+        //
+        // `tried` lists only what was actually attempted. It used to include
+        // providers that were skipped for want of a key, which named the wrong
+        // problem — the fix for an unconfigured provider is a key, not a retry.
+        const notConfigured =
+          unconfigured.length > 0 ? ` ${conjoin(unconfigured, 'and')} not configured.` : '';
         return (
-          `Error: web_search could not reach any provider (tried: ${errored.join(', ')}). ` +
-          'If you know a likely documentation URL, call web_read directly. ' +
-          'To enable higher-quality search, set BRAVE_API_KEY or TAVILY_API_KEY.'
+          `Error: web_search could not reach any provider (tried: ${failed.join(', ')}).` +
+          `${notConfigured}${keyHint} ` +
+          'If you know a likely documentation URL, call web_read directly.'
         );
       },
     }),

@@ -212,18 +212,51 @@ describe('detectToolError', () => {
   // the DELETION — that web_search is now decided by shape like everything
   // else — not evidence of a remaining special case.
   describe('web_search (no longer name-specific — #364)', () => {
+    // These two literals are copied from `web-search.ts` verbatim rather than
+    // paraphrased. They used to be shortened by hand, which made them a false
+    // green: the assertion held whatever production actually emitted. The
+    // BINDING guard is in `web-search.test.ts`, which runs `detectResultFailure`
+    // over the tool's real return — these stay as the shape-not-name case for
+    // `detectToolError` itself.
     it('detects the unreachable-providers diagnostic via the shared Error: prefix', () => {
       const msg =
-        'Error: web_search could not reach any provider (tried: brave, tavily, duckduckgo).';
+        'Error: web_search could not reach any provider (tried: duckduckgo).' +
+        ' brave and tavily not configured. Set BRAVE_API_KEY or TAVILY_API_KEY to enable it. ' +
+        'If you know a likely documentation URL, call web_read directly.';
       const result = detectToolError('web_search', msg);
-      expect(result).toEqual({ isError: true, snippet: msg });
+      expect(result.isError).toBe(true);
+      // Asserted as a PREFIX, not a deep equal: this message is 212 characters
+      // and `detectResultFailure` caps a snippet at 200. Its predecessor was
+      // 214 and was cut the same way — the old test passed only because its
+      // literal was hand-shortened to fit, which is the false green being
+      // removed here. The cap bounds the diagnostic snippet; the full string
+      // still reaches the model as the tool result.
+      expect(msg.startsWith(result.snippet ?? '')).toBe(true);
+      expect(result.snippet).toContain('could not reach any provider');
     });
 
     it('does NOT treat a zero-match search as a failure', () => {
       // A provider answered and the web has nothing — a successful search.
       const result = detectToolError(
         'web_search',
-        'No results for "obscure query" (searched: duckduckgo). Try different or broader terms.',
+        'No results for "obscure query" (searched: brave). ' +
+          'Try different or broader terms, or call web_read with a known URL.',
+      );
+      expect(result).toEqual({ isError: false });
+    });
+
+    it('does NOT treat the unconfigured-provider advice as a failure either (#565)', () => {
+      // The variant that names missing keys is still a search that ran. It
+      // contains the word "configured" and a remedy, but must not begin with
+      // "Error" — `detectResultFailure` matches `startsWith('Error')`, so a
+      // reworded message is one edit away from silently becoming a failure.
+      const result = detectToolError(
+        'web_search',
+        'No results for "obscure query" (searched: duckduckgo). Only the keyless ' +
+          'DuckDuckGo fallback ran — brave and tavily are not configured, so this is a gap ' +
+          'in search coverage rather than a bad query. Set BRAVE_API_KEY or TAVILY_API_KEY ' +
+          'to enable it. Rephrasing is unlikely to help; if you know a likely URL, call ' +
+          'web_read directly.',
       );
       expect(result).toEqual({ isError: false });
     });
