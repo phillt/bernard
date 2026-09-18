@@ -60,6 +60,9 @@ vi.mock('./runner.js', () => ({
   runJob: mockRunJob,
 }));
 
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { runWorkspace } from '../paths.js';
 import {
   cronList,
   cronRun,
@@ -352,6 +355,27 @@ describe('cron CLI commands', () => {
       expect(mockLogStore.deleteJobLogs).toHaveBeenCalledWith('j1');
       expect(mockLogStore.deleteJobLogs).toHaveBeenCalledWith('j2');
     });
+
+    /**
+     * The one assertion in this file that touches a real disk (#585).
+     *
+     * Both stores are mocked here, so every other delete assertion is
+     * "a method was called" — which is exactly what let the workspace leak
+     * survive: nothing was calling anything for it. `removeRunWorkspace` is
+     * real, and so is `paths.ts` under this file's own `BERNARD_HOME`, so the
+     * directory really does have to be gone.
+     */
+    it('removes the job workspace from disk', async () => {
+      const workspace = runWorkspace('cron', 'job-1');
+      fs.mkdirSync(workspace, { recursive: true });
+      fs.writeFileSync(path.join(workspace, 'report.md'), '# out');
+      mockStore.getJob.mockReturnValue(makeJob());
+      confirmAnswer = 'y';
+
+      await cronDelete(['job-1']);
+
+      expect(fs.existsSync(workspace)).toBe(false);
+    });
   });
 
   // ==================== cron-delete-all ====================
@@ -564,6 +588,22 @@ describe('cron CLI commands', () => {
       enabled: true,
       createdAt: '',
     };
+
+    /**
+     * The retention disclosure (#585). This is the one screen that tells a user
+     * the workspace is theirs to write to, so it is where they have to learn it
+     * is not permanent — a bare read (no paths, no `--allow`) is the shape that
+     * prints it.
+     */
+    it('says the workspace is reclaimed when a plain read shows it', async () => {
+      mockStore.getJob.mockReturnValue(job);
+
+      await cronGrant('j1', [], {});
+
+      const said = infoMessages().join('\n');
+      expect(said).toContain(runWorkspace('cron', 'j1'));
+      expect(said).toMatch(/removed after 30 days without a run/);
+    });
 
     it('stores a well-formed spec as a rule', async () => {
       mockStore.getJob.mockReturnValue(job);

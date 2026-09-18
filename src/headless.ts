@@ -1,6 +1,5 @@
 import * as crypto from 'node:crypto';
 import { openCorpus } from './knowledge/corpus.js';
-import * as fs from 'node:fs';
 import { loadConfig } from './config.js';
 import { assembleContext, scopeContext } from './framework/context.js';
 import type { AgentContext, AgentContextMCP, AgentContextStores } from './framework/context.js';
@@ -21,6 +20,7 @@ import { initShellParser } from './permissions/shell-ast.js';
  */
 import { headlessToolOptions, type HeadlessPosture } from './headless-posture.js';
 import { clearDuplicateGuard } from './tools/duplicate-guard.js';
+import { ensureRunWorkspace } from './workspaces.js';
 
 export {
   resolvePosture,
@@ -244,15 +244,11 @@ export async function runHeadless<TInput, TFormatted>(
 
   // Created here rather than by each caller: a workspace that may not exist is
   // one every unattended writer has to remember to check, and forgetting reads
-  // as "the grant did not work".
+  // as "the grant did not work". `ensureRunWorkspace` also stamps it as used and
+  // applies retention (#585) — the sweeper rides the same path as the grower.
   if (posture.writeScope) {
-    try {
-      fs.mkdirSync(posture.writeScope.workspace, { recursive: true });
-    } catch (err) {
-      log(
-        `Could not create the run workspace: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
+    const err = ensureRunWorkspace(posture.writeScope.workspace);
+    if (err) log(`Could not create the run workspace: ${err}`);
   }
   const startedAt = new Date().toISOString();
   const startMs = Date.now();

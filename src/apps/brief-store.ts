@@ -25,10 +25,12 @@ import {
  * named" — which is the right rule for anything keyed on an `appId`, since the
  * repaired id may be another applet's.
  *
- * **`clear()` has a caller.** `CronNotesStore.clear()` has none — `deleteJob`
- * never sweeps `CRON_NOTES_DIR` — so the precedent leaks a file per deleted
- * job. `deleteApplet` calls this one, and the existing no-orphans test asserts
- * it.
+ * **`clear()` has a caller.** `CronNotesStore.clear()` had none when this was
+ * written — `deleteJob` never swept `CRON_NOTES_DIR`, so the precedent leaked a
+ * file per deleted job. `deleteApplet` calls this one, and the existing
+ * no-orphans test asserts it. The precedent has since been given the same
+ * treatment: `cron/lifecycle.ts` is `deleteApplet`'s sibling and sweeps the
+ * notes file and the run workspace along with the row (#585).
  *
  * **Known limit:** `atomicWriteFileSync` makes a WRITE atomic, not a
  * read-modify-write, so two concurrent appends would lose one. Stated rather

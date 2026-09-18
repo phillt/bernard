@@ -136,6 +136,47 @@ describe('deleteApplet', () => {
   });
 
   /**
+   * The applet-data directory is under no age sweep — `pruneRunWorkspaces` walks
+   * `WORKSPACES_DIR` and nothing else — so a removal that dies part-way here had
+   * no collector at all when `atomicRemoveDirectorySync` named one in prose. The
+   * result was an applet's whole SQLite store held forever under a
+   * `.notes.<pid>.<hex>.removing` name nothing lists.
+   *
+   * This is the assertion that would have caught it: the collection has to come
+   * from the remover itself, because there is no lifecycle hook here to hang it
+   * on. Skipped as root, who is not stopped by a mode.
+   */
+  it.skipIf(process.getuid?.() === 0)('leaves no uncollectable applet data behind', async () => {
+    const m = await load();
+    const r = new m.AppRegistry({ seed: false });
+    r.create(MANIFEST('notes'), { 'index.html': 'x' });
+    new m.store.AppletStore('notes').set('k', 'v');
+    m.store.closeAppletStore('notes');
+    const dataRoot = path.dirname(m.paths.appletDataDir('notes'));
+
+    // 0o500 leaves the directory traversable but not writable, so its entries
+    // cannot be unlinked and the recursive removal fails after the rename.
+    fs.chmodSync(m.paths.appletDataDir('notes'), 0o500);
+    try {
+      m.deleteApplet('notes');
+      expect(fs.readdirSync(dataRoot).length).toBe(1); // the tombstone survived
+    } finally {
+      for (const name of fs.readdirSync(dataRoot)) {
+        fs.chmodSync(path.join(dataRoot, name), 0o700);
+      }
+    }
+
+    // A later delete of an unrelated applet is the only thing that happens in
+    // this directory, and it has to be enough.
+    r.create(MANIFEST('todo'), { 'index.html': 'y' });
+    new m.store.AppletStore('todo').set('k', 'v');
+    m.store.closeAppletStore('todo');
+    m.deleteApplet('todo');
+
+    expect(fs.readdirSync(dataRoot)).toEqual([]);
+  });
+
+  /**
    * `HostRegistry` has deliberately no `release`: a re-added applet gets its
    * origin back, and with it the browser storage that origin still holds.
    * Deletion must not undo that.

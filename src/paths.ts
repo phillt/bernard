@@ -87,12 +87,43 @@ export const WATCHERS_DIR = path.join(DATA_DIR, 'watchers');
  * One convention in one place: `<namespace>/<stable id>`. Keyed on a *stable*
  * id (a cron job id, an app id) rather than a run id, because the point of a
  * workspace is that a job's output is still there on its next run. Each new
- * unattended writer inherits the layout instead of re-deriving it — and
- * retention, when it arrives, has one shape to prune rather than N.
+ * unattended writer inherits the layout instead of re-deriving it — and so
+ * retention has one shape to prune rather than N. It is
+ * {@link WORKSPACE_MAX_AGE_MS}, applied by `src/workspaces.ts`.
  */
 export function runWorkspace(namespace: string, id: string): string {
   return path.join(WORKSPACES_DIR, namespace, id);
 }
+
+/**
+ * How long a workspace survives without being handed to a run (#585).
+ *
+ * Stated here because this is where the layout is stated: the bound and the
+ * shape it prunes are one decision, and split apart the bound reads as a number
+ * somebody picked. The *mechanism* is `src/workspaces.ts`, which needs `node:fs`
+ * — this module is imported by almost everything, leaves included, and stays
+ * `node:path` + `node:os`.
+ *
+ * **Age, not count or size**, and the axis is the decision. A count cap ranks
+ * peers against each other, which is right for `MAX_SESSIONS` and wrong here:
+ * fifty hourly cron jobs are all live, so a count would evict one live job's
+ * output to make room for another live job's. Size needs a recursive walk of
+ * every workspace on every sweep, and still reclaims the biggest rather than the
+ * one nobody uses. Age says the thing worth acting on directly — nothing has run
+ * here for a month, so the owner is gone or dormant.
+ *
+ * Thirty days because the bound has to clear the longest schedule anyone
+ * plausibly writes: a monthly job must survive its own gap. It does so without
+ * relying on that margin, because `ensureRunWorkspace` stamps the directory on
+ * every run — so "age" means *time since a run last used this*, not time since
+ * the last file landed in it, and a job that reads its own output without
+ * writing keeps it.
+ *
+ * A plain constant, like `MAX_SESSIONS`, and deliberately not an env var: a user
+ * who needs to tune this has output that belongs somewhere durable, and
+ * `bernard cron-grant` is how they say so.
+ */
+export const WORKSPACE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 export const ROUTINES_DIR = path.join(DATA_DIR, 'routines');
 export const SPECIALISTS_DIR = path.join(DATA_DIR, 'specialists');
 /** One `<appId>.json` manifest per applet-style app (#419). */
