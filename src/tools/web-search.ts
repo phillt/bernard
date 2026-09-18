@@ -53,11 +53,16 @@ type ProviderOutcome =
   | { status: 'failed' };
 
 /**
- * A provider that needs a key, and the variable that holds it. Keyless
+ * A SEARCH provider that needs a key, and the variable that holds it. Keyless
  * providers are absent, which is what makes "could any real provider have run?"
  * answerable from the table rather than from a hard-coded provider name.
+ *
+ * Named apart from `config.ts`'s `PROVIDER_ENV_VARS`, which is the same idea for
+ * LLM providers and shares none of these entries. The two are deliberately not
+ * merged: that one feeds `bernard add-key` and the provider lineup, this one
+ * only decides what a failed search should advise.
  */
-const PROVIDER_ENV_VAR: Record<string, string> = {
+const SEARCH_PROVIDER_ENV_VAR: Record<string, string> = {
   brave: 'BRAVE_API_KEY',
   tavily: 'TAVILY_API_KEY',
 };
@@ -233,12 +238,14 @@ export function createWebSearchTool(provenance?: ProvenanceStore) {
           ['duckduckgo', () => searchDuckDuckGo(query, cappedLimit)],
         ];
         // Which of the attempted providers need a key, derived from the chain
-        // rather than from `PROVIDER_ENV_VAR`'s size. A provider added to that
+        // rather than from `SEARCH_PROVIDER_ENV_VAR`'s size. A provider added to that
         // table and not to this chain would otherwise make the
         // "nothing real ran" test permanently false — a dead branch that fails
         // in the wrong direction, telling the model to rephrase when no real
         // provider was ever available.
-        const keyedProviders = attempts.map(([name]) => name).filter((n) => n in PROVIDER_ENV_VAR);
+        const keyedProviders = attempts
+          .map(([name]) => name)
+          .filter((n) => n in SEARCH_PROVIDER_ENV_VAR);
 
         // Three states, not two (#565). `empty` is the only one that says
         // anything about the QUERY; the other two are facts about this install
@@ -274,7 +281,7 @@ export function createWebSearchTool(provenance?: ProvenanceStore) {
         // set BRAVE_API_KEY when it is Tavily that is missing is the same class
         // of wrong advice this change exists to remove.
         const missingKeys = unconfigured
-          .map((name) => PROVIDER_ENV_VAR[name])
+          .map((name) => SEARCH_PROVIDER_ENV_VAR[name])
           .filter((v): v is string => v !== undefined);
         const keyHint =
           missingKeys.length > 0 ? ` Set ${conjoin(missingKeys, 'or')} to enable it.` : '';

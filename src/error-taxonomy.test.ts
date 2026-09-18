@@ -385,9 +385,11 @@ describe('classifyWrapperFailure — the diagnostic decides, not the label (#565
   });
 
   it('falls back to the label when the prose says nothing recognisable', () => {
-    // The pool fall-through in `wrap-with-specialist` puts its signal ONLY in
-    // the label, with `result: ''` — so a strict prose-only rule would stop an
-    // ordinary batched file read from degrading to the raw tool.
+    // `result` is model-authored — `wrapWrapperResult` parses whatever the
+    // specialist wrote — so it can be empty, or unreadable, while the label is
+    // right. Every producer in the repo sets informative prose (checked, all
+    // nine), so this is the MODEL's shape rather than Bernard's, and it is the
+    // only thing the fallback really protects.
     expect(classifyWrapperFailure({ result: '', error: 'pool_exhausted' }).category).toBe(
       'pool_exhausted',
     );

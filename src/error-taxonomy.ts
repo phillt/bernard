@@ -275,11 +275,19 @@ function proseOf(result: unknown): string {
  * preserves Bernard's own three and little else, which is precisely why
  * consulting it FIRST was a defect rather than a defensible second-best.
  *
- * What the fallback is really for is the case with no prose at all: the pool
- * refusal in `wrap-with-specialist` puts its signal only in the label, with
- * `result: ''`. A plain `result || error` would cover that one too — the
- * outcome test additionally covers a specialist that wrote prose the taxonomy
- * cannot read while labelling it correctly.
+ * What the fallback is really for is MODEL-AUTHORED output. Every producer in
+ * this repo sets an informative `result` — checked, all nine, from
+ * `No specialist found with id "x"` to `Maximum concurrent agents (4) reached.`
+ * — so if those were the only sources the label could be ignored entirely. But
+ * `wrapWrapperResult` parses a `result` the specialist wrote, and nothing
+ * constrains it: a model is free to leave it empty, or to fill it with prose
+ * the taxonomy cannot read while labelling the failure correctly. The fallback
+ * is for that, and for a future producer that puts the signal only in the
+ * label.
+ *
+ * (An earlier draft of this comment cited the pool refusal as the empty-prose
+ * case. It is not: production emits the sentence above. Only a test fixture
+ * carries `result: ''` there.)
  *
  * **Bernard's own three labels survive either order, by construction rather
  * than luck.** Those same first three patterns match both the label and the
@@ -298,8 +306,10 @@ export function classifyWrapperFailure(input: {
   const { error, toolName } = input;
   const fromProse = classifyError({ message: proseOf(input.result), toolName });
   if (fromProse.category !== 'unknown' || !error) return fromProse;
-  const fromLabel = classifyError({ message: error, toolName });
-  return fromLabel.category === 'unknown' ? fromProse : fromLabel;
+  // No ternary back to `fromProse` when the label misses too: `build` is a pure
+  // function of (category, toolName) and both calls pass the same toolName, so
+  // the two objects are identical whenever both categories are `unknown`.
+  return classifyError({ message: error, toolName });
 }
 
 function pickCategory(input: ClassifyInput): ToolErrorType {

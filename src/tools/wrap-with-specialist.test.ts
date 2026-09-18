@@ -262,15 +262,17 @@ describe('wrapToolWithSpecialist', () => {
   });
 
   it('still falls through to the raw tool when the pool is full', async () => {
-    // The pool refusal puts its signal ONLY in the label (`result: ''`), so it
-    // is the guard on the label fallback: a prose-only rule would classify it
-    // `unknown` and stop an ordinary batched file read degrading gracefully.
+    // The PRODUCTION shape, verbatim from `dispatchToolWrapper`'s exhausted
+    // callback — prose in `result`, label in `error`. The sibling test below
+    // carries the empty-`result` variant, which no producer emits; between them
+    // they cover both halves of the precedence, and this one is the half that
+    // actually runs when a batched file read meets a full pool.
     const base = makeBaseTool(async () => ({ lines: ['raw tool ran'] }));
     const ctx = makeCtx();
     ctx.stores.specialists.get.mockReturnValue({ name: 'File Wrapper', kind: 'tool-wrapper' });
     vi.mocked(dispatchToolWrapper).mockResolvedValue({
       status: 'error',
-      result: '',
+      result: 'Maximum concurrent agents (4) reached.',
       error: 'pool_exhausted',
     });
 
@@ -401,6 +403,12 @@ describe('a full agent pool falls through to the raw tool', () => {
     // tool is right here. Falling through is the shim's own contract: it
     // already does exactly this when the specialist is missing or is the wrong
     // kind.
+    //
+    // Note the shape: `result: ''` with the signal in the label. No producer
+    // emits that — `dispatchToolWrapper` sets `Maximum concurrent agents (N)
+    // reached.` — so this stands in for MODEL-authored output, which
+    // `wrapWrapperResult` parses and nothing constrains. That is what the
+    // label fallback in `classifyWrapperFailure` exists for (#565).
     const base = makeBaseTool(async () => ({ lines: ['real file contents'] }));
     const ctx = makeCtx();
     ctx.stores.specialists.get = vi.fn().mockReturnValue(wrapper);
