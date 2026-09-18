@@ -26,7 +26,6 @@ export type ModelSite =
   | 'tool-wrapper'
   | 'rewriter'
   | 'reference-resolver'
-  | 'reference-lookup'
   | 'recall-filter'
   | 'compressor'
   | 'specialist-detector'
@@ -397,7 +396,6 @@ export function providersInUse(config: BernardConfig): string[] {
 const TEMPERATURE_ZERO_SITES: ReadonlySet<ModelSite> = new Set([
   'rewriter',
   'reference-resolver',
-  'reference-lookup',
   'recall-filter',
   'specialist-detector',
   'applet-detector',
@@ -589,7 +587,14 @@ export type SnapshotReason =
   | 'lineup-change'
   | 'model-mode-change'
   | 'profile-switch'
-  | 'provider-change';
+  | 'provider-change'
+  /**
+   * `/setup` committed. Its own reason rather than `profile-switch`: no profile
+   * changed, and a setup run is the one event that can move the provider, the
+   * model mode and the lineup in a single commit — which is exactly the diff
+   * someone reads this log to understand.
+   */
+  | 'setup';
 
 interface SiteChange {
   site: ModelSite;

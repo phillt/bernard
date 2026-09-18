@@ -8,7 +8,8 @@ import { ok, err, type BernardTool } from '../framework/tools/types.js';
 import { clearCache as clearResultCache } from '../framework/tools/result-cache.js';
 import { ProvenanceStore } from '../provenance.js';
 import { runWithDispatchId } from '../framework/dispatch-context.js';
-import { isReadOnlyMCPToolName } from '../risk.js';
+import { hasEmitVerb, isReadOnlyMCPToolName } from '../risk.js';
+import { clearDuplicateGuard } from './duplicate-guard.js';
 
 vi.mock('../tool-profiles.js', () => ({
   classifyShellCommand: vi.fn((cmd: string) => {
@@ -2182,12 +2183,18 @@ const MCP_OPTS = { shellTimeout: 30_000, confirmDangerous: vi.fn() };
 
 function mcpTool(name: string, execute: (args: unknown) => Promise<unknown>) {
   const raw = name.split('__')[1];
+  const isRead = isReadOnlyMCPToolName(raw);
   return attachMeta(
     { description: 'mcp', parameters: z.object({}), execute } as never,
     {
       name,
       rawName: raw,
-      kind: isReadOnlyMCPToolName(raw) ? 'read' : 'write',
+      kind: isRead ? 'read' : 'write',
+      // Derived, never hand-set, for the reason the docstring above gives about
+      // `kind` — and it matters more here: hand-setting it would let a fixture
+      // encode an eligibility production would never produce, which is the exact
+      // mistake that got the first duplicate gate withdrawn.
+      nonIdempotent: !isRead && hasEmitVerb(raw),
     } as never,
   );
 }
@@ -2303,5 +2310,278 @@ describe('augmentTools orders a verification read behind the write', () => {
       ]);
     });
     expect(peak).toBe(2);
+  });
+});
+
+/**
+ * The duplicate gate at the layer that produced the incident (#575).
+ *
+ * Bernard sent the same text to the same chat three times over five days. Each
+ * send returned `"**Open the chat in Beeper**: /open/…"` — no id, no success
+ * field, `isError: false` — and the model re-sent byte-identical with no read
+ * anywhere in between, so the write barrier had nothing to order.
+ *
+ * These pin the two things only this layer answers: that a real MCP send
+ * reaches the gate at all (it takes the LEGACY branch), and that everything
+ * else — reads, non-emit writes, failures — does not.
+ */
+describe('augmentTools refuses a repeated successful emit', () => {
+  // Its own reset: the guard is module state cleared at turn boundaries, and
+  // this is a sibling describe, so the resets inside `describe('augmentTools')`
+  // do not reach it. Without this the previous case's successful send leaks
+  // forward and the failure lands on whichever test happens to run next.
+  beforeEach(clearDuplicateGuard);
+
+  const FOCUS = 'beeper_654785__focus_app';
+  const TEXT = { chatID: '29', text: 'Nice try, Dom.' };
+  const sendOk = () =>
+    vi.fn(async () => ({ content: [{ type: 'text', text: '/open/29' }], isError: false }));
+  const wrap = (name: string, execute: (args: unknown) => Promise<unknown>) =>
+    augmentTools(
+      { [name]: mcpTool(name, execute) } as never,
+      createMockStore() as never,
+      MCP_OPTS as never,
+    );
+
+  it('classifies the three names the way production does', () => {
+    // Guard the guard. Every assertion below is about which bucket a name lands
+    // in, and if a future edit moved one of these they would all still pass
+    // while the incident was fully reproducible.
+    expect(hasEmitVerb('send_message')).toBe(true);
+    expect(hasEmitVerb('focus_app')).toBe(false);
+    expect(isReadOnlyMCPToolName('list_messages')).toBe(true);
+  });
+
+  it('runs once, refuses the identical repeat, then runs it when re-issued', async () => {
+    const execute = sendOk();
+    const tools = wrap(SEND, execute);
+
+    await tools[SEND].execute!(TEXT, {} as never);
+    expect(execute).toHaveBeenCalledTimes(1);
+
+    // The blind re-send. Before the gate this was a second message.
+    const refused = await tools[SEND].execute!(TEXT, {} as never);
+    expect(execute).toHaveBeenCalledTimes(1);
+    // The shared unconditional-gate shape — an `Error:`-prefixed string, the
+    // same one the deny rule and the write-scope gate return, so
+    // `detectResultFailure` reads it as a failure for free.
+    expect(String(refused)).toMatch(/^Error: .*already SUCCEEDED/);
+
+    // Re-issuing is how the model says "yes, on purpose" — no UI, so it works
+    // headless where there is nobody to ask.
+    await tools[SEND].execute!(TEXT, {} as never);
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not gate focus_app, which is a write and repeats legitimately', async () => {
+    // THE case that decides the eligibility rule, and the reason it is not
+    // "every MCP write": `focus_app` carries neither a read nor a write verb so
+    // it classifies as a write, it is the third most-used MCP tool on the
+    // install this was measured against, and the dispatch that double-sent
+    // called it twice with identical args — once before each send. A
+    // write-keyed gate refuses the second one before the send it exists to stop
+    // is ever reached.
+    const execute = vi.fn(async () => ({
+      content: [{ type: 'text', text: 'Focused chat: 29' }],
+      isError: false,
+    }));
+    const tools = wrap(FOCUS, execute);
+    await tools[FOCUS].execute!({ chatID: '29' }, {} as never);
+    await tools[FOCUS].execute!({ chatID: '29' }, {} as never);
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it('never gates a read, however many times it repeats', async () => {
+    // 138 of 187 adjacent identical calls in the corpus are reads — `shell`
+    // re-running a test, a snapshot polling for change. Gating those would fire
+    // constantly to catch nothing.
+    const execute = vi.fn(async () => ({ items: [] }));
+    const tools = wrap(LIST, execute);
+    for (let i = 0; i < 4; i++) await tools[LIST].execute!({ chatID: '29' }, {} as never);
+    expect(execute).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not gate a repeat after a FAILED send', async () => {
+    // The retry is the point. Only successes are recorded, and `augment.ts`'s
+    // own failure detection — which reads MCP's `isError` — is the authority on
+    // which is which, rather than a second guess at it here. Both real 500s in
+    // the logs were retried correctly.
+    const execute = vi.fn(async () => ({
+      content: [{ type: 'text', text: '500 Failed to execute tool: sendMessage' }],
+      isError: true,
+    }));
+    const tools = wrap(SEND, execute);
+    await tools[SEND].execute!(TEXT, {} as never);
+    await tools[SEND].execute!(TEXT, {} as never);
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it('gates across dispatches, which is where the repeated send came from', async () => {
+    // Every observed repeat was raised by a NEW delegate dispatch, after the
+    // previous one had already reported success — so a per-dispatch memory
+    // would have seen a first call each time and passed all of them.
+    const execute = sendOk();
+    const outer = wrap(SEND, execute);
+    const inner = wrap(SEND, execute);
+    await runWithDispatchId('parent', () => outer[SEND].execute!(TEXT, {} as never));
+    const refused = await runWithDispatchId('child', () => inner[SEND].execute!(TEXT, {} as never));
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(String(refused)).toMatch(/already SUCCEEDED/);
+  });
+
+  it('forgets at the turn boundary', async () => {
+    // Turn-scoped rather than session-scoped, which is the other half of what
+    // got the first cut withdrawn: a cron daemon and the applet host run many
+    // jobs in one process, and a job sending the same digest every minute was
+    // refused on its second fire with nobody watching.
+    const execute = sendOk();
+    const tools = wrap(SEND, execute);
+    await tools[SEND].execute!(TEXT, {} as never);
+    clearDuplicateGuard();
+    await tools[SEND].execute!(TEXT, {} as never);
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it('distinguishes two long sends that differ only past 300 characters', async () => {
+    // `safeSerialize` slices to 300, so keying on it collided two genuinely
+    // different calls and refused the second as a duplicate — a false refusal on
+    // a send, which is the failure this gate otherwise exists to avoid. The unit
+    // test pins the module; this pins that `augment.ts` hands it the WHOLE
+    // string, which is the half a mutation to `fullArgsJson` survived without.
+    const execute = sendOk();
+    const tools = wrap(SEND, execute);
+    const body = (tail: string) => ({ chatID: '29', text: 'z'.repeat(400) + tail });
+    await tools[SEND].execute!(body('A'), {} as never);
+    await tools[SEND].execute!(body('B'), {} as never);
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it('gates the ENVELOPE branch too, which no MCP tool exercises', async () => {
+    // `augment.ts` has two `execute` wrappers and MCP takes the legacy one, so
+    // every other case here leaves the migrated-BernardTool path untested — and
+    // a mutation disabling its gate survived until this existed. Same gap the
+    // write barrier had, one commit earlier.
+    const execute = vi.fn(async () => ok({ sent: true }));
+    const tool = toolToAISDK({
+      meta: { name: 'w', kind: 'write', nonIdempotent: true },
+      description: 'w',
+      parameters: z.object({}),
+      execute,
+      serializeForModel: (r) => (r.status === 'ok' ? r.result : `Error: ${r.error.message}`),
+    } as never);
+    const tools = augmentTools({ w: tool } as never, createMockStore() as never, MCP_OPTS as never);
+    await tools.w.execute!({ x: 1 }, {} as never);
+    const refused = await tools.w.execute!({ x: 1 }, {} as never);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(String(refused)).toMatch(/already SUCCEEDED/);
+  });
+});
+
+/**
+ * The refusal an unattended run gets, and why its wording is the fix (#447).
+ *
+ * A cron job needed `gh issue create`. Cron's default posture auto-denies every
+ * write-shaped shell command, so the call was refused — and the model was told
+ * `Action cancelled by user.` There was no user, nothing was cancelled, and the
+ * decision was permanent for the run. The model read it as written, wrote
+ * "shell still cancelled — retry next run" in its notes, and retried across ten
+ * scheduled runs and 934,805 tokens, varying the command each time because the
+ * cron prompt tells it to change something after a failure.
+ *
+ * These pin the two halves of the fix: the text says what actually happened,
+ * and the run can report that it was refused at all.
+ */
+describe('an unattended denial does not claim a user cancelled it', () => {
+  function shellish(name = 'sh') {
+    const execute = vi.fn(async () => ({ output: 'ran', is_error: false }));
+    const t = { description: 'd', parameters: z.object({}), execute } as never;
+    attachMeta(t, { name, kind: 'dangerous', deterministic: false, sideEffect: 'local' });
+    return { t, execute };
+  }
+  // `!shouldConfirm(...)` is what `headlessToolOptions` builds — the same
+  // predicate deciding whether to ask AND what the answer is.
+  const autoDeny = async (i: { risk: string }) => i.risk !== 'high';
+
+  it('says what decided it, and that retrying will not help', async () => {
+    const { t, execute } = shellish();
+    const augmented = augmentTools(
+      { sh: t },
+      {
+        profileStore: createMockStore() as never,
+        confirmThreshold: 'high',
+        confirmAction: autoDeny as never,
+        unattended: true,
+      },
+    );
+    const out = String((await augmented.sh.execute!({}, {} as never)).output);
+
+    expect(out, 'must not invent a user').not.toContain('cancelled by user');
+    // The three facts the old text hid.
+    expect(out, 'why').toMatch(/high-risk/);
+    expect(out, 'nobody can approve it').toMatch(/no one is present/i);
+    expect(out, 'it will not change').toMatch(/will not help|same for every call/i);
+    // …and the remedy, which is the only useful thing the model can report.
+    expect(out).toContain('bernard cron-grant');
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('still says a user cancelled when a user actually did', async () => {
+    // Guard the guard, and the direction that would be a lie: an interactive
+    // Escape must keep reading as an Escape. `unattended` is what separates
+    // them, and without it this assertion and the one above cannot both hold.
+    const { t } = shellish();
+    const augmented = augmentTools(
+      { sh: t },
+      {
+        profileStore: createMockStore() as never,
+        confirmThreshold: 'high',
+        confirmAction: (async () => false) as never,
+      },
+    );
+    const out = String((await augmented.sh.execute!({}, {} as never)).output);
+    expect(out).toBe('Action cancelled by user.');
+  });
+
+  it('reports the refusal so the run can stop calling itself a success', async () => {
+    const { t } = shellish();
+    const denied: { tool: string; permissionKey: string | null; risk: string }[] = [];
+    const augmented = augmentTools(
+      { sh: t },
+      {
+        profileStore: createMockStore() as never,
+        confirmThreshold: 'high',
+        confirmAction: autoDeny as never,
+        unattended: true,
+        onDenied: (d) => denied.push(d),
+      },
+    );
+    await augmented.sh.execute!({}, {} as never);
+    expect(denied).toHaveLength(1);
+    expect(denied[0]).toMatchObject({ tool: 'sh', risk: 'high' });
+  });
+
+  it('a grant for that command clears the gate, and nothing else does', async () => {
+    // The precise lever: `runGate` opens with `if (grant === 'allow') return
+    // true`, so a per-job rule scoped to one command runs THAT command —
+    // where `confirmMode: 'off'` would dissolve every confirmation.
+    const { t, execute } = shellish('shell');
+    const augmented = augmentTools(
+      { shell: t },
+      {
+        profileStore: createMockStore() as never,
+        confirmThreshold: 'high',
+        confirmAction: autoDeny as never,
+        unattended: true,
+        getToolPermissions: () => [{ effect: 'allow', tool: 'shell', specifier: 'gh *', _v: 2 }],
+      },
+    );
+    await augmented.shell.execute!({ command: 'gh issue create --repo a/b' }, {} as never);
+    expect(execute, 'the granted command runs').toHaveBeenCalledTimes(1);
+
+    const out = String(
+      (await augmented.shell.execute!({ command: 'curl https://x' }, {} as never)).output,
+    );
+    expect(out, 'and nothing else is widened').toMatch(/no one is present/i);
+    expect(execute).toHaveBeenCalledTimes(1);
   });
 });

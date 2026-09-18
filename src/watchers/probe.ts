@@ -67,10 +67,9 @@ export type ProbeResult = { ok: true; observation: Observation } | { ok: false; 
  *
  * Read-classified only. A watcher runs unattended and repeatedly, so a write
  * target would be a way to make something happen 1,440 times a day with nobody
- * looking. `isReadOnlyMCPToolName` is the same gate `reference-tool-lookup.ts`
- * uses to decide what an unattended lookup may call, and reusing it means there
- * is one answer to "what is safe to call without a person" rather than two that
- * can drift.
+ * looking. `isReadOnlyMCPToolName` is the same gate `mcp.ts` uses to classify a
+ * server's tools, and reusing it means there is one answer to "what is safe to
+ * call without a person" rather than two that can drift.
  *
  * Returns a refusal string, or `null` when allowed — `directInvocableRefusal`'s
  * shape, so a caller reports WHY rather than a bare boolean.
@@ -233,9 +232,8 @@ async function probeMcp(
   const execute = (tool as { execute: (a: unknown, o: unknown) => Promise<unknown> }).execute;
   try {
     // A hard race, not just the signal: many MCP tools ignore `abortSignal`
-    // entirely, which is the reason `reference-tool-lookup.ts` wraps its own
-    // call the same way. Without it one unresponsive server stalls every other
-    // watcher behind it.
+    // entirely. Without it one unresponsive server stalls every other watcher
+    // behind it.
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const result = await Promise.race([
@@ -254,8 +252,8 @@ async function probeMcp(
       return { ok: true, observation: { value: unwrap(result) } };
     } finally {
       // Every other hand-rolled race in the tree clears its timer in a `finally`
-      // — `reference-tool-lookup`, `mcp`, `cron/scheduler`, `runner` (twice).
-      // Without it each probe leaves a live 10 s timer that later rejects an
+      // — `mcp`, `cron/scheduler`, `runner` (twice). Without it each probe
+      // leaves a live 10 s timer that later rejects an
       // already-settled promise; `unref` keeps that from holding the process
       // open but does not stop it firing.
       if (timer) clearTimeout(timer);

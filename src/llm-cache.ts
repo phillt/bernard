@@ -2,8 +2,8 @@
  * In-process TTL cache for pure LLM subcalls (issue #171).
  *
  * Only wired into deterministic subcalls — currently the prompt rewriter and
- * the two reference-tool-lookup stages. The main agent loop, sub-agent
- * dispatch, and tool-using calls are intentionally NOT cached.
+ * the reference resolver. The main agent loop, sub-agent dispatch, and
+ * tool-using calls are intentionally NOT cached.
  *
  * Kept separate from `framework/tools/result-cache.ts` because the key shape
  * (provider + model + system + messages) is unrelated to `ToolMeta` and the
@@ -25,7 +25,7 @@ export const DEFAULT_LLM_CACHE_TTL_MS = 10 * 60 * 1000;
  * are baked into the model instance by the SDK) and must never be included.
  */
 export interface LLMCacheKey {
-  /** Identifier of the subcall site, e.g. `'rewriter'`, `'reference-lookup:select'`. */
+  /** Identifier of the subcall site, e.g. `'rewriter'`, `'reference-resolver'`. */
   siteName: string;
   /** AI SDK `LanguageModel.modelId`. */
   modelId: string;

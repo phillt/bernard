@@ -32,6 +32,9 @@ export const SGR_DIM = '\u001b[2m';
 /** `colors.muted` is 'gray' in the default theme. */
 export const SGR_THEME_MUTED = '\u001b[90m';
 
+/** `colors.success` is 'green' in the default theme. */
+export const SGR_THEME_SUCCESS = '\u001b[32m';
+
 /** Pass to `afterAll` so the forced colour does not outlive the file. */
 export function restoreForceColor(): void {
   if (ORIGINAL_FORCE_COLOR === undefined) delete process.env.FORCE_COLOR;

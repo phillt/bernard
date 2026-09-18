@@ -29,7 +29,7 @@ export type RemoteMessageMode = 'ask' | 'prompts' | 'all';
 export const ACT_KEY = '↵';
 
 /** The chord that opens the scope menu. */
-export const OPTIONS_KEY = '^o';
+export const OPTIONS_KEY = 'ctrl+o';
 
 /**
  * How the affordance is described in prose, mid-sentence.

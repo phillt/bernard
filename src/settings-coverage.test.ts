@@ -1,0 +1,286 @@
+import { describe, it, expect } from 'vitest';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { OPTIONS_REGISTRY } from './config.js';
+import { WIZARD_FIELDS } from './profiles-wizard-data.js';
+import type { ProfileSettings } from './profiles.js';
+
+/**
+ * Every settable preference is either asked about or deliberately excluded.
+ *
+ * The wizard covered 22 of `ProfileSettings`' 40 fields (#447), and the other 18
+ * were not a considered exclusion — nobody had ever added them. `provider`,
+ * `model`, the active lineup, every voice setting and five behaviour toggles
+ * were reachable from no wizard at all, and the drift is silent by
+ * construction: a field added to `ProfileSettings` works everywhere else and is
+ * merely absent from the registry, which nothing notices.
+ *
+ * So this walks the FIELDS DECLARED IN THE SOURCE to the registry, not the
+ * registry to itself — the record-to-table direction, per
+ * `builtin-specialists/bundled-manifest.test.ts`, and the direction the mistake
+ * is actually made in. Iterating `WIZARD_FIELDS` and checking each is a
+ * `ProfileSettings` key would pass forever while the gap grew.
+ *
+ * Reading the interface out of the source is the `ui/__tests__/keys.test.ts`
+ * move: a type is erased at runtime, and the alternative — a hand-written list
+ * of 40 names — is a second copy of the thing being checked.
+ */
+
+const SRC = path.join(path.dirname(fileURLToPath(import.meta.url)), 'profiles.ts');
+
+/** Field names declared directly on `interface ProfileSettings`. */
+function declaredSettingKeys(): string[] {
+  const source = fs.readFileSync(SRC, 'utf-8');
+  const start = source.indexOf('export interface ProfileSettings {');
+  expect(start).toBeGreaterThan(-1);
+  const open = source.indexOf('{', start);
+  let depth = 0;
+  let end = open;
+  for (let i = open; i < source.length; i++) {
+    if (source[i] === '{') depth++;
+    else if (source[i] === '}') {
+      depth--;
+      if (depth === 0) {
+        end = i;
+        break;
+      }
+    }
+  }
+  const body = source.slice(open + 1, end);
+  // Two-space indent only, so a field of a nested inline type cannot be read as
+  // a setting.
+  return [...body.matchAll(/^ {2}([A-Za-z][A-Za-z0-9]*)\??:/gm)].map((m) => m[1]);
+}
+
+/**
+ * Settings the wizard deliberately does not ask about, each with the reason.
+ *
+ * Structured permission state, in all three cases. They are maps keyed by tool,
+ * app id and directive — not a value a person answers in one screen — and each
+ * already has a surface built for it. A wizard row that could only clear them
+ * would be a way to lose a grant by walking past it.
+ */
+const NOT_IN_SETUP: Readonly<Record<string, string>> = {
+  // The only question in the walk you could not answer from the screen: a free
+  // text field wanting `Daniel` or `en-us+f3`, unanswerable without leaving to
+  // run `say -v ?` / `spd-say -L`, unvalidated, and silently breaking speech
+  // when wrong. `/voice` is where it belongs — its test row plays a phrase and
+  // surfaces the backend's rejection, so you set it and hear whether it took.
+  // A picker would earn it back; nothing else would.
+  // The whole voice section past the on/off, for the reason above generalised:
+  // none of them can be judged without HEARING the result, which the wizard
+  // cannot do and `/voice` does on every row. They are also asked of an install
+  // where `voiceTts` defaults to false, so they configure a feature that is not
+  // running — and the wizard cannot skip them, because `WizardSpec.steps` is a
+  // frozen array with no branching.
+  voiceVoice: 'free-text voice name, only checkable by hearing it — `/voice`',
+  voiceNormalizer: 'only judgeable by ear — `/voice`',
+  voiceBackend: '`auto` is right until it is not, and then you are debugging — `/voice`',
+  voiceRate: 'words per minute means nothing unheard — `/voice`',
+  voiceWarmupMs: 'a PipeWire troubleshooting knob, not a first-run choice — `/voice`',
+  toolPermissions: 'per-tool grants — `/tool-permissions`',
+  appToolGrants: 'per-applet tool grants — `bernard app-grant`',
+  appCspGrants: 'per-applet CSP grants — `bernard app csp`',
+};
+
+/** Keys the registry decides, including those folded into another field's step. */
+function coveredKeys(): Set<string> {
+  const covered = new Set<string>();
+  for (const field of WIZARD_FIELDS) {
+    covered.add(field.key);
+    for (const also of field.covers ?? []) covered.add(also);
+  }
+  return covered;
+}
+
+describe('settings coverage', () => {
+  it('reads the interface it is checking', () => {
+    // Guard the guard: a regex that matched nothing would make every assertion
+    // below vacuously true.
+    const keys = declaredSettingKeys();
+    expect(keys.length).toBeGreaterThan(30);
+    expect(keys).toContain('provider');
+    expect(keys).toContain('specialistRecall');
+  });
+
+  it('asks about every setting that is not deliberately excluded', () => {
+    const covered = coveredKeys();
+    const unexplained = declaredSettingKeys().filter(
+      (k) => !covered.has(k) && !Object.hasOwn(NOT_IN_SETUP, k),
+    );
+    expect(unexplained).toEqual([]);
+  });
+
+  it('has no stale exclusions', () => {
+    // An exclusion for a field that no longer exists, or one the wizard now
+    // asks about, is a reason nobody will re-read but everybody will trust.
+    const declared = new Set(declaredSettingKeys());
+    const covered = coveredKeys();
+    for (const key of Object.keys(NOT_IN_SETUP)) {
+      expect(declared.has(key)).toBe(true);
+      expect(covered.has(key)).toBe(false);
+    }
+  });
+
+  it('declares no field that is not a setting', () => {
+    const declared = new Set(declaredSettingKeys());
+    const strays = WIZARD_FIELDS.map((f) => f.key as string).filter((k) => !declared.has(k));
+    expect(strays).toEqual([]);
+  });
+
+  it('never asks the same question twice', () => {
+    const keys = WIZARD_FIELDS.map((f) => f.key);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+});
+
+/**
+ * `OPTIONS_REGISTRY` and the wizard both describe the four numeric options, and
+ * neither derives from the other — `/options` reads one, the wizard reads the
+ * other, and a bound changed in one is invisible to the other.
+ *
+ * Reconciled rather than merged: unifying the three settings registries is
+ * #441's job, and the established answer here for two tables that must agree is
+ * a test (`timeout-offer.test.ts` already reconciles a third one against this
+ * same registry).
+ */
+describe('numeric options agree with OPTIONS_REGISTRY', () => {
+  const overlap = Object.values(OPTIONS_REGISTRY);
+
+  it('covers all four', () => {
+    const byKey = new Map(WIZARD_FIELDS.map((f) => [f.key as string, f]));
+    for (const opt of overlap) expect(byKey.has(opt.configKey)).toBe(true);
+  });
+
+  it('names the same environment variable', () => {
+    const byKey = new Map(WIZARD_FIELDS.map((f) => [f.key as string, f]));
+    for (const opt of overlap) {
+      expect(byKey.get(opt.configKey)?.envVar).toBe(opt.envVar);
+    }
+  });
+
+  it('declares a range that admits the registry default', () => {
+    // The failure this catches: a bound tightened in the wizard past the value
+    // `/options` hands out, so accepting the default is refused as out of range.
+    const byKey = new Map(WIZARD_FIELDS.map((f) => [f.key as string, f]));
+    for (const opt of overlap) {
+      const field = byKey.get(opt.configKey)?.field;
+      expect(field?.kind).toBe('int');
+      if (field?.kind !== 'int') continue;
+      expect(opt.default).toBeGreaterThanOrEqual(field.min);
+      expect(opt.default).toBeLessThanOrEqual(field.max);
+    }
+  });
+});
+
+/**
+ * Every question explains the TRADE, not just the mechanism (#447).
+ *
+ * The question a reader brings to a settings page is "which of these is right
+ * for me", and naming the mechanism does not answer it — `Integer 1-20.` was a
+ * real description here, and `Which colors the terminal uses.` was as much as
+ * most of the others said. A reader could not tell from any of them whether to
+ * touch the setting.
+ *
+ * So each one now says what it is for, what it buys, what it costs, and the
+ * condition under which the cost is not worth paying. That is a judgement and
+ * cannot be asserted directly; what CAN be asserted is the shape it takes, and
+ * the shapes the old copy took when it was not doing the job.
+ */
+describe('every question says enough to decide on', () => {
+  it('is more than a restatement of its own label', () => {
+    // The floor is deliberately low. It is not a style rule — it is the guard
+    // against a description that names the type and stops, which is what the
+    // step-budget and concurrency questions used to do.
+    for (const f of WIZARD_FIELDS) {
+      expect(f.description.split(/\s+/).length, f.key).toBeGreaterThan(12);
+      expect(f.description.toLowerCase(), f.key).not.toBe(`${f.label.toLowerCase()}.`);
+    }
+  });
+
+  it('carries a second sentence, which is where the trade lives', () => {
+    // One sentence can only say what a thing is. What it costs, and when not to
+    // pay it, needs another — so a single-sentence description is the tell that
+    // the question went back to describing its mechanism.
+    for (const f of WIZARD_FIELDS) {
+      const sentences = f.description.split(/[.!?](?:\s|$)/).filter((s) => s.trim() !== '');
+      expect(sentences.length, `${f.key}: ${f.description}`).toBeGreaterThan(1);
+    }
+  });
+
+  it('uses none of our own words for our own machinery', () => {
+    // `Sub-agent PAC pipeline` was a live LABEL. PAC is the three phases of an
+    // internal pipeline; it names the mechanism to someone who already knows
+    // the mechanism, and nothing at all to the person meeting this screen on
+    // their first run. The list is short on purpose — it is the acronyms this
+    // repo actually uses about itself, not a general prose rule.
+    const OURS = /\b(PAC|ReAct|RAG|MCP|JSONL|TTL)\b/;
+    for (const f of WIZARD_FIELDS) {
+      expect(f.label, `${f.key} label`).not.toMatch(OURS);
+      expect(f.description, `${f.key} description`).not.toMatch(OURS);
+      if (f.field.kind !== 'list') continue;
+      for (const o of f.field.options) expect(o.label, `${f.key}/${o.value}`).not.toMatch(OURS);
+    }
+  });
+
+  it('never calls a recalled memory a fact', () => {
+    // `bernard facts` and `RAGStore` are what we call them, and the word claims
+    // something they have not earned: they are assertions a cheap model pulled
+    // out of past conversations, not truths. Worse, it collided — four
+    // questions across three different stores said "saved facts", "notes it has
+    // saved", "notes from its own runs" and "working notes", with no way for a
+    // reader to tell those were four different things.
+    for (const f of WIZARD_FIELDS) {
+      expect(f.description, f.key).not.toMatch(/\bfacts?\b/i);
+    }
+  });
+
+  it('says which pile the recall filter is filtering', () => {
+    // The one sentence that answers the question this copy exists to stop
+    // somebody asking: does turning this on throw away things I told Bernard to
+    // remember? It does not. The filter SELECTS among what Bernard picked up on
+    // its own; it also sees your saved notes, but only ever to decide their
+    // ORDER when they are already over their character budget — it never causes
+    // one to be dropped. Pinned because the sentence is easy to read as padding
+    // and cut.
+    const d = WIZARD_FIELDS.find((f) => f.key === 'recallFilter')!.description;
+    expect(d).toMatch(/never the notes you asked it to keep/i);
+  });
+
+  it('explains a word that means something only here', () => {
+    // `sub-agent`, `specialist`, `applet` and `lineup` are ours. Each is
+    // glossed at the first question that uses it, so a reader walking the
+    // sections in order has met it before it is used plainly — which is why
+    // this asserts on the FIRST field to mention one rather than on every
+    // field, and why moving a section could fail it.
+    const GLOSSED: Array<[RegExp, RegExp]> = [
+      [/sub-agents?/i, /small helpers/i],
+      [/\bspecialist\b/i, /saved persona/i],
+      [/\bapplets?\b/i, /small web app/i],
+      [/\blineups?\b/i, /named set of models/i],
+    ];
+    for (const [term, gloss] of GLOSSED) {
+      const first = WIZARD_FIELDS.find((f) => term.test(f.description));
+      expect(first, String(term)).toBeDefined();
+      expect(first?.description, `${first?.key} must gloss ${term}`).toMatch(gloss);
+    }
+  });
+
+  it('puts nothing in parentheses on a row label', () => {
+    // A gloss beside the option is the thing the description is supposed to
+    // have absorbed. Asserted across every list rather than per question,
+    // because this was fixed three times — coordinator, tool and confirm mode —
+    // before the rule was general.
+    for (const f of WIZARD_FIELDS) {
+      if (f.field.kind !== 'list') continue;
+      for (const o of f.field.options) expect(o.label, `${f.key}/${o.value}`).not.toMatch(/[()]/);
+    }
+  });
+});
+
+/** Type-level: `covers` may only name real settings. */
+const _coversAreSettings: Array<keyof ProfileSettings> = WIZARD_FIELDS.flatMap(
+  (f) => f.covers ?? [],
+);
+void _coversAreSettings;

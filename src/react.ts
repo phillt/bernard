@@ -14,6 +14,7 @@
  * layer; today `agent.ts` (re-export) and `plan-enforcement.ts` are the only
  * importers.
  */
+import { MISSING_PLAN_PREFIX, PLAN_ENFORCEMENT_PREFIX } from './session-markers.js';
 
 export const REACT_COORDINATOR_PROMPT = `## Coordinator Mode (Active)
 
@@ -174,7 +175,7 @@ export const REACT_AUTO_CANCEL_NOTE = 'auto-cancelled: enforcement retries exhau
  */
 export function buildEnforcementFeedback(planRender: string): string {
   return (
-    `Your plan still has unresolved steps:\n\n${planRender}\n\n` +
+    `${PLAN_ENFORCEMENT_PREFIX}\n\n${planRender}\n\n` +
     `Resolve each remaining step: complete it (plan update -> done), mark it cancelled with a note if the user's intent changed or the step is no longer needed, or mark it error with a note if it is genuinely unachievable. Do not leave steps pending or in_progress.`
   );
 }
@@ -187,7 +188,7 @@ export function buildEnforcementFeedback(planRender: string): string {
  */
 export function buildMissingPlanFeedback(): string {
   return (
-    `You are operating in coordinator mode but did not call the \`plan\` tool. ` +
+    `${MISSING_PLAN_PREFIX} the \`plan\` tool. ` +
     `Before composing your final response, call \`plan\` with action \`create\` and an ordered list of step objects ({description, verification}) covering the work this turn requires. ` +
     `Then walk each step through the in_progress → done/cancelled/error lifecycle as described in the coordinator prompt. ` +
     `Do not skip planning — every coordinator turn needs a plan.`

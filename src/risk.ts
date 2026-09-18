@@ -30,9 +30,8 @@ export type ConfirmThreshold = 'never' | 'high' | 'medium' | 'always';
 /**
  * Verbs that make an MCP tool a lookup-style call.
  *
- * Centralized here so the MCP wrapper (`mcp.ts`), the reference-resolver lookup
- * pass (`reference-tool-lookup.ts`) and the watcher probe (`watchers/probe.ts`)
- * agree on one definition of "read-only MCP tool".
+ * Centralized here so the MCP wrapper (`mcp.ts`) and the watcher probe
+ * (`watchers/probe.ts`) agree on one definition of "read-only MCP tool".
  */
 const READ_VERBS = new Set(['search', 'list', 'find', 'get', 'query', 'read', 'lookup']);
 
@@ -106,6 +105,68 @@ const WRITE_VERBS = new Set([
  * leading-verb test would never fire — which is the same reason the original was
  * anchored rather than free-floating.
  */
+/**
+ * Verbs that EMIT something into the world that cannot be un-emitted (#575).
+ *
+ * This answers a different question from {@link WRITE_VERBS}, and conflating
+ * the two is what got the first duplicate-write gate withdrawn. That one asks
+ * "does this mutate"; this asks "is doing it twice a second thing that
+ * happened". A message is sent, a calendar event is created, a row is appended
+ * — each repeat is a new artefact somebody receives. Setting a value is not:
+ * `mark_read`, `set_status`, `update_row`, `archive_chat`, `rename_file` and
+ * `delete_message` all land on the same state whether called once or twice,
+ * so repeating them is wasteful at worst and must not be refused.
+ *
+ * So this is a strict subset of the write verbs — the state-setting half of
+ * that set is deliberately absent — plus a few names it never needed.
+ *
+ * **It is narrower than "every MCP write" on purpose, and the trace that
+ * motivated the gate is the proof.** `focus_app` carries no read verb and no
+ * write verb, so it classifies as a write; it is the third most-used MCP tool
+ * on the install this was measured against (38 calls), and the dispatch that
+ * double-sent called it TWICE with identical arguments, once before each send.
+ * A rule keyed on write-ness refuses the second `focus_app` before the send it
+ * exists to stop is ever reached.
+ *
+ * Same stop-gap status as its neighbour above, and the same replacement: MCP
+ * declares `idempotentHint` for exactly this, and #570 is where reading the
+ * server's own annotations lands. Until then a name is all there is.
+ */
+const EMIT_VERBS = new Set([
+  'send',
+  'post',
+  'reply',
+  'forward',
+  'create',
+  'add',
+  'insert',
+  'upload',
+  'publish',
+  'submit',
+  'invite',
+  'draft',
+  'email',
+  'notify',
+]);
+
+/**
+ * Whether repeating this MCP tool with identical arguments emits a second time.
+ *
+ * Segmented exactly as {@link isReadOnlyMCPToolName} segments, through the same
+ * shared `parseMCPToolName`, so the two cannot disagree about where the tool
+ * name starts. Callers must AND this with `!isReadOnlyMCPToolName(name)`:
+ * `list_drafts` and `search_posts` carry an emit verb and are lookups, and a
+ * read is never worth refusing.
+ */
+export function hasEmitVerb(name: string): boolean {
+  const bare = parseMCPToolName(name)?.tool ?? name;
+  return bare
+    .toLowerCase()
+    .split('_')
+    .filter(Boolean)
+    .some((seg) => EMIT_VERBS.has(seg));
+}
+
 export function isReadOnlyMCPToolName(name: string): boolean {
   // `parseMCPToolName`, not a local strip. The inline version split on the LAST
   // `__` while the shared one splits on the FIRST, and they disagree for any
@@ -186,13 +247,14 @@ export function shouldConfirm(risk: RiskLevel, threshold: ConfirmThreshold | und
  * answer. A future refinement made for permission reasons would silently move
  * the barrier too, so it is named here rather than left to be found.
  *
- * A third caller was tried and withdrawn, and the reason bounds what this
+ * A third caller was tried and withdrawn, and the reason still bounds what this
  * predicate can be asked (#575). A duplicate-write gate wanted "is repeating
  * this harmful", which is IDEMPOTENCY rather than mutation — and measured
  * against real logs the substitution is not close: of 46 adjacent identical
  * `shell` repeats, this predicate calls 44 of them writes, including
  * `ls -l … | cat` and `grep -nE …`, because `primaryShellCommand` returns null
- * for any compound line. Do not reach for this to answer that question.
+ * for any compound line. Do not reach for this to answer that question; the
+ * answer is `ToolMeta.nonIdempotent`, fed for MCP by {@link hasEmitVerb}.
  *
  * When `meta.isWriteAction` is set, it overrides the static `kind` check for
  * this specific invocation — so `memory({action:'read'})` falls through even

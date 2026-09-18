@@ -209,7 +209,6 @@ export const SITE_ROLE: Record<ModelSite, RoleId> = {
   compressor: 'summarizer',
   rewriter: 'classifier',
   'reference-resolver': 'classifier',
-  'reference-lookup': 'classifier',
   'recall-filter': 'classifier',
   'specialist-detector': 'classifier',
   'applet-detector': 'classifier',

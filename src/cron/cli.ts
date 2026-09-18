@@ -7,6 +7,7 @@ import { runJob } from './runner.js';
 import { isDaemonRunning, startDaemon, stopDaemon } from './client.js';
 import { printInfo, printError } from '../output.js';
 import { runWorkspace } from '../paths.js';
+import { parseGrantSpec, type PermissionRule } from '../tool-permissions.js';
 
 /** Stops the daemon automatically when no enabled jobs remain. */
 function stopIfNoEnabledJobs(store: CronStore): void {
@@ -311,10 +312,11 @@ export async function cronBounce(ids?: string[]): Promise<void> {
  * its own write scope, which is the escalation the whole gate exists to
  * prevent — a grant has to come from the person, not the process.
  */
+
 export async function cronGrant(
   id: string,
   paths: string[],
-  opts: { clear?: boolean } = {},
+  opts: { clear?: boolean; allow?: string[] } = {},
 ): Promise<void> {
   const store = new CronStore();
   const job = store.getJob(id);
@@ -325,8 +327,41 @@ export async function cronGrant(
   }
 
   if (opts.clear) {
-    store.updateJob(id, { writePaths: [] });
-    printInfo(`Cleared extra write paths for "${job.name}". It keeps its own workspace.`);
+    store.updateJob(id, { writePaths: [], toolPermissions: [] });
+    printInfo(`Cleared extra write paths and tool grants for "${job.name}".`);
+    printInfo('It keeps its own workspace and the read-only shell allowlist.');
+    return;
+  }
+
+  // `--allow shell:gh` — the precise lever, and the one that was missing.
+  //
+  // Cron denies every write-shaped shell command, so a job that needed
+  // `gh issue create` could not be expressed: one real job spent ten scheduled
+  // runs and 934,805 tokens discovering that, and there was no way to fix it
+  // short of editing `jobs.json` by hand. `runGate` opens with
+  // `if (grant === 'allow') return true`, so a rule scoped to one command
+  // clears the confirm gate for THAT command only — where `confirmMode: 'off'`,
+  // the other reachable knob, would dissolve every confirmation including
+  // `rm -rf`.
+  if (opts.allow && opts.allow.length > 0) {
+    // `parseGrantSpec`, not a local copy. The copy dropped the validation
+    // half — it minted `{tool: ''}` for `:foo` and `{tool:'gh'}` for `gh:` —
+    // so a typo persisted a rule that matches nothing, unattended, which is
+    // the shape of the very deny-loop `--allow` exists to end. The shared one
+    // returns `null` for all three and the caller refuses.
+    const parsed = opts.allow.map((a) => [a, parseGrantSpec(a, 'allow')] as const);
+    const bad = parsed.filter(([, r]) => r === null).map(([a]) => a);
+    if (bad.length > 0) {
+      printError(`Not a tool spec: ${bad.join(', ')}`);
+      printInfo("Expected `<tool>` or `<tool>:<specifier>`, e.g. 'shell:gh *'.");
+      process.exitCode = 1;
+      return;
+    }
+    const rules: PermissionRule[] = parsed.map(([, r]) => r as PermissionRule);
+    store.updateJob(id, { toolPermissions: [...(job.toolPermissions ?? []), ...rules] });
+    printInfo(`Job "${job.name}" may now run:`);
+    for (const a of opts.allow) printInfo(`  ${a}`);
+    printInfo('Nothing else changed — every other tool keeps its usual gate.');
     return;
   }
 
@@ -338,6 +373,15 @@ export async function cronGrant(
       current.length > 0
         ? `  Also granted:\n${current.map((p) => `    ${p}`).join('\n')}`
         : '  No extra write paths granted.',
+    );
+    // Printed beside the write paths because they answer one question — what
+    // may this job do that it could not by default — and a grant the user
+    // cannot see is one they cannot revoke.
+    const tools = job.toolPermissions ?? [];
+    printInfo(
+      tools.length > 0
+        ? `  Tools allowed:\n${tools.map((r) => `    ${r.tool}${r.specifier ? `:${r.specifier}` : ''}`).join('\n')}`
+        : '  No extra tool grants.',
     );
     return;
   }

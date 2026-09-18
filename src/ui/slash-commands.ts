@@ -57,6 +57,7 @@ export const DISPATCHED_COMMANDS = [
   '/rag',
   '/facts',
   '/update',
+  '/setup',
   '/theme',
   '/tool-permissions',
   '/voice',
@@ -188,6 +189,12 @@ const CATALOGUE: readonly BuiltinSlashCommand[] = [
   { name: '/models', description: 'Browse the model catalog and add custom providers' },
   { name: '/refresh-models', description: 'Force-refresh the model catalog from the gateway' },
   { name: '/provider', description: 'Manage providers (alias of /models)' },
+  {
+    name: '/setup',
+    description: 'Walk every setting, prepopulated',
+    detail:
+      'Provider, key and every setting, each opening on its current value. Only what you change is saved, so anything inherited from a BERNARD_* variable stays inherited. Same flow as `bernard setup`.',
+  },
   { name: '/theme', description: 'Switch color theme' },
   { name: '/voice', description: 'Voice settings: readback, backend, voice, natural speech' },
   { name: '/routines', description: 'List saved routines' },

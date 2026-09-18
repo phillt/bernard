@@ -20,6 +20,7 @@ import { initShellParser } from './permissions/shell-ast.js';
  * here because every existing caller addresses them by this module's name.
  */
 import { headlessToolOptions, type HeadlessPosture } from './headless-posture.js';
+import { clearDuplicateGuard } from './tools/duplicate-guard.js';
 
 export {
   resolvePosture,
@@ -140,6 +141,13 @@ export interface HeadlessTimings {
   totalMs: number;
 }
 
+/** One gate refusal during an unattended run. */
+export interface DeniedCall {
+  tool: string;
+  permissionKey: string | null;
+  risk: string;
+}
+
 export type RunHeadlessResult<TFormatted> =
   | {
       ok: true;
@@ -148,6 +156,16 @@ export type RunHeadlessResult<TFormatted> =
       startedAt: string;
       timings: HeadlessTimings;
       stepLimitHit: boolean;
+      /**
+       * Tool calls a gate refused with nobody present to decide it (#447).
+       *
+       * Reported on the OK arm deliberately: a run can complete, answer, and
+       * still have been refused the one capability the job existed for — which
+       * is exactly what happened, ten times, while every surface said
+       * `success`. The caller decides what that means; `runHeadless` never
+       * classifies.
+       */
+      denied: DeniedCall[];
     }
   | {
       ok: false;
@@ -158,6 +176,7 @@ export type RunHeadlessResult<TFormatted> =
       env: HeadlessEnv;
       startedAt: string;
       timings: HeadlessTimings;
+      denied: DeniedCall[];
     };
 
 /** Empty MCP snapshot used when no server connects. */
@@ -210,6 +229,16 @@ export async function runHeadless<TInput, TFormatted>(
   if (posture.toolPermissions?.length) {
     await initShellParser();
   }
+
+  // One run is one piece of work (#575). A cron daemon runs many in one process
+  // and never exits between them, which is how the first cut of the duplicate
+  // guard refused a job's identical scheduled write on its second fire.
+  clearDuplicateGuard();
+
+  // Accumulated for the whole run and returned on BOTH arms. A run can finish,
+  // answer, and still have been refused the capability it existed for — which
+  // is the state that looked like ten clean successes (#447).
+  const denied: DeniedCall[] = [];
 
   const runId = opts.runId ?? crypto.randomUUID();
 
@@ -296,7 +325,7 @@ export async function runHeadless<TInput, TFormatted>(
     ctx = scopeContext(
       assembleContext({
         config,
-        toolOptions: headlessToolOptions(posture, config.shellTimeout),
+        toolOptions: headlessToolOptions(posture, config.shellTimeout, (d) => denied.push(d)),
         mcp: mcpSnapshot,
         rag: ragStore,
         ragForOwner: ragStore ? specialistRagFor : undefined,
@@ -384,10 +413,10 @@ export async function runHeadless<TInput, TFormatted>(
       // not a specialist record and `resolveDispatchProfile` cannot see one.
       declaredScope: scope,
     });
-    return { ok: true, formatted, env, startedAt, timings: timings(), stepLimitHit };
+    return { ok: true, formatted, env, startedAt, timings: timings(), stepLimitHit, denied };
   } catch (err: unknown) {
     const error = err instanceof Error ? err.message : String(err);
-    return { ok: false, error, timedOut, timeoutMs, env, startedAt, timings: timings() };
+    return { ok: false, error, timedOut, timeoutMs, env, startedAt, timings: timings(), denied };
   } finally {
     if (timer) clearTimeout(timer);
     opts.abortSignal?.removeEventListener('abort', onCallerAbort);

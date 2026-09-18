@@ -49,8 +49,6 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
     autoCreateThreshold: 0.8,
     correctionEnabled: true,
     promptRewriter: true,
-    referenceLookup: true,
-    referenceLookupTools: [],
     scratchSubjectThreshold: 0.15,
     conciseMode: true,
     anthropicApiKey: 'sk-ant',
@@ -656,7 +654,6 @@ describe('resolveSiteModel — every mode is total', () => {
     'tool-wrapper',
     'rewriter',
     'reference-resolver',
-    'reference-lookup',
     'compressor',
     'specialist-detector',
   ] as const;
@@ -680,7 +677,6 @@ describe('snapshotSiteModels', () => {
     'tool-wrapper',
     'rewriter',
     'reference-resolver',
-    'reference-lookup',
     'compressor',
     'specialist-detector',
   ] as const;

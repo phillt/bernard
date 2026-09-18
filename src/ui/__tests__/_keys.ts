@@ -66,7 +66,11 @@ export const CTRL_D = '\x04';
 export const CTRL_B = '\x02';
 /** Free at every layer — see `remote-messages.ts` on why not Ctrl+Enter. */
 export const CTRL_O = '\x0f';
+/** Forward, the sibling of `^B`. Free per `use-line-editor.tsx`. */
+export const CTRL_N = '\x0e';
 export const CTRL_F = '\x06';
+/** Runs a step's own check (#447). Free at every layer — `t` is unclaimed. */
+export const CTRL_T = '\x14';
 export const ALT_B = '\x1bb';
 export const ALT_F = '\x1bf';
 export const ALT_BACKSPACE = '\x1b\x7f';

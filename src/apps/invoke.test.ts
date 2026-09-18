@@ -11,6 +11,7 @@ const mockDispatchAction = vi.hoisted(() =>
     startedAt: '2026-01-01T00:00:00.000Z',
     timings: { mcpConnectMs: 7, totalMs: 12 },
     stepLimitHit: false,
+    denied: [],
   }),
 );
 // Returns the RECORD now, not a boolean: the invocation log records the
@@ -70,6 +71,7 @@ describe('invokeAction', () => {
       startedAt: '2026-01-01T00:00:00.000Z',
       timings: { mcpConnectMs: 7, totalMs: 12 },
       stepLimitHit: false,
+      denied: [],
     });
   });
 
@@ -319,6 +321,7 @@ describe('invokeAction', () => {
       startedAt: '2026-01-01T00:00:00.000Z',
       timings: { mcpConnectMs: 1, totalMs: 2 },
       stepLimitHit: false,
+      denied: [],
     });
     const result = await m.invokeAction({ appId: 'demo', action: 'ask', args: { q: 'x' } });
     expect(result.ok).toBe(false);
@@ -388,6 +391,7 @@ describe('a parse failure says what actually came back', () => {
       startedAt: '2026-01-01T00:00:00.000Z',
       timings: { mcpConnectMs: 7, totalMs: 12 },
       stepLimitHit: false,
+      denied: [],
     });
   });
 

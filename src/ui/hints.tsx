@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { Text } from 'ink';
-import { getThemeColors } from '../theme.js';
+import { useThemeColors } from './ThemeContext.js';
 
 /**
  * The shared visual atoms for chrome legends — the bottom-left {@link HintBar},
@@ -22,7 +22,7 @@ export const HINT_DIVIDER = '  ·  ';
 
 /** The {@link HINT_DIVIDER} as a standalone node, for hand-built rows (StatusBar). */
 export function HintDivider() {
-  const colors = getThemeColors();
+  const colors = useThemeColors();
   return <Text color={colors.muted}>{HINT_DIVIDER}</Text>;
 }
 
@@ -33,7 +33,7 @@ export function HintDivider() {
  * the muted default.
  */
 export function HintEntry({ hintKey, label }: { hintKey: ReactNode; label: ReactNode }) {
-  const colors = getThemeColors();
+  const colors = useThemeColors();
   return (
     <Text color={colors.muted}>
       <Text color={colors.accent}>{hintKey}</Text> {label}
@@ -79,6 +79,19 @@ export const KEY = {
   /** Drilled-in viewers spend Esc on "back one level", so they advertise both. */
   escBack: 'esc/←',
 } as const;
+
+/**
+ * A control chord, spelled the way people say it.
+ *
+ * `ctrl+b` rather than `^b`: the caret is terminal shorthand that readers of
+ * emacs and older CLIs know and nobody else does, and this row is read by
+ * someone being onboarded. One function rather than a literal per site, because
+ * the wizard and the transcript hint bar had already picked `^b` and `^o`
+ * independently and would have drifted again the next time one was added.
+ */
+export function ctrlKey(letter: string): string {
+  return `ctrl+${letter}`;
+}
 
 /** `esc close` — the dismiss hint for a read-only surface. */
 export const HINT_CLOSE: KeyHint = { key: KEY.esc, label: 'close' };

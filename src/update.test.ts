@@ -50,6 +50,9 @@ import {
   applyUpdate,
   interactiveUpdate,
   startupUpdateCheck,
+  flushPendingUpdateNotice,
+  applyPendingUpdate,
+  takePendingUpdate,
   releaseNotesUrl,
 } from './update.js';
 
@@ -370,13 +373,22 @@ describe('startupUpdateCheck', () => {
     expect(outputMock.printInfo).not.toHaveBeenCalled();
   });
 
-  it('prints notification when update available and autoUpdate off', async () => {
+  it('records the notification instead of printing it mid-session', async () => {
+    // The same reason the INSTALL was moved to exit, one branch over: this
+    // check settles long after Ink has mounted, so a `printInfo` here lands in
+    // the alternate screen buffer Ink owns and is painted over on the next
+    // ~32 ms render. The line deliberately made loud was the one least likely
+    // to be read — and only for users who declined auto-update, i.e. exactly
+    // the ones who have to act on it by hand.
     fsMock.readFileSync.mockReturnValue(JSON.stringify({ version: '1.0.0' }));
     mockHttpsGet(JSON.stringify({ version: '2.0.0' }));
 
     startupUpdateCheck(false);
     await new Promise((r) => setTimeout(r, 50));
+    expect(outputMock.printInfo).not.toHaveBeenCalled();
 
+    // Drained at exit, past `fullScreen.teardown()`, onto the restored screen.
+    flushPendingUpdateNotice();
     expect(outputMock.printInfo).toHaveBeenCalledWith(expect.stringContaining('Update available'));
     expect(outputMock.printInfo).toHaveBeenCalledWith(
       expect.stringContaining("What's new: https://phillt.github.io/bernard/releases.html#v2.0.0"),
@@ -384,13 +396,44 @@ describe('startupUpdateCheck', () => {
     expect(outputMock.printInfo).toHaveBeenCalledWith(expect.stringContaining('bernard update'));
   });
 
-  it('applies update when autoUpdate is on', async () => {
+  it('clears as it reads, so a second drain cannot print it twice', async () => {
+    fsMock.readFileSync.mockReturnValue(JSON.stringify({ version: '1.0.0' }));
+    mockHttpsGet(JSON.stringify({ version: '2.0.0' }));
+    startupUpdateCheck(false);
+    await new Promise((r) => setTimeout(r, 50));
+
+    flushPendingUpdateNotice();
+    const after = outputMock.printInfo.mock.calls.length;
+    flushPendingUpdateNotice();
+    expect(outputMock.printInfo.mock.calls.length).toBe(after);
+  });
+
+  it('records the update instead of installing it mid-session', async () => {
+    // The install is an `execSync` of a global npm install with
+    // `stdio: 'inherit'`. This check fires before Ink mounts and settles well
+    // after, so doing it here froze the event loop for the length of that
+    // install and wrote npm's output into the alternate screen buffer Ink owns.
+    // Asserting `execSync` was NOT called is the whole point — the old test
+    // asserted the opposite, which is what made the default unsafe to flip.
     fsMock.readFileSync.mockReturnValue(JSON.stringify({ version: '1.0.0' }));
     mockHttpsGet(JSON.stringify({ version: '2.0.0' }));
     cpMock.execSync.mockReturnValue(undefined);
 
     startupUpdateCheck(true);
     await new Promise((r) => setTimeout(r, 50));
+
+    expect(cpMock.execSync).not.toHaveBeenCalled();
+    expect(takePendingUpdate()).toBe('2.0.0');
+  });
+
+  it('installs what the session recorded, once the session is over', async () => {
+    fsMock.readFileSync.mockReturnValue(JSON.stringify({ version: '1.0.0' }));
+    mockHttpsGet(JSON.stringify({ version: '2.0.0' }));
+    cpMock.execSync.mockReturnValue(undefined);
+
+    startupUpdateCheck(true);
+    await new Promise((r) => setTimeout(r, 50));
+    applyPendingUpdate();
 
     expect(cpMock.execSync).toHaveBeenCalledWith('npm install -g bernard-agent@2.0.0', {
       stdio: 'inherit',
@@ -399,5 +442,21 @@ describe('startupUpdateCheck', () => {
     expect(outputMock.printInfo).toHaveBeenCalledWith(
       expect.stringContaining("What's new: https://phillt.github.io/bernard/releases.html#v2.0.0"),
     );
+  });
+
+  it('takes the pending update exactly once', async () => {
+    // Or a second drain — an exit path that runs twice, a test file that
+    // forgets to reset — reinstalls the same version.
+    fsMock.readFileSync.mockReturnValue(JSON.stringify({ version: '1.0.0' }));
+    mockHttpsGet(JSON.stringify({ version: '2.0.0' }));
+    cpMock.execSync.mockReturnValue(undefined);
+
+    startupUpdateCheck(true);
+    await new Promise((r) => setTimeout(r, 50));
+    applyPendingUpdate();
+    cpMock.execSync.mockClear();
+    applyPendingUpdate();
+
+    expect(cpMock.execSync).not.toHaveBeenCalled();
   });
 });

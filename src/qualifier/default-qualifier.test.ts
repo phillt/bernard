@@ -20,8 +20,6 @@ function makeConfig(): BernardConfig {
     autoCreateThreshold: 0.8,
     correctionEnabled: true,
     promptRewriter: true,
-    referenceLookup: true,
-    referenceLookupTools: [],
     scratchSubjectThreshold: 0.15,
     conciseMode: true,
     customProviders: {},

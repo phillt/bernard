@@ -782,6 +782,34 @@ describe('MCPManager namespaced names (#413)', () => {
     expect(readToolMeta(tools[mcpToolName('srv', 'browser_click')])?.kind).toBe('write');
   });
 
+  // The duplicate gate's whole live population comes from here (#575), and
+  // nothing else asserts that `mcp.ts` wires the rule: the augment fixtures
+  // derive the flag themselves, so a mutation dropping `hasEmitVerb` — or the
+  // field entirely — survived every one of them.
+  //
+  // `focus_app` is the case that decides the rule rather than an extra one. It
+  // carries neither a read nor a write verb so it classifies as a WRITE, it is
+  // the third most-used MCP tool on the install this was measured against, and
+  // the dispatch that double-sent called it twice with identical arguments.
+  // `nonIdempotent: !isRead` would refuse the second one.
+  it('marks only the emitting writes non-idempotent', async () => {
+    mockCreateMCPClient.mockResolvedValue(
+      makeMockClient({
+        send_message: makeDynamicTool(vi.fn()),
+        focus_app: makeDynamicTool(vi.fn()),
+        list_messages: makeDynamicTool(vi.fn()),
+      }),
+    );
+    vi.spyOn(manager, 'loadConfig').mockReturnValue({ mcpServers: { srv: { url: 'http://s' } } });
+    await manager.connect();
+
+    const tools = manager.getTools();
+    const flag = (t: string) => readToolMeta(tools[mcpToolName('srv', t)])?.nonIdempotent;
+    expect(flag('send_message')).toBe(true);
+    expect(flag('focus_app')).toBe(false);
+    expect(flag('list_messages')).toBe(false);
+  });
+
   // A name must depend only on its own server, never on config order — the
   // whole reason the segment carries a content hash rather than a suffix.
   it('produces identical keys regardless of server order in the config', async () => {

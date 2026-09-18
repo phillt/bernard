@@ -10,10 +10,9 @@
  *
  * ## Why its own module
  *
- * Six consumers across four layers need these strings: the manager itself, the
+ * Five consumers across four layers need these strings: the manager itself, the
  * delegation surface, the augment layer's profile keys, the tool-wrapper's
- * `targetTools` filter, the reference-lookup allowlist, and `mcp_verify`'s
- * reconciliation. `mcp.ts` opens `@ai-sdk/mcp` and `node:fs` at import, so
+ * `targetTools` filter, and `mcp_verify`'s reconciliation. `mcp.ts` opens `@ai-sdk/mcp` and `node:fs` at import, so
  * making `augment.ts` depend on it to ask a pure question about a string is the
  * edge `tool-bytes.ts` and `tool-result-shape.ts` were both carved out to
  * avoid. This module imports `node:crypto` and nothing else.
@@ -153,8 +152,8 @@ export type MCPAliasIndex = ReadonlyMap<string, string | null>;
  *
  * Bernard shipped for a long time registering MCP tools under their bare names,
  * and those bare names are persisted in permission grants, tool-profile
- * filenames, specialist `targetTools` and `BERNARD_LOOKUP_TOOLS`. Rather than
- * rewrite user data, a stored name is resolved through this at match time.
+ * filenames and specialist `targetTools`. Rather than rewrite user data, a
+ * stored name is resolved through this at match time.
  *
  * Three forms are recognised: the bare tool tail, the unhashed
  * `<server>__<tool>` form (what the `@ai-sdk/mcp` convention would have
@@ -273,8 +272,8 @@ export function toolNameFromProfileKey(key: string): string | null {
  * server. Both cases fail closed at every consumer.
  *
  * Declared here, in the leaf every consumer already imports, rather than in
- * `permissions/engine.ts`: the tool-wrapper and reference-lookup consumers have
- * no other reason to reach into the permissions layer, and hand-respelling the
+ * `permissions/engine.ts`: the tool-wrapper consumer has no other reason to
+ * reach into the permissions layer, and hand-respelling the
  * signature inline loses the `null`-means-ambiguous contract the whole
  * fail-closed design rests on.
  */

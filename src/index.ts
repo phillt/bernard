@@ -74,8 +74,15 @@ import {
 import type { ScriptCliOptions } from './script/run.js';
 import { listMCPServers, removeMCPServer, MCPManager, setActiveMCPManager } from './mcp.js';
 import { ToolProfileStore } from './tool-profiles.js';
-import { runFirstTimeSetup } from './setup.js';
-import { getLocalVersion, startupUpdateCheck, interactiveUpdate } from './update.js';
+import { runSetupHost } from './ui/SetupHost.js';
+import { describeOutcome } from './setup-flow.js';
+import {
+  getLocalVersion,
+  startupUpdateCheck,
+  applyPendingUpdate,
+  flushPendingUpdateNotice,
+  interactiveUpdate,
+} from './update.js';
 import { factsList, factsSearch, clearFacts } from './facts-cli.js';
 import { migrateFromLegacy } from './migrate.js';
 import { MCP_CONFIG_PATH, PROFILES_PATH, PREFS_PATH, RAG_DIR } from './paths.js';
@@ -219,7 +226,23 @@ program
       // qualify — an existing prefs file means we're migrating, not onboarding.
       const isFreshInstall = !fs.existsSync(PROFILES_PATH) && !fs.existsSync(PREFS_PATH);
 
-      await runFirstTimeSetup();
+      // A first run walks setup before `loadConfig` is reached, because without
+      // a key `loadConfig` throws. The gate is the KEY, not `isFreshInstall`:
+      // someone whose only key is in the environment has no profiles file and
+      // does not need to be asked anything.
+      if (!getProviderKeyStatus().some((p) => p.hasKey)) {
+        const outcome = await runSetupHost();
+        for (const line of describeOutcome(outcome)) printInfo(`  ${line}`);
+        // Anything short of a saved provider leaves `loadConfig` about to throw,
+        // and its message is about `add-key` rather than about the wizard the
+        // user just walked away from. Exit here with the better sentence.
+        if (outcome.status !== 'saved') {
+          if (outcome.status === 'cancelled') {
+            printInfo('  Run `bernard setup` when you are ready.');
+          }
+          process.exit(0);
+        }
+      }
 
       const config = loadConfig({
         provider: opts.provider,
@@ -275,7 +298,10 @@ The user has been notified and this session is open for them to review and act o
       }
 
       const prefs = loadPreferences();
-      startupUpdateCheck(!!prefs.autoUpdate);
+      // Default ON, like `autoOpenApplets` and its neighbours: an agent that
+      // silently runs an old build is the worse failure. Safe to default only
+      // because the install now happens at EXIT — see `update.ts`.
+      startupUpdateCheck(prefs.autoUpdate ?? true);
 
       await runInkRepl({
         config,
@@ -803,6 +829,14 @@ async function runInkRepl(args: {
   // screen, not the about-to-be-discarded alt screen.
   fullScreen?.teardown();
   await cleanup();
+  // After teardown, so npm's own output lands on the restored normal screen and
+  // the blocking install cannot freeze a live REPL. Nothing is left running to
+  // interrupt, and the user is already on their way out.
+  // Both drained here, after `fullScreen.teardown()`, so each lands on the
+  // restored normal screen: the notice for a user who declined auto-update,
+  // the install for one who did not.
+  flushPendingUpdateNotice();
+  applyPendingUpdate();
 }
 
 program
@@ -831,6 +865,21 @@ program
       printError(message);
       process.exit(1);
     }
+  });
+
+program
+  .command('setup')
+  .description('Walk provider, key and every setting, then check the result can make a call')
+  .option('--no-verify', 'Skip the closing probe that confirms the model answers')
+  .action(async (opts: { verify?: boolean }) => {
+    // Deliberately does NOT call `loadConfig` — that throws without a key, and a
+    // keyless install is the case this command most needs to serve. The
+    // `voice-test` precedent.
+    const outcome = await runSetupHost({ verify: opts.verify !== false });
+    for (const line of describeOutcome(outcome)) printInfo(`  ${line}`);
+    // A failed probe is a real failure of the thing this command promises, so it
+    // exits non-zero the way `validate-lineup` does. A cancellation is not.
+    if (outcome.status === 'saved' && outcome.probe && !outcome.probe.ok) process.exit(1);
   });
 
 program
@@ -1286,9 +1335,13 @@ program
 
 program
   .command('cron-grant <id> [paths...]')
-  .description('Show or set the folders a cron job may write to, beyond its own workspace')
-  .option('--clear', 'Remove all extra write paths, leaving only the job workspace')
-  .action(async (id: string, paths: string[], options: { clear?: boolean }) => {
+  .description('Show or set what a cron job may do beyond its defaults — write paths and tools')
+  .option('--clear', 'Remove all extra write paths and tool grants')
+  .option(
+    '--allow <specifier...>',
+    "Let this job run a tool it otherwise cannot, e.g. 'shell:gh *'",
+  )
+  .action(async (id: string, paths: string[], options: { clear?: boolean; allow?: string[] }) => {
     try {
       await cronGrant(id, paths ?? [], options);
     } catch (err: unknown) {

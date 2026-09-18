@@ -221,6 +221,15 @@ import {
   runsUnattended,
   type RemoteMessageMode,
 } from '../remote-messages.js';
+import { COORDINATOR_MODES } from '../coordinator-modes.js';
+import {
+  CONFIRM_MODES,
+  TOOL_MODES,
+  TOOL_MODE_SETTINGS,
+  toolModeFor,
+  toolModeLabel,
+  type ToolModeChoice,
+} from '../tool-modes.js';
 import { setOutputSink } from '../framework/hooks/output-sink.js';
 import { setInkHandlers, type MenuResult } from './ink-handlers.js';
 import { formatAskUserAnswers, injectAskUserHistoryMessages } from '../tools/ask-user-history.js';
@@ -241,6 +250,7 @@ import { notAskedLine, type PendingPermission } from '../apps/permission-consent
 import { isWildcardSource, type GrantableDirective } from '../host/csp-grant.js';
 import type { PermissionConsentRequest } from '../tools/types.js';
 import { deleteSpecialist } from '../specialist-lifecycle.js';
+import { clearDuplicateGuard } from '../tools/duplicate-guard.js';
 
 /**
  * Slash commands and overlays need direct access to the same stores the
@@ -584,12 +594,33 @@ const LEGACY_INLINE_CHROME_ROWS = 5;
  * are namespaced so they can never collide with the numeric `itemKeyRef`
  * counter that drives live turns.
  */
+/**
+ * True when this message is prompt scaffolding rather than a turn (#447).
+ *
+ * ONE predicate for both transcript paths, which is the whole point: the live
+ * commit and `buildResumeSeed` disagreed, so the same message rendered or not
+ * depending on which one put it there. The plan-enforcement re-prompt is how
+ * that surfaced — `wrapIterate` pushes strategy extras into persistent history
+ * so the model sees them on the next iterate, and a whole rendered plan
+ * followed by "Resolve each remaining step" appeared as a right-aligned `❯`
+ * bubble. Bernard instructing itself, painted as something the user said.
+ *
+ * Exported so it can be driven directly: the live path is inside a component
+ * and cannot be reached without running a turn, which is exactly how it ended
+ * up as the untested half of a rule the other half tested.
+ */
+export function isScaffoldingMessage(message: CoreMessage): boolean {
+  if (message.role !== 'user' && message.role !== 'assistant') return false;
+  const text = extractText(message)?.trim();
+  return text !== undefined && text !== '' && isSessionScaffolding(text);
+}
+
 export function buildResumeSeed(history: CoreMessage[], toolDetails: boolean): StaticItem[] {
   const items: StaticItem[] = [];
   for (const message of history) {
     if (message.role !== 'user' && message.role !== 'assistant') continue;
     const text = extractText(message)?.trim();
-    if (!text || isSessionScaffolding(text)) continue;
+    if (!text || isScaffoldingMessage(message)) continue;
     // A woken turn replays as a panel, not as a `❯` bubble. Text forensics is
     // the only mechanism available — the persisted message is all there is, so
     // the watcher's name and reason are unrecoverable and the source degrades
@@ -1441,32 +1472,25 @@ export function App({
     return () => setInkHandlers(null);
   }, []);
 
-  // Fresh-install profile wizard (#207). Runs once on mount, after handlers
-  // are registered, before the user starts typing. Failures are swallowed so
-  // a wizard glitch never blocks the REPL from coming up.
+  // A first run points at `/setup` rather than opening a wizard on mount (#447).
+  //
+  // The wizard it used to open ran AFTER the REPL had come up, which meant it
+  // could only ever ask about settings — the provider and key were already
+  // settled by then, by a `readline` prompt printed before Ink started, or the
+  // session would not have mounted at all. Setup now runs before `loadConfig`
+  // in its own Ink host (`src/ui/SetupHost.tsx`), so by the time this component
+  // exists there is nothing left for it to collect.
+  //
+  // What remains is telling a new user the command exists. A notice rather than
+  // an overlay: the walk is 37 questions, and a fresh session should open on a
+  // prompt the user can type into, not on a form they did not ask for.
   const onboardingRanRef = useRef(false);
   useEffect(() => {
     if (!isFreshInstall || onboardingRanRef.current) return;
     onboardingRanRef.current = true;
-    void (async () => {
-      try {
-        const wiz = await runProfileWizardInk(requestMenu, requestTextInput, flashToast);
-        if (!wiz.cancelled) {
-          const { savePreferences: save } = await import('../config.js');
-          save({ provider: config.provider, model: config.model, ...wiz.settings });
-          const { applyProfileToConfig: apply } = await import('../config.js');
-          apply(config);
-          flashToast('Default profile updated.', 'success');
-        } else {
-          flashToast('Setup skipped — running with built-in defaults.', 'info');
-        }
-      } catch (err) {
-        flashToast(
-          `Onboarding wizard error: ${err instanceof Error ? err.message : String(err)}`,
-          'error',
-        );
-      }
-    })();
+    pushAssistantNotice(
+      'Welcome. Run `/setup` to walk every setting with its current value shown, or just start typing — the defaults work.',
+    );
   }, [isFreshInstall]);
 
   // Startup model-catalog refresh (#264 follow-up, extended by #306). Every
@@ -1645,6 +1669,9 @@ export function App({
           if (submittingRef.current) return;
           submittingRef.current = true;
           setBusy(true);
+          // This block holds both of `runAgentTurn`'s guards itself rather than
+          // going through it, so it owns the turn-boundary resets too (#575).
+          clearDuplicateGuard();
           const clearAbort = new AbortController();
           turnAbortRef.current = clearAbort;
           // Counted in the outer scope so the result line can name it. It was
@@ -2294,6 +2321,33 @@ export function App({
           `Update check failed: ${err instanceof Error ? err.message : String(err)}`,
           'error',
         );
+      }
+      return;
+    }
+
+    if (is(text, '/setup')) {
+      // The same flow `bernard setup` and a first run walk — see
+      // `src/setup-flow.ts`. Only the host differs: there the wizard is rendered
+      // by a standalone Ink mount, here by the overlay bridge this REPL already
+      // owns. Deferred import so the REPL's startup graph does not acquire the
+      // model-catalog and lineup modules for a command most sessions never run.
+      const { runSetupFlow, describeOutcome } = await import('../setup-flow.js');
+      try {
+        const outcome = await runSetupFlow({ requestWizard });
+        if (outcome.status === 'saved') {
+          // Settings were written to the profile; pull them onto the live config
+          // and re-fire the runtime side effects, exactly as a profile switch
+          // does. Without this the theme and tool-details choices sit on disk
+          // and do not take until the next launch.
+          applyProfileToConfig(config);
+          reapplyRuntimeSettings(config);
+          logSiteModelSnapshot(config, 'setup');
+        }
+        // The transcript, not a toast: several lines, and "this model cannot be
+        // reached" must outlive the next keystroke.
+        pushAssistantNotice(describeOutcome(outcome).join('\n'));
+      } catch (err) {
+        flashToast(`Setup failed: ${err instanceof Error ? err.message : String(err)}`, 'error');
       }
       return;
     }
@@ -3499,18 +3553,12 @@ export function App({
   }
 
   async function runCoordinatorModePrompt(): Promise<void> {
-    const modes: Array<{ value: 'on' | 'off' | 'auto'; label: string; desc: string }> = [
-      {
-        value: 'auto',
-        label: 'Auto (qualifier picks per turn)',
-        desc: 'Classifier inspects each ask and chooses Normal or ReAct.',
-      },
-      { value: 'on', label: 'On (always coordinator)', desc: 'Every turn runs ReAct.' },
-      { value: 'off', label: 'Off (always normal)', desc: 'Every turn runs single-shot Normal.' },
-    ];
-    const entries: MenuEntry[] = modes.map((m) => ({
+    // The shared table, not this menu's own spelling of it — the wizard asks
+    // the same question, and two copies of three rows is how they came to
+    // disagree in the first place.
+    const entries: MenuEntry[] = COORDINATOR_MODES.map((m) => ({
       label: m.label,
-      description: m.desc,
+      description: m.description,
       active: config.coordinatorMode === m.value,
       value: m.value,
     }));
@@ -3610,46 +3658,76 @@ export function App({
     flashToast(`Remote messages → ${chosen}`, chosen === 'all' ? 'warning' : 'success');
   }
 
+  /**
+   * The merged permission question (#447), rendered the way setup renders it.
+   *
+   * The shared table, not this menu's own spelling of it: the three answers
+   * were worded three ways across this file and the setup wizard, and one of
+   * those — "Write (allow all tools)" — described `write` as what
+   * `unrestricted` does; see `tool-modes.ts`.
+   *
+   * `TOOL_MODE_SETTINGS` decides what a row writes, for the same reason. This
+   * menu wrote two keys while the wizard wrote three, and the row whose label
+   * they disagreed about is the one a reader most needs to trust.
+   */
   async function runToolModePrompt(): Promise<void> {
-    const modes: Array<{ value: 'read-only' | 'write' | 'skip'; label: string; desc: string }> = [
-      {
-        value: 'read-only',
-        label: 'Read-only (least privilege)',
-        desc: 'Write tools blocked until explicitly enabled.',
-      },
-      {
-        value: 'write',
-        label: 'Write',
-        desc: 'Every tool may run; confirm gate still prompts on risk.',
-      },
-      {
-        value: 'skip',
-        label: 'Run Without Permission Checks or Safeguards',
-        desc: '⚠ No blocking, no confirmation prompts — every tool call runs unattended.',
-      },
-    ];
-    const entries: MenuEntry[] = modes.map((m) => ({
+    const inForce = toolModeFor(config);
+    const entries: MenuEntry[] = TOOL_MODES.map((m) => ({
       label: m.label,
-      description: m.desc,
-      active:
-        m.value === 'skip'
-          ? config.skipPermissions
-          : !config.skipPermissions && config.toolMode === m.value,
+      description: m.description,
+      active: inForce === m.value,
       value: m.value,
     }));
-    const current = config.skipPermissions ? 'unrestricted' : config.toolMode;
-    const result = await requestMenu(entries, { title: `Tool mode: ${current}` });
+    // `null` is the state no row represents — `write` with the confirm level
+    // off, reachable from the row below and from `BERNARD_CONFIRM_MODE`. Named
+    // rather than rounded to a neighbour, so nothing here is ticked either.
+    const result = await requestMenu(entries, { title: `Tool mode: ${inForce ?? 'custom'}` });
     if (result.cancelled) return;
-    const chosen = result.item.value as 'read-only' | 'write' | 'skip';
-    if (chosen === 'skip') {
-      setSkipPermissions(true);
-      return;
-    }
-    // Picking a guarded mode always re-arms the safeguards.
-    config.toolMode = chosen;
-    config.skipPermissions = false;
-    saveActiveSettings({ toolMode: chosen, skipPermissions: false });
-    flashToast(`Tool mode → ${chosen}`, 'success');
+    const chosen = result.item.value as ToolModeChoice;
+    const next = TOOL_MODE_SETTINGS[chosen];
+    config.toolMode = next.toolMode;
+    config.skipPermissions = next.skipPermissions;
+    config.confirmMode = next.confirmMode;
+    saveActiveSettings(next);
+    flashToast(
+      next.skipPermissions
+        ? '⚠ Permission checks and safeguards DISABLED for this profile.'
+        : `Tool mode → ${chosen}`,
+      next.skipPermissions ? 'error' : 'success',
+    );
+  }
+
+  /**
+   * Which calls count as risky enough to stop for (#144/#447).
+   *
+   * A refinement of the answer above rather than a peer of it — which is the
+   * merge: asked as a peer, it let a reader accept "ask only about risky
+   * things" and then, one screen later, answer what "risky" means with "never".
+   *
+   * It is also the ONLY interactive surface that reaches `strict` or `off`.
+   * `/options` is the four numeric settings and has never held this, so without
+   * this row the merge would have quietly made both env-only.
+   */
+  async function runConfirmModePrompt(): Promise<void> {
+    const entries: MenuEntry[] = CONFIRM_MODES.map((m) => ({
+      label: m.label,
+      description: m.description,
+      active: config.confirmMode === m.value,
+      value: m.value,
+    }));
+    const result = await requestMenu(entries, {
+      // `toolModePolicy` short-circuits on `skipPermissions` before this is
+      // consulted at all, so the title says so rather than presenting a
+      // question whose answer decides nothing.
+      title: config.skipPermissions
+        ? 'Confirm mode (ignored — tool mode is unrestricted)'
+        : `Confirm mode: ${config.confirmMode}`,
+    });
+    if (result.cancelled) return;
+    const chosen = result.item.value as BernardConfig['confirmMode'];
+    config.confirmMode = chosen;
+    saveActiveSettings({ confirmMode: chosen });
+    flashToast(`Confirm mode → ${chosen}`, chosen === 'off' ? 'warning' : 'success');
   }
 
   async function runScratchThresholdPrompt(): Promise<void> {
@@ -3826,9 +3904,10 @@ export function App({
       {
         kind: 'item',
         item: {
-          label: 'Coordinator (ReAct) mode',
+          label: 'Planning',
           annotation: `= ${config.coordinatorMode}`,
-          description: 'On = always coordinator; Off = always normal; Auto = per-turn qualifier.',
+          description:
+            'On a task with several steps, planning makes the work markedly more reliable, at the cost of extra turns and time. It buys nothing on work that was only ever one step.',
         },
         action: runCoordinatorModePrompt,
       },
@@ -3856,11 +3935,28 @@ export function App({
         kind: 'item',
         item: {
           label: 'Tool mode',
-          annotation: `= ${config.skipPermissions ? '⚠ unrestricted' : config.toolMode}`,
+          // The row's own label, from the shared table — never a second
+          // spelling of it. `toolModeFor` already answers UNRESTRICTED for
+          // `skipPermissions`, so the branch this replaces was re-implementing
+          // its first line in order to disagree with it.
+          annotation: `= ${toolModeLabel(config) ?? 'custom'}`,
+          // In the rows' own words, not a fourth paraphrase of them.
           description:
-            'Read-only blocks write tools until enabled. Write lets every tool run subject to the confirm gate. Unrestricted skips all permission checks.',
+            'How much Bernard can do on its own before it needs you. Stop before every change, stop only at the dangerous calls, or never stop — which also removes the deny rules and write scopes, not just the prompts.',
         },
         action: runToolModePrompt,
+      },
+      {
+        kind: 'item',
+        item: {
+          label: 'Confirm mode',
+          annotation: `= ${config.skipPermissions ? 'ignored' : config.confirmMode}`,
+          // The finer grain under the row above (#447), which is why it reads
+          // as a refinement rather than as a second permission question.
+          description:
+            'Which calls count as dangerous enough to stop for. Auto means a destructive shell command or anything reaching off your machine; strict also stops before ordinary file writes; off never prompts, though deny rules and write scopes still apply.',
+        },
+        action: runConfirmModePrompt,
       },
       {
         kind: 'item',
@@ -4537,6 +4633,19 @@ export function App({
       // given, and the injector added it to history afterwards so the model
       // sees it next turn. The cursor still advances past it below.
       if (alreadyOnScreenRef.current.has(message)) continue;
+      // Scaffolding is addressed to the MODEL, never to the reader — the
+      // compression and truncation notices, and the plan-enforcement re-prompt
+      // that renders a whole plan back with "Resolve each remaining step".
+      // `wrapIterate` pushes strategy extras into persistent history so the
+      // model sees them on the next iterate, and everything `role: 'user'`
+      // landed in the transcript as a right-aligned `❯` bubble — Bernard
+      // instructing itself, painted as something the user said.
+      //
+      // The same predicate `buildResumeSeed` already uses, which is the point:
+      // it filtered on resume and not live, so the identical message rendered
+      // or not depending on which path put it there. `session-markers.ts`
+      // exists because every consumer that hand-rolled this list drifted.
+      if (isScaffoldingMessage(message)) continue;
       appended.push({
         key: String(itemKeyRef.current++),
         message,
@@ -4636,6 +4745,11 @@ export function App({
     // Clear the previous turn's stream events so the in-flight
     // <StreamingAssistantMessage> renders only this turn's deltas.
     messageStore.reset();
+    // A repeat is only ever compared against calls from the same piece of work
+    // (#575). Here rather than in `runPreTurnPipeline`, which is where
+    // `clearTurnCache` sits: headless never reaches that, and this is the one
+    // true turn boundary.
+    clearDuplicateGuard();
     // A new turn supersedes the previous turn's unspoken readback (#432) — the
     // case that motivates the guard at all.
     cancelPendingSpeech();
@@ -5648,6 +5762,11 @@ export function App({
         <WizardOverlay
           spec={pendingWizard.spec}
           reserveRows={overlayReserveRows}
+          // Full-screen replaces the transcript with a modal layer, so the card
+          // can centre in the frame it now owns. Legacy inline appends below a
+          // live transcript and prompt, where a full-height box would push both
+          // off the screen.
+          fill={fullScreen}
           onResolve={(result) => {
             pendingWizard.resolve(result);
             setPendingWizard(null);
@@ -5879,6 +5998,13 @@ async function pickWizardField(
   requestTextInput: RequestTextInput,
 ): Promise<unknown> {
   const kind = field.field;
+  // A dynamic list's options depend on the installed keys, the model catalog or
+  // the lineups on disk — none of which this flow resolves. Creating a PROFILE
+  // is also not the same act as running setup: provider, model and lineup are
+  // better chosen afterwards against a profile that is already live, via
+  // `/provider`, `/model` and `/lineups`. Skipped explicitly so the field is a
+  // decision here rather than a silent fall-through into the numeric branch.
+  if (kind.kind === 'dynamic') return undefined;
   if (kind.kind === 'list') {
     const entries: MenuEntry[] = kind.options.map((o) => ({
       label: o.label,
@@ -5907,6 +6033,7 @@ async function pickWizardField(
   if (val.cancelled) return undefined;
   const trimmed = val.raw.trim();
   if (!trimmed) return undefined;
+  if (kind.kind === 'text') return trimmed;
   if (kind.kind === 'int') {
     const parsed = Number.parseInt(trimmed, 10);
     if (!Number.isFinite(parsed) || String(parsed) !== trimmed) return undefined;

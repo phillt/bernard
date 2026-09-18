@@ -43,6 +43,12 @@ bernard knowledge read mybooks ./docs/deploy.md --from 4 --to 8
 bernard knowledge stats mybooks
 bernard knowledge remove mybooks                    # or `… remove mybooks <uri>`
 
+# Setup: provider, key and every setting, each opening on its current value (#447).
+# Only what you change is saved, so anything inherited from a BERNARD_* var stays so.
+bernard setup                                      # works with no API key at all
+bernard setup --no-verify                          # skip the closing "can it call?" probe
+# …and /setup in the REPL runs the identical flow.
+
 # Facts, yours and each specialist's own (#501). No flag = your own store.
 bernard facts                                      # names any specialist stores that exist
 bernard facts --specialist coder                   # that specialist's own
@@ -84,6 +90,8 @@ bernard applet-host uninstall
       - **`wrap="truncate"` is a SECOND broken copy, and it is still standing.** Ink routes truncation through `cli-truncate@4` → `slice-ansi@**5**`, vendored independently of the 7.x that the clip path uses, and it fails in the _more_ dangerous direction: a hyperlinked line given a 10-column budget measured **39 visible columns**, i.e. it over-runs rather than over-cuts. Three sites use it — `PlanPanel.tsx`, `HelpOverlay.tsx`, and this file's own position row, whose "exactly one row" reservation it would silently break. **Latent, not live:** only `renderMarkdown` emits OSC 8 and it flows solely into `MarkdownLines` → `MessageBlock`, so no truncated surface can carry one today. Do not read the fix above as retiring this; the invariant that would actually pin it is "no horizontal clip or truncate around content that can carry arbitrary escapes", and the repo's idiom for that is a `meta-coverage`-style source scan rather than a comment. Note this copy is **two** majors behind the upstream fix, so an `overrides` bump would have to reach `cli-truncate`'s `@5` as well as Ink's `@7`. The issue's own diagnosis had ruled `slice-ansi` out by round-tripping the line at a _fixed_ width — which passes; it is `stringWidth(line)` as the bound, the value Ink actually passes, that fails. The regression test therefore has to drive the **real Ink tree with the clip in place**: a `renderMarkdown`-level assertion passes while the bug is fully present, which is how this shipped.
       - **It is also a large performance win**, worth knowing before anyone reinstates `overflow`. Ink's horizontal early-out runs `widestLine()` on every write op _before_ the vertical `continue` skips off-screen rows, and `MarkdownLines` emits one `<Text>` per line — so the cost was O(whole transcript), not O(viewport). Measured: `Output.get()` **17.76 ms → 0.67 ms** at 958 rows (16.1 µs per `widestLine` × 958 accounts for 15.4 ms of it), and 43.1 → 25.2 ms end-to-end per frame. Ink throttles rendering at 32 ms, so the old code spent over half that budget measuring lines nobody could see, on every streaming delta.
     - **Link styling: `href` carries the colour, `link` carries the underline (#464).** marked-terminal applies `href` to the link TEXT and then wraps the result in `link`, so the two compose — underlining in both nests underline inside underline. Measured at `FORCE_COLOR=3`: 3 opens / 2 closes, with the teardown re-enabling it. **Deleting `href` is not the fix**, though it reads as one: marked-terminal falls back to its own `chalk.blue.underline`, which underlines just the same _and_ hard-codes blue, losing the theme — the exact TTY-and-theme blindness `normalizeColor` and the forced-level chalk exist to avoid. The three variants measured: `href: accent.underline` 3/2 with the accent kept; `href` absent 3/2 with links blue; `href: accent` **1/1** with the accent kept. Independent of the OSC 8 truncation above, and testable only with colour forced — under `vitest run` marked-terminal's own chalk sits at level 0, so its `href` emits nothing and the nesting is invisible. That is why `TranscriptViewport.hyperlink.test.tsx` forces **both** `FORCE_HYPERLINK` and `FORCE_COLOR`, and why `ink` is a dynamic import there: importing it statically constructs chalk before the env is set, and chalk caches its level — with `ink` static the assertion passes with the theme-loss defect fully present.
+    - **An undeclared code block is not guessed at, and an apostrophe is what made that visible.** Reported as "a markdown leak when using `'`": in a drafted email, `that` stayed white and `'s what we'd` turned red, with `for` / `and` / `like` blue. marked-terminal hands every code block to `cli-highlight`, which branches `options.language ? hljs.highlight(...) : hljs.highlightAuto(...)` — so a block declaring no language is **auto-detected**, English prose is duly detected as source code, `'` opens a string literal whose span runs to the next apostrophe or to the end of the block, and keywords colour in the same pass. It reaches ordinary prose because **four spaces of indentation IS an indented code block** in markdown, so a draft with indented paragraphs becomes one; a fence with no info string — shell output, a log, a directory listing — lands there too. The layered `code` renderer returns `false` for a declared language (```ts keeps real highlighting, which is why this is not "turn highlighting off") and otherwise styles the block in the theme's code colour, which is what marked-terminal's own error path already falls back to. Styled **per line**, because `MarkdownLines`slices the transcript into lines and a span that opens on one and closes on another survives that by accident; the indent stays outside the styling, where`indentify` puts it.
+      - **`_force-color.ts` cannot switch the highlighter on**, which matters because that module's premise is that a module-level assignment is early enough. It is, for **chalk@5** — `ink` and `marked-terminal` resolve the top-level copy and evaluate lazily. `cli-highlight` resolves a **nested chalk@4**, which caches its level when first required, and under vitest that happens before the test file can act. Measured: with `FORCE_COLOR` set by the module `highlight(code, {language:'ts'})` returns the code bare; set in the SHELL it returns it coloured. So the highlighter is only observable as `FORCE_COLOR=3 npx vitest` — which is **not a supported run mode** for the suite as a whole (22 pre-existing Ink plain-text assertions fail under it). `markdown.highlight.test.ts` therefore asserts which RENDERER took the block, using `markdown.ts`'s own forced level-3 chalk, so it holds in both regimes; mutation-checked in both, including the indent, which nothing pinned on the first cut.
     - **`flexBasis={0}` on the measured outer box is load-bearing (#435).** Ink 5 never maps `overflow` onto Yoga — `styles.js` has no `setOverflow`, and `render-node-to-output.js` consumes it only at paint time as a clip rectangle — so with the default `auto` basis the outer box's flex base size is its **content** height, i.e. the whole inner column (`flexShrink={0}`, hundreds of rows). That base size enters the frame's negative-free-space distribution against the chrome, so `measureElement` returns a height that depends on the **current scroll offset** and `maxOffset = contentH - viewportH` is understated in the same breath. The viewport becomes a damped iteration: measured at 24 rows against an 8-row chrome, `viewportH` walked 21 → 17 → 16 → 15 over four passes while the chrome rendered at **3 of its 8 rows on the first frame** — a prompt box losing five rows, its bottom border overwritten by the hint bar, and the plan panel's header clipped. Streaming restarts it on every delta, so it never settles while output is flowing. A zero basis removes content from the calculation: the box grows into exactly the free space the chrome leaves, correct on the first frame, in one measure pass. It also sets the right priority under a too-tall chrome — a zero basis carries zero **shrink** weight, so the transcript yields rows to the prompt rather than the prompt being squashed, which is what makes `plan-window.ts`'s `MIN_TRANSCRIPT_ROWS` the thing that actually protects the transcript. Pinned by `Thread.test.tsx` → "leaves the chrome its full height on the very first frame" / "settles its window in a single measure pass", which mount the viewport in a `height`-pinned frame **beside a chrome sibling** — the three older tests mount it standalone, and with nothing to compete against there is no negative free space, which is exactly why this had no coverage.
     - **The position row is reserved unconditionally, sits above the content, and states one fact.** It used to render only while `scrolledUp`, which was two defects at once: the viewport lost a row the moment you scrolled (layout height depending on the budget that decides what is hidden — `OverlayFooter`'s rule), and **at rest it said nothing at all**. Stuck at the bottom is the normal state after every turn, so a reply taller than the frame opened mid-thought with no marker and read as a worse answer rather than a scrolled one — the user-visible half of #435, and the reason TTS could be heard reading more than the screen showed (both read the same `agent.getHistory()`; the transcript renders strictly more, since TTS speaks only the last assistant message). Reuses `viewer-util.listPosition`, whose `null` IS the "everything fits" suppression rule, and `wrap="truncate"` so the row it reserves is always exactly one row.
       - **#470 moved it above the content and cut it in half.** It read `▲ 923 more rows above · rows 924–958 of 958` — below the thing it describes, so the reader travelled past the cut content to learn it was cut, and saying the same number three times: `listPosition` returns `first = offset + 1`, so the count above is always `first - 1`, and at rest `last === total`. Under `wrap="truncate"` a narrow terminal then lost the right half, i.e. the half that was not redundant. It is now `formatPosition(...)` alone, the spelling every other windowed surface uses. `↓ new output` stays on that same row rather than moving to the bottom, and that is a **budget** decision: splitting them costs a second permanently-reserved row, and `plan-window.ts` calibrates `MIN_TRANSCRIPT_ROWS` against the transcript spending exactly one — while a conditionally-rendered bottom row would make layout height depend on the state it is reporting. `moreRowsLabel` is deliberately **not** touched: it still serves `BoundedLine`'s prompt affordance, where #435's "rows, not lines" reasoning is exactly right.
@@ -149,6 +157,19 @@ bernard applet-host uninstall
   - **`WRITE_PATH_TOOLS`' completeness is a test, not a comment.** Its incompleteness is silent and **fail-open** — a fourth path-taking write tool, or `file_write`'s `path` argument renamed, would ship unscoped with every other test green. `meta-coverage.test.ts` walks the constructed registry and fails if any `write`/`dangerous` tool with a `path` parameter is missing from the set. (`FILE_TOOLS`' incompleteness is at least user-visible; this one is only ever noticed by the write it failed to stop.)
   - **Grants come from the user, never the model.** `bernard cron-grant <id> [paths...]` (`--clear`, or no paths to show) is the producer; paths are stored resolved so a grant made from one working directory still means the same place later. Deliberately absent from the `cron` tool: letting an agent widen its own write scope is the escalation the gate exists to prevent.
   - **`shell` is deliberately NOT covered.** Extracting write targets from an arbitrary command line is not reliably possible, and a containment check that is sometimes wrong is worse than none — it grants confidence it has not earned. `WRITE_PATH_TOOLS` (`permissions/matchers.ts`, declared beside `FILE_TOOLS` so the two cannot drift) holds only the tools that write through a `path` argument. Reads are ungated: this bounds writes, and read scoping is a separate decision #340 leaves open. So #340's "does this subsume shell?" is answered **not yet**, on purpose.
+- **An unattended refusal no longer claims a user cancelled it (#447).** One cron job ran **10 times over 45 minutes, burned 934,805 tokens, logged `success: true` every time, and did nothing**: it found the reply it was waiting for on run 1, then failed to open a GitHub issue ten times. The user found out by asking, two and a half hours later, and the same `gh issue create` then succeeded instantly from the interactive session. Four links, and the first two are the loop.
+  - **Cron denies far more shell than anyone intended, and `echo hello` is the case that shows it.** Default posture is `confirmMode: 'auto'` → threshold `high`; `shell` is `kind: 'dangerous'`, so `riskFromMeta` returns `high` for anything `isReadOnlyShellInvocation` rejects; and `headless-posture.ts`'s `confirmAction` is `!shouldConfirm(...)` — the same predicate that decides whether to ASK also decides the ANSWER. The allowlist passes only a simple invocation of ~31 commands, `echo` is deliberately not among them (`echo $TOKEN` is exfiltration), and `COMPLEX_RE` rejects `&`, `|` and `>` **before** the allowlist is consulted — so `pwd && which gh | head -20` is denied three times over while every component of it is individually allowed.
+  - **The refusal said `Action cancelled by user.`** There is no user, nothing was cancelled, and the decision was permanent for the run. The model read it as written — its notes say _"shell still cancelled … retry next run"_ — and retried. `ToolOptions.unattended` is set only by `headlessToolOptions` and changes **no verdict, only what the model is told**: the risk tier, that nobody can approve it, that it will not change, and the `bernard cron-grant` command to fix it. A flag rather than a richer `confirmAction` return, because the callback has several implementors and none of them has more to say — the fact worth carrying is a property of the RUN.
+    - **One `refuse()` helper mints it for every gate, and the first cut fixed only the confirm gate.** That is not a corner: `headlessToolOptions` omits `blockAction` and `apps/manifest.ts` defaults an action to `read-only`, so the **block** gate is the primary denial path for applet actions and `bernard script` — the two least-trusted unattended callers — and cron escaped it only by defaulting `toolMode: 'write'`. They were handed `READ_ONLY_DENIED_MESSAGE`, which tells a user who does not exist to allow the tool, and `onDenied` never fired for them, so `RunHeadlessResult.denied` was empty and the run reported a clean success: the 934,805-token shape with none of this machinery firing. `runBlockGate` returns `true | {refusal}` now, the shape `runGate` already had and for the same reason — the message has to be minted where `unattended`, the meta and the args are in scope. **Widening it is the trap this file already records**: `!object` is falsy, so both call sites had to move to `!== true` in the same change or the gate would have stopped denying while type-checking. `runDenyGate` reports too; only `cause` differs per gate.
+    - **The remedy reaches the caller as well as the model.** `InvocationLogRow.denied` records the refused keys, and `formatLogRow` prints them **before** its `ok` early-out — a denial is the one diagnostic that only ever appears on a SUCCESSFUL row, so returning `head` alone for `ok` would have made the field write-only. The envelope deliberately stays `ok`: an applet button that degrades is not a broken request, and flipping the exit code is its own decision.
+  - **`runGate` returns the refusal now, not a boolean** — and changing that silently broke the legacy branch, because `if (!(await runGate(…)))` is a truthiness test and an object is truthy. The gate stopped denying while still type-checking. Its own tests caught it within a minute, which is the only reason that reads as a comment rather than a shipped hole; both call sites test `!== true`.
+  - **The daemon prompt described a rule that does not exist, and then drove the loop.** It promised that _"dangerous commands (rm -rf, sudo, etc.)"_ are denied and _"safe, read-oriented commands"_ run. Two lines later: _"you MUST call the shell tool"_ and _"NEVER retry the exact same command — you must change something"_ — so the model varied the command, and every natural variation (a pipe to trim output, an `echo` probe, an `&&` chain) is **also** high risk. The rule is now **derived from `READONLY_COMMANDS`** rather than described, the `APPLET_STYLED_SELECTORS` treatment — a prompt that lists an artefact is a second copy of it, and this copy had drifted into being false. The retry rule gains a carve-out: a permission verdict is not a command error.
+  - **A run refused its tools is an `error`, and says so once.** `success` means "the dispatch did not throw", which for cron was indistinguishable from working. `runHeadless` returns `denied` on **both** arms — a run can complete, answer, and still have been refused the capability it existed for — and the cron runner logs `success: false` with a `fail` check. The category is `permission` from the shared taxonomy rather than a cron-only value, because widening `ToolErrorType` for one caller puts a category in the table `classifyError` can never produce. **The alert is raised once per category, not once per run**, keyed on the `lastErrorCategory` that was already recorded: a read-only job that merely probes a write would otherwise shout on every fire forever, so a repeat stays `error` in `cron-list` and stops notifying.
+  - **`parseGrantSpec` is the round trip's other half and lives beside `grantSpecFor`.** `cron/cli.ts` had its own copy that dropped the VALIDATION — it minted `{tool: ''}` for `:foo` and `{tool: 'gh'}` for `gh:`, persisting a rule that matches nothing on the one path with no operator watching, which is the deny-loop shape `--allow` exists to end. Importing the app CLI's copy instead would have pulled `AppRegistry` onto `bernard cron-grant` (measured 59 ms against 0 for the leaf), so the function moved to `tool-permissions.ts`, where the `PermissionRule` type already lives and the inverse already sat.
+  - **`CronJob.toolPermissions` is the precise lever, and `bernard cron-grant --allow 'shell:gh *'` is who decides.** `runGate` opens with `if (grant === 'allow') return true`, so a rule scoped to one command clears the confirm gate for **that command and nothing else** — where `confirmMode: 'off'`, the only other reachable knob, dissolves every confirmation including `rm -rf`. Verified by replaying the job's real commands: with the grant, `gh issue create` runs while `echo hello` and the compound line stay denied. `resolveCronJobPosture` still passes the user's PROFILE grants as `null` — those belong to a session someone is watching — and the fields stay off the `cron` tool's schema, the rule `cli.ts` already states for write paths.
+  - **Three of the four fixes are wiring, and wiring is the half that fails silently.** `run.ts` used to build `augmentTools`' options by ENUMERATING fields, and its own comment named the hazard for `writeScope`: _"a scope set on `toolOptions` and not passed on is a scope that silently never applies"_. Every field added since inherited it — three mutations survived the behavioural tests for exactly that reason, and writing the wiring test is what revealed that `onDenied` had never been forwarded at all, so the denial reporting would not have fired in production. **It is a spread now** (`...ctx.toolOptions` FIRST, the policy-derived `toolMode`/`confirmThreshold` after it so they still win), which makes forwarding total by construction and covers a field that does not exist yet. That retires the source-scan test the fix originally shipped with — `expect(bag).toContain('onDenied: ctx.toolOptions.onDenied')`, which its own comment called "the weak assertion it is": it pinned the MECHANISM, needed a hand-written literal per field, and broke on a reformat. `tool-options-forwarding.test.ts` pins the property at the real seam instead, and both halves are mutation-checked — including the ordering, which needed a deliberately hostile `toolOptions` carrying `toolMode`, since without one the assertion passes with the spread in either position.
+  - **Checked and cleared, so they are not re-investigated**: the cron notes worked (every run read and wrote them, which is how the retry history is legible at all), `toolResults` ARE recorded in the run log (a sibling array, not nested in `toolCalls`), `file_write` succeeded inside the workspace, and the three `notify` alerts were written. The write-scope gate was never involved.
+  - **Known and separate**: cron alerts are read at REPL **startup** only, which is why three of them sat unseen for two and a half hours while a session was open. The `src/inbox/` transport from #462 is the obvious carrier.
 - **src/headless.ts** — `runHeadless`: the whole no-user-present recipe, extracted from cron's `runJob` (#419). Owns `registerBuiltinDefinitions()`, `loadConfig()`, the RAG store + fail-soft search, the MCP lifecycle (connect → `snapshot()` → **close in `finally`**), `assembleContext` with the fail-closed headless `toolOptions`, the `ctx.policyDecision` wiring, the wall clock, and the `runDefinition` call. Top-level rather than under `src/framework/` on purpose: it must import `config`/`mcp`/`rag`, and putting it in the framework creates exactly the edge `tool-bytes.ts` and `mcp-names.ts` exist to refuse. It is a composition root, and those live beside `agent.ts`.
   - **It never throws for a run failure and never classifies one.** A failed dispatch comes back as `{ok: false}` so each caller reacts in its own idiom; `classifyError` stays at the call site, because the message worth classifying is one only the caller can mint — cron's timeout text names `job.timeoutMs / BERNARD_CRON_JOB_TIMEOUT_MS` and escalates severity to `critical` because a hung job was holding a scheduler slot, neither of which is true of a script invocation.
   - **`definition` is a thunk, not a value.** `runHeadless` owns `registerBuiltinDefinitions()` and `definitions.get(id)` throws on an empty registry, so a resolved definition would require every caller to remember to register first — the first cut of the refactor tripped exactly that, in 20 tests at once. Deferring the lookup makes the ordering a property of the signature.
@@ -324,7 +345,7 @@ bernard applet-host uninstall
 - **Bernard reacts to a change, instead of waiting to be asked (#479/#201/#493/#202).** Nothing in the tree could do that: there was no path by which an external or asynchronous event started a turn — every `runAgentTurn` call sat on a user-interaction stack. `src/watchers/` is the mechanism, and the four issues are one feature because every durable-execution runtime implements them as one: Inngest's `step.sleepUntil` beside `step.waitForEvent`, Temporal's timers beside signals, LangGraph's `interrupt()` + checkpointer. **A sleep is a watcher whose trigger is a clock.**
   - **Level-triggered, and that is the design rather than an implementation detail.** A watcher reads CURRENT state and compares it against a snapshot taken when it was created; it never consumes an event stream. That is the Kubernetes controller pattern, and it buys the property that makes an unreliable poll clock acceptable — a watcher that misses eleven consecutive polls still fires correctly on the twelfth, because the snapshot is what it compares against, not the gap. **That is why #400 (cron silently drops fires during OS sleep) is not a prerequisite**, and why none of this touches the cron scheduler. The honest limit is a genuinely TRANSIENT event — one that appears and is gone between two polls — where the answer is a durable log at the source (Gmail's `historyId`) reached through an `mcp` target, never a faster poll.
   - **The poller lives in the REPL, not the cron daemon.** It borrows the session's already-connected `MCPManager`; cron connects MCP **per job run** at a measured 1.1-1.6 s, which a 60 s poll cannot pay. Three borrowing rules are load-bearing: re-take `snapshot()` every poll rather than caching `tools` (caching the flat bag is exactly the #305 regression that silently zeroed every `delegate_<server>`, and a captured bag cannot see a server that reconnected); never call `close()`, which tears down every client for the whole session; and hold the manager from `stores.mcp`, not a frozen `ctx.mcp`. Structurally it is `InboxWatcher` again — plain class, mount-once effect, `unref()`ed timer, re-entrancy guarded, never throws — and it looks once immediately on `start()` rather than waiting a full tick, so a `time` target that came due while no session was running does not sit unnoticed.
-  - **No model in the poll loop.** A 60 s watcher polls 1,440 times a day; dispatching an agent to answer "nothing changed" is the shape this must not take (`CronJob.prompt` runs a full agent per fire, ~49k prompt tokens). A probe is a fetch, a `stat`, or one tool call, and the agent runs only when the predicate fires. Probes are restricted to READ-classified tools via `watchableToolRefusal`, which delegates to `isReadOnlyMCPToolName` — the same gate `reference-tool-lookup.ts` uses to decide what an unattended lookup may call, so there is one answer to "what is safe to call without a person" rather than two that drift.
+  - **No model in the poll loop.** A 60 s watcher polls 1,440 times a day; dispatching an agent to answer "nothing changed" is the shape this must not take (`CronJob.prompt` runs a full agent per fire, ~49k prompt tokens). A probe is a fetch, a `stat`, or one tool call, and the agent runs only when the predicate fires. Probes are restricted to READ-classified tools via `watchableToolRefusal`, which delegates to `isReadOnlyMCPToolName` — the same gate `mcp.ts` classifies a server's tools with, so there is one answer to "what is safe to call without a person" rather than two that drift.
   - **The wake carries two channels, and the split is a compile error rather than a convention.** `bernard say` deliberately never starts a turn, and CLAUDE.md calls that structural; a watcher DOES, so the guarantee is re-established on different ground by asking who wrote each byte. `instructions` were authored by this session when the watcher was created and go in the instruction slot; whatever the watcher then OBSERVED — an email body, a page — travels as `UntrustedData` through the new `ProcessInputOptions.data`, rendered last under its own banner. #509's brand is minted in exactly two places and a plain string cannot be assigned there, so the natural mistake (concatenating the observation in because it is "just context") does not type-check. A watcher wake never touches the inbox transport at all, so `bernard say`'s two tests pass **unchanged**.
   - **The transcript shows an abstract of the wake, not the wake.** The two channels were being rendered TWICE: `WakePanel` announced the turn correctly, and then `agent.ts` joined the wrapped instruction with the fenced observation into one `role:'user'` message that `commitNewHistory` painted seconds later as a right-aligned bubble behind the `❯` chevron — a ~40-line instruction plus ~4 KB of somebody's inbox, attributed to the user. The panel's docstring had stated the correct rule all along ("it can be megabytes of somebody's inbox, and the panel's job is attribution, not disclosure"); it was simply not the only render. **Every existing wake test used a `time` target**, which has no data block, which is how it shipped.
     - **The summary is minted where the bytes are, and the payload never reaches the panel.** `observationOf` computes `renderObservation(value)` ONCE and derives both the block and an `ObservationSummary` (`bytes`, a 200-char `excerpt`, `clipped`) from it, so the panel's "3.2 KB observed" cannot disagree with what the model was handed. A `StaticItem` lives in an append-only array for the whole session, so a cap enforced at the mint is the version of "don't hold the inbox" that survives a refactor — carrying `data.text` and truncating at render is not.
@@ -449,7 +470,10 @@ bernard applet-host uninstall
 - **One `AgentContext` for tests (#318).** Twenty-two files hand-built one, and the duplication broke twice on **disjoint** file sets — `asOwner` (#501) took `run.test.ts` and `tool-wrapper-run.test.ts`, `scoped` (#511) took `fence.test.ts` and `dispatch-scope.test.ts` — so neither repair converged on a shared double. `src/__tests__/agent-context.ts` is that double: one memory stub answering the whole narrowing surface, config through `makePolicyInput` (the one cast-free `BernardConfig` builder, which three suites bypassed with a thirty-line literal apiece), a complete `mcp` bag including the two required fields `run.test.ts` omitted, and `stores` merged one level deeper than everything else — the trap two files had independently hand-rolled around. The **precedent is `assembleContext`**, which four suites already use cast-free; this is for the ones that mock `node:fs` or need a store to observe rather than to work. The `noopStore` Proxy is gone: `new Proxy({}, { get: () => () => [] })` answered `specialists.get(anyId)` with a truthy EMPTY array, so every `if (record)` guard took the "found" branch for ids nothing had seeded. **That removal does not make the fixture-backed suites catch a deleted `targetTools` filter** — measured, `tool-surface.test.ts` and `child.mcp-delegation.test.ts` still pass under that mutation, because `inputFor` supplies no `specialistId` at all; the Proxy was a landmine for the next test, not the reason those cases are blind. Deliberately NOT adopted by the `{} as AgentContext` one-liners, which are honest assertions that the context is never touched, nor by `dispatch-scope.test.ts`'s `harness()`, whose spy-bearing memory is the one thing a shared double of plain functions cannot provide.
 - **src/overlap-checker.ts** — Token-based Jaccard overlap detection for specialist candidates
 - **src/reference-resolver.ts** — Pre-turn LLM pass that resolves user-named entities (e.g. "my daughter") against persistent memory; returns `resolved`, `ambiguous` (menu), `unknown` (prompts user), or `noop`. Invoked from `runPreTurnPipeline` in `src/ui/App.tsx` before `agent.processInput` and rendered as a `## Resolved References` block in the system prompt (agent-visible, user-hidden). The Ink port currently fails open on `ambiguous` / `unknown` rather than blocking the turn with a disambiguation menu.
-- **src/reference-tool-lookup.ts** — Pre-fallback module that runs only when the resolver returns `unknown`. Picks one read-only allowlisted lookup tool (MCP `*_search`/`*_list`/`*_read`/etc., plus `web_search`/`web_read`) via an LLM call, executes it with a 5 s hard timeout enforced via `Promise.race` (so even MCP tools that ignore `abortSignal` can't stall the REPL), and interprets the result into `{none|found|ambiguous}`. The `select` and `interpret` LLM calls respect the parent abort signal (Esc cancels) but are otherwise bounded by the AI SDK's API timeout. On `found`, the REPL shows a Save/Edit/Skip menu before persisting to memory. Fails open at every stage. Gated by `config.referenceLookup` (default on).
+- **The resolver's `unknown` branch falls open, and the module that was to catch it is gone (#447).** `reference-tool-lookup.ts` was a complete pre-fallback: when `resolveReferences` could not place a phrase, it picked one read-only allowlisted tool, ran it under a 5 s `Promise.race`, interpreted the result, and offered to save the answer to memory. **It had no production caller.** `runReferenceLookup` was imported only by its own test; `App.tsx`'s resolver call site says why in a comment that outlived it — _"ambiguous/unknown: degraded — the legacy disambiguation / save menus haven't been ported to Ink yet (Phase E). Fall open so the turn proceeds."_ So the setting, its env var, its allowlist var and its `reference-lookup` model site all gated a function nothing called, and `bernard setup` asked a question that decided nothing — which is worse than not asking, because it reads as live.
+  - **Deleted rather than wired**, which was the user's call. The Ink half is real work (a Save/Edit/Skip overlay on a branch that currently falls open), and a feature nobody has missed in the months it has been dead is not evidence for building it now. `git log` holds the module if it is wanted back; what is not recoverable is a reader's trust in a settings page, which is what the dead row was spending.
+  - **The `reference-lookup` MODEL SITE went with it.** `SITE_ROLE` is `Record<ModelSite, RoleId>` and `TEMPERATURE_ZERO_SITES` is a `Set<ModelSite>`, so dropping the union member made both a compile error — which is the property those two tables exist to have, and the reason a site could not quietly outlive its only caller.
+  - **Six comments across five modules cited it as precedent** — `risk.ts` on the read-only MCP gate, `watchers/probe.ts` twice on the hard race and the `finally`-cleared timer, `tools/watcher.ts`, `mcp-names.ts` on its consumer count, `speech-normalizer.ts` on the copied cache block. A deleted file named as the reason for a live decision is worse than no comment, so each now points at something that exists (`mcp.ts` for the read gate) or drops the reference and keeps the reasoning.
 - **src/prompt-rewriter.ts** — Pre-turn LLM pass that rewrites the user's message for the active model family (see `ModelProfile.rewriterHint` in `src/providers/profiles.ts`). Runs after reference-resolution so resolved entities can be inlined. Temperature 0, fail-open to the original prompt, gated by `config.promptRewriter` (default on; toggle via `/agent-options` or `BERNARD_PROMPT_REWRITER=false`).
 - **Curator memory reconciliation (#371)** — `recall-filter` also receives the `MemoryStore` as **read-only** input and returns two extra fields beside its selection. `reconciliation` is one sentence on how curated memory bears on the facts it kept — rendered as a `### Reconciliation with curated memory` block _inside_ `<recalled_context>`, beside facts that stay **verbatim**, because strict-selection is what keeps provenance `rawRef`s and `[^Sn]` citations valid. `memoryPriority` ranks memory keys for this turn and is consulted **only** as packing order in `renderPersistentMemory`. The safety property is narrower than "memory is never eliminated", which would be false: under budget nothing is dropped and the ranking is unused (it is not even requested — see below); over budget `renderPersistentMemory` drops the tail regardless, and the ranking only decides _which_ tail. The curator never causes a drop, it only chooses among drops that were happening anyway — where Phase 3 would have filtered memory on every turn, budget or not. The residual risk is that a topical ranker puts a standing rule ("never email the client directly") last by construction, so the ranking prompt names that case explicitly. The ranking is requested **only when memory is over budget**: asking unconditionally made the model echo every key verbatim each turn (~250 serial output tokens on a pass that blocks the user's turn) for a result that is discarded whenever memory fits, and — sharing `RECALL_FILTER_MAX_TOKENS` with `keep` — could truncate the JSON mid-array and take the _selection_ down with it, scaling against exactly the users the ranking exists to help. That is the distinction from #307 Phase 3, which routed memory _through_ the filter on every turn and was deferred precisely because a curated entry could then be dropped for looking off-topic. The motivating defect for the ranking half: `renderPersistentMemory` packs in Map order, which traces to readdir, so for any user over `MAX_PERSISTENT_MEMORY_CHARS` **which curated facts survive is decided by filename** — `aaa.md` in, `zzz.md` out, no relevance judgement in the path. A malformed `reconciliation` or `memoryPriority` degrades to `undefined` rather than discarding the selection, and unknown keys are filtered so a hallucinated one cannot reorder real entries around a ghost. The system prompt states the precedence explicitly (memory outranks recalled context, override only the conflicting clause) so the fail-open path — no note produced — still has a rule.
 - **src/recall-filter.ts** — Pre-turn LLM pass that curates recalled memory (widen-then-rerank). Runs **last** in `runPreTurnPipeline` (on the final rewritten `agentInput`): retrieves a deliberately **widened** candidate set via `RAGStore.searchWithIds(query, {threshold, topKPerDomain, maxResults})` (moderate: 0.28 / 8 / 24, looser than the store defaults 0.35 / 5 / 15), then a cheap-tier (`recall-filter` site → `classifier` role) LLM **selects** only the facts relevant to the conversation. Strict selection only — never rewrites/synthesizes fact text, so provenance `rawRef`s and `[^Sn]` citations stay intact. Commits access for exactly the kept ids via `RAGStore.recordAccess(ids)` (so TTL extension tracks LLM-relevant facts, not every topical hit). Returns `{status:'filtered', facts}` or `{status:'noop'}`. **Fail-open**: on `noop` (disabled / no candidates / LLM error / parse fail) `App.tsx` injects nothing and `Agent.processInput` runs its own legacy narrow `ragStore.search()` — i.e. exactly today's behavior; only a successful `filtered` result overrides retrieval. On `filtered`, the kept set is passed to `processInput(..., { ragResults })`, which still applies `applyStickiness` + provenance registration + `previousRAGFacts` tracking on the injected set exactly as on a self-searched one. Temperature 0, LLM subcall cache, per-turn usage recorded. Gated by `config.recallFilter` (default on; toggle via `/agent-options` or `BERNARD_RECALL_FILTER=false`). Interactive-REPL only (cron dispatches via `runDefinition`, not `processInput`).
@@ -457,7 +481,7 @@ bernard applet-host uninstall
 - **src/providers/catalog.ts** — Model catalog fetched from the Vercel AI Gateway (`https://ai-gateway.vercel.sh/v1/models`, 24 h TTL) and cached at `~/.cache/bernard/model-catalog.json`, with a vendored snapshot at `src/data/model-catalog-fallback.json` (regenerate with `npm run refresh-catalog`). It is the **single upstream source for both context windows and pricing** — `getContextWindow` (`src/context.ts`) and `priceUsageUsd` (`src/usage-report.ts`) both fail soft on a miss (128 k default window; `null` cost → `n/a`), so a whole provider dropping out of the catalog degrades silently rather than erroring. Two guards exist because of that: **owner aliasing** — the gateway namespaces a provider by `owned_by` prefix and renamed xAI's from `xai/` to `spacexai/`, which dropped every Grok model until `resolveGatewayOwner` (`src/providers/types.ts`, `GATEWAY_OWNER_ALIASES`) mapped it back; and **id normalization** — `normalizeModelId` (lowercase, dots→dashes, strip a trailing `-YYYYMMDD`) gives `getModelMeta` / `findModelMetaByName` a second-chance match after exact match, because gateway ids use dots (`grok-4.1-fast-reasoning`) while our lineups use dashes and date suffixes (`grok-4-1-fast-reasoning`, `claude-sonnet-4-5-20250929`). Bump `CACHE_SCHEMA_VERSION` whenever a parser change alters which entries survive, so caches written by the broken build are discarded rather than served for another TTL. Since #306 a refresh also reports **what disappeared**: `refreshCatalogWithDiff` returns `byProvider` (every built-in provider seeded to `0`, so a wipe reads as an explicit zero rather than a missing key) and logs `catalog:removed`, and the pure decision in **src/catalog-notice.ts** (`catalogRefreshNotice`, modelled on `cost-guardrail.ts`) classifies the refresh as `none` / `added` / `removed` / `provider-wiped`. `provider-wiped` fires only when a provider that lost entries lands at zero **and** is one the session actually uses (`config.provider` + `lineupProviders(activeLineup)`) — the count-alone test would false-fire every startup for a built-in that was never catalogued. App renders `provider-wiped` through `pushAssistantNotice` rather than a toast, because toasts are cleared by the next submit and "your cost and context numbers are now wrong" has to outlive a keystroke.
 - **src/custom-providers.ts** — `CustomProviderStore`: single-file JSON store at `~/.config/bernard/custom-providers.json`. Each entry binds a user-chosen `name` to one of the three installed SDKs (`openai` / `anthropic` / `xai`), a `baseURL`, a `defaultModel`, and a remembered `models[]` list that grows as the user types new names in `/model`. Reserved names: `anthropic`, `openai`, `xai`.
 - **src/profiles.ts** — Settings-profile store (#207) at `~/.config/bernard/profiles.json`. CRUD + atomic writes + lazy migration from legacy `preferences.json`. `loadPreferences` / `savePreferences` in `src/config.ts` are now thin shims that read/write the active profile's `settings` blob, so every existing settings call site is automatically profile-scoped.
-- **src/profiles-wizard.ts** — `WIZARD_CATEGORIES` constant + `runProfileWizard()` orchestrator for `/profiles` (create new) and the fresh-install onboarding flow. Built on `selectFromMenu` / `promptValue`; never persists mid-flight (caller commits via `createProfile`).
+- **src/profiles-wizard-data.ts** — the declarative field registry behind every settings wizard. A pure data tree (no Ink, no readline) so any host can interpret it; the legacy `src/profiles-wizard.ts` that paired field metadata with readline pickers is long gone, and `runProfileWizardInk` (`App.tsx`) is what `/profiles` → create runs. See **Setup** below for the coverage invariant.
 - **src/tool-call-repair.ts** — `makeRepairHook()`: one-shot `ToolCallRepairFunction` wired into every `generateText` site (main, specialist, subagent, tool-wrapper, cron). Re-prompts the model on `InvalidToolArgumentsError` / `NoSuchToolError`. Detects argument truncation (e.g. a 16 KB heredoc cut mid-string) and steers the retry toward `file_write` + `shell` instead of inlining payloads. Forwards the parent abort signal so user-cancel (Esc) also cancels the repair call.
 - **src/tools/wrap-with-specialist.ts** — Transparent shim that routes the main agent's direct `shell`, `web_read`, and `file_*_lines` calls through their wrapper specialists (same tool name/schema; only `execute` changes). On `status: 'ok'` returns the wrapper's `result` as-is; on `status: 'error'` maps to the _native_ tool's error shape so `detectToolError` and tool-profile learning still see the right format. Falls through to the raw tool when the specialist is missing or wrong kind. Only active on the main agent — sub-agents and wrappers themselves bypass it.
 - **src/tools/ask-user.ts** — `ask_user` tool: pauses the agent loop to ask the user one or more clarifying questions and waits for their answers. Accepts a `questions` array (1-10 entries), each with optional `choices` / `allow_other` / `other_label`. For batches of 2+ the REPL pins a tab strip above the menu. Returns `{answers: [...]}`, `{cancelled: true, answered: [...]}` on Esc, or `{unavailable: true}` when running headless. Exists so the agent stops writing clarifying questions as prose (which leaves the turn idle and, in coordinator mode, trips the plan-enforcement loop).
@@ -530,6 +554,10 @@ bernard applet-host uninstall
   - **A new tab, not a section inside `ContextViewer`.** That component's test fake is a single-method `{ getTurnContext }`, so a second data source there breaks it — and the two answer different questions: a turn's pre-turn pipeline versus one assembly's output. Neither subsumes the other. The **list row** names a memory drop rather than hiding it behind a keystroke, for the reason #528 removed the same silence from the render path.
   - **Dropped keys are named at every layer**, which is the through-line with #528: the model gets `### (truncated)`, the log gets `droppedKeys`, the REPL gets a once-per-session notice, and this record gets the list. "2 entries were dropped" cannot be acted on.
 
+- **Plan enforcement is addressed to the model, and was rendering as a user turn (#447).** `wrapIterate` pushes strategy extras into persistent history so the model sees them on the next iterate, and `buildEnforcementFeedback` is `role: 'user'` — so a whole rendered plan followed by _"Resolve each remaining step"_ appeared in the transcript as a right-aligned `❯` bubble. Bernard instructing itself, painted as something the user said.
+  - **`session-markers.ts` is where it belonged**, and that module's own docstring had predicted this: _"prompt scaffolding addressed to the model, not things the user typed … each one that hand-rolled its own list drifted."_ The pair is on `BOUNDARY_PREFIXES` now, and `react.ts` interpolates the constants rather than repeating the sentences, so the producer and the detector cannot drift. They are unbracketed unlike their neighbours, deliberately: that text is tuned prompt wording the model reads verbatim, and bracketing it to match would change what every coordinator turn is told.
+  - **The live transcript had no scaffolding filter at all** — only `buildResumeSeed` did, so the identical message rendered or not depending on which path put it there. `isScaffoldingMessage` is one exported predicate both now use, and being exported is the point: the live commit lives inside the component and only runs during a real turn, which is exactly how it ended up as the untested half of a rule the other half tested. It also fixes the RAG query builder, which was embedding a rendered plan into the retrieval query for every enforced turn.
+  - **The loop's own `printWarning` / `printInfo` were bare `console.log`s fired MID-TURN** while Ink owns the alternate screen buffer — the `mcp.ts` reconnect-notice class again, corrupting the frame and being painted over on the next ~32 ms render. They are `debugLog` events (`plan:enforce`, `plan:auto-cancelled`, `plan:none-after-retries`) carrying `ctx.prefix` as a FIELD rather than a bracket glued onto a string. Nine tests across three suites were pinning that stdout — holding in place the thing that corrupts the frame — and now assert on the model-facing payload or the plan store instead, which is what they were really about.
 - **src/turn-context.ts** — `TurnContextRecord` type + `TurnContextStore` (sibling of `ProvenanceHistoryStore`; both are thin `PerTurnStore<T>` subclasses — see `src/per-turn-store.ts` — with atomic writes to `turn-context.json`). One record per completed turn capturing the pre-turn prompt-assembly trail — `originalInput` (typed) vs. `rewrittenInput` (post-rewriter), `resolvedReferences`, and `recalledFacts` (post-filter/stickiness). Deliberately **omits the system prompt** (internal infra — not persisted or shown). The `Agent` snapshots it alongside `turnProvenance` in `processInput` (originalInput threaded through the `processInput` options bag by `App.tsx`), exposes it via `getTurnContext()` / `setTurnContext()`, and clears it in `clearHistory`. Persisted + resumed by `src/index.ts` and `src/ui/save.ts` exactly like the provenance history; powers the Shift+Tab "Prompt & Context" viewer (`ContextViewer`).
 - **src/tools/** — Tool registry; each tool is a separate file using `tool()` from `ai`
 - **src/tools/file.ts** — `file_read_lines`, `file_write`, `file_edit_lines`. `file_write` authors a whole file in one call (#342); it was referenced by the system prompt, the tool-call repair hint and `permissions/matchers.ts`' `FILE_TOOLS` **before it existed**, so the agent was told to use a tool it could not call and degraded to shell heredocs — the pattern the same prompt forbids by name. Its argument MUST stay named `path`: the permission engine routes `FILE_TOOLS` through `matchPathSpecifier(rule.specifier, args.path)`, so any other name silently loses path-scoped grants and the breadth ladder. `atomicWrite` (unique temp name, cleanup on failure — not `fs-utils`' fixed-suffix `atomicWriteFileSync`) and `verifyDeclaredHash` are shared by both write tools rather than copied; the copy drifted on first use, returning a `detail` field `VerifyOutcome` does not declare, so every warn/fail surfaced with no explanation. Cron withholds the write-capable file tools by filtering `FILE_TOOLS` (the set the permission engine already routes through `matchPathSpecifier`) rather than a second name list. Note `file_write` does **not** raise the response-token ceiling (`maxTokens`, default 4096) — it removes shell-quoting overhead and makes chunked authoring possible (`file_write` then `file_edit_lines` `append`), which `file_edit_lines` alone cannot bootstrap because it errors on a nonexistent path. Cron withholds both write tools; see the cron tool-surface entry.
@@ -557,7 +585,7 @@ Keys for custom providers are stored in `keys.json` (same path as built-ins) and
 
 - `off` — every site uses `config.provider`/`config.model`. Legacy behavior, zero overhead. **Not the default** — `DEFAULT_MODEL_MODE` (`src/config.ts:377`) is `balanced`, and this line said otherwise until #447. Worth stating because the difference decides blast radius: under `balanced` the lineup's `premium` slot is what every main-agent turn resolves to, so a bad slot is the live path for every install rather than an opt-in.
 - `optimize-tokens` — aggressive cost-saving. Main uses **mid**, every sub-agent/wrapper/router site uses **cheap**.
-- `balanced` (**default**) — main **premium**; specialist/tool-wrapper/compressor **mid**; rewriter/reference-resolver/reference-lookup/recall-filter/specialist-detector **cheap**.
+- `balanced` (**default**) — main **premium**; specialist/tool-wrapper/compressor **mid**; rewriter/reference-resolver/recall-filter/specialist-detector **cheap**.
 - `optimize-performance` — every site uses **premium**.
 
 Per-provider tier → model mapping — `DEFAULT_TIERS` in `src/lineups.ts`, which is
@@ -632,13 +660,702 @@ User-tunable settings are organized into named **profiles** (#207). Bernard alwa
 - `/manage-profiles` — rename or delete (guards against deleting the active or last-remaining profile).
 - `bernard profiles` — read-only listing from the CLI.
 
-`src/profiles.ts` is the disk-backed store (CRUD + atomic writes); `src/profiles-wizard.ts` defines `WIZARD_CATEGORIES` (Agent behavior / Tool safety / Output style / Limits / Advanced) and the `runProfileWizard()` orchestrator, both built on the existing `selectFromMenu` / `promptValue` primitives — no new UI components.
+`src/profiles.ts` is the disk-backed store (CRUD + atomic writes); `src/profiles-wizard-data.ts` defines the field registry (Model / Agent behavior / Memory & context / Tool safety / Output style / Voice / Automation / Limits) that both `/setup` and `/profiles` → create read.
 
 Migration: the first read of `profiles.json` is lazy; if the file is absent but `~/.config/bernard/preferences.json` exists, its contents seed the `default` profile and a `.migrated-to-profiles` marker is dropped (subsequent loads consult the marker to avoid re-ingesting stale legacy settings if `profiles.json` is later removed). The legacy `preferences.json` is left in place (no destructive delete) so users can roll back. Brand-new users (neither file present) get the wizard at REPL start to customize their `default` profile.
 
 Resolution precedence in `loadConfig` matches the pre-profiles behavior: **CLI overrides > active profile (stored prefs) > environment variables > built-in defaults**. The profile is the preferences layer — storing a value in the active profile shadows the matching env var (e.g. `BERNARD_MODEL`, `BERNARD_MODEL_MODE`). To let an env var take effect again, reset the field from `/agent-options` or use a fresh profile that omits it.
 
 Profile switching mid-session calls `applyProfileToConfig(config)` (`src/config.ts`) which re-runs `loadConfig()` and copies only the profile-scoped fields back onto the live `config` reference, so subsystems holding that reference (agent loop, tool augment layer) see the new values without reinitialization. `setMaxConcurrentAgents()` is re-fired inside `loadConfig()` so the shared agent pool reflects the new cap.
+
+## Setup
+
+`bernard setup`, `/setup`, and a first run all walk the same flow (#447). Provider
+and key, then every remaining setting, each question opening on the value that is
+in force right now.
+
+- **`src/setup-wizard.ts`** is pure — the questions and the decode rules, over an
+  injected `SetupContext`, so the whole question set is testable without a
+  terminal or a provider key. **`src/setup-flow.ts`** owns the I/O: what is
+  installed, what gets persisted, and the closing probe. **`src/ui/SetupHost.tsx`**
+  is a minimal Ink mount that provides `requestWizard`; the REPL provides its own.
+  One flow, two hosts — the `apps/manage.ts` (returns) vs `app-cli.ts` (prints)
+  split applied to a flow. The legacy `src/setup.ts` readline prompt is gone.
+- **Only what CHANGED is written, and that is the point.** `loadConfig` resolves
+  `prefs.X ?? env ?? DEFAULT`, so writing a value into the profile permanently
+  shadows the matching `BERNARD_*` variable. Every step opens on the EFFECTIVE
+  value, which for an unset field is the environment's — so saving all of them
+  back would freeze whatever each variable happened to hold and leave it dead,
+  for settings nobody touched. `settingsPatch` emits a key only when its answer
+  differs from the one the step opened with; a step whose value comes from the
+  environment says so in its hint. The cost, stated rather than discovered: there
+  is no way here to RESET a field to inheriting — `/options` and
+  `bernard reset-option` own that, and a row meaning "unset" would need a third
+  state these answers cannot carry.
+- **Two stages, because `WizardSpec.steps` is a frozen array with no branching.**
+  Stage A settles provider and key; stage B is built afterwards, when the model
+  list is knowable and `loadConfig()` no longer throws. Stage A persists BEFORE
+  stage B is built — a stored key is progress worth keeping, and it is what makes
+  the model list and the probe possible at all. Back does not cross the boundary,
+  which is honest: changing provider invalidates every model answer after it.
+- **`bernard setup` must work with no API key**, which is why it cannot be the
+  REPL: `loadConfig()` throws without one. It reads through `getProviderKeyStatus()`
+  / `loadPreferences()`, the `voice-test` precedent, and checks `process.stdin.isTTY`
+  before mounting — Ink's `useInput` throws out of an already-returned `render()`
+  when raw mode is unavailable, surfacing as an unhandled rejection rather than a
+  sentence anyone can act on.
+- **A step never invents the answer it opens on.** `WizardChoiceStep` seeded its
+  cursor-and-tick at row one whenever `initial` matched no row, so a page whose
+  in-force value the list did not offer said `✓` against a value nobody held —
+  and Continue then WROTE it, because `settingsPatch`'s change test compares the
+  answer against `initial` and an invented answer differs from it like any other.
+  That is the env-shadowing hazard's twin and strictly worse: not shadowing a
+  variable, but replacing a working setting with the first row of a list. It
+  seeds `-1` now, ticks nothing, and the reserved reason row says why Continue is
+  refusing rather than letting the button swallow the keystroke in silence.
+  - **It is reachable through the model step, and the catalog is why.** Catalog
+    membership is not dispatchability in either direction — the same fact the
+    lineup table above is curated over — so a model in force can be absent from
+    its own list. It is offered back as a row (`… — in use, not in the catalog`)
+    rather than dropped, since the remedy for "your value is not here" cannot be
+    "pick one of these instead". Only when the catalog answered at all: an empty
+    list means "could not read it", and the step is dropped entirely, which is
+    the same rule a lineup list follows before any lineup exists.
+- **Every step must open on something Enter can accept**, and both halves of that
+  were found by walking it rather than by reasoning. A CHOICE step with no initial
+  puts the cursor on row one and Enter writes that row as though it had been
+  chosen — `activeLineupId` is unset on most installs, so the flow resolves it
+  through `resolveActiveLineup` instead of leaving it blank. A NUMERIC step with
+  no initial is refused by its own range check, so the walk **cannot proceed** —
+  `voiceRate` is `undefined` on `BernardConfig` until someone sets one, so an
+  unset numeric step is `optional` and its validator tolerates empty. Neither is
+  visible from a hand-written context, which is why `setup-flow.test.ts` asserts
+  it against the real one.
+- **The voice section is one question, and the rest went to `/voice`.** `voiceTts` stays; Natural speech, Voice backend, Speech rate and Audio warmup do not. They generalise the rule above — none can be judged without HEARING the result, which the wizard cannot do and every `/voice` row can — and they were asked of an install where `voiceTts` defaults to false, so four of five questions configured a feature that was not running. The wizard cannot skip them conditionally: `WizardSpec.steps` is a frozen array with no branching, deliberately, because Back must not cross a boundary that invalidates later answers. Nothing is lost — `/voice` has a row for each, and its test row plays a phrase so a bad value is heard rather than discovered later.
+- **Auto-update defaults ON, and the install moved to session EXIT to make that safe.** `applyUpdate` is an `execSync` of a global npm install with `stdio: 'inherit'`, and `startupUpdateCheck` is fired before Ink mounts while its promise settles long after — so the old inline apply froze the event loop for the length of that install and wrote npm's output into the alternate screen buffer Ink owns, the exact class of bug `mcp.ts`'s reconnect notice was fixed for. Flipping the default without moving it would have shipped that to every user. The check now records a `pendingUpdate` and `index.ts` drains it after `fullScreen.teardown()`, where output lands on the restored normal screen and nothing is left to interrupt; the message was already "Restart to use the new version", so nothing is lost. `takePendingUpdate` clears as it reads, so a second drain cannot reinstall. The old test asserted `execSync` WAS called mid-session — which is what made the default unsafe to flip — and now asserts it was not.
+- **A question you cannot answer from the screen does not belong in the wizard.** `voiceVoice` asked for a free-text voice name — `Daniel`, `en-us+f3` — which needs `say -v ?` or `spd-say -L` from outside Bernard to answer, is not validated, and silently produces no speech when wrong. Every other step offers rows or opens on a real value; this one offered a caret and a description admitting it could not check the answer. It is `/voice`'s, and `/voice` is strictly better at it: that menu's test row plays a phrase and surfaces the backend's rejection through `onError`, so you set the name and immediately hear whether it took. A picker built from the backend's own voice list would earn the question back; nothing short of that would.
+  - **Removing it made an existing invariant stronger rather than weaker.** `opens every step on a real value` carried a carve-out naming this one field as legitimately blank, so the rule had to be read before it could be trusted; it is now flat. And `provenanceNote`'s `Not set.` case had been leaning on this field being unset — a fixture that has to stay unset to keep a test meaningful is one waiting to be populated — so it drives a context that OMITS a field instead.
+  - **Still asked with speech off**, and worth knowing before the next pass: `voiceTts` defaults to `false`, so Voice backend, Speech rate and Audio warmup are three questions about a feature that is not running. The wizard cannot skip them — `WizardSpec.steps` is a frozen array with no branching, deliberately, because Back must not cross a boundary that invalidates later answers — so the fix is either dropping them to `/voice` as well or giving voice its own stage the way the model list already has one.
+- **`profiles-wizard-data.ts` covers every settable field, and a test says so.**
+  It covered 22 of `ProfileSettings`' 40 — the other 18 were never a considered
+  exclusion, so `provider`, `model`, the lineup, every voice setting and five
+  toggles were reachable from no wizard at all. `settings-coverage.test.ts` walks
+  the fields DECLARED IN THE SOURCE to the registry — the record-to-table
+  direction, per `bundled-manifest.test.ts` — and fails on any that is neither
+  declared nor in a reasoned exclusion set (the three structured permission maps,
+  which have their own surfaces). It also reconciles the four numeric options
+  against `OPTIONS_REGISTRY`, which is a second table describing the same
+  settings with its own bounds; merging the three registries is #441's job, and
+  the house answer for two tables that must agree is a test (`timeout-offer.test.ts`
+  already reconciles a third against the same registry).
+- **It opens on a welcome page, and `{kind:'info'}` is how.** A step that asks
+  nothing, whose Enter advances. A STEP rather than something the host draws
+  first, because back has to work: `^B` from question one should reach it, and a
+  host-rendered preamble is gone by then. `isAnswered` is always true for one and
+  the review leaves it out — a row reading "Welcome — (not answered)" invites the
+  reader to go and fix something that is not broken. The copy is paragraphs, not
+  pre-wrapped lines; the card wraps them to whatever width it has.
+- **A progress rail down the left, derived from `WizardStep.section`.** Sections,
+  not steps: a 36-question walk cannot list every question in a rail a terminal
+  can hold, and "which part am I in" is the question a reader has. Derived rather
+  than declared, so a spec cannot carry a rail that disagrees with its own steps.
+  Marked with a glyph AND a colour (`✓ ▸ ·`), never colour alone. Dropped below
+  `RAIL_MIN_COLUMNS` — a rail that squeezes the question into 30 columns costs
+  more than the orientation it buys.
+  - **`WizardSpec.railContext` spans the seam.** Setup is two wizards because the
+    model list cannot be built before a provider is chosen, but it is one journey
+    to the person walking it — and a rail derived from `steps` alone restarts at
+    the boundary, telling the reader they are at the beginning immediately after
+    finishing a third of the work. `before` renders done, `after` todo. The
+    review row belongs to the LAST stage only; two of them read as a mistake, and
+    on an intermediate review the last section stays current so the rail is never
+    left with nothing marked.
+  - This **reverses #473's "no progress fraction"** at the user's explicit
+    request. That finding is about an ADAPTIVE interview which cannot know its own
+    length, where a fraction is a guess in the direction that nearly doubled
+    abandonment; here the length is fixed and known, and a rail names sections
+    rather than claiming a proportion.
+- **The header belongs to the BODY, not to the card.** Spanning the full width
+  it sat above the rail as well — over a column the reader is not looking at —
+  and read as a title for the modal rather than for the page inside it.
+- **Select, then continue — one model on every screen.** Enter on a row marks it
+  with `✓`; the Continue control at the foot hands back what is marked. It costs
+  a keystroke over "Enter picks and advances", and the keystroke is the price of
+  not having two models: a page whose rows are things to DO (the provider hub)
+  and a page whose rows are answers otherwise behave differently under the same
+  key, and the reader has to learn which is which per screen.
+  - The selection is tracked **separately from the cursor**, which is what makes
+    it work at all: by the time Continue is pressed the cursor is on a control,
+    so a page handing back "the highlighted row" would have nothing to give.
+  - Seeded from the answer the step opens on, so accepting a prepopulated page is
+    Continue alone rather than a re-pick.
+  - **`pickAdvances` is the opt-out**, for pages where picking IS the act: a hub
+    row that opens an editor, and `ask_user`, whose whole point is that a
+    clarifying question answers in one keystroke (on a multi-select that means
+    space toggles and Enter confirms the set, exactly as before). Such a page
+    shows **no tick at all** — there is no selection to mark, and one on row one
+    would claim an answer nobody had given.
+  - The Continue control is **not relabelled from whatever the cursor is
+    touching**. It says what IT does; the key line under the card says what Enter
+    does where the cursor is (`↵ select`). A button that renames itself to a
+    neighbour's action is how a reader presses the wrong thing.
+- **Every step kind reaches the controls, and which keys get there depends on
+  what else is on the page.** The footer draws Continue and Back on every screen
+  and only the choice step could reach them — so on a numeric settings question
+  `↓` did nothing, which is the one key a reader tries after typing a value, and
+  the key line read `esc cancel` alone on a page showing two buttons. A control
+  you can see and cannot reach is worse than no control.
+  - A TEXT step takes `↓` from the buffer onto Continue and `↑` back, with `←/→`
+    between the two controls exactly as a choice step has. Three details follow
+    from the buffer being there: `←/→` are cursor movement while it has focus, so
+    they are advertised only once the cursor is ON a control; the caret is hidden
+    there, because it means "typing lands here" and would say so while Enter went
+    elsewhere; and anything typed on a control hands the buffer back rather than
+    being swallowed, which would reproduce the original complaint one key over.
+  - An INFO step opens with Continue focused and moves with `←/→` only. There is
+    no body above the controls for `↑/↓` to reach, so the hints name the keys
+    that work rather than one with nowhere to go.
+- **`← Back` and a step's own actions are focusable CONTROLS.** Arrowing past
+  the last option moves onto the buttons in the footer rather than into list rows
+  that duplicate them: a "Continue" row and a Continue button are two places to
+  do one thing, and the reader has to work out whether they differ. The focused
+  control takes the marker, the accent AND the `↵`; the list neither grows a row
+  for one nor counts it in the position.
+  - **Accent means focused, and nothing else.** Painted as the primary colour
+    whenever the cursor was merely not on Back, Continue read as highlighted from
+    the moment the page opened — so the one thing the accent is for, saying where
+    Enter will land, said nothing. The return glyph moves with it: on an option
+    row Enter SELECTS, and a `↵` sitting on Continue promises otherwise.
+  - **`WizardSpec.backExits` is what makes Back exist at a stage boundary.**
+    Four of setup's five screens are single-step specs, so `canGoBack` —
+    `index > 0` — was false on almost all of them and the control was simply
+    absent. With it, Back on the first step resolves `{cancelled: true, back:
+true}` and the caller reopens whatever came before. A FLAG on the cancelled
+    variant rather than a third result case: a caller that does not know about it
+    still compiles and still stops, and treating an unhandled "go back" as a
+    cancel loses a step where treating it as a completion would lose the answers.
+  - **So `runSetupFlow` is a stage machine, not a run of awaits.** Setup cannot
+    be one wizard (the model list needs a provider first) but it is one journey,
+    and a straight sequence has nowhere to put "go back". Each stage names where
+    Back goes; `askedDefault` is recorded because the default question is skipped
+    when only one provider has a key, and Back from the settings must skip it in
+    the same case rather than reopening a question that was never asked.
+  - **The review commits through the same control**, not a last list row reading
+    "Looks right — go ahead". Every other page moves on with Continue, and a
+    review that needed its own gesture was the one screen where the reader had to
+    learn a second one. Its key line names the back chord too — it was the one
+    surface whose hints omitted it, which is how "there is no back button"
+    survives a page that has one.
+  - **A greyed row keeps its trailing detail**, muted along with the label. That
+    detail is usually the very thing that explains why the row cannot be picked
+    (`xai ···· no key`), so branching it away left the reader with a dead row and
+    no reason until they highlighted it.
+  - **`ctrl+n` does what the step's own forward BUTTON does**, which is not
+    always "hand back the selection". A step with its own `actions` draws the
+    first of them as that button — the provider hub's reads "Continue to the next
+    step" and resolves with that label — and a `pickAdvances` page carries no
+    selection at all, so a chord bound to `submitChosen` was advertised in the
+    key line and silently inert on the screen a fresh install starts on. It takes
+    the same branch `commit` takes for a tail row, so the chord and the button
+    cannot come to mean different things, and the hint is gated on the same value
+    so it is never offered on a page with no forward button (an `ask_user` menu,
+    where picking IS the act). `setup-walk.test.tsx` drives the chord through
+    every stage the flow really builds rather than a hand-written spec — the
+    shape that broke exists only in the builders.
+  - **`ctrl+n` continues from any step kind, and it ACTS.** Symmetric with
+    `ctrl+b`, which goes back rather than focusing Back — a pair where one
+    commits and the other only points at a button would be two rules wearing one
+    shape. It routes through each step's own commit, so a value its validator
+    refuses is still refused; a shortcut that bypassed that would open the one
+    door nothing else does. A chord rather than `→` because a text step spends
+    the arrow keys on its buffer, and a shortcut that works on four step kinds
+    and silently does nothing on the fifth is the inconsistency it replaces —
+    `←`/`→` do also reach Back and Continue from an option ROW, where the arrows
+    have nothing else to mean — a reader who has just learned that `→` goes
+    forward reaches for `←` without being told. Both land ON the control rather
+    than acting, which is what focusable controls are for; the chords are the
+    ones that act. That is the cheap half rather than the rule, and it does not
+    exist on a text step, where the arrows belong to the buffer.
+  - **Chords are spelled `ctrl+b`, not `^b`.** The caret is terminal shorthand
+    that readers of emacs and older CLIs know and nobody else does, and this row
+    is read by someone being onboarded. `ctrlKey()` in `hints.tsx` is the one
+    spelling, because the wizard and the transcript hint bar had already picked
+    `^b` and `^o` independently and would have drifted again on the next one.
+  - **Back is reached SIDEWAYS from Continue**, `←` to it and `→` back. They are
+    one row on screen, so walking `↓` through them would be the cursor moving
+    down where nothing is — `↓` on Continue therefore does nothing at all. `↑`
+    from either returns to the END of the list, which is the row the cursor left;
+    from Back that is the case worth having, since the row above it is Continue
+    and plain list navigation would step onto it. `^b` still works from anywhere
+    and is named in the key line, which is why the control itself no longer
+    spells the chord. `WizardStepKind.choice.actions` name the extra
+    controls, each resolving the step with its own label — which is also what the
+    button then says, because the action names what Enter does better than any
+    generic word. A page whose Enter already means "choose this and move on"
+    declares none: a second control doing the same thing would have to guess which
+    option was meant once the cursor had left them.
+- **`WizardStepKind.choice.trailing`** is right-aligned detail per row with
+  leader dots filling the gap — the table-of-contents shape `output.ts`'s welcome
+  box already uses. Separate from the label because the label is the ANSWER
+  vocabulary: a decoder that had to strip a decorated suffix back off would be a
+  second copy of the formatting, and the decoration changes with the terminal
+  width.
+- **One tick, one place, one colour.** `✓` goes hard right of the row, past the
+  leader dots, in the theme's success green, on every page that draws one. It
+  marks a fact ABOUT the row — chosen here, a key already stored on the provider
+  hub — where `>` marks where the cursor is. The selection tick used to be
+  rendered INSIDE the label (`1. ✓ anthropic`), which broke both halves at once:
+  it inherited whatever `MenuRow` painted the highlighted row, so the same glyph
+  meant "chosen" in accent on one screen and "key stored" in green on the next,
+  and it sat in a different column on each. Plain text is blind to both — a
+  `toContain('✓')` assertion passes on either position and either colour — so the
+  guard is a bounded colour assertion in `WizardRow.theme.test.tsx`, mutation-
+  checked against accent-instead-of-green and against moving it back inside the
+  label.
+- **`WizardSpec.skipReview`** resolves on the last answer instead of ending at
+  the review. The review is a check-your-ANSWERS screen and is unskippable by
+  construction precisely so a caller cannot forget it; a navigational page — a
+  hub whose rows are things to DO, or a single field opened from one — has no
+  batch to check, and a summary reading `Providers — anthropic` is unactionable.
+  **A single-question stage counts as one of those**, which the default-provider
+  page did not do at first: its review was the page you had just left, restated
+  as one row with the blurbs and the greyed rows that made the choice legible
+  stripped out. The guard is on the SPEC, not the flow — `runSetupFlow` hands out
+  a spec and takes a `WizardResult` back, so the review is entirely a renderer
+  concern and every flow test passes with it on or off.
+  Resolved from an EFFECT, never in render: it calls back into the host, which
+  sets state, and doing that mid-render updates one component while another is
+  rendering.
+- **Stage A is providers, plural.** Bernard is not a one-provider product —
+  lineups mix providers across tiers and a specialist can pin one — and the old
+  stage A asked "which provider, and its key", which taught every reader the
+  opposite. It is now a key page **per provider**, every one optional, so a
+  single walk can add a second and third. One page each is also what keeps the
+  spec a flat array: "which do you want to add" followed by pages for the answers
+  is branching, which `WizardSpec` deliberately cannot express.
+  - **A masked key is `\*\***`, not `····`.** The leader dots that right-align the
+cell are `·`, so a `·`-masked key ran straight out of the alignment and the
+    row read as one long run of dots with four characters on the end.
+  - **`✓` marks the default in force, and nothing else.** It first shipped as a
+    per-row `[✓ key set]` badge, which read as "this row is selected" and
+    competed with the cursor marker for the same meaning — two markers, two
+    different facts, one of them wrong on every row. Key status is carried by the
+    greying and the key hint instead.
+  - **It is a HUB, not a page per provider.** A page each asked about three
+    providers in a row when almost everyone wants one, gave no view of the set,
+    and made "which of these am I actually using" a thing you had to remember
+    across screens. Here the state IS the screen: every provider with a tick and
+    the last four characters of its stored key, Enter opens that key, and a
+    the Continue control leaves. A tick alone cannot say WHICH key is
+    in place, which is the question after a rotation or with several accounts —
+    and the SUFFIX, because provider keys share a scheme-and-project prefix, so
+    the front of one identifies nothing. `getStoredKeyHint` exists rather than
+    exporting `loadStoredKeys`, which would hand every caller the keys to get at
+    four characters; it reads STORED keys only, since one that arrived through
+    the environment is not ours to echo back even in part.
+  - **The hub is a LOOP in the flow, rebuilt on every pass**, which is what keeps
+    the ticks and hints describing what is on disk NOW rather than when the
+    wizard opened. Built once, it still says "no key" for a provider whose key you
+    typed two screens ago. **Esc on the hub leaves setup; Esc inside a key page
+    only leaves that page** — the hub is the screen you are on, and a field
+    opened from it dismisses back to where it came from.
+  - **A keyless provider is shown, greyed, and refuses Enter**, with the reason on
+    a reserved row under the list and `Unavailable` where the action label goes.
+    Shown rather than hidden because absence answers no question: a provider
+    missing from the list looks unsupported, where a greyed one with "no key"
+    beside it says what to do. The cursor still lands on it for the same reason —
+    the explanation has to be reachable. Muted **even while highlighted**, or the
+    highlight says "pickable" at exactly the moment the reader is looking.
+  - **That rule is what forces the default question into its own stage, AFTER the
+    keys.** `steps` is frozen, so a page built beside the key pages cannot know
+    what was typed into them — and this page must, to grey the right rows. Asked
+    first, every row on a fresh install is unpickable and the reader is stuck on a
+    question with no valid answer. So: welcome + key pages, then a separate
+    one-question wizard, **skipped** when fewer than two providers have keys,
+    because a question whose answer is forced is a screen that costs a keystroke.
+  - **No keys at all stops the flow** (`status: 'no-key'`) rather than walking 35
+    settings questions to arrive at "no API key is stored".
+  - **`WizardStep.emptySummary`** is what the review says for a blank answer.
+    `(not answered)` is right for a question that wanted one; it is actively
+    misleading on an optional page where blank IS the answer — a skipped key page
+    read as unanswered next to a provider that works.
+- **Every screen is a centred, bounded card (`WizardCard`).** Flush-left and
+  full-width, a four-word question wrapped across 100+ columns and a long walk
+  read as a terminal that kept reprinting rather than a sequence of pages. The
+  border is a **considered reversal** of this component's own "no borders" rule,
+  not an oversight: that rule cited the finding that unstructured
+  two-dimensional output is the core barrier for CLI screen readers, and the
+  barrier it names is two-dimensional LAYOUT — what is inside the frame is still
+  one linear column read top to bottom. It is also already the house surface
+  (`Prompt` draws one every frame; `TranscriptPanel` around every error and
+  notice). The rest of the original rule stands: no animation, no colour-only
+  meaning, every step answerable by typing plus Enter. `fill` centres vertically
+  too and is **opt-in**, because it is only correct where the wizard owns the
+  frame — the standalone host and the REPL in full-screen; legacy inline appends
+  below a live transcript that a full-height box would push off the screen.
+- **The frame is laid out like a dialog, and `WizardCard` owns all of it.**
+  A title bar across the top with a rule under it, the rail and body below,
+  the primary action bottom-right with Back immediately to its left, and the
+  universally-true keys on a line **under** the card. Inside the frame those
+  keys read as being about this question; under it they read as being about the
+  wizard — which is also why dismissal is said there and **only** there: a close
+  control in the corner plus the same word in the key line is one frame saying
+  `esc` twice. `OverlayFooter` is
+  correspondingly no longer used here — its blank/position/hints trio is the
+  right shape for a free-standing list overlay and the wrong one for a dialog
+  with its own button row — so `CARD_CHROME_ROWS` is the single constant every
+  budget subtracts, for the reason `OVERLAY_FOOTER_ROWS` exists.
+  - The question is a **header across the whole card**, above the rail as well as
+    the body. Inside the body column it was one more paragraph competing with
+    the hint and the options. Both rules are the box's own border — the header's
+    bottom, the body's left — so they span their extent without anyone computing
+    it, and the divider grows with the body however tall it gets.
+  - **`contentWidth` must charge for the divider**, which is a real border (1)
+    plus the body's inset (2). Three columns optimistic, prose pre-wrapped to it
+    overflows and Ink wraps it a **second** time — and Ink wraps with
+    `trim: false`, so every re-broken line keeps its break space and the welcome
+    page comes out with a ragged left edge. Info bodies are pre-wrapped through
+    `wrapText` for that reason rather than left to Ink. The guard's fixture is
+    uniform short words on purpose: whether a second wrap leaves a visible space
+    depends on where the break lands, so ordinary prose passes or fails on its
+    own wording.
+  - **Back works on the review now.** `goBack` has handled the review phase
+    since it was written and is unit-tested, but no renderer ever called it —
+    so the one transition a reader most expects from a summary screen was
+    unreachable. Found while making Back part of the frame rather than a
+    per-step hint.
+- **The primary action says what Enter does, in words, from the STATE.** On a
+  prepopulated walk most screens are "accept what is already here", and a bare
+  `↵ choose` invites the reader to think nothing is selected yet — so it reads
+  `Keep this` when Enter commits the value the step opened on and `Choose this`
+  when it commits a different one. `WizardStep.nextLabel` overrides it for the
+  case the renderer cannot see: an API-key field on a provider that already has
+  one, where Enter on a blank buffer is not skipping a question but keeping the
+  stored key. The Enter hint is correspondingly dropped from the key legend —
+  one statement, in the reader's words rather than as a key.
+- **Narrowing the frame exposed a latent review bug.** `WizardReview`'s
+  docstring claimed each row is bounded to one terminal row "by
+  `summarizeAnswer`" — which caps the ANSWER at 60 characters and never touched
+  the QUESTION. At full width the sum happened to fit; inside a 68-column card a
+  long label wrapped to two rows and the window overflowed the budget it had
+  been given, because the arithmetic counts ITEMS and assumes one row each. The
+  composed row is truncated now, and the invariant has its own test.
+- **`WizardStep.section`** carries the group label ("Tool safety") as its own
+  field rather than as a prefix baked into `question`. The setup flow built
+  `Tool safety — Tool mode` first; the renderer would then have to split on a
+  delimiter to style the halves differently, and any question legitimately
+  containing an em dash would break it.
+- **`WizardStep.initial` and `.validate` were added for this** and are generic:
+  `initial` is prepopulation, `validate` is what `runAddProviderInk` still wants
+  (it discards four steps of typing when step three fails). Validation runs
+  BEFORE the empty-answer rule, so a hook can own the empty case and say
+  something — reversed, a required numeric field holds silently and reads as a
+  broken Enter key. The message row is reserved unconditionally, `OverlayFooter`'s
+  rule, so being refused does not reflow the frame under a reader mid-correction.
+  Branching and typed answers are still deliberately absent — setup keeps its own
+  label↔value mapping rather than pushing its domain into the type every
+  `ask_user` batch is built from.
+- **The Theme question shows you the theme.** Arrowing down it repaints the whole wizard — border, rail, header, rows, footer — in the highlighted row's colours, and the row you leave selected is what the rest of the walk is drawn in. It is the one question in the flow whose answer the screen can simply BE.
+  - **The one-line version is the wrong one, and both ways it fails are worth knowing.** `setTheme(key)` on cursor move looks sufficient, since all 85 `getThemeColors()` call sites read a module-level `activeThemeKey` at render. It repaints the wrong half of the frame: the cursor lives in `useListCursor` inside `WizardChoiceStep`, a CHILD of `WizardCard`, so the rows recolour and the border, rail, header and footer do not. And it writes a process global, so Esc, Back and an abandoned `/setup` each need a restore path, and a missed one leaves the REPL in a theme nobody chose.
+  - **`src/ui/ThemeContext.tsx` is the answer, shaped like `DimensionsContext.tsx`.** It sits above the card, so the whole frame agrees; and reverting is _not doing anything_, because the provider unmounts with the overlay. `useThemeColors()` is `useContext(ThemeContext) ?? getThemeColors()`, and **that fallback is what makes adoption piecemeal** — outside a provider it returns the same OBJECT, so the ~70 unconverted sites and `markdown.ts`'s `cachedColors === colors` cache cannot tell the difference. Eleven sites converted: the wizard's own eight, plus `MenuRow`, `hints` and `BoundedLine`, which render inside it and are shared with every other overlay. `mastheadBlock` takes colours as an ARGUMENT — it is a plain function called from JSX, so a hook there would be one outside a render, and after an early return at that.
+  - **It reads the row's VALUE, never its label**, through a new index-aligned `WizardChoiceField.values`. The renderer otherwise sees only labels by design, and for this one field label and value are identical (`profiles-wizard-data.ts` maps the theme ids to themselves) — so reading the label works, by coincidence, until someone gives the rows prettier names. The test uses a fixture where they differ, which is the only way that case can fail.
+  - **Declared, not special-cased**: `WizardFieldData.livePreview?: 'theme'` → `WizardStep.preview?: 'theme'`, a closed set of one in the `apps/manifest.ts` idiom. Keying the renderer on `step.id === 'theme'` is the special case this registry exists to remove.
+  - **On an option row it is that row; off the list it is the row SELECTED.** Stepping onto Continue shows what you are about to keep, not the last thing the cursor passed — which is how this first shipped, leaving the screen claiming a theme the `✓` disagreed with at exactly the moment you decide whether to commit. `↑` from a control lands on the LAST option rather than the one you left, and the preview follows it there, which a fix written only for "leaving the list" would miss. All three are pinned.
+  - **A chosen theme then sticks for the rest of the walk**, because once the step has an answer the preview falls back to it — the same rule, one step later.
+  - **`getActiveThemeKey()` is asserted unchanged through previewing and through Esc.** That is the safety argument as an assertion rather than a comment. The preview becomes real only through the saved answer, on the path that already existed (`applyProfileToConfig` + `reapplyRuntimeSettings`).
+  - **Colour tests need long ticks, which reads exactly like the feature being broken.** A preview takes two renders — the keypress moves the cursor, the effect that reports it then sets state at the root — and Ink throttles writes at 32 ms, so at the suite's usual 10 ms tick the second render has not flushed and the frame still carries the old theme. Cost an hour of debugging a working feature.
+  - **Nine themes, and the three added last carry a constraint worth not tidying away.** `blossom` is pink and `ember` is red, so each has an accent in the same family as `error` — the one colour that must never blend into the chrome. Blossom takes a plain red error against its pink accent; ember, whose accent IS red, separates them by lightness instead (deep `#dc2626` accent, bright `#ff6b6b` error, so the alarming one is the one that jumps). `theme.test.ts` asserts `error !== accent` for every theme, which is what makes a later "tidy-up" toward each other fail.
+  - **`graphite` took three cuts, and `src/color.ts` is what settled it.** Measured against a `#0d1117` terminal, every theme built on hex puts `text` BRIGHTER than `accent` (text 10.8-16.1, accent 5.4-8.3) — the accent marks a few characters, the text is the page. The first cut had accent and text a shade apart, so the accent did no work; the second had a near-white accent at **17.27** over text at 7.38, more than double any other theme's accent and inverted, which is exactly why it read as `high-contrast` rather than as a dark theme. It now sits below the family on both (accent 6.40, text 7.50, muted 5.41) while keeping the order, and its accent is a HUE rather than a brightness — a muted violet reads as an accent against grey-blue prose without being the brightest thing on screen. `theme.test.ts` pins the ordering, with a floor so a version that measured nothing cannot pass quietly. `error`/`success`/`warning` keep their vivid colours, and `toolCall`/`prefixColors` keep hues rather than becoming four greys: a restrained theme is a choice about chrome, not a reason to stop signalling or to make sub-agent prefixes untellable apart.
+  - **`ember`'s accent is the dimmest of the set at 3.92, measured and accepted.** Brightening it into the family band puts it within a shade of its own error, which is the one thing that must not happen on a red theme; 3.92 clears the 3:1 floor for the large and non-text uses an accent has here. Recorded beside the palette so it reads as a trade rather than an oversight.
+  - **`fantastic` is named for what it is rather than whose it is** — a cobalt uniform against the Torch's flame, on the white of the logo. Two colours carry it, `accent` blue and `toolCall` orange, which is why its `error` is a rose rather than a red: a failure must not read as more tool output.
+  - **The theme-count test was replaced rather than bumped.** `returns all 6 theme keys` is what a new theme breaks while telling you nothing. What replaced it names the invariants: the default and the accessibility pair (which `/theme` splits its menu on by name) must survive, and `THEME_COLORS` and `THEMES` must agree in BOTH directions — a named theme with no palette silently renders as `bernard` through `getThemeColorsFor`'s fallback, and a palette with no name is unreachable by any menu. The palette keys are read out of the source rather than exporting a module-private record for one test, the move `settings-coverage.test.ts` already makes.
+  - **Not done: `/theme`.** The same mechanism would work, but `useListCursor` exposes no movement callback and `MenuOverlay` serves every menu in the product, so the hook cannot be added without touching all of them. Ink's `<Static>` transcript can never repaint regardless, so a whole-tree theme context would not buy a live switch anyway.
+- **An option row says the answer; the sentence above says what it means.** The
+  coordinator rows read `Auto (qualifier picks per turn)` and `On (always
+coordinator)`, which translated one piece of jargon into another beside every
+  option — a reader who does not know what a coordinator is learns nothing from
+  being told they always get one. The rows are bare and the description names all
+  three, so each is explained by the time it is read. `/agent-options` asks the
+  same question and was given the same words, since two vocabularies for one
+  setting is the drift these questions keep being rewritten to remove.
+  - **This line used to carve out an exception, and the exception was wrong.**
+    It said `Read-only (least privilege)` and `Strict (also medium-risk)` were
+    disambiguating an answer that is genuinely ambiguous alone, rather than
+    glossing a term. Both went bare too. The test is not whether the gloss is
+    informative — it is whether the SENTENCE can carry it, and it always can:
+    two words beside a row cannot say what four lines above the list can, and
+    `Auto` is no more ambiguous than `On` once the description names all three.
+    What the carve-out actually protected was a copy of the answer in a second
+    place, which is the drift the label-is-the-answer-vocabulary rule exists to
+    refuse — and it had already produced `Write (allow all tools)`, describing
+    `write` as what `unrestricted` does.
+  - **`src/tool-modes.ts` is the table**, in the `remote-messages.ts` shape and
+    at `src/` root for its stated reason. Three surfaces had grown three
+    spellings of these three answers — setup, the `/agent-options` menu, and
+    that menu's own parent-row description — and the sentinel for the third row
+    was `'unrestricted'` in one and `'skip'` in the other. `ProfileSettings.toolMode`
+    holds two values; the third answer is `skipPermissions`, and presenting it
+    as a row is right (a mode you can set and then contradict on the next screen
+    is not a mode), so the sentinel is written down once rather than invented
+    per caller.
+  - **`src/coordinator-modes.ts` is the same treatment for the planning
+    question**, which had the same two hand-written copies plus a third
+    paraphrase on the menu's parent row. Its rows are `Auto` / `Always on` /
+    `Always off`: the VALUES stay `auto`/`on`/`off` (they are on disk and in
+    `BERNARD_COORDINATOR_MODE`), but a bare `On` beside `Auto` invites the
+    reading that `Auto` is somehow less on, and the word that distinguishes them
+    is `Always`. It belongs in the label rather than being left for the note.
+  - **The formula is written on `WizardFieldData.description`**, because that
+    is where the next person adding a field looks. Three parts, in order: what
+    it is (glossing any word that is OURS rather than English), what you get
+    from it in terms of the work rather than the mechanism, and what it costs
+    plus when that cost is not worth paying — the last only where there is a
+    real cost. Casual register throughout: this is a first-run screen, not a
+    reference page.
+  - **Tool mode is asked in permission language now, and defaults to `write`.**
+    `Read-only` / `Write` / `⚠ Unrestricted` name the MECHANISM: they are the
+    values on disk, and a reader has to work out what each one does to them.
+    The rows are `Ask before every change` / `Ask only about risky things` /
+    `⚠ Never ask`, which is the question actually being asked. Note the
+    description correspondingly stops naming the rows — the inverse of the
+    coordinator question's rule and for the same reason: `Auto` says nothing
+    alone so that one must name all three, while a row that is already a
+    sentence would just be quoted back.
+    - **Tool mode and confirm mode are one question now.** The middle row was
+      not true on its own: `Ask only about risky things` describes
+      `toolMode: 'write'` PLUS `confirmMode: 'auto'`, and the confirm question
+      was the very next screen, so a reader could accept that label and then
+      answer what "risky" means with "never" — with nothing on either screen
+      connecting them. The split is an implementation fact ("is it allowed to
+      run" against "do I get a prompt"), not a distinction anybody chooses
+      between. `TOOL_MODE_SETTINGS` is the decode and `toolModeFor` the
+      inverse, both in `tool-modes.ts`, because a decode written at each of the
+      two call sites is two decodes — and that had already happened, with the
+      `/agent-options` menu writing two keys where the wizard wrote three.
+      - **Three rows, not four.** The obvious merge has one row per coherent
+        combination. It collapses because of what `risk.ts` classifies: an
+        ordinary local write is `medium` and an unclassified MCP tool is
+        `medium`, so "block every write until allowed" (`read-only`) and
+        "confirm at medium and up" (`write`+`strict`) select the IDENTICAL
+        population. What differs is the prompt's wording and the breadth of
+        the allowance it offers — the block gate's session allowance is keyed
+        on the tool NAME, the confirm gate's on `name:hash(args)`, so
+        `read-only`'s is the coarser, which is not an argument for keeping it
+        as a row.
+      - **But `toolModeFor` does NOT read `write`+`strict` back as that row**,
+        and it used to — "they stop the same calls" is a claim about what the
+        two postures STOP, which is not what that function decides. It is the
+        PRESELECTOR, and both surfaces decode a row through
+        `{...TOOL_MODE_SETTINGS[value]}`, which writes all three keys: so a
+        `write`+`strict` user opened `/setup` on a row that was not their
+        state and, by accepting what was shown, wrote `read-only`+`auto` over
+        it — writes lost one way, `strict` the other, from a keystroke that
+        changed nothing. That is this wizard's own "a step never invents the
+        answer it opens on", which is a rule about what Continue WRITES; and
+        it is the `⚠ Never ask` row's own argument applied consistently, since
+        `confirmMode` is the value left holding the answer when the safeguards
+        come back. Both un-representable pairs answer `null` now and the step
+        opens unticked. The invariant is stated over the whole space rather
+        than for the pair that broke it: a row is offered as preselected only
+        when re-applying it reproduces the state it was read from.
+      - **`confirmMode` is NOT inert under `read-only`**, and the sentence that
+        said so was false about the mechanism it named. `runBlockGate` and
+        `runGate` are independent and `runGate` never reads `toolMode`, so a
+        call the block gate PASSES still meets the confirm gate at its own
+        threshold. The diverging population is precisely the one
+        `shouldBlockInReadOnly` lets through on purpose — a tool with no meta
+        (so "legacy/foreign tools without classification don't get bricked
+        silently") and a `kind:'read'` tool declaring `risk:'medium'`; both
+        measure `medium`, which `strict` confirms and `auto` does not.
+        **Latent, not live**: nothing in-tree declares `risk:'medium'`,
+        `riskForCall` can only answer `'high'` or `null`, and everything
+        in-tree is classified. So the true statement is about the tool TABLE,
+        which is weaker and can change without anyone touching `tool-modes.ts`
+        — the row is withheld rather than resting on it, and both armed modes
+        now behave the same way. The earlier objection that preserving it
+        would need "a row that writes some of its keys" was wrong: `null`
+        writes nothing, which is the mechanism the `write` half already uses.
+        The `skipPermissions` rows still normalise by design, which is the
+        `⚠ Never ask` decision and is why that row writes `auto` and must not
+        write `off`. The invariant is pinned over the whole 12-state space.
+      - **It was very nearly a silent capability removal.** `strict` and `off`
+        lose their setup rows, and the registry they left is the ONLY wizard
+        surface — `OPTIONS_REGISTRY` is the four numeric settings, and
+        `/agent-options` had no confirm-mode row at all. So dropping the
+        question would have left `BERNARD_CONFIRM_MODE` and the per-job cron
+        field as the only doors to either value. `CONFIRM_MODES` and the new
+        `/agent-options` row are what make "it stays reachable" true, and the
+        setup description names that door, because a reader who wants to be
+        stopped more often would otherwise conclude it is not possible.
+      - **`write`+`off` is a state no row represents**, and is deliberately not
+        folded into `⚠ Never ask`: `skipPermissions` short-circuits the
+        profile's own `deny` rules too, so reading it as that row would turn a
+        bare Enter on a ticked row into an escalation. `toolModeFor` returns
+        `null`, the step opens with nothing ticked, and the reader chooses —
+        this wizard's existing rule that a step never invents the answer it
+        opens on.
+      - **The last row leaves `confirmMode: 'auto'`, not `'off'`.** `'off'` is
+        what that row MEANS and is the one value it must not store, which is a
+        defect this shipped with for about ten minutes: the level is inert
+        while `skipPermissions` is set, and `/tool-permissions` re-arms the
+        safeguards by writing `skipPermissions` ALONE — so `'off'` would hand
+        someone who turned the safeguards back on a session that still never
+        asks, in exactly the un-representable state above. What an inert field
+        should hold is whatever is correct the moment it stops being inert, and
+        the property is pinned for every row rather than for the one that
+        failed.
+      - **`readCurrent`'s provenance loop walks `WIZARD_FIELDS`**, so a key
+        that is `covers`ed rather than asked is invisible to it. `confirmMode`
+        needed adding there beside `skipPermissions` — which had the same gap
+        and had therefore made `covers: ['skipPermissions']` inert since it was
+        written, because nothing ever added that key to the explicit set.
+    - **Nothing pinned `DEFAULT_TOOL_MODE`** before this — a security-relevant
+      default changeable with the whole suite green, which is exactly how it
+      got changed during a copy pass. `tool-modes.test.ts` reads it out of the
+      source (`settings-coverage.test.ts`'s move, since the constant is private
+      and `loadConfig` throws without a key) and pins it to the row the wizard
+      marks, so the default and the recommendation cannot drift apart.
+    - **Three tests were pinning the LABELS while claiming to test the decode.**
+      `setup-wizard.test.ts` wrote `'⚠ Unrestricted'` and `'Read-only'` as
+      literals, so a copy edit broke a test about whether one row writes two
+      settings keys. They read the label off `TOOL_MODES` now; which words are
+      on a row is that module's own test's business.
+  - **The part-2 audit found six more, and what they had in common is worth the
+    line.** Every one described its own MECHANISM well and never said what the
+    mechanism is for: tool mode explained what each of its three rows does
+    without saying that read-only means nothing reaches your machine unseen;
+    confirm mode named the thresholds but never that a prompt is your chance to
+    stop a call; the rewriter said you get "a better first answer", which is a
+    tautology; natural speech said what it rewrites but, worse, its closing
+    clause ("speech stays intelligible either way") argued AGAINST turning it
+    on. `autoCreateSpecialists` and `autoCreateApplets` never said what a
+    specialist or an applet gets you at all — only whether Bernard asks first.
+    The tell is the same each time: the sentence answers "what does this do"
+    twice and "why would I want it" never.
+  - **Part 2 of the formula is the one no test can hold, and it is the one that
+    goes missing.** Memory consolidation shipped this pass reading "Leave it off
+    and that pile only grows" — a consequence of NOT doing it, phrased as a
+    vague threat, with no statement of what doing it gets you and no cost at
+    all. Both are checkable-looking and neither is checkable: a word floor and a
+    second sentence pass happily on a description that says what a thing is
+    twice. The remedy is that the missing benefit is usually a measured fact
+    nobody put in the copy — here, that memory is re-sent on every DISPATCH (a
+    turn with three sub-agents pays four times), so a dead note costs tokens
+    forever, and past `MAX_PERSISTENT_MEMORY_CHARS` a live one starts being
+    dropped to make room for it. The cost has a mitigation worth naming too:
+    the pass runs in the detached exit worker, so it costs a call and no
+    latency.
+  - **Three stores were all called "notes" or "facts", and the copy could not
+    tell them apart.** `recallFilter` said "saved facts" (the RAG store),
+    `memoryConsolidation` "notes it has saved" (the memory store),
+    `specialistRecall` "notes from its own runs" (a per-specialist RAG store
+    plus owned memory notes) and `scratchSubjectThreshold` "working notes"
+    (in-memory scratch). Four questions, three stores, one vocabulary. They now
+    name their own: what Bernard **picked up from past conversations**, the
+    notes **you asked it to keep**, a specialist's **own** notes, and **rough
+    working** notes.
+  - **"Facts" is banned outright**, by test. It is what we call the RAG store
+    (`bernard facts`, `RAGStore`) and the word claims something the contents
+    have not earned — they are assertions a cheap model extracted from past
+    conversations, with a TTL and a dedup threshold, not truths.
+  - **The recall filter filters the RAG side and never the memory side**, and
+    the copy now says so, because the inverse is the natural reading. `#371`
+    hands it the `MemoryStore` read-only and takes back `memoryPriority`, which
+    `renderPersistentMemory` consults ONLY as packing order, and only once
+    `packMemory` already reports a drop — so it decides WHICH note is dropped
+    when you are over budget and never THAT one is. The sentence is pinned,
+    because it reads as padding and is the one thing on the screen that answers
+    "will this throw away what I told it to remember".
+  - **`sub-agent`, `specialist`, `applet` and `lineup` are ours**, and each is
+    glossed at the FIRST question that uses it, so a reader walking the sections
+    in order has met it before it is used plainly. The test asserts on the first
+    field to mention each term rather than on every field, which means moving a
+    section can fail it — correctly, since that is exactly what would put a term
+    in front of its own explanation. It caught one on arrival: `provider` and
+    `model` both said "lineup" two questions before `activeLineupId` explained
+    it.
+  - **No label or description may use one of our acronyms.** `Sub-agent PAC
+pipeline` was a live LABEL — PAC names three phases of an internal pipeline
+    to someone who already knows the pipeline, and nothing at all to the person
+    meeting the screen on their first run. It is `Sub-agent self-review`, and
+    the banned list is short on purpose: the acronyms this repo uses about
+    itself, not a general prose rule.
+  - **Every question owes the trade, not only the mechanism**, and the sweep to
+    make that true is what turned three one-off rewrites into a rule. The old
+    copy named what a setting was and stopped — `Integer 1-20.` was a real
+    description, and `Which colors the terminal uses.` was as much as most of
+    the rest said — which answers a question nobody is asking. A reader at a
+    settings page is asking "is this one for me", and that needs four things:
+    what it is for, what it buys, what it costs, and the condition under which
+    the cost is not worth paying. `settings-coverage.test.ts` asserts the SHAPE
+    rather than the judgement — a word floor that the type-naming descriptions
+    would fail, a second sentence (one sentence can only say what a thing is),
+    and no parenthetical gloss on any row label anywhere. Word counts land
+    between 21 and 62; the long end is a list question that has to name four
+    rows, and the short end is the theme picker, which genuinely has no trade.
+  - **A description for a mode question owes the TRADE, not examples.** The
+    question a reader brings is "which of these is right for me", and a list of
+    examples cannot answer it — the examples are always someone else's work. So
+    the coordinator question states what planning buys (reliability on a task
+    with several steps), what it costs (turns and time), and the condition under
+    which the cost buys nothing (work that was only ever one step). A reader who
+    knows the shape of their own work can then settle it, and the two `Always`
+    rows are the two ends of that same sentence. `coordinator-modes.test.ts`
+    asserts the four claims rather than the sentence, because the wording will
+    be revised and the obligation will not.
+  - **The reserved note row is reserved as exactly ONE row, and had to be
+    truncated to keep that true.** The comment above it already claimed the
+    height could not depend on the cursor; it could, through the CONTENT — a
+    note wider than the card wrapped to two rows, so the card grew as the
+    cursor passed and shrank on the way back. Bounding it is the structural
+    guard; keeping each note under about fifty characters is what stops the
+    guard from firing and cutting a sentence mid-word.
+- **The provenance note says where a value came FROM, never what it IS.** It
+  read `Currently On, saved in this profile.` above a row already carrying a `✓`
+  on `On` — the same fact twice, and on a text step the buffer shows it too. A
+  sentence that has to point at what is already on screen is a sign the screen
+  was not obvious enough, not a fix for it. What is left is the half a reader
+  cannot see: `Saved in this profile.`, `Set by BERNARD_X — changing it here
+overrides that.`, or `Recommended.` — the last being useful where `(default)`
+  was not, since "default" repeats where the value came from and "recommended"
+  answers the question the reader is actually asking. `Not set.` survives as its
+  own case, because it is the one thing no row can show: a blank buffer looks the
+  same whether the value is empty or absent.
+- **Each question says what the setting is FOR, not only what it does.** The
+  descriptions were one terse line apiece (`How aggressively to prompt before
+running risky tools.`), which tells a reader what the words mean and nothing
+  about whether to change it. They are two short sentences now — what it does,
+  then why you would want it — in plain words, which is `PLAIN_LANGUAGE_RULE`'s
+  register applied to the surface a new user meets first.
+  - **That growth exposed a wrapping defect the short lines had hidden.** Ink
+    wraps with `trim: false`, keeping the break space at the START of a
+    continuation line — and only where the break lands after one, so the left
+    edge came out ragged on some lines and straight on others. `StepHeader`
+    pre-wraps through `wrapText` now, which is what the info step already did
+    for exactly this reason. The guard needs a fixture with a RAIL: the rail
+    narrows the content column, and at the full width the same text wraps
+    cleanly and the test passes with the pre-wrap deleted.
+- **`WizardSpec.masthead` signs the screen** — a small line, `BERNARD_BANNER`'s
+  block lettering, and the tagline under it on the right. The block is CENTRED in
+  the card and its parts hang on the BLOCK's own edges, not the card's, so the
+  small line sits at the lettering's left shoulder and the tagline at its right —
+  which is what makes them read as belonging to the name rather than to the box
+  below it. Sized to its widest part rather than to the banner, or a tagline
+  longer than the lettering would be right-aligned into space the block does not
+  own and spill past it. Opt-in, and every part supplied by the caller: `WizardCard` also
+  draws every `ask_user` batch the model raises mid-turn, and a product splash
+  over a clarifying question would be signing the wrong thing — a hard-coded
+  banner in the overlay would make that unavoidable rather than a choice.
+  `runSetupFlow` adds it in ONE place rather than each spec builder, because
+  setup is five wizards and one journey: a builder that forgot would put an
+  unsigned screen mid-sequence with nothing to notice.
+  - **Dropped whole below its own width**, the rule the rail follows and for the
+    same reason: block lettering cannot reflow, so a banner that does not fit is
+    worse present than absent. Measured with `stringWidth`, not `.length` — the
+    rows are box-drawing today and a future banner need not be.
+- **The 31 questions are a starting point, not the answer.** This phase exists to
+  be walked end to end so the day-one subset can be chosen from experience.
+  Trimming, and the splash copy that says what Bernard is, are follow-ups.
 
 ## Key Patterns
 
@@ -720,7 +1437,7 @@ Profile switching mid-session calls `applyProfileToConfig(config)` (`src/config.
   - **`<sanitizedServer>_<6hex>__<tool>`, and both halves of that are load-bearing.** **Prefix, not suffix**: `isReadOnlyMCPToolName` (`risk.ts`) matches a read verb at either END of the name, so a suffix would silently reclassify every read-only MCP tool as a write. A prefix would survive even that, but only because the classifier strips the namespace itself before segmenting — a coupling worth keeping visible rather than a coincidence to lean on. **The hash buys stability, not collision-avoidance**: server names are already unique as `mcp.json` object keys, but their _sanitized_ forms are not (`my.server` and `my-server` both collapse to `my_server`), and the previous answer was a numeric suffix assigned in iteration order — so editing `mcp.json` could renumber a **different** server's key, and that key is persisted in permission grants and tool-profile filenames. `mcpToolName` guarantees ≤ 64 characters (Anthropic and OpenAI enforce that server-side, and neither SDK validates locally, so a violation is a runtime API 400 rather than a startup error) via a three-rung ladder: R0 readable, R1 drops the human label but keeps the hash and the whole tool name, R2 cuts the tool through the middle around a 4-hex hash of the original. Today's worst case is R0 at 54 chars. Risk is classified from the **raw** name kept on a `RegisteredTool` envelope rather than re-derived from the key, because an R2 key ends in the tool's tail, not its verb.
   - **Two invariants that would fail silently.** `meta.name` must move with the registry key — the permission and block gates key on the registry key while `framework/tools/result-cache.ts` keys on `meta.name`, so namespacing one without the other splits them; a test asserts they are equal for every registered tool. And `getLiveRegistration` maps probe names **forward** (`own[mcpToolName(name, t)]`): `verifyMCPServer` probes a server in isolation and reports the **raw** names it exports, so comparing them against namespaced keys reports every tool of every healthy server as `missing`, which `mcp_verify` renders as ⚠ — the signal the `mcp-manager` specialist has previously answered by deleting a correct config (see **Verdicts and Step Limits**). `mcp-verify.test.ts` mocks `getLiveRegistration`, so it cannot catch that; the guard is an integration test in `mcp.test.ts` driving the real function with real raw probe names.
   - **`LiveRegistration.shadowed` is gone**, along with the "Name collision / last-writer-wins" copy in `mcp-verify.ts`. It could only ever have been `[]`, and a permanently-empty field feeding user-facing prose about a mechanism that no longer exists is worse than no field. An MCP tool also can no longer shadow a Bernard **built-in** through `createTools`' trailing spread (`shell`, `memory`, `web_search`, `wait`, `cite`, `file_write` were all reachable, replacing Bernard's gated implementation _including its risk metadata_) — that hazard closed for free rather than needing a guard.
-  - **Migration is a lazy alias, never a rewrite.** Four persisted surfaces name a tool as a plain string: profile permission grants (`profiles.json`, matched by strict equality in `permissions/engine.ts`), specialist `targetTools` (exact lookup, **silent** drop — `{}` is a supported state since #331), tool profiles, and `BERNARD_LOOKUP_TOOLS`. A stored bare name resolves only when exactly one live server exports it; ambiguous fails closed and the user is asked again. `mcpAliasResolverFor` (`framework/agents/mcp-alias.ts`) builds the index from `ctx.mcp.tools` — **the whole live surface, never the caller's registry**: inside a `delegate_<server>` helper the dispatch's registry holds one server, so a locally-built index would call an ambiguous name unambiguous and honour a grant the user made while a different server owned it. Tool profiles additionally seed forward (`ToolProfileStore.ensureSeeded`), because `resolveProfileKey`'s `includes('__')` branch was **dead** — Bernard registered bare names — so 109 profiles on one real install were keyed indistinguishably from built-ins and would have been orphaned wholesale. Seeding runs in its own try: sharing `recordOutcome`'s catch meant any failure silently skipped the record that followed. `buildToolProfilesPrompt` now takes `liveKeys` and drops superseded and orphaned `mcp.*` profiles — it is otherwise unfiltered and sorts by `errorCount` descending, so a dead high-error profile outranks live tools at the 4000-char budget. Its comment claiming "the registry is not in scope here anyway" was stale; the live call site `framework/agents/main.ts` has `ctx`.
+  - **Migration is a lazy alias, never a rewrite.** Three persisted surfaces name a tool as a plain string: profile permission grants (`profiles.json`, matched by strict equality in `permissions/engine.ts`), specialist `targetTools` (exact lookup, **silent** drop — `{}` is a supported state since #331), and tool profiles. A stored bare name resolves only when exactly one live server exports it; ambiguous fails closed and the user is asked again. `mcpAliasResolverFor` (`framework/agents/mcp-alias.ts`) builds the index from `ctx.mcp.tools` — **the whole live surface, never the caller's registry**: inside a `delegate_<server>` helper the dispatch's registry holds one server, so a locally-built index would call an ambiguous name unambiguous and honour a grant the user made while a different server owned it. Tool profiles additionally seed forward (`ToolProfileStore.ensureSeeded`), because `resolveProfileKey`'s `includes('__')` branch was **dead** — Bernard registered bare names — so 109 profiles on one real install were keyed indistinguishably from built-ins and would have been orphaned wholesale. Seeding runs in its own try: sharing `recordOutcome`'s catch meant any failure silently skipped the record that followed. `buildToolProfilesPrompt` now takes `liveKeys` and drops superseded and orphaned `mcp.*` profiles — it is otherwise unfiltered and sorts by `errorCount` descending, so a dead high-error profile outranks live tools at the 4000-char budget. Its comment claiming "the registry is not in scope here anyway" was stale; the live call site `framework/agents/main.ts` has `ctx`.
 - **Claim↔source verification (#417).** A research answer's factual claims are checked against the sources they cite, in code, and an unsupported claim **fails the run**. The measured failure mode is not fabricated URLs — SourceCheckup found ~100% URL validity alongside **55% response-level support**, with ~30% of statements unsupported by the page cited: the citation looked right and the page did not say it. So `extractCitationMarkers`' existing check (does the cited id exist in the store?) is necessary and nowhere near sufficient.
   - **`src/claim-verifier.ts` fails CLOSED**, which is the deliberate difference from every other sub-call. `prompt-rewriter` / `recall-filter` / `reference-resolver` fail OPEN because their neutral outcome is "today's behaviour"; here the neutral outcome would be an unchecked answer wearing a checked answer's clothes, so an unparseable verdict, an unregistered source id, and a thrown error all yield `fail`. Same reasoning as `pac-critic`'s parse handling. Empty claims yields `warn`, not `pass` — an answer asserting nothing checkable has nothing to verify, and that is a fact worth surfacing.
   - **The quote check is not an LLM call.** String containment against `SourceItem.verifyText` is deterministic, free, and cannot be argued out of its answer. Only the softer "does this text support this claim" judgement needs a model. Whitespace is collapsed on both sides because markdown conversion rewraps lines and a faithfully copied span can differ by line breaks alone; nothing else is normalised. Claims are checked **independently and in parallel** — batching invites the model to rationalise a weak claim from a strong neighbour, which is the failure the pass exists to catch.
@@ -844,7 +1561,7 @@ On first run, files are auto-migrated from `~/.bernard/` to XDG locations. A `~/
 - `BERNARD_PROVIDER_STALL_TIMEOUT_MS` — Time-to-first-byte cap on every LLM completion (#302), default `90000`; `0` or a non-numeric value disables it. A provider can accept the POST and then go silent — no headers, no bytes, and no error for the SDK to surface. Nothing bounded that: the only backstop was **undici's 300 s `headersTimeout`**, and since the AI SDK retries by default a single stall could wedge a turn for ~15 minutes (observed: a 300,837 ms request, then a retry, then the user pressed Esc). The guard (`src/providers/stall-guard.ts`) is injected as a custom `fetch` into every built-in and custom client from `src/providers/index.ts`, and covers the **header** await plus, since #350, a separate body-inactivity budget (`BERNARD_PROVIDER_BODY_IDLE_TIMEOUT_MS`). This entry used to say it "covers only the header await — once the response exists the body streams untimed", and that was **false for four months**: the budget was an `AbortSignal.timeout` passed as `init.signal`, and a signal handed to `fetch` stays bound for the whole response lifetime, so it was also a hard 90 s deadline on the BODY. Real traffic came within 4.5 s of it — a step measured 85,447 ms returning 1,295 bytes, a reasoning model working correctly. Worse, because `await fetch(...)` had already resolved, the `catch` never ran: a stalled body surfaced as a raw `TimeoutError` with none of the message below, and no `provider:stall` line. The fix is one `clearTimeout` in a `finally` — pinned by a test that needs all three of a short header budget, headers that beat it, and a body that then legitimately outlives it, since every other test in that file uses a generous budget and a mutation check found them all green with the leak reinstated. 90 s is 3.3x the worst legitimate TTFB measured across 1,230 real requests (p50 1.8 s, p99 13.3 s, max 27.4 s). A dead connection now costs **one** budget, not three: the guard throws a plain `Error`, and the AI SDK only retries a `TypeError('fetch failed')` that it wraps as a retryable `APICallError` — so a stall is never retried. (That is also what produced the original ~15 min: undici's timeout _does_ surface as `TypeError: fetch failed`, so it was retried twice.) Both the budget and the underlying `fetch` are resolved **per request**, never captured at module load — `.env` is parsed later by `loadConfig`, and `installInstrumentedFetchIfDebug()` patches the global later still, so capturing either one broke it silently (the second disabled the `http:*` events documented above for diagnosing this very failure). The thrown error is deliberately **not** an `AbortError` — the REPL treats those as "user pressed Esc" and renders nothing, so a stall surfaced that way would silently swallow the turn; it is a plain `Error` whose message contains "timed out", which `error-taxonomy.ts` classifies as `timeout` for free. A caller's own abort still propagates untouched, so Esc keeps reading as Esc.
 - `BERNARD_STREAM_STALL_TIMEOUT_MS` — Mid-stream stall cap on the streaming branch (#325), default `120000`; `0` or a non-numeric value disables it. The sibling of the first-byte guard above: that one bounds the wait for _headers_, this one bounds the silence _after_ they arrive. A stream that dies mid-body was previously bounded only by undici's 300 s `bodyTimeout` — five minutes of a dead turn, unattended. The guard reuses the existing `agent:dispatch:stuck` watchdog, which needed two changes to work. First, **its progress signal was wrong**: `lastStepEndAt` moves only at step boundaries, so it climbs monotonically while tokens pour in and aborting on it would kill healthy long steps. `runStreaming` now stamps `lastProgressAt` on every part pulled off `fullStream` — the one point in the process that knows a byte arrived — stamped _before_ per-part branching so part types the switch ignores (`reasoning`, `step-start`) still count as liveness. Second, **the watchdog was debug-gated**, which would have meant the guard protected only sessions someone already suspected, never the unattended cron run that needs it; it now runs whenever a budget is set (still `unref()`ed, so it cannot hold the event loop open). The clock **pauses while a tool is executing** (`inFlightTools`, counted from `tool-call` / `tool-result` parts): `fullStream` goes silent for the whole span of a `task` / `subagent` / MCP call, which is legitimately minutes, so pausing keeps the guard's teeth instead of raising the budget past the false positive. A tool-result that never arrives leaves the count above zero and disables the guard for the rest of that dispatch — fail-open, because losing the guard costs a slow failure while a false abort costs completed work. 120 s is deliberately **above** the 90 s first-byte budget: an agent loop runs every step inside one `streamText` call, so the HTTP round trip opening step N+1 happens _inside_ the stream with no parts flowing, and a lower budget would race the first-byte guard and misreport a slow-but-live request. The watchdog tick tracks `min(30 s, budget)` so a user-configured small budget isn't silently rounded up to the 30 s period. **Scope, precisely: this is main-agent-only.** `useStreaming` is `sink !== null` and the sink is registered only by `<App>`; `streaming: true` is declared on exactly one definition (`main`). So the guard covers the main agent in a mounted Ink REPL and nothing else — not cron, sub-agents, tool wrappers, PAC phases, or delegate helpers, which are all non-streaming and resolve `stallMs === null` (and therefore register no watchdog at all). That is the opposite of where an unattended hang hurts most, and it is a property of the layer rather than an oversight: a per-part clock can only exist where parts exist, and `generateText` is one opaque await. Those paths stay covered by the first-byte guard plus step boundaries. Covering them properly means moving body-inactivity detection down to `providers/stall-guard.ts`, which already wraps every client's `fetch` for the first-byte case and would also make `inFlightTools` unnecessary — each agent step is its own HTTP request, so at the fetch layer there is no tool-execution silence to pause for. Filed as a follow-up. Like #302 the abort is re-shaped into a plain `Error` containing "timed out" rather than surfacing as a bare `AbortError` (which the REPL renders as nothing), so `error-taxonomy.ts` classifies it as `timeout` for free.
 - `BERNARD_PROVIDER_BODY_IDLE_TIMEOUT_MS` — Body-inactivity cap at the transport layer (#350), default `120000`; `0` or a non-numeric value disables it. Measured **between chunks**, never from request start, and that distinction is the whole point: a fixed deadline cannot tell a model generating steadily for 85 s from a connection that said nothing at all, and every chunk restamps the clock so only the second trips it. Implemented as a `TransformStream` wrapped around `res.body` in `stall-guard.ts` — verified that re-wrapping survives `.clone()`, which #350 names as the risk, since the AI SDK clones responses and breaking it would break every provider call rather than only a stalled one. The controller is errored with our own branded error **before** the socket is torn down, so the consumer sees a stall rather than racing us to a bare `AbortError`. Unlike `BERNARD_STREAM_STALL_TIMEOUT_MS` this covers **every** dispatch — cron, sub-agents, tool wrappers, PAC phases, delegate helpers — because it sits under `fetch` rather than at the `fullStream` abstraction, which closes the asymmetry #350 documents. It needs no `inFlightTools` equivalent for the reason that issue gives: the AI SDK issues its own request per agent step and the body closes before tool execution begins, so at this layer there is no tool-execution silence to pause for. Only `res.ok` responses are guarded — an error body is small and read immediately by the SDK's own error path, so watching it adds a failure mode and protects nothing. `producedOutput` is reported conservatively as "any chunk at all arrived", because a chunk that reached the SDK may already have become a `text-delta` on screen. **The two body guards overlap rather than nest and either may win**: this one is per-request and cannot see across the several HTTP requests one `fullStream` is assembled from; the runner's can, but pauses for tools and exists only on the streaming branch. Both brand their error identically, so recovery does not care which fired. The runner's `inFlightTools` watchdog is deliberately **not** retired here — removing a working liveness guard in the same change that rewrites the layer beneath it doubles the blast radius.
-- **How the transport budgets nest** (#329), outermost first: `BERNARD_DISPATCH_TIMEOUT_MS` (opt-in, whole dispatch, spans every step and every tool call) → `BERNARD_STREAM_STALL_TIMEOUT_MS` (120 s, silence across one `fullStream`, main agent only, pauses for tools) → `BERNARD_PROVIDER_BODY_IDLE_TIMEOUT_MS` (120 s, silence within one HTTP response body, every dispatch) → `BERNARD_PROVIDER_STALL_TIMEOUT_MS` (90 s, wait for that response's headers, every dispatch). The four narrower per-call budgets sit **inside** all of these: `PROBE_TIMEOUT_MS` (15 s, `model-validate.ts`), `BERNARD_MCP_CONNECT_TIMEOUT_MS` (15 s), `FETCH_TIMEOUT_MS` (5 s, `catalog.ts`), `LOOKUP_TIMEOUT_MS` (5 s, `reference-tool-lookup.ts`). Only the two stall guards are recoverable — see the recovery loop below; a dispatch timeout is a wall clock the operator set and retrying past it would defeat what they asked for, which is why `runner.ts` brands the stall arm and not the timeout arm.
+- **How the transport budgets nest** (#329), outermost first: `BERNARD_DISPATCH_TIMEOUT_MS` (opt-in, whole dispatch, spans every step and every tool call) → `BERNARD_STREAM_STALL_TIMEOUT_MS` (120 s, silence across one `fullStream`, main agent only, pauses for tools) → `BERNARD_PROVIDER_BODY_IDLE_TIMEOUT_MS` (120 s, silence within one HTTP response body, every dispatch) → `BERNARD_PROVIDER_STALL_TIMEOUT_MS` (90 s, wait for that response's headers, every dispatch). The three narrower per-call budgets sit **inside** all of these: `PROBE_TIMEOUT_MS` (15 s, `model-validate.ts`), `BERNARD_MCP_CONNECT_TIMEOUT_MS` (15 s), `FETCH_TIMEOUT_MS` (5 s, `catalog.ts`). Only the two stall guards are recoverable — see the recovery loop below; a dispatch timeout is a wall clock the operator set and retrying past it would defeat what they asked for, which is why `runner.ts` brands the stall arm and not the timeout arm.
 - **A stall is retried, not fatal** (`src/framework/agents/stall-recovery.ts`). Both stall guards brand their error via `markProviderStall` (`error-taxonomy.ts`), and `runWithStallRecovery` wraps the single `runAgent` call at the end of `innerIterate` — the point at which `system` and `messages` are already materialised, so a retry re-sends byte-identical input with no context re-assembly and `recordDispatchContext` records once for all attempts. Three attempts total. **The gate is `producedOutput`**: `OutputSink` is append-only with deliberately no reset, so re-running a dispatch that already emitted a `text-delta` prints a second copy beside the first and the answer visibly stutters. That is not a narrow carve-out — a provider that goes quiet usually does so before saying anything, which is exactly the observed incident (`stepsCompleted: 0`, zero parts) — and it carries the accounting too, since with no step finished no hook ran and there is no usage row to double-count. Known under-count, stated rather than hidden: the dead attempt's prompt tokens _were_ billed and are recorded nowhere; small next to the cache-read rate (49,152 of 49,493 prompt tokens were cache reads in the incident), and the alternative is inventing a usage row for a call that produced no usage report. **Retries get a shorter clock** (`STALL_RETRY_BUDGET_MS`, 30 s) threaded as `AgentSpec.stallTimeoutMs` and applied as `min(configured, override)` everywhere, so it can only shorten and an off switch stays off: three attempts at the full budget is a six-minute spinner, which is a worse product than the bug, while 30 s still clears the 27.4 s worst legitimate TTFB. Backoff is ~1 s then ~3 s with jitter — deliberately small, since the failure already cost a 90–120 s budget. **Retries are silent**; only exhaustion announces, as an `<ErrorPanel>` whose message contains `timed out` so `classifyError` supplies the title and `playbook.user` hint with no new vocabulary. The loop lives in the caller because `AgentSpec`'s own docstring says _"the runner is intentionally policy-free: retry loops … live in the caller"_; the runner only reports which guard fired and whether anything reached the sink. The exhausted error **keeps the original error's name**, so a mid-stream stall still carries `DISPATCH_ABORT_NAME` and the five dispatch boundaries unwind rather than handing the model a stall dressed as a successful tool result. It must never become SDK-retryable (still a plain `Error`, never a `TypeError`), or Bernard's three attempts multiply with the SDK's three into nine requests — the over-billing #308 measured.
 - `BERNARD_CRON_JOB_TIMEOUT_MS` — Per-job wall clock for headless cron runs (#326), default `1800000` (30 min); `0` disables. Overridden per job by `CronJob.timeoutMs`. Cron used to call `runDefinition` with **no `abortSignal`** — it had none to give — and nothing in `src/cron/` was a job-level clock (`shellTimeout` is per-tool). Two consequences, the second much worse than the first: `runNonStreaming` skips its defensive abort race entirely when the signal is undefined (`if (!abortSignal) return gen`), so headless runs had _less_ protection than interactive ones; and `Scheduler.executeJob` increments `runningCount`, awaits, and decrements only in `finally`, so a hung job held its slot forever — once `runningCount` reached `maxConcurrent` every later fire went onto `this.queue` and never drained, because `drainQueue` only runs from a completing job's `finally`. One stuck job silently stopped the whole scheduler, with no operator present and the store row reading `lastRunStatus: 'running'` until the next daemon restart's stale sweep. Defaulted rather than opt-in because every job that exists predates the field, and those are exactly the ones that can wedge the scheduler. The abort is re-shaped into a message the taxonomy reads as `timeout`, and **severity is escalated to `critical` at that one site**: `timeout` is `low` in `error-taxonomy.ts`, which is right for an ordinary tool timeout and wrong for a job that was holding a scheduler slot and queueing every later fire behind it. Escalating in the cron runner rather than in the shared table keeps the taxonomy from having to know about cron — `Classification.severity` is documented on the interface as "Drives cron alert severity", and cron is in fact its only live consumer today (the other consumer is the in-thread failure hint added by #353, which colours `category · recovery hint` by severity). Severity and the user-facing alert text are keyed on the same fact and so are resolved together; split across two ternaries, an edit to one reads as complete. The scheduler carries a second, longer backstop (`SLOT_RELEASE_GRACE_MS`) that releases the slot even when the hang is somewhere the job's own abort cannot reach — the timer starts after `mcpManager.connect()` and the pre-run RAG search, and `mcpManager.close()` runs after it is cleared, so a stdio child ignoring SIGTERM would otherwise still wedge the queue. The two layers answer different questions: the abort stops the _work_, the race guarantees the _slot_ is freed.
 - **Child dispatch cancellation (#327, #351)** — `subagent`, `specialist-run`, `delegate-dispatch`, `task` and `tool-wrapper-run` each wrap their `runDefinition` call in a catch-all that shapes the error into a tool result. That is right for a work failure — a failed MCP call is a legitimate tool result the model should see, and stringifying it preserves the useful behaviour where a model recovers from a failed sub-task on its own — and wrong for a cancellation, which arrives at the parent as a _successful_ tool result it reads as data and loops on. Most visibly, a user's Esc during a child dispatch became `Sub-agent failed: Aborted` while the parent kept running until its own signal tripped. Note there are **five** such boundaries: the first pass patched three, and the two it missed (`task`, `tool-wrapper-run`) both pass `abortSignal` too — an identical two-line paste missing 40% of the sites is the signature of a fix that wants to be one layer down. **Since #351 that layer exists**: `runDispatchOrFail(fn, onFailure)` (`src/tools/dispatch-failure.ts`) owns the try/catch, the re-throw and the `err instanceof Error ? err.message : String(err)` extraction, and delegates only the shaping; the five sites read `withSlot(() => runDispatchOrFail(work, shape), exhausted)`. `onFailure` is a callback for the same reason `withSlot`'s `onExhausted` is: three sites owe the model a string whose `Error:` prefix `detectResultFailure` reads (#364), `task` a `ToolResult` envelope, `tool-wrapper-run` a `WrapperResult` — shapes their own contracts dictate and tests assert verbatim, converging only in that `error-taxonomy.ts` classifies all of them. It is a sibling module of `agent-pool.ts` rather than part of it: the two compose at every site but answer different questions (slot lifecycle vs. failure shaping), and `agent-pool.ts` is a leaf with nothing behind it but `node:async_hooks`. It does **not** own the try SCOPE — `delegate-dispatch` deliberately protects its tool-registry assembly and PAC self-escalation branch too, so each site passes the region it means to protect. The guard against a sixth boundary omitting it is behavioural, not structural: a call site can still hand-roll a catch and typecheck, so each of the five pins the re-throw with its own cancellation test (removing the re-throw from the combinator fails all five). #351 also deleted `framework/dispatch.ts`'s `createDispatchTool` — a zero-caller "shared factory" with no try/catch, no pool handling, no pre-flight guards and no `telemetrySite` passthrough, which two of these files already carried comments explaining why they could not use. `isDispatchCancellation` (`src/error-taxonomy.ts`) is the single predicate all five consult, and it matches on `Error.name` only: a real `AbortError` (the user's signal or a provider-side cancellation), or `DISPATCH_ABORT_NAME`, which the runner stamps on aborts it fired itself (the stall guard, `BERNARD_DISPATCH_TIMEOUT_MS`). **"Any timeout" is deliberately not the rule.** It was, briefly, and an existing test caught it: `new Error('network timeout')` classifies as `timeout`, and the taxonomy itself marks that category `retryable: true` — a provider network blip is exactly the failure a model should be told about and work around, not a reason to unwind the turn. Our own aborts therefore need a distinct **name**, because neither alternative works: not `AbortError`, since the REPL renders nothing for those and the turn would vanish silently; and not the message, since ours and the provider's both say "timed out". `classifyError` alone cannot answer even the `AbortError` half — a `DOMException` named `AbortError` carries the message `"Aborted"`, matching neither `\bcancelled\b` nor `aborted by user`, so it classifies as `unknown`. Re-throwing is safe for the pool because `runHoldingSlot` (#317) releases in a `finally`. The predicate **walks `cause`**, because one of these boundaries can sit inside another and the AI SDK rewrites the error in between: a throw out of `tool.execute` is wrapped in `ToolExecutionError` (`name: 'AI_ToolExecutionError'`) — directly on the non-streaming path, and via an `error` part that `runStreaming` re-throws on the streaming one. Reachable today as main → `agent` → `delegate_<server>`, since sub-agents carry delegate tools; without the walk a cancellation stops propagating after exactly one level — the same bug, one frame up. The walk is depth-bounded rather than `while (cause)`: error chains are built by providers and MCP servers, and a cycle would hang the catch handler.
@@ -853,7 +1570,7 @@ On first run, files are auto-migrated from `~/.bernard/` to XDG locations. A `~/
 - `BERNARD_MODEL_MODE` — Multi-model assignment policy (#170): `off | optimize-tokens | balanced | optimize-performance` (default: `off`). See the "Model Mode" section above.
 - `BERNARD_SUBAGENT_PAC` — Route sub-agent dispatch through the PAC (Planner → Actor → Critic) pipeline instead of the legacy single-agent path (default: true). Each phase is a distinct `AgentDefinition` with its own ephemeral history, tool subset, and step budget (20% / 60% / 20% of the sub-agent allotment). On critic `fail` the orchestrator re-plans with critic feedback and re-runs the actor once (`PAC_MAX_RETRIES = 1`); after final failure the actor output is returned with a `## Critic Verdict: FAIL` footer. Set to `false` to fall back to the legacy `sub` definition. See `src/framework/pac/run-pac.ts`.
 - `BERNARD_SUBAGENT_RESULT_MAX_CHARS` — Max characters returned from a sub-agent / specialist into the parent agent's context, default 4000. The user still sees full output in the terminal.
-- `BERNARD_AUTO_CREATE_SPECIALISTS` — Auto-create specialists above confidence threshold (default: false)
+- `BERNARD_AUTO_CREATE_SPECIALISTS` — Auto-create specialists above confidence threshold (**default: true** since #447). The asymmetry with `autoCreateApplets` beside it is the argument: promoting a specialist is one JSON write, visible in `/specialists` and deletable there, while an applet is a manifest, a page, a bound agent, an origin and a launcher. What this decides is only whether the detector's result waits for a yes.
 - `BERNARD_AUTO_CREATE_THRESHOLD` — Confidence threshold for auto-creating specialists and applets, 0-1 (default: 0.8)
 - `BERNARD_AUTO_OPEN_APPLETS` — Open a newly built applet in the browser (default: **on**; set `false`/`0` to opt out). Deliberately the inverse default of its `autoCreate*` neighbours: the defect it fixes is "the thing I asked for never appeared", and the environments where opening is wrong (headless, SSH with no display) are **detected** by `canOpenBrowser` rather than defaulted around. `create` only, never `update`. Profile-scoped.
 - `BERNARD_AUTO_STYLE_APPLETS` — Hand a newly created applet to the design pass (`applet-styler`) before it opens (default: **on**; `false`/`0` to opt out). Same inverse default and the same reasoning as its neighbour above: the defect is that the thing the user asked for arrives looking unmade. It costs one dispatch on an action taken rarely and deliberately, and it is the **only** path on which that specialist runs — before this it had no caller anywhere in the tree. `create` only; `update` never styles, so a caller who wants their exact bytes kept can create and then update. Profile-scoped.
@@ -870,8 +1587,7 @@ On first run, files are auto-migrated from `~/.bernard/` to XDG locations. A `~/
 - `BERNARD_CORRECTION_ENABLED` — Run the correction agent at session close to learn from tool-wrapper failures (default: true)
 - `BERNARD_PROMPT_REWRITER` — Run the model-specific prompt rewriter as a pre-turn LLM pass (default: true). Fails open to the original prompt on any error.
 - `BERNARD_RECALL_FILTER` — Run the RAG recall filter as a pre-turn LLM pass (default: true). Widens RAG retrieval (moderate: cosine ≥ 0.28, top-8/domain, cap 24 candidates — looser than the retrieval defaults of 0.35 / 5 / 15) and has a cheap-tier `recall-filter` site model select only the candidates relevant to the current conversation before they reach the main agent's `<recalled_context>`. Reduces context distraction from topically-similar-but-irrelevant recalled facts. Fails open at every stage to the legacy narrow `ragStore.search()` (so `false`, no candidates, or any LLM/parse error reproduces today's behavior exactly). Profile-scoped; toggle via `/agent-options → Recall filter`. Interactive-REPL only (cron is unaffected). See `src/recall-filter.ts`.
-- `BERNARD_REFERENCE_LOOKUP` — When the reference resolver returns `unknown`, attempt one read-only tool lookup (e.g. a Google Contacts MCP) before prompting the user for free-form text (default: true). The tool-execution stage is hard-capped at 5 s via `Promise.race` (resilient to MCP tools that ignore `abortSignal`); the surrounding LLM `select`/`interpret` calls respect the parent abort signal. Fails open at every stage. See `src/reference-tool-lookup.ts`.
-- `BERNARD_LOOKUP_TOOLS` — Comma-separated tool-name allowlist additions for the resolver lookup pass (additive over the built-in MCP read-only suffix patterns + `web_search` / `web_read`). Use sparingly — only allow tools that are read-only.
+- `BERNARD_REFERENCE_LOOKUP` / `BERNARD_LOOKUP_TOOLS` — **Removed (#447).** They gated `reference-tool-lookup.ts`, which had no production caller; see the entry above. Nothing reads either variable now, so setting one is inert rather than an error.
 - `BERNARD_VOICE` — Enable TTS for assistant responses (`true` or `1`, default: `false`). macOS uses `say`, Linux probes `spd-say` → `espeak-ng` → `espeak`, Windows uses PowerShell System.Speech. Toggle in the REPL via `/voice on`/`/voice off`. STT is a planned follow-up. See `src/voice-service.ts`.
 - `BERNARD_VOICE_VOICE` — Named voice passed to the backend (e.g. `Daniel` on macOS `say`, `en-us+f3` on espeak). Unset uses the backend's own default. Profile-scoped; settable from `/voice`, which since #432 is the first UI that reaches it. **Not validated** — a typo'd name makes the backend exit non-zero and speech silently does nothing, which is why the `/voice` menu's test row surfaces the rejection instead of swallowing it.
 - `BERNARD_VOICE_NORMALIZER` — Run the LLM **speech text normalization** pass before speaking an assistant reply (#432), default `true`; opt out with `=false` / `=0`, or per-invocation with `bernard --no-voice-normalize`. Converts the written form into a spoken one — links named rather than spelled, ambiguous numbers read as their actual semiotic class, tables read as sentences. Gates **only** the LLM half: the deterministic pass (markup stripping, phone numbers, currency, units, ISO dates) is unconditional because it is free and cannot be wrong. Speech path only — the transcript and persisted history stay literal either way. Cheap tier via the `speech-normalizer` site, temperature 0, LLM subcall cache, fails open to the deterministic form at every stage. Profile-scoped; toggle via `/voice → Natural speech`. See `src/speech-text.ts` / `src/speech-normalizer.ts`.
@@ -880,8 +1596,8 @@ On first run, files are auto-migrated from `~/.bernard/` to XDG locations. A `~/
 - `BERNARD_VOICE_WARMUP_MS` — Milliseconds of silence played through the audio sink immediately before each TTS utterance, to wake a suspended output device so the first words aren't clipped (default: 400; 0 disables). Linux-only effect: it requires a playback binary (`pw-play` / `paplay` / `aplay`) and is a no-op on macOS/Windows (those keep output devices responsive) or when none is installed. The mitigation exists because PipeWire/PulseAudio suspends idle sinks — HDMI links especially take a few hundred ms to re-establish — clipping leading audio; the silent buffer flows through the same audio layer to wake the device first. Profile-scoped. See `src/voice-service.ts` (`resolveWarmupPlayer` / `buildWarmupCommand` / `buildSilenceWav`).
 - `BERNARD_FULLSCREEN` — Render the REPL in the terminal's **alternate screen buffer** (full-screen, vim/htop style), default `true`. Set to `false` for the legacy inline rendering (Ink `<Static>` + native terminal scrollback) on dumb terminals / CI. Full-screen is only entered on a real TTY (`process.stdout.isTTY`); piped/non-TTY output always uses legacy rendering regardless of this flag. `src/ui/withFullScreen.ts` owns the enter/exit escapes (`?1049h/l` alt buffer, `?25l/h` cursor, plus mouse) and registers `exit`/`SIGINT`/`SIGTERM`/`SIGHUP`/`uncaughtException`/`unhandledRejection` handlers so the terminal is always restored; `src/index.ts` calls `teardown()` **before** `cleanup()` so post-unmount `printInfo`/`printError` land on the restored normal screen. Env-only (not profile-scoped).
 - `BERNARD_DISABLE_MOUSE` — Opt out of mouse-wheel transcript scrolling in full-screen (default off → wheel scrolling on). Enabling mouse tracking captures click-drag, so the terminal's native text selection requires holding the emulator's bypass modifier (Shift on most; Option on iTerm2; Fn on Terminal.app); set this if you'd rather keep native selection and scroll with the keyboard only. No effect when `BERNARD_FULLSCREEN=false`. The SGR wheel parser (`src/ui/mouse.ts`) reads `?1000h+?1006h` wheel reports (button 64/65) off a stdin `'data'` listener attached alongside Ink (`src/ui/useMouseWheel.ts`). Env-only.
-- `BERNARD_CONFIRM_MODE` — Risk-based confirmation policy (#144): `off | auto | strict` (default: `auto`). `off` never prompts; `auto` prompts only on **high**-risk calls (dangerous shell, write+external-api tools); `strict` also prompts on **medium**-risk calls (local writes, unclassified MCP). The Policy Engine's `toolMode.confirmThreshold` short-circuits to `never` on pure-question turns (rule-based `isPureQuestion` in `src/policy/tool-mode.ts`). REPL renders a three-option menu (Allow once / Allow for session / Cancel) with an in-memory per-`toolName:hash(args)` allowlist that clears on REPL restart. Cron jobs apply a per-job `confirmMode` field (`CronJob.confirmMode`): unset defaults to `'auto'` (auto-deny high-risk, pass medium/low — the legacy headless behavior); `'off'` approves all risk levels including dangerous shell; `'strict'` also denies medium-risk calls. Risk tiers derive from `ToolMeta.kind` + `sideEffect` via `src/risk.ts`; tools can declare `meta.risk` to override. MCP tools default to `kind: 'write', sideEffect: 'local'` (medium), opting `*_search` / `*_list` / `*_find` / `*_get` / `*_query` / `*_read` / `*_lookup` to `read` (low).
-- `BERNARD_TOOL_MODE` — Least-privilege tool mode (#179): `read-only | write` (default: `read-only`). In `read-only` mode any tool whose meta classifies it as a write (`kind` in `{'write','dangerous'}`) is blocked until the user picks **Allow once** or **Enable for this tool, this session** at the REPL block menu (rendered with the 🔒 prefix). `write` mode lets every tool run subject only to the `confirmMode` risk gate. The two settings are **orthogonal**: `toolMode` answers "is this allowed to run at all?" and `confirmMode` answers "do I want to be asked first?" — when both fire on the same call, the block gate runs first and the confirm gate may still fire on allowance. The per-tool session allowlist is owned by the REPL (`sessionToolAllowlist: Set<string>` on `ToolOptions`, threaded through to `augmentTools` in `src/tools/augment.ts`) so an "Enable for this tool, this session" decision survives across turns and across nested sub-agent / tool-wrapper dispatches; it clears on REPL restart. When no shared Set is provided (tests, cron), `augmentTools` falls back to a closure-local Set. Tools without classified meta (legacy / foreign) fall through the block gate so they don't get bricked silently — MCP tools already get `kind: 'write'` by default via `wrapMCPTool()` so unclassified MCP writes still trip the gate. Pure-question turns bypass both gates via the existing `isPureQuestion` short-circuit. Cron jobs apply a per-job `toolMode` field (`CronJob.toolMode`): unset defaults to `'write'` (legacy behavior — jobs opted in to writes at creation time); `'read-only'` blocks all write/dangerous tools headlessly (fail-closed, no Ink overlay prompt).
+- `BERNARD_CONFIRM_MODE` — Risk-based confirmation policy (#144): `off | auto | strict` (default: `auto`). **Set from `/agent-options → Confirm mode`, and no longer asked by `bernard setup`** — since #447 it is folded into the merged Tool mode question, whose three rows each write it; that row is what keeps `strict` and `off` reachable without an env var, and is the only interactive surface for either. `off` never prompts; `auto` prompts only on **high**-risk calls (dangerous shell, write+external-api tools); `strict` also prompts on **medium**-risk calls (local writes, unclassified MCP). The Policy Engine's `toolMode.confirmThreshold` short-circuits to `never` on pure-question turns (rule-based `isPureQuestion` in `src/policy/tool-mode.ts`). REPL renders a three-option menu (Allow once / Allow for session / Cancel) with an in-memory per-`toolName:hash(args)` allowlist that clears on REPL restart. Cron jobs apply a per-job `confirmMode` field (`CronJob.confirmMode`): unset defaults to `'auto'` (auto-deny high-risk, pass medium/low — the legacy headless behavior); `'off'` approves all risk levels including dangerous shell; `'strict'` also denies medium-risk calls. Risk tiers derive from `ToolMeta.kind` + `sideEffect` via `src/risk.ts`; tools can declare `meta.risk` to override. MCP tools default to `kind: 'write', sideEffect: 'local'` (medium), opting `*_search` / `*_list` / `*_find` / `*_get` / `*_query` / `*_read` / `*_lookup` to `read` (low).
+- `BERNARD_TOOL_MODE` — Tool mode (#179): `read-only | write` (**default `write` since #447**, reversing #179's least-privilege default — see `DEFAULT_TOOL_MODE` for the argument, and note `confirmMode: 'auto'` still stops a dangerous call, so what was given up is the prompt on an ordinary local write). In `read-only` mode any tool whose meta classifies it as a write (`kind` in `{'write','dangerous'}`) is blocked until the user picks **Allow once** or **Enable for this tool, this session** at the REPL block menu (rendered with the 🔒 prefix). `write` mode lets every tool run subject only to the `confirmMode` risk gate. The two settings are **orthogonal**: `toolMode` answers "is this allowed to run at all?" and `confirmMode` answers "do I want to be asked first?" — when both fire on the same call, the block gate runs first and the confirm gate may still fire on allowance. The per-tool session allowlist is owned by the REPL (`sessionToolAllowlist: Set<string>` on `ToolOptions`, threaded through to `augmentTools` in `src/tools/augment.ts`) so an "Enable for this tool, this session" decision survives across turns and across nested sub-agent / tool-wrapper dispatches; it clears on REPL restart. When no shared Set is provided (tests, cron), `augmentTools` falls back to a closure-local Set. Tools without classified meta (legacy / foreign) fall through the block gate so they don't get bricked silently — MCP tools already get `kind: 'write'` by default via `wrapMCPTool()` so unclassified MCP writes still trip the gate. Pure-question turns bypass both gates via the existing `isPureQuestion` short-circuit. Cron jobs apply a per-job `toolMode` field (`CronJob.toolMode`): unset defaults to `'write'` (legacy behavior — jobs opted in to writes at creation time); `'read-only'` blocks all write/dangerous tools headlessly (fail-closed, no Ink overlay prompt).
 - **Profile tool permissions (#212)** — persisted "always allow" grants that survive REPL restarts, stored in the active profile (`ProfileSettings.toolPermissions`, profile-scoped via `PROFILE_SCOPED_KEYS`). Keys come from `permissionKeyFor` (`src/tool-permissions.ts`): tool name for non-shell tools (MCP included), `shell:<primary-command>` for simple shell calls; complex command lines (pipes/redirects/subshells/newlines per `COMPLEX_RE`) have **no** stable key and never get a profile option. Both augment gates consult the grants (after the session allowlist, before prompting) via `ToolOptions.getToolPermissions` — a live reader of `config.toolPermissions` so mid-session grants and profile switches apply immediately; `allow` proceeds, `deny` refuses without prompting. The confirm/block dialogs (`ConfirmDialog.tsx`) append an "Always allow \`<cmd>\` for this profile" choice when `permissionKey` is non-null; persistence happens in `App.tsx` (`persistToolPermission` → `saveActiveSettings`). The block gate's `'allow-tool-for-profile'` outcome deliberately does NOT touch `sessionToolAllowlist` (name-keyed — would over-allow all of `shell` for a `shell:ls` grant). Inspect/remove grants via `/tool-permissions`. Cron never passes the getter — headless runs ignore profile grants. Related nag reduction: shell's `meta.isWriteAction` delegates to `isReadOnlyShellInvocation` (conservative allowlist: `ls`/`cat`/`git status`/…), and `riskFromMeta` checks `isWriteAction` _before_ the `kind === 'dangerous'` short-circuit, so simple read-only shell commands run at low risk (no confirm prompt) and pass the read-only block gate with no grant needed.
 - **Skip-permissions mode (#212)** — "Run Without Permission Checks or Safeguards": profile-scoped boolean `skipPermissions` (default false), selectable as the third mode under `/agent-options → Tool mode` (shown as `⚠ unrestricted`; picking read-only/write re-arms the safeguards) or toggled from `/tool-permissions`. Enforced in `toolModePolicy` (`src/policy/tool-mode.ts`) which short-circuits to `{mode: 'write', confirmThreshold: 'never', reason: 'skip-permissions'}` before every other rule, so both gates dissolve through existing plumbing. Cron jobs support a per-job `skipPermissions` field (`CronJob.skipPermissions`): when true, both the `toolMode` block gate and the `confirmMode` confirm gate are dissolved for that job — including dangerous-shell denial (the user explicitly opted the job in to "no safeguards"). Takes precedence over per-job `confirmMode` and `toolMode`. The global profile `skipPermissions` flag does NOT affect cron jobs (headless runs only honor the per-job field).
 - `BERNARD_ACCEPT_REMOTE_PROMPTS` / `--accept-remote-prompts` — Let `bernard say --run` start turns in this session (#493). **Kept, and now one value of `remoteMessages` rather than a field of its own**: it resolves to `prompts`, which is exactly what it always meant — run a `--run`, leave a plain notice. `config.acceptRemotePrompts` is gone; `prefs.remoteMessages ?? (flag ? 'prompts' : 'ask')` is the whole resolution, so a stored preference outlives the launch flag. A sender still cannot upgrade itself — the capability is written by the session into its own record, and `sendToSessions` filters on that record.
@@ -895,7 +1611,7 @@ On first run, files are auto-migrated from `~/.bernard/` to XDG locations. A `~/
 - `BERNARD_RESPONSE_STYLE` — User-selectable response shape (#133): one of `default | detailed | short | step-by-step | simple | high-level | critical | creative` (default: `default`). Orthogonal to `BERNARD_CONCISE_MODE` — concise governs length budget, style governs form. `'default'` injects nothing; other ids append the matching `## Response Style` block from `RESPONSE_STYLE_PROMPTS` (`src/agent-prompt.ts`) in `buildMainSystemPrompt`. Configure interactively via `/agent-options → Response style`.
 - **OpenAI strict-schema mode** is disabled for all `generateText` calls (see `getProviderOptions` in `src/providers/index.ts`). MCP tool schemas come from third parties and use full JSON Schema features that strict mode rejects at preflight. Trade-off: tool calls become advisory rather than enforced — minor reliability cost, large UX win. To re-enable for a specific call, pass `providerOptions: { openai: { strictSchemas: true } }` directly.
 - `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `XAI_API_KEY` — Provider API keys
-- `BERNARD_CACHE_ENABLED` — Global on/off for all caching layers (#171): tool result cache, LLM subcall cache (`rewriter` + `reference-lookup:select`/`interpret` + `reference-resolver` + `specialist-detector`), and the per-turn RAG search cache (default: `true`). Set to `false` to bypass every cache check; the existing structure-level safeguards (opt-in `ToolMeta.deterministic`/`cacheable`, write-tool exclusion, post-gate placement) still apply when caching is on.
+- `BERNARD_CACHE_ENABLED` — Global on/off for all caching layers (#171): tool result cache, LLM subcall cache (`rewriter` + `reference-resolver` + `specialist-detector`), and the per-turn RAG search cache (default: `true`). Set to `false` to bypass every cache check; the existing structure-level safeguards (opt-in `ToolMeta.deterministic`/`cacheable`, write-tool exclusion, post-gate placement) still apply when caching is on.
 - `BERNARD_PROMPT_CACHE` — Provider prompt caching (#269): mark the main agent's system+tools prefix and rolling history with Anthropic `cache_control` ephemeral breakpoints so repeated input tokens bill at the cache-read discount (~90% off). Default `true`; effect scoped to the built-in `anthropic` provider (OpenAI caches automatically, xAI/custom ignore the markers). The prefix is kept byte-stable for this to hit: the per-turn timestamp lives in the `<current_datetime>` context section (not the system prompt), and the tool set is session-stable (`isReactPossible`, not per-turn `evaluate` gating), pinned by `main.tool-block-stability.test.ts`. **This binds only the main agent** — `promptCacheActive` in `framework/agents/run.ts` requires `historyMode === 'persistent'`, and `main` is the only definition that qualifies, so ephemeral dispatches are never cache-marked and their tool surface is scoped to `'worker'` by `runDefinition`'s derivation (#253, #315). See `src/providers/prompt-cache.ts`. Set to `false` to disable marking.
 - `BERNARD_SEMANTIC_CACHE` — Semantic response cache (#269, Layer 3): opt-in (default `false`). For read-only Q&A turns only (`isPureQuestion`, no images, no tool actions), embeds the request via the local RAG embedding stack and returns a prior answer on a near-identical hit (cosine ≥ 0.95, 10-min TTL), skipping the model call. See `src/semantic-cache.ts`. Fails open.
 - `BERNARD_FULLSCREEN` note for #462: nothing about the inbox touches `process.stdin` or writes to stdout while mounted. A listener that resumed the stream would steal keystrokes from Ink (`useRawKeys.ts` explains the mechanism), and a print during a mounted render corrupts the live UI — which is why the transport is files and a callback rather than anything that reads or writes a stream.
@@ -961,7 +1677,7 @@ A transparent layer that wraps every tool's `execute` function to observe errors
 In-memory TTL caches (#171) cut latency and tokens across three layers. All are opt-in or opt-out via flags — never on by default for write-effecting tools.
 
 - **Tool result cache** (`src/framework/tools/result-cache.ts`): a tool is cacheable only when its `ToolMeta` declares `deterministic: true` and either `sideEffect: 'none'` or `cacheable: true` (the `isCacheable` predicate). Per-tool TTL via `cacheTtlMs`, default 5 min; `cacheTtlMs: 0` = session-lifetime. Keys are stable JSON over the args; secrets in `meta.sensitiveArgs` are redacted before hashing. The cache check runs **after** the read-only block gate (#179) and risk-based confirm gate (#144), so policy guarantees are preserved on hits. Only `status: 'ok'` envelopes are stored, so errors/denies don't poison. Current opt-ins: `time_range`, `time_range_total`.
-- **LLM subcall cache** (`src/llm-cache.ts`): standalone module keyed by `{siteName, modelId, providerOptions, system, userContent}` with a 10-min default TTL. Wired at three pure-deterministic call sites: `rewriter`, `reference-lookup:select`, `reference-lookup:interpret`. The `modelId` is pulled from the AI SDK `LanguageModel` so model-mode (#170) re-tiers automatically partition the cache.
+- **LLM subcall cache** (`src/llm-cache.ts`): standalone module keyed by `{siteName, modelId, providerOptions, system, userContent}` with a 10-min default TTL. Wired at the pure-deterministic call sites: `rewriter`, `reference-resolver`, `specialist-detector`. The `modelId` is pulled from the AI SDK `LanguageModel` so model-mode (#170) re-tiers automatically partition the cache.
 - **RAG search cache** (`RAGStore.turnSearchCache` in `src/rag.ts`): per-turn, cleared at the REPL turn boundary (`ragStore?.clearTurnCache()` before `agent.processInput`) and whenever `addFacts` mutates the store. Avoids re-embedding the same query when both the agent and the reference resolver run a RAG lookup in the same turn. Read directly from `process.env.BERNARD_CACHE_ENABLED` so `RAGStore` doesn't carry a config dependency.
 
 Hit/miss telemetry: every layer emits a `debugLog` line — `cache:tool:hit`/`miss`, `cache:llm:hit`/`miss`, `cache:rag:hit`, `cache:semantic:hit`/`miss` — visible with `BERNARD_DEBUG=1`. Global opt-out: `BERNARD_CACHE_ENABLED=false`.
@@ -991,7 +1707,13 @@ Measured across 81 real session logs (6,867 tool calls): **91** reads started wh
 - **Per dispatch, never global.** `withSlot` allows four concurrent dispatches and each MCP delegation adds another, so one shared set would make a sub-agent's write block an unrelated sibling's read — serializing work that never raced. A `Set` rather than one chained promise, so a settled write stops being waited on instead of pinning every later read behind the longest write the dispatch ever ran.
 - **`isWrite` comes from `shouldBlockInReadOnly`**, the same predicate the read-only block gate uses — consulted per call, so `memory{action:'read'}` and a read-shaped `shell` are correctly reads, and MCP is decided by `isReadOnlyMCPToolName` where `mcp.ts` assigns the meta. Deriving it a second time here is how two answers to one question drift. It inherits that function's fail-open on missing meta: an unclassified tool reads as a read and never registers, which is the status quo rather than a regression.
 - **Known limit, and the one way this quietly does nothing.** A write registers when its `execute` is invoked, so a read only sees it if the write appears FIRST in the step's tool calls. Accepted on evidence rather than faith: all 91 observed overlaps are write-then-read, which is what "verify what I just did" looks like. The fix for read-first is a macrotask yield on every read so siblings can register — a cost on every tool call in the product for a shape never once observed.
-- **A duplicate-write gate was built beside this and WITHDRAWN, and the reason bounds what the barrier can be paired with (#575).** It refused an identical write that had already succeeded, keyed on `shouldBlockInReadOnly` — and that predicate answers MUTATION where the gate needed IDEMPOTENCY. Measured against the real logs the substitution is not close: of 46 adjacent identical `shell` repeats, **44 classify as writes**, including `ls -l … | cat` and `grep -nE …`, because `primaryShellCommand` returns null for any compound line. So it would have fired ~44 times on that corpus to catch 2 duplicate sends; told the model "its result is unchanged" when an edit had changed it; and — since a confirmed call re-arms the gate — refused every OTHER identical call rather than once. Module-global state additionally gave the cron daemon and the applet host alternating refusals with nobody watching. **The error worth not repeating is the measurement, not the idea**: the population was counted with a hand-classification of tool names rather than with the predicate that shipped, so the justification and the code disagreed about what a "write" is.
+- **A duplicate gate sits beside this, and it took two attempts (#575).** The barrier orders a verification READ behind the write it checks. That is the smaller of two shapes: of the identical write pairs measured across 81 session logs, **45** had a read between them and **58** had none — a model that re-sends because the first result told it nothing is not verifying anything, so there is no ordering to fix. `src/tools/duplicate-guard.ts` refuses an identical call that already succeeded, and its refusal supplies the fact the result withheld: that the earlier call **SUCCEEDED**. That wording is load-bearing rather than stylistic — a model that re-issues already believes the first one failed, so "an identical call was made" tells it nothing it does not think it knows.
+  - **The first cut was withdrawn for its eligibility predicate, and the error worth not repeating is the measurement rather than the idea.** It keyed on `shouldBlockInReadOnly`, which answers MUTATION where this needs IDEMPOTENCY: of 46 adjacent identical `shell` repeats that predicate calls **44** of them writes, including `ls -l … | cat` and `grep -nE …`, because `primaryShellCommand` returns null for any compound line. So it fired ~44 times on that corpus to catch 2 duplicate sends. The population had been counted by hand-classifying tool names rather than with the predicate that shipped, so the justification and the code disagreed about what a "write" is. `risk.ts` carries a standing refusal to be asked this question.
+  - **Eligibility is `ToolMeta.nonIdempotent`**, the `directInvocable` shape: declared on the meta, because a name list kept elsewhere can disagree with the tool it describes. No Bernard-owned tool declares it — `shell` never will, `file_write` with identical content is idempotent by definition and `file_edit_lines` is guarded by `old_hash` — so the whole live population is MCP, set in `mcp.ts` beside the `isRead` it already computes.
+  - **And the MCP rule is `!isRead && hasEmitVerb(raw)`, NOT every write, on evidence.** `EMIT_VERBS` is a strict subset of `WRITE_VERBS` — send/post/reply/forward/create/add/insert/upload and friends — omitting the state-setting half, because `mark_read`, `set_status`, `update_row` and `rename_file` land on the same state whether called once or twice. The case that decides it is `focus_app`: it carries neither a read nor a write verb so it classifies as a write, it is the third most-used MCP tool on the install this was measured against (38 calls), and the dispatch that double-sent called it **twice with identical arguments**, once before each send. `nonIdempotent: !isRead` refuses the second one before the send it exists to stop is ever reached. Same stop-gap status as `WRITE_VERBS`, same replacement: MCP declares `idempotentHint` and #570 is where reading annotations lands.
+  - **Turn-scoped, with the window kept as a backstop.** The first cut was session-wide, which gave the cron daemon and the applet host alternating refusals on identical scheduled writes with nobody watching. `clearDuplicateGuard()` runs at `runAgentTurn`'s head (not in `runPreTurnPipeline`, which headless never reaches), at the `/clear` block that holds both of that function's guards itself, at `runHeadless`'s entry, and at `dispatchToolAction`'s. **Both halves are required** — the `rag.ts` `persistState` rule — because a forgotten clear site would otherwise leave a long-lived process refusing forever, which fails closed in the wrong direction. Not per-dispatch, which is what would have missed the case entirely: every observed repeat came from a NEW delegate dispatch raised after the previous had reported success.
+  - **Refusing forgets, so re-issuing is the confirmation.** A third identical call runs — the model says "yes, on purpose" by doing it, which costs one round trip and needs no UI, so it works headless where there is nobody to ask. The refusal is `debugLog` only.
+  - **Three tests would each have passed for the wrong reason, and the mutation check is what said so.** The augment fixtures derive the flag themselves, so mutating `mcp.ts` to `!isRead` — or to `false` — survived all of them; `mcp.test.ts` now drives the real `getTools()` and asserts the three names. The `focus_app` case is the one that fails when the rule widens. And the withdrawal records that the first cut's own unit test "passed only because it never called `recordWriteSuccess`", which is why the round trip is driven through the real `augmentTools` on the **legacy** branch — the one MCP takes.
 - **Both `execute` wrappers go through the one helper**, and that is checkable rather than asserted: MCP takes the LEGACY branch (which is where the duplicate came from), so a test covering only MCP leaves the envelope branch untested — a mutation removing its `runOrdered` survived until an envelope-branch case existed.
 - **Test fixtures must use `attachMeta`.** `readToolMeta` reads the non-enumerable `__bernardMeta` and returns `undefined` for anything else, and an undefined meta classifies as a READ — so a hand-hung `.meta` property makes a fixture invisible to the gate and the barrier silently inert. The MCP fixture also derives its kind through the real `isReadOnlyMCPToolName` rather than hand-setting it: hard-coding `kind: 'write'` on both tools made the READ a write too, and writes never wait.
 - **Not fixed here, and tracked in #575**: the result shape that started it. `send_message` answers `"**Open the chat in Beeper**: /open/19"` — no message id, no success field — so "did it send?" is unanswerable from the result, which is what pushed the agent into verifying by reading at all.

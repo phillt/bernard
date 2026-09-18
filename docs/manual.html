@@ -745,7 +745,7 @@
             <a href="#references">Reference Resolution</a>
             <ul class="toc-sub">
               <li><a href="#references-resolver">Resolver</a></li>
-              <li><a href="#references-lookup">Tool Lookup</a></li>
+              <li><a href="#references-lookup">Tool Lookup (removed)</a></li>
               <li><a href="#references-rewriter">Prompt Rewriter</a></li>
             </ul>
           </li>
@@ -1001,22 +1001,6 @@
                   (fail-open)
                 </td>
                 <td><code>true</code></td>
-              </tr>
-              <tr>
-                <td><code>BERNARD_REFERENCE_LOOKUP</code> <span class="vtag">v0.9.0+</span></td>
-                <td>
-                  When the resolver returns <code>unknown</code>, attempt one read-only tool lookup
-                  before prompting (5&thinsp;s timeout, fail-open)
-                </td>
-                <td><code>true</code></td>
-              </tr>
-              <tr>
-                <td><code>BERNARD_LOOKUP_TOOLS</code> <span class="vtag">v0.9.0+</span></td>
-                <td>
-                  Comma-separated tool-name allowlist additions for the resolver lookup pass (use
-                  read-only tools only)
-                </td>
-                <td>&mdash;</td>
               </tr>
               <tr>
                 <td><code>BERNARD_TOOL_DETAILS</code> <span class="vtag">v0.9.0+</span></td>
@@ -2116,22 +2100,14 @@
           reference resolves silently next time.
         </p>
 
-        <h3 id="references-lookup">Tool Lookup</h3>
+        <h3 id="references-lookup">Tool Lookup (removed)</h3>
         <p>
-          When the resolver returns <code>unknown</code> and
-          <code>BERNARD_REFERENCE_LOOKUP</code> is on (the default), Bernard picks one read-only
-          allowlisted tool &mdash; e.g.&nbsp;<code>contacts__search</code>, <code>web_search</code>,
-          an MCP <code>*_list</code> / <code>*_read</code> &mdash; and runs it with a hard 5-second
-          timeout enforced via <code>Promise.race</code> against a real timer (resilient to tools
-          that ignore <code>abortSignal</code>). The result is parsed into one of
-          <code>none</code> / <code>found</code> / <code>ambiguous</code>; on
-          <code>found</code> Bernard shows a Save / Edit / Skip menu before persisting to memory.
-          Every stage fails open &mdash; if anything goes wrong, you simply get the original prompt
-          for the value.
-        </p>
-        <p>
-          Use <code>BERNARD_LOOKUP_TOOLS=tool_a,tool_b</code> to extend the allowlist. Only allow
-          tools that are read-only.
+          Bernard used to have a fallback for the <code>unknown</code> case: look the name up in a
+          read-only tool such as your contacts, then offer to save what it found. It was never wired
+          to the resolver, and <code>BERNARD_REFERENCE_LOOKUP</code> and
+          <code>BERNARD_LOOKUP_TOOLS</code> have been removed along with it. Today an unresolved
+          reference simply falls open &mdash; the turn proceeds with your original wording, and
+          Bernard asks you in conversation if it needs to know who you meant.
         </p>
 
         <h3 id="references-rewriter">Prompt Rewriter</h3>

@@ -24,6 +24,7 @@ import { createElement } from 'react';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ARROW_DOWN, CTRL_O, ENTER, ESC, SHIFT_TAB, tick } from './_keys.js';
 import stripAnsi from 'strip-ansi';
 import { getInkHandlers } from '../ink-handlers.js';
@@ -113,7 +114,7 @@ const TMP_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'bernard-app-test-'));
 process.env.BERNARD_HOME = TMP_HOME;
 
 // ── Imports under test (after mocks + env) ──────────────────────────────
-import { App, buildResumeSeed, type AppStores } from '../App.js';
+import { App, buildResumeSeed, isScaffoldingMessage, type AppStores } from '../App.js';
 import { DimensionsProvider } from '../DimensionsContext.js';
 import type { CoreMessage } from 'ai';
 import type { BernardConfig } from '../../config.js';
@@ -150,7 +151,6 @@ function makeConfig(overrides: Partial<BernardConfig> = {}): BernardConfig {
     autoCreateThreshold: 0.8,
     correctionEnabled: false,
     promptRewriter: false,
-    referenceLookup: false,
     confirmMode: 'auto',
     toolMode: 'write',
     maxConcurrentAgents: 4,
@@ -1481,10 +1481,36 @@ describe('<App> requestAskUser multi-select (#231)', () => {
     stdin.write('2');
     await tick(40);
     // A batch of 2+ now renders as a wizard (#473), so it lands on the
-    // check-your-answers review rather than resolving. Row 3 is "Looks right".
+    // check-your-answers review rather than resolving. Row 3 is the Save control.
     stdin.write('3');
     await tick(40);
     await expect(pending).resolves.toEqual({ answers: [['A'], 'Y'] });
+    unmount();
+  });
+
+  it('moves the review cursor with the arrow keys, not only with digits', async () => {
+    // Every other wizard assertion in this file commits by DIGIT, so arrow
+    // navigation on a review had no App-level coverage at all — and the review
+    // is the one wizard surface App renders beside a live `Prompt`, which owns
+    // up/down for history. Ink broadcasts to every mounted handler with no
+    // stop-propagation, so "the component works standalone" does not settle it.
+    const { stdin, lastFrame, unmount } = renderApp();
+    await tick();
+    void getInkHandlers()!.requestAskUser([
+      { question: 'Multi', choices: ['A', 'B'], allowOther: false, multiSelect: true },
+      { question: 'Single', choices: ['X', 'Y'], allowOther: false },
+    ]);
+    await tick(40);
+    stdin.write('1');
+    await tick();
+    stdin.write(ENTER);
+    await tick(40);
+    stdin.write('2');
+    await tick(40);
+    expect(lastFrame()).toContain('> Multi — A');
+    stdin.write(ARROW_DOWN);
+    await tick(40);
+    expect(lastFrame()).toContain('> Single — Y');
     unmount();
   });
 });
@@ -1710,6 +1736,72 @@ describe('<App> management menu chains', () => {
 });
 
 describe('buildResumeSeed (--resume transcript replay)', () => {
+  it('calls the plan-enforcement re-prompt scaffolding, on the shared predicate', async () => {
+    // The LIVE commit path and this one both go through `isScaffoldingMessage`
+    // now. It is exported so it can be driven directly: the live path is inside
+    // a component and only reachable by running a turn, which is exactly how it
+    // ended up as the untested half of a rule the other half tested — and the
+    // reported bug was on that half.
+    const { buildEnforcementFeedback } = await import('../../react.js');
+    const enforcement: CoreMessage = {
+      role: 'user',
+      content: buildEnforcementFeedback('1. [pending] do the thing'),
+    };
+    expect(isScaffoldingMessage(enforcement)).toBe(true);
+    // And the direction that would lose the user's own words rather than merely
+    // show too much.
+    expect(isScaffoldingMessage({ role: 'user', content: 'what is this?' })).toBe(false);
+    expect(isScaffoldingMessage({ role: 'assistant', content: 'on it' })).toBe(false);
+    // A tool message carries no prose to classify and must fall through rather
+    // than be dropped — the live path keeps them in `staticItems` (they render
+    // nothing) and the resume path drops them by role, which is why this
+    // predicate must not be the thing deciding either.
+    expect(
+      isScaffoldingMessage({ role: 'tool', content: [] as unknown as never } as CoreMessage),
+    ).toBe(false);
+  });
+
+  it('is consulted by the live commit path too, not only on resume', async () => {
+    // A source scan, and the weakest assertion here — stated rather than
+    // dressed up. `commitNewHistory` lives inside the component and only runs
+    // during a real turn, so the call cannot be driven from here; the predicate
+    // above and the resume path below are properly covered, and this one line
+    // of wiring is not. It is what fails when someone deletes the call, which
+    // is the mutation that survived everything else — and deleting it restores
+    // the exact bug: the enforcement re-prompt back in the transcript as a `❯`
+    // bubble, with the resume path still filtering it, so the same message
+    // renders or not depending on which path put it there.
+    const src = fs.readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'App.tsx'),
+      'utf-8',
+    );
+    const commit = src.slice(src.indexOf('function commitNewHistory'));
+    expect(commit.slice(0, commit.indexOf('\n  }\n'))).toContain('isScaffoldingMessage(message)');
+  });
+
+  it('replays no plan-enforcement re-prompt', async () => {
+    // The live path and this one both push the same message into history —
+    // `wrapIterate` puts strategy extras there so the model sees them on the
+    // next iterate — so both have to skip it, through the same predicate. This
+    // one filtered scaffolding and the live commit did not, which is how the
+    // identical message rendered or not depending on which path put it there.
+    //
+    // Built through the real producer rather than by hand-writing the sentence:
+    // a fixture that retypes it passes while the wording drifts underneath.
+    const { buildEnforcementFeedback } = await import('../../react.js');
+    const items = buildResumeSeed(
+      [
+        { role: 'user', content: 'do the thing' },
+        { role: 'assistant', content: 'on it' },
+        { role: 'user', content: buildEnforcementFeedback('1. [pending] do the thing') },
+        { role: 'assistant', content: 'done' },
+      ] as CoreMessage[],
+      false,
+    );
+    const texts = items.map((i) => String((i.message as { content: unknown }).content));
+    expect(texts).toEqual(['do the thing', 'on it', 'done']);
+  });
+
   /**
    * A woken turn replays as a PANEL, never as a `❯` bubble.
    *

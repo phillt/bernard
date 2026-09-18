@@ -18,6 +18,7 @@ import { detectResultFailure } from '../tool-result-shape.js';
 import { ARG_REF_PREFIX, formatZodError, type ToolDispatch } from './manifest.js';
 import type { ResolvedInvocation } from './invocation.js';
 import * as fs from 'node:fs';
+import { clearDuplicateGuard } from '../tools/duplicate-guard.js';
 
 /**
  * A `kind: 'tool'` action: one tool call, no model (#445).
@@ -79,6 +80,10 @@ export interface DispatchToolActionOpts {
 export async function dispatchToolAction(opts: DispatchToolActionOpts): Promise<ToolActionResult> {
   const { invocation, dispatch, timeoutMs } = opts;
   const { action, appId } = invocation;
+
+  // This path resets nothing else, and the applet host is long-lived — the
+  // other half of what made a session-wide duplicate guard misfire (#575).
+  clearDuplicateGuard();
 
   const posture = resolvePosture({
     toolMode: action.toolMode,

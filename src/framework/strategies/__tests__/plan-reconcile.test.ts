@@ -1,15 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../../../output.js', () => ({
-  printInfo: vi.fn(),
-  printWarning: vi.fn(),
+// See `react.test.ts`: the enforcement loop writes to `debugLog` now, because
+// `printWarning` is a bare `console.log` and this runs mid-turn while Ink owns
+// the screen.
+vi.mock('../../../logger.js', async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  debugLog: vi.fn(),
 }));
 
 import { PlanReconcileStrategy } from '../plan-reconcile.js';
 import { NormalStrategy } from '../normal.js';
 import { PlanStore } from '../../../plan-store.js';
 import { REACT_ENFORCEMENT_MAX_RETRIES } from '../../../react.js';
-import { printInfo, printWarning } from '../../../output.js';
+import { debugLog } from '../../../logger.js';
 import { baseResult, toolUseResult, makeCtx as makeBaseCtx } from './_harness.js';
 import type { StrategyContext } from '../types.js';
 
@@ -23,8 +26,7 @@ function strategy(): PlanReconcileStrategy {
 }
 
 beforeEach(() => {
-  vi.mocked(printInfo).mockClear();
-  vi.mocked(printWarning).mockClear();
+  vi.mocked(debugLog).mockClear();
 });
 
 describe('PlanReconcileStrategy (#303)', () => {
@@ -50,7 +52,10 @@ describe('PlanReconcileStrategy (#303)', () => {
     const steps = planStore.view();
     expect(steps.every((s) => s.status === 'cancelled')).toBe(true);
     expect(steps[0].note).toContain('enforcement retries exhausted');
-    expect(vi.mocked(printInfo).mock.calls.flat().join(' ')).toContain('Auto-cancelled');
+    expect(vi.mocked(debugLog)).toHaveBeenCalledWith(
+      'plan:auto-cancelled',
+      expect.objectContaining({ steps: expect.any(Number) }),
+    );
   });
 
   it('stops re-prompting as soon as the model resolves the plan', async () => {
@@ -80,7 +85,7 @@ describe('PlanReconcileStrategy (#303)', () => {
     await strategy().run(ctx);
 
     expect(ctx.iterate).toHaveBeenCalledTimes(1);
-    expect(printWarning).not.toHaveBeenCalled();
+    expect(vi.mocked(debugLog).mock.calls.map((c) => c[0])).not.toContain('plan:enforce');
   });
 
   it('does not re-prompt when the plan is already fully resolved', async () => {
@@ -141,7 +146,7 @@ describe('PlanReconcileStrategy (#303)', () => {
     expect(ctx.iterate).toHaveBeenCalledTimes(1);
   });
 
-  it('tags warnings with the dispatch prefix', async () => {
+  it('tags enforcement events with the dispatch prefix', async () => {
     const planStore = new PlanStore();
     const ctx = makeCtx({ planStore, prefix: 'sub:1' });
     ctx.iterate.mockImplementation(async () => {
@@ -152,6 +157,10 @@ describe('PlanReconcileStrategy (#303)', () => {
 
     await strategy().run(ctx);
 
-    expect(vi.mocked(printWarning).mock.calls.flat().join(' ')).toContain('[sub:1]');
+    // The prefix rides the event payload now rather than a printed bracket.
+    expect(vi.mocked(debugLog)).toHaveBeenCalledWith(
+      'plan:enforce',
+      expect.objectContaining({ prefix: 'sub:1' }),
+    );
   });
 });

@@ -162,13 +162,22 @@ export function resolvePosture(input: HeadlessPostureInput): HeadlessPosture {
  * edit to a grant applies to the next dispatch with no restart. `null` — cron
  * — omits it, and `augmentTools` then reads no rules at all.
  */
-export function headlessToolOptions(posture: HeadlessPosture, shellTimeout: number): ToolOptions {
+export function headlessToolOptions(
+  posture: HeadlessPosture,
+  shellTimeout: number,
+  /** Where gate refusals are reported. Optional — reporting only (#447). */
+  onDenied?: ToolOptions['onDenied'],
+): ToolOptions {
   return {
     shellTimeout,
     // Unreachable, but required by ToolOptions — see
     // HeadlessPosture.confirmAction for why wiring confirmAction retires it.
     confirmDangerous: async () => false,
     confirmAction: posture.confirmAction,
+    // Nobody is here. Changes no verdict — `posture.confirmAction` already
+    // auto-denies — only what the refusal says. See `ToolOptions.unattended`.
+    unattended: true,
+    ...(onDenied ? { onDenied } : {}),
     ...(posture.writeScope ? { writeScope: posture.writeScope } : {}),
     ...(posture.toolPermissions ? { getToolPermissions: () => posture.toolPermissions ?? [] } : {}),
   };

@@ -192,6 +192,24 @@ const READONLY_COMMANDS = new Set([
 ]);
 
 /**
+ * The read-only allowlist, rendered for a prompt.
+ *
+ * Exported so `cron.ts` can STATE the rule rather than describe it from
+ * memory. It described it from memory, and had drifted into being false: it
+ * promised that "dangerous commands (rm -rf, sudo, etc.)" are denied and that
+ * "safe, read-oriented commands" run, while in fact `echo hello` is denied and
+ * so is any line carrying a pipe, an `&&` or a redirect. A model told the old
+ * sentence will reach for exactly the shapes that are refused.
+ *
+ * Same treatment as `APPLET_STYLED_SELECTORS`, and for the same reason: a
+ * prompt that lists an artefact is a second copy of it, and copies do not fail,
+ * they diverge. `cron.test.ts` pins the prompt against this.
+ */
+export function readOnlyShellSummary(): string {
+  return [...READONLY_COMMANDS].sort().join(', ');
+}
+
+/**
  * Read-only git subcommands. Excludes bare `branch`/`tag`/`remote`/`stash` —
  * each lists when bare but writes with args, and a first-two-token check
  * can't tell the difference safely.
@@ -297,4 +315,84 @@ export function isReadOnlyShellInvocation(command: string): boolean {
  */
 export function permissionKeyLabel(key: string): string {
   return key.startsWith('shell:') ? key.slice('shell:'.length) : key;
+}
+
+/**
+ * The `bernard cron-grant --allow` specifier that would actually clear this
+ * call's gate, or `null` when no per-call grant can cover it.
+ *
+ * The sibling of {@link permissionKeyFor} and deliberately NOT the same string.
+ * A key is an IDENTITY — what to show a user, what to store a decision under —
+ * and printing one as a remedy was wrong for every shape it can take, verified
+ * against the real `resolveGrant`:
+ *
+ * - `shell:gh` resolves to `ask`. `matchShellSpecifier` treats a specifier with
+ *   no trailing `*` as an EXACT token match, so it covers a bare `gh` and not
+ *   `gh issue create`, which is the only form anyone runs. `gh *` is a prefix
+ *   match and covers both, so it strictly dominates the key.
+ * - `cron:delete` resolves to `ask`. The engine's action arm requires the
+ *   specifier itself to read `action:delete`, so through
+ *   `parseGrantSpecifier`'s first-colon split the grant must be spelled
+ *   `cron:action:delete`.
+ * - A compound shell line has no key at all, and the message rendered that as
+ *   `--allow this tool` — two bare words that word-split into grants for two
+ *   tools that do not exist.
+ *
+ * `null` is therefore a real answer rather than a gap: `shellSubcommands`
+ * returns `null` for a pipe, a redirect or an `&&`, so no SPECIFIER can ever
+ * match one. The only grant that reaches such a call is the whole tool, which
+ * is a broader thing to hand out and has to be named as one — see
+ * {@link unattendedDenialMessage}, which is what puts this in front of a user.
+ *
+ * Every row above is pinned by `grant-spec.test.ts` driving the real engine,
+ * because a remedy is a claim about what another module will do and the four
+ * defects here were all of the form "looks right, resolves to `ask`".
+ */
+export function grantSpecFor(
+  toolName: string,
+  args: unknown,
+  meta?: { actionScoped?: boolean } | null,
+): string | null {
+  if (meta?.actionScoped) {
+    const action = actionOf(args, meta);
+    return action ? `${toolName}:action:${action}` : null;
+  }
+  if (toolName === 'shell') {
+    const cmd = (args as Record<string, unknown> | undefined)?.command;
+    if (typeof cmd !== 'string') return null;
+    const primary = primaryShellCommand(cmd);
+    // Trailing `*` is the prefix form: it covers the bare command and every
+    // invocation carrying arguments, which is what a job actually runs.
+    return primary ? `shell:${primary} *` : null;
+  }
+  return toolName;
+}
+
+/**
+ * The inverse of {@link grantSpecFor}: a typed `<tool>[:<specifier>]` argument
+ * back into a rule, or `null` when it is not one.
+ *
+ * Here rather than in either CLI because it is the round trip's other half and
+ * a `PermissionRule` is this module's type — and because the copy that lived in
+ * `cron/cli.ts` had already dropped the validation: it minted `{tool: ''}` for
+ * `:foo` and `{tool: 'gh'}` for `gh:`, persisting a rule that matches nothing
+ * on the one path with no operator watching. Importing the app CLI's copy
+ * instead would have pulled `AppRegistry` onto `bernard cron-grant`, measured
+ * at 59 ms against 0 for this leaf.
+ *
+ * Only the FIRST colon splits, because an action-scoped specifier is itself
+ * `action:<value>`. Deliberately NOT validated against the live registry: MCP
+ * tool names depend on which servers happen to be connected, and refusing a
+ * grant for one that is merely offline is worse than storing a rule that
+ * matches nothing today.
+ */
+export function parseGrantSpec(spec: string, effect: ToolPermissionEffect): PermissionRule | null {
+  const trimmed = spec.trim();
+  if (trimmed === '') return null;
+  const colon = trimmed.indexOf(':');
+  if (colon === -1) return { effect, tool: trimmed, _v: 2 };
+  const tool = trimmed.slice(0, colon);
+  const specifier = trimmed.slice(colon + 1);
+  if (tool === '' || specifier === '') return null;
+  return { effect, tool, specifier, _v: 2 };
 }

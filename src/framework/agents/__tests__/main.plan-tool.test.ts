@@ -36,8 +36,6 @@ function baseConfig(coordinatorMode: BernardConfig['coordinatorMode']): BernardC
     toolMode: 'write',
     maxConcurrentAgents: 4,
     responseStyle: 'default',
-    referenceLookup: false,
-    referenceLookupTools: [],
     scratchSubjectThreshold: 0.15,
     conciseMode: false,
     customProviders: {},

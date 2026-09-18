@@ -11,6 +11,7 @@ const mockDispatchAction = vi.hoisted(() =>
     startedAt: '2026-01-01T00:00:00.000Z',
     timings: { mcpConnectMs: 12, totalMs: 34 },
     stepLimitHit: false,
+    denied: [],
   }),
 );
 
@@ -84,6 +85,7 @@ describe('scriptRun', () => {
       startedAt: '2026-01-01T00:00:00.000Z',
       timings: { mcpConnectMs: 12, totalMs: 34 },
       stepLimitHit: false,
+      denied: [],
     });
     mockSpecialistGet.mockReturnValue({
       id: 'web-wrapper',
@@ -209,6 +211,7 @@ describe('scriptRun', () => {
       startedAt: '2026-01-01T00:00:00.000Z',
       timings: { mcpConnectMs: 1, totalMs: 2 },
       stepLimitHit: false,
+      denied: [],
     });
     const code = await m.scriptRun({ app: 'demo', action: 'ask', argsJson: '{"q":"hi"}' });
     expect(code).toBe(1);
@@ -229,6 +232,7 @@ describe('scriptRun', () => {
         startedAt: '2026-01-01T00:00:00.000Z',
         timings: { mcpConnectMs: 1, totalMs: 2 },
         stepLimitHit: false,
+        denied: [],
       };
     });
     const code = await m.scriptRun({ app: 'demo', action: 'ask', argsJson: '{"q":"hi"}' });

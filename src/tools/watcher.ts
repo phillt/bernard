@@ -36,8 +36,8 @@ import {
  * neither is a prompt instruction:
  *
  * - `watchableToolRefusal` admits only READ-classified tools, checked at create
- *   time and again on every poll. The same gate `reference-tool-lookup.ts` uses
- *   to decide what an unattended lookup may call.
+ *   time and again on every poll — `isReadOnlyMCPToolName`, the same gate
+ *   `mcp.ts` classifies a server's tools with.
  * - The `instructions` it stores are the INSTRUCTION channel. Whatever the
  *   watcher later observes travels separately as `UntrustedData`, so an email
  *   body cannot become the next turn's prompt — see `watchers/wake.ts`.

@@ -134,7 +134,7 @@ export interface BernardConfig {
   recallFilter: boolean;
   /**
    * Whether the in-process caching layer (#171) is active. Covers deterministic
-   * tool results, select LLM subcalls (rewriter, reference-lookup), and the
+   * tool results, select LLM subcalls (rewriter, reference-resolver), and the
    * per-turn RAG search cache. Default `true`; opt out via
    * `BERNARD_CACHE_ENABLED=false`. Not persisted to preferences — environment
    * toggle only.
@@ -235,9 +235,6 @@ export interface BernardConfig {
    */
   responseStyle: ResponseStyle;
   /** Whether the resolver attempts a tool-based lookup before prompting the user for unknown references. */
-  referenceLookup: boolean;
-  /** Extra tool-name allowlist for the reference-lookup pass (additive over built-in patterns). */
-  referenceLookupTools: string[];
   /**
    * Jaccard-similarity threshold (0-1) below which the scratch-lifecycle policy
    * (#169) treats a user turn as a subject change and clears all scratch.
@@ -377,11 +374,33 @@ const DEFAULT_MAX_TOKENS = 4096;
 export const DEFAULT_SHELL_TIMEOUT = 30000;
 const DEFAULT_TOKEN_WINDOW = 0;
 const DEFAULT_MAX_STEPS = 25;
-const DEFAULT_AUTO_CREATE_SPECIALISTS = false;
+/**
+ * Promote a specialist without asking, above `autoCreateThreshold` (#447).
+ *
+ * ON, and the asymmetry with `autoCreateApplets` beside it is the argument:
+ * promoting a specialist is one JSON write, visible in `/specialists` and
+ * deletable there, while an applet is a manifest, a page, a bound agent, an
+ * origin and a launcher. The detector already runs in the detached exit worker
+ * and already scores against a 0.8 threshold; what this decides is only whether
+ * the result waits for a yes.
+ */
+const DEFAULT_AUTO_CREATE_SPECIALISTS = true;
 const DEFAULT_AUTO_CREATE_THRESHOLD = 0.8;
 const DEFAULT_COORDINATOR_MODE: 'on' | 'off' | 'auto' = 'auto';
 const DEFAULT_CONFIRM_MODE: 'off' | 'auto' | 'strict' = 'auto';
-const DEFAULT_TOOL_MODE: 'read-only' | 'write' = 'read-only';
+/**
+ * **Changed from `'read-only'` (#447), which reverses #179's least-privilege
+ * default.** That default is the safer posture in the abstract and was the
+ * wrong one to ship: a brand-new user meets a 🔒 block prompt on the first file
+ * Bernard tries to edit, which reads as broken rather than as careful, and the
+ * remedy — "Allow for this tool, this session" — is a thing they have to learn
+ * before they have done anything. `write` is not unguarded: `confirmMode`
+ * defaults to `auto`, so a dangerous shell command or anything reaching outside
+ * the machine still stops and asks. What it gives up is the prompt on an
+ * ORDINARY local write, which is the one nobody was reading anyway. Cron has
+ * defaulted to `write` since it existed, for the neighbouring reason.
+ */
+const DEFAULT_TOOL_MODE: 'read-only' | 'write' = 'write';
 const DEFAULT_MODEL_MODE: ModelMode = 'balanced';
 const DEFAULT_SCRATCH_SUBJECT_THRESHOLD = 0.15;
 const DEFAULT_CONCISE_MODE = true;
@@ -548,7 +567,6 @@ export function savePreferences(prefs: {
   autoCreateThreshold?: number;
   promptRewriter?: boolean;
   recallFilter?: boolean;
-  referenceLookup?: boolean;
   scratchSubjectThreshold?: number;
   conciseMode?: boolean;
   confirmMode?: 'off' | 'auto' | 'strict';
@@ -609,7 +627,6 @@ export function loadPreferences(): {
   autoCreateThreshold?: number;
   promptRewriter?: boolean;
   recallFilter?: boolean;
-  referenceLookup?: boolean;
   scratchSubjectThreshold?: number;
   conciseMode?: boolean;
   confirmMode?: 'off' | 'auto' | 'strict';
@@ -667,8 +684,6 @@ export function loadPreferences(): {
       typeof parsed.autoCreateThreshold === 'number' ? parsed.autoCreateThreshold : undefined,
     promptRewriter: typeof parsed.promptRewriter === 'boolean' ? parsed.promptRewriter : undefined,
     recallFilter: typeof parsed.recallFilter === 'boolean' ? parsed.recallFilter : undefined,
-    referenceLookup:
-      typeof parsed.referenceLookup === 'boolean' ? parsed.referenceLookup : undefined,
     scratchSubjectThreshold:
       typeof parsed.scratchSubjectThreshold === 'number'
         ? parsed.scratchSubjectThreshold
@@ -838,6 +853,23 @@ export function resetAllOptions(): void {
  * Checks both stored keys and environment variables (env vars apply only
  * to the three built-in providers; custom providers always use `keys.json`).
  */
+/**
+ * The last few characters of a provider's STORED key, or `undefined`.
+ *
+ * Purpose-built rather than exporting `loadStoredKeys`, which would hand every
+ * caller the keys themselves to get at four characters. The suffix is what a
+ * reader needs to tell which of several keys is in place — provider keys share
+ * a scheme-and-project prefix, so the front of one identifies nothing.
+ *
+ * Stored keys only. One that reached us through the environment is not ours to
+ * echo back even in part, and it is not what a "saved in this profile" surface
+ * is talking about.
+ */
+export function getStoredKeyHint(provider: string, chars = 4): string | undefined {
+  const key = loadStoredKeys()[provider];
+  return typeof key === 'string' && key.length >= chars ? key.slice(-chars) : undefined;
+}
+
 export function getProviderKeyStatus(): Array<{
   provider: string;
   hasKey: boolean;
@@ -1339,7 +1371,7 @@ export function loadConfig(overrides?: {
     : undefined;
   const confirmMode = prefs.confirmMode ?? envConfirmMode ?? DEFAULT_CONFIRM_MODE;
 
-  // Least-privilege tool mode (#179). Precedence: pref > env > default 'read-only'.
+  // Tool mode (#179). Precedence: pref > env > default — see DEFAULT_TOOL_MODE.
   const envToolMode = isToolMode(process.env.BERNARD_TOOL_MODE)
     ? (process.env.BERNARD_TOOL_MODE as 'read-only' | 'write')
     : undefined;
@@ -1373,19 +1405,6 @@ export function loadConfig(overrides?: {
     (rawConcise === undefined
       ? DEFAULT_CONCISE_MODE
       : !(rawConcise === 'false' || rawConcise === '0'));
-
-  // Reference tool-lookup runs by default; users can opt out with BERNARD_REFERENCE_LOOKUP=false.
-  const rawReferenceLookup = process.env.BERNARD_REFERENCE_LOOKUP;
-  const referenceLookup =
-    prefs.referenceLookup ??
-    (rawReferenceLookup === undefined
-      ? true
-      : !(rawReferenceLookup === 'false' || rawReferenceLookup === '0'));
-
-  const referenceLookupTools = (process.env.BERNARD_LOOKUP_TOOLS ?? '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
 
   // Unlike `autoCreateThreshold` we don't rescale: `scratchSubjectThreshold`
   // is documented as a 0-1 Jaccard score and the REPL prompt enforces the
@@ -1498,8 +1517,6 @@ export function loadConfig(overrides?: {
     toolMode,
     maxConcurrentAgents,
     responseStyle,
-    referenceLookup,
-    referenceLookupTools,
     scratchSubjectThreshold,
     conciseMode,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
@@ -1596,7 +1613,6 @@ const PROFILE_SCOPED_KEYS: ReadonlyArray<keyof BernardConfig> = [
   'toolMode',
   'maxConcurrentAgents',
   'responseStyle',
-  'referenceLookup',
   'scratchSubjectThreshold',
   'conciseMode',
   'activeLineupId',
@@ -1621,7 +1637,7 @@ const PROFILE_SCOPED_KEYS: ReadonlyArray<keyof BernardConfig> = [
  * Does not touch API keys, custom providers, the cached `providerBaseUrl`, or
  * env-only flags (`ragEnabled`, `cacheEnabled`, `promptCache`, `mcpDelegation`,
  * `mcpDelegateEscalation`, `mcpResultShaping`, `mcpResultShapingMaxChars`, `costGuardrailTokens`,
- * `semanticCache`, `correctionEnabled`, `referenceLookupTools`) — those are not
+ * `semanticCache`, `correctionEnabled`) — those are not
  * profile-scoped.
  *
  * @throws if the new profile selects a provider with no configured API key.
