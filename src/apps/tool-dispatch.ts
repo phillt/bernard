@@ -15,7 +15,7 @@ import { headlessToolOptions, resolvePosture, type HeadlessPosture } from '../he
 import { loadAppGrants } from './app-grants.js';
 import { directInvocableRefusal } from './direct-tool.js';
 import { detectResultFailure } from '../tool-result-shape.js';
-import { ARG_REF_PREFIX, formatZodError, type ToolDispatch } from './manifest.js';
+import { ARG_REF_PREFIX, formatZodError, type ArgValue, type ToolDispatch } from './manifest.js';
 import type { ResolvedInvocation } from './invocation.js';
 // A leaf like the posture module above: `node:fs` + `node:path` only, so the
 // cheap path stays cheap.
@@ -54,10 +54,22 @@ export type ToolActionResult =
  *
  * A reference to an undeclared arg cannot occur here — the manifest refinement
  * rejects it at parse time — so this maps rather than validates.
+ *
+ * **Per-parameter, and still per-parameter now that a value may nest (#588).**
+ * The mapping stayed flat deliberately: nesting lives in the TYPE of the
+ * source, not in the mapping, so `edits: "$.edits"` names exactly one declared
+ * argument and a literal is still a scalar. A nested literal would be a second
+ * vocabulary — a template language beside the type table — with its own
+ * recursion here and in `intraActionRules`, and the two would have to be kept
+ * in step. What it would buy is an author pinning a nested parameter to a fixed
+ * value, and the absence of that is not a safety gap: the caller-supplied
+ * alternative is bounded by a declared `.strict()` shape at every level, which
+ * is strictly narrower than `file_write`'s `content` — a free string this tier
+ * already lets a caller fill.
  */
 export function mapToolArgs(
   dispatch: ToolDispatch,
-  callArgs: Record<string, string | number | boolean>,
+  callArgs: Readonly<Record<string, ArgValue>>,
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [param, value] of Object.entries(dispatch.args)) {

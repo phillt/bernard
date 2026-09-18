@@ -678,6 +678,13 @@ export function createFileTools(provenance?: ProvenanceStore) {
       {
         name: 'file_edit_lines',
         kind: 'write',
+        // A path and a list of line operations (#588). Eligible since the arg
+        // vocabulary gained `list` and `object`; before that a manifest could
+        // not name `edits` at all, so an applet could overwrite a whole file
+        // with no model and had to pay for an agent to change three lines of
+        // one — which is also the strictly worse write, losing the `old_hash`
+        // check and clobbering where there was a patch.
+        directInvocable: true,
         deterministic: false,
         sideEffect: 'local',
         cacheable: false,

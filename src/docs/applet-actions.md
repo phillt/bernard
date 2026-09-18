@@ -34,8 +34,9 @@ Action names are lowercase, `a-z0-9_-`. Argument names are lowercase,
 
 ## Argument types
 
-Four, and no more: `string`, `number`, `boolean`, `enum`. An `enum` requires
-`values`. `maxLength` applies only to `string`.
+Six, and no more: `string`, `number`, `boolean`, `enum`, `list`, `object`. An
+`enum` requires `values`, a `list` requires `of`, an `object` requires
+`fields`. `maxLength` applies only to `string`, `maxItems` only to `list`.
 
 Prefer `number`, `boolean` and `enum` wherever the answer allows it — those
 three admit no prose at all, so an action built only from them cannot carry an
@@ -45,6 +46,36 @@ give it a `maxLength`.
 Mark an argument `"required": true` when the action cannot run without it.
 Unknown arguments are rejected, so the page cannot smuggle a field past the
 declaration.
+
+### Nested arguments
+
+Reach for a `list` when the count is genuinely variable; if the action takes
+exactly two numbers, declare two arguments. `object` is legal only INSIDE a
+`list`, because at the top level a record is always two arguments instead,
+while inside a variable-length list it is the only way to give an element a
+shape.
+
+Nesting stops at three levels, which is exactly deep enough for a line edit:
+
+```json
+"edits": {
+  "type": "list", "required": true, "maxItems": 50,
+  "of": {
+    "type": "object",
+    "fields": {
+      "action": { "type": "enum", "required": true,
+                  "values": ["replace", "insert", "delete", "append"] },
+      "line": { "type": "number" },
+      "lines": { "type": "list", "of": { "type": "number" } },
+      "content": { "type": "string", "maxLength": 4000 }
+    }
+  }
+}
+```
+
+Every level is checked the way a top-level argument is: an undeclared key
+inside an element is rejected, not ignored. What reaches the tool is a
+reconstruction of what you declared, never the caller's own object.
 
 ## Two kinds of dispatch
 
@@ -82,8 +113,10 @@ Each tool parameter names `$.<declaredArg>` or a literal. Arguments are
 mapped, never passed through wholesale.
 
 Not every tool is eligible for direct dispatch, and the ones that are take only
-simple arguments. If a manifest names an ineligible tool the write is refused
-with the reason — read it rather than guessing at a substitute.
+arguments the six types above can name — which is most shapes, but not a union,
+an open-keyed record, or anything nested deeper than three levels. If a
+manifest names an ineligible tool the write is refused with the reason — read
+it rather than guessing at a substitute.
 
 ## When a button fails, read the log first
 

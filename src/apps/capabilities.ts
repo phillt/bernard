@@ -1,4 +1,7 @@
 import * as crypto from 'node:crypto';
+// Type-only, so this module stays the `node:crypto`-only leaf its header
+// describes; `arg-types.ts` is itself a zod-only leaf.
+import type { ArgValue } from './arg-types.js';
 
 /**
  * The capability table behind applet callbacks (#420).
@@ -42,7 +45,7 @@ export interface CapabilityRecord {
   appId: string;
   action: string;
   /** Present only for `frozen` handles. */
-  frozenArgs?: Readonly<Record<string, string | number | boolean>>;
+  frozenArgs?: Readonly<Record<string, ArgValue>>;
   /** The session this handle was issued to; a handle is bound, not bearer. */
   sessionId: string;
   expiresAt: number;
@@ -64,7 +67,7 @@ export interface MintOptions {
   appId: string;
   action: string;
   sessionId: string;
-  frozenArgs?: Readonly<Record<string, string | number | boolean>>;
+  frozenArgs?: Readonly<Record<string, ArgValue>>;
   ttlMs?: number;
   /** `Infinity` for a reusable action handle; `1` for a confirmed one-shot. */
   uses?: number;

@@ -1,4 +1,7 @@
 import { readToolMeta } from '../framework/tools/adapter.js';
+// The leaf, not `./manifest.js`: this asks what a manifest could EXPRESS, and
+// the depth bound is the one fact it needs.
+import { MAX_ARG_DEPTH } from './arg-types.js';
 
 /**
  * Which tools an applet action may call **directly, with no model** (#445).
@@ -15,7 +18,7 @@ import { readToolMeta } from '../framework/tools/adapter.js';
  * two structural checks a flag cannot make on its own.
  */
 
-/** Zod nodes an {@link ArgSpec} can produce a value for. */
+/** Zod nodes a scalar `ArgSpec` can produce a value for. */
 const SCALAR_TYPES = new Set(['ZodString', 'ZodNumber', 'ZodBoolean', 'ZodEnum', 'ZodLiteral']);
 /** Wrappers that do not change whether the value underneath is a scalar. */
 const TRANSPARENT_TYPES = new Set([
@@ -35,18 +38,46 @@ function innerOf(node: unknown): unknown {
   return def.innerType ?? def.schema ?? def.type;
 }
 
+/** Guards a pathological schema; unrelated to the arg grammar's own bound. */
+const MAX_WRAPPER_HOPS = 16;
+
 /**
  * True when a manifest could supply this parameter.
  *
- * `ArgSpec` produces `string | number | boolean` and nothing else, so an
- * array, an object or a union of them is not something a declared arg can
- * become. Bounded by depth rather than trusting the schema to be shallow.
+ * Two budgets, and conflating them is the mistake worth naming. `hops` counts
+ * CONTAINERS and is the arg grammar's own bound — a manifest can declare
+ * {@link MAX_ARG_DEPTH} levels of `list` / `object` and no more, so a parameter
+ * whose deepest leaf sits past that is one no declared argument can become.
+ * `wraps` counts `ZodOptional` / `ZodDefault` / friends, which change nothing
+ * about the shape and exist only to stop a pathological schema recursing
+ * forever.
+ *
+ * Sharing {@link MAX_ARG_DEPTH} with the grammar is what makes the two agree.
+ * The failure if they drift is silent and fail-OPEN: this would admit a tool
+ * whose parameter a manifest cannot name, `mapToolArgs` would omit it, and the
+ * tool would be called with a required argument simply missing — which is
+ * exactly the class `directInvocableRefusal` exists to refuse at authoring
+ * time. `arg-types.test.ts` pins the agreement at the boundary, in both
+ * directions.
  */
-export function isRepresentableParam(node: unknown, depth = 0): boolean {
-  if (depth > 8) return false;
+export function isRepresentableParam(node: unknown, hops = 0, wraps = 0): boolean {
+  if (wraps > MAX_WRAPPER_HOPS) return false;
   const t = typeNameOf(node);
   if (SCALAR_TYPES.has(t)) return true;
-  if (TRANSPARENT_TYPES.has(t)) return isRepresentableParam(innerOf(node), depth + 1);
+  if (TRANSPARENT_TYPES.has(t)) return isRepresentableParam(innerOf(node), hops, wraps + 1);
+  if (hops >= MAX_ARG_DEPTH) return false;
+  if (t === 'ZodArray') return isRepresentableParam(innerOf(node), hops + 1, wraps + 1);
+  if (t === 'ZodObject') {
+    const shape = (node as { shape?: Record<string, unknown> })?.shape;
+    // A `ZodRecord` is deliberately absent: an `object` spec declares its
+    // fields by name, so an open-keyed record is not something it can produce.
+    if (!shape || typeof shape !== 'object') return false;
+    // `{}` is not vacuously representable: an `object` spec must declare at
+    // least one field, so nothing in the grammar produces an empty record.
+    const children = Object.values(shape);
+    if (children.length === 0) return false;
+    return children.every((child) => isRepresentableParam(child, hops + 1, wraps + 1));
+  }
   return false;
 }
 
@@ -73,9 +104,11 @@ export function unrepresentableParams(tool: unknown): string[] {
  * reach without a person in the loop.
  *
  * Representability is last because it is about what a manifest can *express*,
- * not about trust: `file_edit_lines` and `time_range_total` take nested
- * arrays, which `ArgSpec` cannot produce. Excluding them is honest — a
- * template layer for nested args is its own change.
+ * not about trust. It used to exclude `file_edit_lines` and `time_range_total`,
+ * whose arguments nest; #588 gave the arg vocabulary `list` and `object`, so
+ * both are expressible now and both are eligible. What it still refuses is a
+ * shape past {@link MAX_ARG_DEPTH}, an open-keyed record, and a union — none
+ * of which any declared argument can become.
  */
 export function directInvocableRefusal(toolName: string, tool: unknown): string | null {
   if (!tool) {

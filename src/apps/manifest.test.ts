@@ -4,6 +4,7 @@ import {
   parseRawAppManifest,
   validateActionArgs,
   AppActionSchema,
+  LATEST_APP_SCHEMA_VERSION,
 } from './manifest.js';
 
 function manifest(over: Record<string, unknown> = {}) {
@@ -76,10 +77,16 @@ describe('parseAppManifest', () => {
     ).toBe(false);
   });
 
-  it('rejects an unknown schemaVersion', () => {
-    // Bumped from 3 to 4 when #467 added a revision. The union grows, never
-    // replaces: v1 and v2 manifests on disk must still read.
-    expect(parseAppManifest(manifest({ schemaVersion: 4 })).ok).toBe(false);
+  it('rejects an unknown schemaVersion, and reads the newest one it can write', () => {
+    // Derived rather than a literal bumped per revision, and it pins BOTH
+    // directions: the newest revision this binary writes must be one it can
+    // read (bumping the constant without widening the union breaks every
+    // write), and one past it must be refused (the union grows, never
+    // replaces — v1 and v2 manifests on disk must keep reading).
+    expect(parseAppManifest(manifest({ schemaVersion: LATEST_APP_SCHEMA_VERSION })).ok).toBe(true);
+    expect(parseAppManifest(manifest({ schemaVersion: LATEST_APP_SCHEMA_VERSION + 1 })).ok).toBe(
+      false,
+    );
     expect(parseAppManifest(manifest({ schemaVersion: 0 })).ok).toBe(false);
   });
 

@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import { useTempHome } from '../__tests__/temp-home.js';
 import { mapToolArgs } from './tool-dispatch.js';
 import { directInvocableRefusal, unrepresentableParams } from './direct-tool.js';
-import type { ToolDispatch } from './manifest.js';
+import type { ArgValue, ToolDispatch } from './manifest.js';
 
 const dispatch = (args: Record<string, string | number | boolean>): ToolDispatch => ({
   kind: 'tool',
@@ -67,12 +67,35 @@ describe('direct-invocation eligibility (#445)', () => {
     expect(directInvocableRefusal('nope', undefined)).toContain('does not exist');
   });
 
-  // `ArgSpec` produces scalars only, so a nested array is not something a
-  // declared arg can become — which is why `file_edit_lines` is excluded.
-  it('sees which parameters a manifest cannot express', async () => {
+  // Inverted by #588: `edits` is `list<object<scalar | list<scalar>>>`, which
+  // the arg vocabulary now produces, so the tool it kept out of the tier is
+  // eligible. The `delete` action is covered too — its `lines` array is the
+  // third hop, and `MAX_ARG_DEPTH` is 3 for exactly that reason.
+  it('sees that a nested-but-expressible parameter is expressible', async () => {
     const r = await registry();
     expect(unrepresentableParams(r.file_write)).toEqual([]);
-    expect(unrepresentableParams(r.file_edit_lines).length).toBeGreaterThan(0);
+    expect(unrepresentableParams(r.file_edit_lines)).toEqual([]);
+    expect(unrepresentableParams(r.time_range_total)).toEqual([]);
+    expect(directInvocableRefusal('file_edit_lines', r.file_edit_lines)).toBeNull();
+    expect(directInvocableRefusal('time_range_total', r.time_range_total)).toBeNull();
+  });
+
+  // What it still refuses, so "expressible" does not quietly become "anything
+  // with a shape". Each is a real zod node no `ArgSpec` can produce.
+  it('still refuses a shape no declared argument can become', async () => {
+    const { z } = await import('zod');
+    const param = (node: z.ZodTypeAny) => ({ parameters: z.object({ p: node }) });
+    // A union.
+    expect(unrepresentableParams(param(z.union([z.string(), z.number()])))).toEqual(['p']);
+    // An open-keyed record: an `object` spec names its fields.
+    expect(unrepresentableParams(param(z.record(z.string(), z.string())))).toEqual(['p']);
+    // One hop past the grammar: list -> object -> list -> object -> scalar.
+    const tooDeep = z.array(z.object({ a: z.array(z.object({ b: z.string() })) }));
+    expect(unrepresentableParams(param(tooDeep))).toEqual(['p']);
+    // Exactly at the bound, to show the case above fails for DEPTH and not
+    // because the walk simply cannot see through four containers.
+    const atBound = z.array(z.object({ a: z.array(z.string()) }));
+    expect(unrepresentableParams(param(atBound))).toEqual([]);
   });
 });
 
@@ -86,7 +109,7 @@ describe('dispatchToolAction', () => {
     return { ...mod, runWorkspace: paths.runWorkspace };
   }
 
-  function invocation(args: Record<string, string | number | boolean>) {
+  function invocation(args: Record<string, ArgValue>) {
     return {
       appId: 'demo',
       actionName: 'go',
@@ -94,6 +117,60 @@ describe('dispatchToolAction', () => {
       action: { toolMode: 'write', confirmMode: 'off', args: {}, toolAllowlist: [] },
     } as never;
   }
+
+  /**
+   * The acceptance criterion of #588, stated as a filesystem fact: an applet
+   * action edits three lines of a file with no model in the loop. The `delete`
+   * edit is included deliberately — its `lines` array is the third nesting hop
+   * and the reason `MAX_ARG_DEPTH` is 3 rather than 2.
+   */
+  it('edits lines in place with no model in the loop', async () => {
+    const m = await load();
+    const target = path.join(m.runWorkspace('apps', 'demo'), 'doc.txt');
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, 'one\ntwo\nthree\nfour\n');
+
+    const res = await m.dispatchToolAction({
+      invocation: invocation({
+        file: target,
+        edits: [
+          { action: 'replace', line: 2, content: 'TWO' },
+          { action: 'delete', lines: [3] },
+          { action: 'append', content: 'five' },
+        ],
+      }),
+      dispatch: {
+        kind: 'tool',
+        tool: 'file_edit_lines',
+        args: { path: '$.file', edits: '$.edits' },
+      },
+      timeoutMs: null,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(fs.readFileSync(target, 'utf-8')).toBe('one\nTWO\nfour\nfive\n');
+  });
+
+  // Same tier, same gates: nesting does not buy a way out of the write scope.
+  it('is still bound by the write-scope gate when the argument nests', async () => {
+    const m = await load();
+    const outside = path.join(process.env.BERNARD_HOME as string, 'target.txt');
+    fs.writeFileSync(outside, 'safe\n');
+    const res = await m.dispatchToolAction({
+      invocation: invocation({
+        file: outside,
+        edits: [{ action: 'replace', line: 1, content: 'pwned' }],
+      }),
+      dispatch: {
+        kind: 'tool',
+        tool: 'file_edit_lines',
+        args: { path: '$.file', edits: '$.edits' },
+      },
+      timeoutMs: null,
+    });
+    expect(res.ok).toBe(false);
+    expect(fs.readFileSync(outside, 'utf-8')).toBe('safe\n');
+  });
 
   // The acceptance criterion of #445, stated as a filesystem fact.
   it('runs a real tool with no model in the loop', async () => {

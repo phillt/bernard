@@ -312,18 +312,37 @@ describe('the applet planners (#13)', () => {
   });
 
   it('the data planner names every argument type and no others', async () => {
-    // Read off the zod enum rather than retyped. A fifth type in the prompt is a
-    // plan the manifest cannot express; a missing one is a plan that reaches for
-    // `string` where an enum would have made the action uninjectable.
-    // `ArgSpecFields` is exported for exactly this. The refinement on
-    // `ArgSpecSchema` makes it a `ZodEffects`, so reading `.shape` there means
-    // reaching through `_def` — which breaks silently on a zod upgrade, and a
-    // silently-empty type list makes this whole assertion vacuous.
-    const { ArgSpecFields } = await import('../apps/manifest.js');
-    const types: readonly string[] = ArgSpecFields.shape.type.options;
+    // Read off the type table rather than retyped. An invented type in the
+    // prompt is a plan the manifest cannot express; a missing one is a plan
+    // that reaches for `string` where an enum would have made the action
+    // uninjectable. Both directions are checked, which the predecessor's name
+    // claimed and its body did not do (#588).
+    const { ARG_TYPE_IDS, ArgSpecFields } = await import('../apps/manifest.js');
+    const types: readonly string[] = ARG_TYPE_IDS;
     expect(types.length).toBeGreaterThan(0);
     const prompt = load('applet-data-planner').systemPrompt;
     for (const t of types) expect(prompt, `does not name the \`${t}\` type`).toContain(`\`${t}\``);
+
+    // The other direction: a backticked word in the prompt's type list that is
+    // not a real type. Scoped to the bullet list rather than the whole prompt,
+    // which legitimately backticks `values`, `maxItems` and tool names.
+    const list = /closed set of (\w+) types[\s\S]*?\n\n(- [\s\S]*?)\n\n/.exec(prompt);
+    expect(list, 'the prompt no longer carries a type list to check').not.toBeNull();
+    const named = [...(list?.[2] ?? '').matchAll(/^- `([a-z]+)`/gm)].map((m) => m[1]);
+    expect([...named].sort()).toEqual([...types].sort());
+
+    // And the COUNT the sentence states. A prompt that says "four types" above
+    // a list of six is self-contradictory, and the number is the half a model
+    // is most likely to take at its word — the list looks like examples.
+    const NUMERALS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight'];
+    expect(NUMERALS[types.length], 'the vocabulary outgrew the numeral list').toBeDefined();
+    expect(list?.[1]).toBe(NUMERALS[types.length]);
+
+    // `ArgSpecFields` is exported for the model's sake, and its level-0 enum
+    // must stay a subset of the table — a type it advertises that the table
+    // does not know would be authorable and unvalidatable.
+    const atRoot: readonly string[] = ArgSpecFields.shape.type.options;
+    expect(atRoot.filter((t) => !types.includes(t))).toEqual([]);
   });
 
   it('no planner depends on an intent field the interview never fills', async () => {
