@@ -9,6 +9,7 @@ import { isDaemonRunning, startDaemon, stopDaemon } from './client.js';
 import { printInfo, printError } from '../output.js';
 import { runWorkspace, WORKSPACE_MAX_AGE_MS } from '../paths.js';
 import { parseGrantSpec, type PermissionRule } from '../tool-permissions.js';
+import { failureStreak, jobCountNotice, jobSignals } from './health.js';
 
 /** Stops the daemon automatically when no enabled jobs remain. */
 function stopIfNoEnabledJobs(store: CronStore): void {
@@ -33,9 +34,10 @@ function confirm(prompt: string): Promise<boolean> {
   });
 }
 
-/** Lists all cron jobs with their status, schedule, and last-run info. */
+/** Lists all cron jobs with their status, schedule, last-run info and health signals. */
 export async function cronList(): Promise<void> {
   const store = new CronStore();
+  const logStore = new CronLogStore();
   const jobs = store.loadJobs();
 
   if (jobs.length === 0) {
@@ -54,12 +56,23 @@ export async function cronList(): Promise<void> {
       : 'never run';
     printInfo(`  ${indicator} ${job.name} (${job.id})`);
     printInfo(`    Schedule: ${job.schedule} | ${lastRun}`);
+    // Health is rendered from the shared table (#401) rather than decided here,
+    // so this listing, `cron list`, `cron get` and `cron status` cannot come to
+    // disagree about what is wrong with a job or what to do about it.
+    for (const signal of jobSignals({ job, failureStreak: failureStreak(job, logStore) })) {
+      printInfo(`    \u26a0 ${signal.label}`);
+      printInfo(`      ${signal.remedy}`);
+    }
   }
 
   const enabled = jobs.filter((j) => j.enabled).length;
   const disabled = jobs.length - enabled;
   printInfo('');
   printInfo(`${jobs.length} job(s): ${enabled} enabled, ${disabled} disabled`);
+  // The pile itself is the thing nobody could see: 42 junk jobs accumulated
+  // because no surface ever said how many there were (#401).
+  const notice = jobCountNotice(jobs.length, enabled);
+  if (notice) printInfo(notice);
 }
 
 /** Manually triggers an immediate execution of a cron job by ID, printing the result. */

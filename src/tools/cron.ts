@@ -2,8 +2,10 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import cron from 'node-cron';
 import { CronStore } from '../cron/store.js';
+import type { CronJob } from '../cron/types.js';
 import { CronLogStore } from '../cron/log-store.js';
 import { deleteCronJob } from '../cron/lifecycle.js';
+import { duplicateJob, failureStreak, jobCountNotice, jobSignals } from '../cron/health.js';
 import { isDaemonRunning, startDaemon, stopDaemon } from '../cron/client.js';
 import { debugLog } from '../logger.js';
 import { attachActionMeta } from '../framework/tools/adapter.js';
@@ -42,6 +44,7 @@ interface CronArgs {
   name?: string;
   schedule?: string;
   prompt?: string;
+  catchUp?: boolean;
 }
 
 interface CronDeps {
@@ -63,6 +66,20 @@ export function missing(action: string, field: string, example: string): string 
 }
 
 /**
+ * Renders a job's health signals as indented lines, or nothing when it is well.
+ *
+ * The decision is `health.ts`'s; this is only how the tool says it. Four
+ * surfaces render the same signals and a rule written at four call sites is four
+ * rules that drift, which is why the labels and remedies come from the table
+ * rather than from here.
+ */
+function signalLines(deps: CronDeps, job: CronJob, indent: string): string {
+  const signals = jobSignals({ job, failureStreak: failureStreak(job, deps.logStore) });
+  if (signals.length === 0) return '';
+  return signals.map((s) => `\n${indent}\u26a0 ${s.label} — ${s.remedy}`).join('');
+}
+
+/**
  * Per-action handlers for the consolidated `cron` tool (#253).
  *
  * Exported so the behaviour can be unit-tested directly, without going through
@@ -80,7 +97,7 @@ export function missing(action: string, field: string, example: string): string 
  * here would be a confusing near-collision.
  */
 export const CRON_ACTIONS = {
-  create: async ({ store }, { name, schedule, prompt }) => {
+  create: async ({ store }, { name, schedule, prompt, catchUp }) => {
     if (!name || !schedule || !prompt) {
       return missing(
         'create',
@@ -91,43 +108,79 @@ export const CRON_ACTIONS = {
     if (!cron.validate(schedule)) {
       return `Error: Invalid cron expression "${schedule}". Use standard cron format (e.g. "0 * * * *" for hourly, "*/5 * * * *" for every 5 minutes).`;
     }
+
+    // Nothing deduped, and 42 identical jobs were the result (#401): same
+    // schedule, same prompt, all enabled, all still firing at midnight months
+    // later. A refusal rather than the warning the issue asks for, because a
+    // warning that still writes the row is what would have happened 42 times —
+    // the tool has no confirm channel, so the only thing that can actually stop
+    // it is not creating it. Both ways forward are named, and the caller can
+    // always change the schedule or the prompt if it really wants two.
+    const twin = duplicateJob(store.loadJobs(), schedule, prompt);
+    if (twin?.enabled) {
+      return (
+        `Error: an enabled job already runs this exact prompt on this exact schedule: ` +
+        `"${twin.name}" (${twin.id}). Creating a second one would do the same work twice at ` +
+        `the same moment. Update that job instead ({"action":"update","id":"${twin.id}",...}), ` +
+        `or change the schedule or the prompt.`
+      );
+    }
+
     try {
-      const job = store.createJob(name, schedule, prompt);
+      const job = store.createJob(name, schedule, prompt, { catchUp });
+      const jobs = store.loadJobs();
+      // Said at the one moment that would have stopped the pile: while the count
+      // is still small enough to prune.
+      const notice = jobCountNotice(jobs.length, jobs.filter((j) => j.enabled).length);
+      const twinNote = twin
+        ? `\nNote: a disabled job has the same schedule and prompt — "${twin.name}" (${twin.id}). ` +
+          'Enable that one instead if this was meant to bring it back.'
+        : '';
       const daemonErr = ensureDaemon();
       if (daemonErr) {
-        return `Job "${job.name}" created (${job.id}) but daemon failed to start: ${daemonErr}`;
+        return `Job "${job.name}" created (${job.id}) but daemon failed to start: ${daemonErr}${twinNote}`;
       }
-      return `Cron job created:\n  ID: ${job.id}\n  Name: ${job.name}\n  Schedule: ${job.schedule}\n  Daemon: running`;
+      return (
+        `Cron job created:\n  ID: ${job.id}\n  Name: ${job.name}\n  Schedule: ${job.schedule}\n` +
+        `  Catch up missed runs: ${job.catchUp === true}\n  Daemon: running${twinNote}` +
+        (notice ? `\n\n${notice}` : '')
+      );
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       return `Error creating job: ${msg}`;
     }
   },
 
-  list: async ({ store }) => {
-    const jobs = store.loadJobs();
+  list: async (deps) => {
+    const jobs = deps.store.loadJobs();
     if (jobs.length === 0) return 'No cron jobs configured.';
     const lines = jobs.map((j) => {
       const status = j.enabled ? 'enabled' : 'disabled';
       const lastRun = j.lastRun
         ? `last run: ${j.lastRun} (${j.lastRunStatus || 'unknown'})`
         : 'never run';
-      return `  - ${j.name} [${status}]\n    ID: ${j.id}\n    Schedule: ${j.schedule}\n    ${lastRun}`;
+      return (
+        `  - ${j.name} [${status}]\n    ID: ${j.id}\n    Schedule: ${j.schedule}\n    ${lastRun}` +
+        signalLines(deps, j, '    ')
+      );
     });
-    return `Cron jobs (${jobs.length}):\n${lines.join('\n')}`;
+    const notice = jobCountNotice(jobs.length, jobs.filter((j) => j.enabled).length);
+    return `Cron jobs (${jobs.length}):\n${lines.join('\n')}` + (notice ? `\n\n${notice}` : '');
   },
 
-  get: async ({ store }, { id }) => {
+  get: async (deps, { id }) => {
     if (!id) return missing('get', 'id', '{"action":"get","id":"<job-id>"}');
-    const job = store.getJob(id);
+    const job = deps.store.getJob(id);
     if (!job) return `Error: No job found with ID "${id}".`;
     let result = `Job details:\n`;
     result += `  ID: ${job.id}\n`;
     result += `  Name: ${job.name}\n`;
     result += `  Schedule: ${job.schedule}\n`;
     result += `  Enabled: ${job.enabled}\n`;
+    result += `  Catch up missed runs: ${job.catchUp === true}\n`;
     result += `  Created: ${job.createdAt}\n`;
     result += `  Prompt: ${job.prompt}`;
+    if (job.nextRunAt) result += `\n  Next run: ${job.nextRunAt}`;
     if (job.lastRun) {
       result += `\n  Last run: ${job.lastRun}`;
       result += `\n  Last status: ${job.lastRunStatus || 'unknown'}`;
@@ -135,18 +188,18 @@ export const CRON_ACTIONS = {
         result += `\n  Last result: ${job.lastResult}`;
       }
     }
-    return result;
+    return result + signalLines(deps, job, '  ');
   },
 
-  update: async ({ store }, { id, name, schedule, prompt }) => {
+  update: async ({ store }, { id, name, schedule, prompt, catchUp }) => {
     if (!id) return missing('update', 'id', '{"action":"update","id":"<id>","prompt":"..."}');
-    if (!name && !schedule && !prompt) {
-      const received = Object.entries({ id, name, schedule, prompt })
+    if (!name && !schedule && !prompt && catchUp === undefined) {
+      const received = Object.entries({ id, name, schedule, prompt, catchUp })
         .filter(([, v]) => v !== undefined)
         .map(([k]) => k)
         .join(', ');
       return (
-        'Error: update requires at least one field to change (name, schedule, prompt) as a parameter in this tool call. ' +
+        'Error: update requires at least one field to change (name, schedule, prompt, catchUp) as a parameter in this tool call. ' +
         'Example: {"action":"update","id":"...","prompt":"new prompt text"}. ' +
         `Received parameters: ${received}.`
       );
@@ -154,13 +207,17 @@ export const CRON_ACTIONS = {
     if (schedule && !cron.validate(schedule)) {
       return `Error: Invalid cron expression "${schedule}". Use standard cron format (e.g. "0 * * * *" for hourly, "*/5 * * * *" for every 5 minutes).`;
     }
-    const updates: Record<string, string> = {};
+    const updates: Partial<CronJob> = {};
     if (name) updates.name = name;
     if (schedule) updates.schedule = schedule;
     if (prompt) updates.prompt = prompt;
+    if (catchUp !== undefined) updates.catchUp = catchUp;
     const job = store.updateJob(id, updates);
     if (!job) return `Error: No job found with ID "${id}".`;
-    return `Job updated:\n  ID: ${job.id}\n  Name: ${job.name}\n  Schedule: ${job.schedule}\n  Enabled: ${job.enabled}`;
+    return (
+      `Job updated:\n  ID: ${job.id}\n  Name: ${job.name}\n  Schedule: ${job.schedule}\n` +
+      `  Enabled: ${job.enabled}\n  Catch up missed runs: ${job.catchUp === true}`
+    );
   },
 
   delete: async (deps, { id }) => {
@@ -230,13 +287,23 @@ export const CRON_ACTIONS = {
     }
   },
 
-  status: async ({ store }) => {
+  status: async (deps) => {
     const running = isDaemonRunning();
-    const jobs = store.loadJobs();
+    const jobs = deps.store.loadJobs();
     const enabled = jobs.filter((j) => j.enabled).length;
-    const alerts = store.listAlerts().filter((a) => !a.acknowledged);
+    const alerts = deps.store.listAlerts().filter((a) => !a.acknowledged);
+    // Aggregate rather than per-job here: `status` answers "is everything all
+    // right", and the row-level labels belong to `list` and `get`.
+    const unwell = jobs.filter(
+      (j) => jobSignals({ job: j, failureStreak: failureStreak(j, deps.logStore) }).length > 0,
+    );
     let result = `Daemon: ${running ? 'running' : 'stopped'}\n`;
     result += `Jobs: ${jobs.length} total, ${enabled} enabled\n`;
+    if (unwell.length > 0) {
+      result += `Jobs needing attention: ${unwell.length} — ${unwell
+        .map((j) => `${j.name} (${j.id})`)
+        .join(', ')}\n`;
+    }
     result += `Unacknowledged alerts: ${alerts.length}`;
     if (alerts.length > 0) {
       result += '\n\nRecent alerts:';
@@ -244,7 +311,8 @@ export const CRON_ACTIONS = {
         result += `\n  - [${alert.timestamp}] ${alert.jobName}: ${alert.message}`;
       }
     }
-    return result;
+    const notice = jobCountNotice(jobs.length, enabled);
+    return notice ? `${result}\n\n${notice}` : result;
   },
 
   bounce: async ({ store }) => {
@@ -298,11 +366,13 @@ export function createCronTool() {
 
 Actions: create · list · get · update · delete · enable · disable · run · status · bounce
   create   — needs name, schedule, prompt
-  update   — needs id plus at least one of name/schedule/prompt (replaces that field entirely)
+  update   — needs id plus at least one of name/schedule/prompt/catchUp (replaces that field entirely)
   get/delete/enable/disable/run — need id
   list/status/bounce — need nothing else
 
-The daemon auto-starts when a job is created or enabled, and auto-stops when no enabled jobs remain. "bounce" restarts it (useful after a code update).`,
+The daemon auto-starts when a job is created or enabled, and auto-stops when no enabled jobs remain. "bounce" restarts it (useful after a code update).
+
+A job only runs while the machine is awake and the daemon is up. A fire the machine slept through is recorded as missed and, by default, dropped. Set catchUp for a job that monitors something ("check for replies every 2h"), where running late beats not running at all; leave it off for anything time-of-day specific, where firing hours late is worse than skipping.`,
         parameters: z.object({
           action: z.enum(CRON_ACTION_NAMES).describe('The cron operation to perform'),
           id: z
@@ -324,6 +394,12 @@ The daemon auto-starts when a job is created or enabled, and auto-stops when no 
             .optional()
             .describe(
               'The AI prompt to execute on each run — required by create, optional for update',
+            ),
+          catchUp: z
+            .boolean()
+            .optional()
+            .describe(
+              'Run ONE missed fire when the machine wakes or the daemon restarts, instead of dropping it. Default false. For monitors, not for time-of-day actions.',
             ),
         }),
         execute: async (args): Promise<string> => {
