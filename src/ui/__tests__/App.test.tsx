@@ -1881,6 +1881,74 @@ describe('<App> plain-text turn', () => {
     expect(agentSpy.processInput).toHaveBeenCalledTimes(1);
     unmount();
   });
+
+  it('lets a watcher wake again after its queued turn is dropped from /queue', async () => {
+    // `releaseWake` has two callers — the drain's `finally` and the `/queue`
+    // removal — and two callers is a convention, not a property. The removal
+    // is the one that has to be pinned: without it the watcher stays marked
+    // outstanding in `outstandingWakesRef` for the life of the SESSION, every
+    // later fire is refused silently, and the watcher simply stops waking.
+    //
+    // The sibling drop test above cannot stand in for this, and that is worth
+    // saying rather than assuming: it queues a `{kind:'user'}` turn, and
+    // `releaseWake` early-returns for anything that is not a watcher — so the
+    // one case it covers is exactly the one where the call does not matter.
+    // Only a REPEATING watcher can show it either, since a one-shot marks
+    // itself terminal on the first fire and would never have woken again.
+    const { WatcherStore } = await import('../../watchers/store.js');
+    const { getSessionId } = await import('../../logger.js');
+    const { digestOf } = await import('../../watchers/evaluate.js');
+    const store = new WatcherStore();
+    for (const w of store.list()) store.remove(w.id);
+
+    const watched = path.join(TMP_HOME, 'queue-drop.txt');
+    fs.writeFileSync(watched, 'first');
+    const w = store.create({
+      name: 'the thread',
+      target: { kind: 'file', path: watched },
+      predicate: { kind: 'changed' },
+      instructions: 'reply to the newest message',
+      ownerSessionId: getSessionId(),
+      repeating: true,
+      snapshot: digestOf({ exists: true, mtimeMs: fs.statSync(watched).mtimeMs, size: 5 }),
+    });
+    // Below the 15 s floor `create` enforces — this exercises the drop, not
+    // the floor.
+    store.update(w.id, { intervalMs: 40 });
+    process.env.BERNARD_WATCHER_TICK_MS = '20';
+
+    const { stdin, lastFrame, agentSpy, release, unmount } = heldTurn();
+    try {
+      await tick();
+      await submit(stdin, 'the first question');
+      // Fires while that turn is held, so it queues rather than running.
+      fs.writeFileSync(watched, 'second message');
+      await tick(400);
+      expect(agentSpy.processInput).toHaveBeenCalledTimes(1);
+
+      await submit(stdin, '/queue');
+      await tick(60);
+      expect(stripAnsi(lastFrame() ?? '')).toContain('reply to the newest message');
+      // Row 1 → its action menu → "Drop it". The list menu then re-reads, finds
+      // the queue empty and closes itself.
+      stdin.write(ENTER);
+      await tick(60);
+      stdin.write(ENTER);
+      await tick(60);
+      expect(stripAnsi(lastFrame() ?? '')).toContain('Nothing waiting');
+
+      // The whole question: a later change must still wake it.
+      fs.writeFileSync(watched, 'third message arrives after the drop');
+      await tick(400);
+      release();
+      await tick(400);
+      const seen = agentSpy.processInput.mock.calls.map(([t]) => String(t));
+      expect(seen.some((t) => t.includes('reply to the newest message'))).toBe(true);
+    } finally {
+      delete process.env.BERNARD_WATCHER_TICK_MS;
+      unmount();
+    }
+  });
 });
 
 describe('<App> interrupted turn leaves a durable record (#403)', () => {

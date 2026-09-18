@@ -902,6 +902,17 @@ const QUEUE_PREFIX_RE = /^\+(?:\s+|$)/;
  * later is refused mid-turn until somebody decides it is safe there, which is
  * the direction that fails loudly. `/queue` is on it because it is the one
  * command whose entire subject is the turn that has not started yet.
+ *
+ * **One keystroke deliberately does not meet this gate, and the asymmetry is
+ * the point rather than an oversight.** Enter on an EMPTY buffer never reaches
+ * `handleSubmit` at all — `Prompt` routes it to `onEmptySubmit`, i.e. to
+ * `actOnPendingMessage` — so acting on a delivered message queues silently
+ * mid-turn where typed text is refused. Two reasons, and both are about what
+ * the keystroke MEANS. It is not text: it reaches `requestTurn` and nothing
+ * else, so none of the ~45 idle-REPL branches this list is guarding is
+ * reachable from it. And the refusal above exists to keep #200's reading of
+ * bare TYPED text open, while a message already on screen has no #200 reading
+ * — CLAUDE.md records it as #202's answer, which is exactly what it gets.
  */
 const BUSY_ALLOWED_COMMANDS: readonly DispatchedCommand[] = ['/queue'];
 
@@ -1239,9 +1250,15 @@ export function App({
    * Never `runAgentTurn`: one arriving mid-turn must not hit `submittingRef` and
    * vanish. #493 requires the mid-turn answer to be #200's or #202's rather than
    * a third rule; this is #202's — a new top-level request, run after the
-   * current turn. That matters for the `^o` path and for an automatic mode,
-   * which can both fire while busy; the Enter path cannot, since `Prompt` is
-   * `disabled` for the whole turn.
+   * current turn.
+   *
+   * **All three producers can fire while busy**, and that is what closes the
+   * door on simplifying this back onto `runAgentTurn`. It used to be only the
+   * `^o` path and an automatic mode, because "the Enter path cannot, since
+   * `Prompt` is `disabled` for the whole turn" — an invariant #202 removed.
+   * The prompt is live during a turn now, so Enter on an empty buffer reaches
+   * `onEmptySubmit` while a turn is running, which is precisely the case that
+   * would vanish.
    */
   const runRemote = (text: string, label: string): boolean =>
     requestTurn({ text, source: { kind: 'remote', label } }).ok;
