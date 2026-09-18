@@ -729,6 +729,80 @@ function openOverlay<T>(
 }
 
 /**
+ * A number a numeric prompt may accept — or `null` when it may not (#440).
+ *
+ * Returns the VALUE rather than a boolean, so a caller cannot use a number it
+ * never validated; and `null` rather than `undefined`, because `0` is a
+ * legitimate answer at more than one of these prompts (`token-window` disables
+ * itself with it, and a voice warmup of 0 turns warmup off). Every call site
+ * therefore tests `=== null`, never falsiness — a `if (!value)` here silently
+ * refuses the one entry the field documents.
+ *
+ * The caller supplies the parse, which is what keeps the float prompts out of
+ * {@link acceptInteger} below: `parseFloat`'s leniency is arguably wanted on a
+ * percentage box (`80%` reads as 80, and `runThresholdPrompt`'s own toast
+ * offers `0.8 or 80`), where `parseInt`'s is never wanted on `max-tokens`. The
+ * strict round trip that fixes the integer case cannot be transplanted anyway —
+ * `String(Number.parseFloat('0.50'))` is `'0.5'`, so it would refuse the most
+ * ordinary thing anyone types into a temperature field. Closing the float half
+ * needs a different predicate and is its own decision.
+ *
+ * One deliberate tightening over the two float sites this absorbed, which
+ * tested `Number.isNaN`: `±Infinity` past an absent bound was accepted there
+ * and is refused here. Unreachable today — both live `range` descriptors in
+ * `providers/model-params.ts` carry a `min` and a `max`, and the two threshold
+ * prompts bound both ends — so nothing observable moves; it is stated because
+ * `ParamDescriptor.max` is optional and the next descriptor need not have one.
+ */
+export function acceptInRange(value: number, min?: number, max?: number): number | null {
+  if (!Number.isFinite(value)) return null;
+  if (min !== undefined && value < min) return null;
+  if (max !== undefined && value > max) return null;
+  return value;
+}
+
+/**
+ * The same, for an integer typed into a text prompt — the one decision behind
+ * every `parseInt` prompt in this file (#440).
+ *
+ * `parseInt` reads a PREFIX: `parseInt('8192abc', 10)` is `8192`. Four prompts
+ * each spelled their own guard against that and arrived at four different
+ * answers, and the registry-driven `/options` one — the only one with no strict
+ * check and no `trim()` — accepted `8192abc` and stored half of what was typed,
+ * with nothing on screen saying so. The round trip through `String` is what
+ * rejects a partial read. It is kept verbatim from `runMaxConcurrentPrompt`,
+ * the site that already had it right, so routing the other four through here
+ * moves no behaviour at any of them.
+ *
+ * `Number.isFinite` (in {@link acceptInRange}) is load-bearing rather than belt
+ * and braces: `parseInt('NaN')` is `NaN` and `String(NaN)` is `'NaN'`, so the
+ * literal string passes the round trip and only the finite check refuses it.
+ *
+ * The `trim()` is the opposite — belt and braces, and #440's claim that the
+ * `/options` prompt let `' 8192'` through is simply wrong. `TextInputOverlay`
+ * trims on commit, so `raw` is already trimmed for every caller here, which is
+ * also why the four sites that trimmed before parsing were each doing it
+ * redundantly. It is kept so the helper's contract holds on its own terms
+ * rather than by a property of one producer — the round trip is exactly the
+ * check that turns untrimmed input into a silent refusal.
+ *
+ * **Not the last word on where this lives.** `setup-wizard.ts` spells the same
+ * decision twice more (`validate` has the round trip, `decode` re-parses with
+ * only a finite check) and cannot reach these: that module is pure by contract
+ * — questions and decode rules over an injected context, testable with no
+ * terminal — so importing this file would hand it the whole Ink tree, the edge
+ * `tool-bytes.ts` and `mcp-names.ts` exist to refuse. A pure leaf beside
+ * `line-geometry.ts` would take all seven; it belongs with #441's unification
+ * of the three settings registries rather than ahead of it.
+ */
+export function acceptInteger(raw: string, min?: number, max?: number): number | null {
+  const trimmed = raw.trim();
+  const parsed = Number.parseInt(trimmed, 10);
+  if (String(parsed) !== trimmed) return null;
+  return acceptInRange(parsed, min, max);
+}
+
+/**
  * The two shapes every slash branch in `handleSubmit` tests, typed so the
  * command literal must be a member of `DISPATCHED_COMMANDS` (#393).
  *
@@ -1695,7 +1769,21 @@ export function App({
             // Route these off-loop /clear --save LLM calls (fact extraction,
             // specialist detection) through the session telemetry sink so they
             // aren't an accounting hole (#session-telemetry).
-            const recordSaveUsage = makeUsageRecorder(agent);
+            //
+            // **Out of turn, because nothing is ever going to price this
+            // ledger** (#439). `/clear --save` is a slash command, not a turn:
+            // the block above holds `runAgentTurn`'s guards itself and so never
+            // brackets `beginTurnStats()` / `finalizeTurnStats()` — and
+            // `finalizeTurnStats()` is the only thing that prices `turnLedger`
+            // into `sessionCostUsd`. A row written there is therefore not
+            // merely mis-attributed, it is dropped: `agent.clearHistory()`
+            // below calls `resetTurnTokenOdometer()`, which clears the ledger,
+            // in this same handler. The predecessor's stated goal — reaching
+            // the durable sink — was met, so `bernard usage` was right all
+            // along; it is the status bar's session `~$` that silently omitted
+            // the spend. The out-of-turn recorder prices the row once and folds
+            // it straight into `sessionCostUsd`, which survives the clear.
+            const recordSaveUsage = makeOutOfTurnUsageRecorder(agent);
             // Two ways out, and the 60 s one is the backstop rather than the
             // answer. `AbortSignal.timeout` bounds a hung LLM call and needs no
             // teardown; `clearAbort` is what Esc reaches. Composed with
@@ -3736,8 +3824,8 @@ export function App({
       label: 'New subject-change threshold (0-1, e.g. 0.15)',
     });
     if (val.cancelled) return;
-    const parsed = parseFloat(val.raw);
-    if (Number.isNaN(parsed) || parsed < 0 || parsed > 1) {
+    const parsed = acceptInRange(Number.parseFloat(val.raw), 0, 1);
+    if (parsed === null) {
       flashToast('Threshold must be a number between 0 and 1 (e.g. 0.15)', 'error');
       return;
     }
@@ -3756,14 +3844,8 @@ export function App({
       label: `Max concurrent sub-agents (1-${MAX_CONCURRENT_AGENTS_LIMIT}, default 4)`,
     });
     if (val.cancelled) return;
-    const raw = val.raw.trim();
-    const parsed = Number.parseInt(raw, 10);
-    if (
-      !Number.isFinite(parsed) ||
-      String(parsed) !== raw ||
-      parsed < 1 ||
-      parsed > MAX_CONCURRENT_AGENTS_LIMIT
-    ) {
+    const parsed = acceptInteger(val.raw, 1, MAX_CONCURRENT_AGENTS_LIMIT);
+    if (parsed === null) {
       flashToast(`Value must be an integer between 1 and ${MAX_CONCURRENT_AGENTS_LIMIT}.`, 'error');
       return;
     }
@@ -3803,8 +3885,8 @@ export function App({
   async function runThresholdPrompt(): Promise<void> {
     const val = await requestTextInput({ label: 'New threshold (0-100)' });
     if (val.cancelled) return;
-    const parsed = parseFloat(val.raw);
-    if (Number.isNaN(parsed) || parsed < 0 || parsed > 100) {
+    const parsed = acceptInRange(Number.parseFloat(val.raw), 0, 100);
+    if (parsed === null) {
       flashToast('Threshold must be a number between 0 and 100 (e.g. 0.8 or 80)', 'error');
       return;
     }
@@ -4069,9 +4151,13 @@ export function App({
         action: async () => {
           const valResult = await requestTextInput({ label: `New value for ${name}` });
           if (valResult.cancelled) return;
-          const val = parseInt(valResult.raw, 10);
           const minVal = opt.default === 0 ? 0 : 1;
-          if (Number.isNaN(val) || val < minVal) {
+          // No `max`: the bound `WIZARD_FIELDS` carries for these same four
+          // settings is deliberately not mirrored onto `OPTIONS_REGISTRY` here
+          // — unifying the three settings registries is #441's, and
+          // `settings-coverage.test.ts` reconciles them in the meantime.
+          const val = acceptInteger(valResult.raw, minVal);
+          if (val === null) {
             flashToast(
               `Invalid value. Must be ${minVal === 0 ? 'a non-negative integer' : 'a positive integer'}.`,
               'error',
@@ -4149,9 +4235,9 @@ export function App({
    * `cancelOnEmpty: false` is required — without it the field could be set but
    * never unset.
    *
-   * `String(n) !== raw` is the guard the older numeric prompts carry
-   * (`runMaxConcurrentPrompt`) and the registry-driven one does not: without
-   * it `parseInt` accepts `120wpm` and silently stores `120`.
+   * Validation is `acceptInteger`'s, which is where the guard this row was
+   * given at birth now lives for every numeric prompt in the file (#440):
+   * without it `parseInt` accepts `120wpm` and silently stores `120`.
    */
   async function promptVoiceInt(o: {
     prompt: string;
@@ -4174,8 +4260,8 @@ export function App({
     if (raw.length === 0 && o.blankClears !== false) {
       o.apply(undefined);
     } else {
-      const n = Number.parseInt(raw, 10);
-      if (!Number.isFinite(n) || String(n) !== raw || n < o.min) {
+      const n = acceptInteger(raw, o.min);
+      if (n === null) {
         flashToast(o.invalid, 'error');
         return;
       }
@@ -6081,16 +6167,14 @@ async function pickWizardField(
   const trimmed = val.raw.trim();
   if (!trimmed) return undefined;
   if (kind.kind === 'text') return trimmed;
-  if (kind.kind === 'int') {
-    const parsed = Number.parseInt(trimmed, 10);
-    if (!Number.isFinite(parsed) || String(parsed) !== trimmed) return undefined;
-    if (parsed < kind.min || parsed > kind.max) return undefined;
-    return parsed;
-  }
+  // Alone among the numeric prompts this one reports a refusal by returning
+  // `undefined` — the wizard treats that as "field left alone" — rather than by
+  // toasting. That is why the shared helpers hand back a value-or-`null` and
+  // leave the reporting to the caller: the decision is shared, the telling is
+  // not.
+  if (kind.kind === 'int') return acceptInteger(trimmed, kind.min, kind.max) ?? undefined;
   // float01
-  const parsed = Number.parseFloat(trimmed);
-  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) return undefined;
-  return parsed;
+  return acceptInRange(Number.parseFloat(trimmed), 0, 1) ?? undefined;
 }
 
 /**
@@ -6545,13 +6629,13 @@ async function pickGenerationParamsInk(
         delete values[d.id];
         continue;
       }
-      const parsed = isFloat ? Number.parseFloat(raw) : Number.parseInt(raw, 10);
-      if (
-        Number.isNaN(parsed) ||
-        (!isFloat && String(parsed) !== raw) ||
-        (d.min !== undefined && parsed < d.min) ||
-        (d.max !== undefined && parsed > d.max)
-      ) {
+      // The one site holding both modes, so it is also where the difference
+      // between them is visible: the bounds are shared, only the junk check
+      // differs — see `acceptInRange` for why a float cannot take the integer's.
+      const parsed = isFloat
+        ? acceptInRange(Number.parseFloat(raw), d.min, d.max)
+        : acceptInteger(raw, d.min, d.max);
+      if (parsed === null) {
         flashToast(
           `${d.label} must be a ${isFloat ? 'number' : 'whole number'} in ${bounds}.`,
           'error',

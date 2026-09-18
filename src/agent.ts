@@ -50,7 +50,7 @@ import { type ImageAttachment, IMAGE_TOKEN_ESTIMATE } from './image.js';
 import { PlanStore } from './plan-store.js';
 import { type ResolvedEntry } from './reference-resolver.js';
 import type { AgentContext } from './framework/context.js';
-import { recordTurnUsage, makeOutOfTurnUsageRecorder } from './framework/hooks/token-stats.js';
+import { makeUsageRecorder, makeOutOfTurnUsageRecorder } from './framework/hooks/token-stats.js';
 import { computeTurnUsageReport } from './usage-report.js';
 // Two producers now — `processInput`'s abort branch and
 // `recordInterruptedInput` — so the marker has one owner, and it lives in
@@ -704,8 +704,14 @@ export class Agent {
           this.history,
           this.config,
           this.ragStore,
-          // Count compression's off-loop LLM calls toward the per-turn ledger (#258).
-          this.spinnerStats ? (rec) => recordTurnUsage(this.spinnerStats!, rec) : undefined,
+          // Count compression's off-loop LLM calls toward the per-turn ledger
+          // (#258). Deliberately the IN-turn recorder, unlike `compactHistory`
+          // below: auto-compaction runs inside `processInput`, so the ledger is
+          // genuinely open and this turn's `finalizeTurnStats()` will price it.
+          // Through the shared factory rather than a second hand-rolled
+          // presence-guard, which is what `token-stats.ts` calls itself the one
+          // home for (#439).
+          makeUsageRecorder(this),
           // Announce only once compaction commits to the work. `shouldCompress`
           // stays true after a run the reclaim floor skipped (nothing changed,
           // so nothing re-baselines), so printing before the call would show
