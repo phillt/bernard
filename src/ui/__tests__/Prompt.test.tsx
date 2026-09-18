@@ -9,6 +9,7 @@ import { PlanStore } from '../../plan-store.js';
 import type { Agent } from '../../agent.js';
 import { FALLBACK_DIMENSIONS } from '../useDimensions.js';
 import { planPanelMaxRows } from '../plan-window.js';
+import { slashPickerMaxRows } from '../slash-picker.js';
 import {
   ENTER,
   ESC,
@@ -461,6 +462,106 @@ describe('<Prompt> input history (↑/↓ recall)', () => {
   });
 });
 
+/**
+ * The slash-command picker (#589): bounded, framed, and finally on the shared
+ * list keystream.
+ */
+describe('<Prompt> the slash-command picker', () => {
+  const rendered = async (typed: string) => {
+    const onSubmit = vi.fn();
+    const { stdin, lastFrame } = render(createElement(Prompt, { onSubmit }));
+    await tick();
+    for (const ch of typed) stdin.write(ch);
+    await tick();
+    return { stdin, lastFrame, onSubmit };
+  };
+
+  /**
+   * The layout defect. `matchSlashCommands('/')` returns the whole catalogue
+   * and `SlashHints` applied no height bound of any kind, so the frame measured
+   * 42 rows at the 24-row fallback this renderer supplies — nearly twice the
+   * terminal, inside a fixed-height frame whose only growable child is the
+   * transcript. Asserted on the WHOLE frame rather than on the popover, because
+   * the bound that matters is the dock's.
+   */
+  it('keeps the whole prompt dock inside the frame with every command matching', async () => {
+    const { lastFrame } = await rendered('/');
+    expect(matchSlashCommands('/').length).toBeGreaterThan(
+      slashPickerMaxRows(FALLBACK_DIMENSIONS.rows),
+    );
+    expect(frameRows(lastFrame())).toBeLessThanOrEqual(FALLBACK_DIMENSIONS.rows);
+  });
+
+  it('draws a framed popover rather than loose rows under the box', async () => {
+    const { lastFrame } = await rendered('/ex');
+    const frame = stripAnsi(lastFrame() ?? '');
+    // Two frames: the prompt box, then the popover hanging below it.
+    expect(frame.split('\n').filter((l) => /^╭─+╮$/.test(l))).toHaveLength(2);
+    expect(frame).toContain('/exit');
+  });
+
+  /**
+   * Wrap, kept deliberately (#589) rather than inherited from being the one
+   * list nobody had unified — a completion popup is something the user cycles,
+   * and reaching the tail of a 38-entry catalogue should not mean holding ↓
+   * thirty-seven times. It now comes from `useListCursor`'s `wrap` option, not
+   * from a fifth hand-rolled copy of the keymap.
+   */
+  it('wraps off the top onto the last command', async () => {
+    const { stdin, onSubmit } = await rendered('/');
+    stdin.write(ARROW_UP);
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    expect(onSubmit).toHaveBeenCalledWith(matchSlashCommands('/').at(-1)?.name);
+  });
+
+  it('wraps off the bottom onto the first command', async () => {
+    const all = matchSlashCommands('/');
+    const { stdin, onSubmit } = await rendered('/');
+    for (let i = 0; i < all.length; i++) {
+      stdin.write(ARROW_DOWN);
+      await tick();
+    }
+    stdin.write(ENTER);
+    await tick();
+    expect(onSubmit).toHaveBeenCalledWith(all[0].name);
+  });
+
+  it('scrolls the window to keep the highlight visible', async () => {
+    const all = matchSlashCommands('/');
+    const { stdin, lastFrame } = await rendered('/');
+    stdin.write(ARROW_UP); // straight to the tail
+    await tick();
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toContain(`> ${all.at(-1)?.name}`);
+    expect(frame).toContain(`of ${all.length}`);
+  });
+
+  /**
+   * A digit in this buffer is TEXT — `/2` is the start of a routine name, not
+   * "run the second row" — so the shared keymap is given `digits: false`. With
+   * its default this submits `/applets`.
+   */
+  it('types a digit instead of committing the row it names', async () => {
+    const { stdin, lastFrame, onSubmit } = await rendered('/');
+    stdin.write('2');
+    await tick();
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(stripAnsi(lastFrame() ?? '')).toContain('/2');
+  });
+
+  /** `listNavIntent` returns null for `q` so the overlays' dismiss key can own
+   *  it; here that is what keeps it an ordinary character. */
+  it('types q instead of letting the shared keymap swallow it', async () => {
+    const { stdin, lastFrame, onSubmit } = await rendered('/');
+    stdin.write('q');
+    await tick();
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(stripAnsi(lastFrame() ?? '')).toContain('/q');
+  });
+});
+
 describe('<Prompt> Esc dismisses the slash picker', () => {
   it('clears the buffer (and the hint strip) on Esc while the picker is open', async () => {
     const { stdin, lastFrame } = render(createElement(Prompt, { onSubmit: () => {} }));
@@ -636,6 +737,24 @@ describe('<Prompt> with a pinned plan inside the border', () => {
       }),
     );
   }
+
+  /**
+   * And with the slash popover open underneath it (#589). The picker's budget
+   * charges the input one row where this block's budget charges it ten, so the
+   * two overlap — deliberately, and inside slack the plan has already reserved.
+   * That claim is arithmetic in `slash-picker.test.ts`; this measures it on the
+   * frame the user actually gets.
+   */
+  it('stays inside the frame with the slash popover open below it', async () => {
+    const { stdin, lastFrame } = mountWithPlan(12);
+    await tick();
+    stdin.write('/');
+    await tick();
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toContain('plan');
+    expect(frame).toContain('commands');
+    expect(frameRows(lastFrame())).toBeLessThanOrEqual(FALLBACK_DIMENSIONS.rows);
+  });
 
   it('renders the plan and the input inside one box', async () => {
     const { stdin, lastFrame } = mountWithPlan(3);

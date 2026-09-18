@@ -155,8 +155,14 @@ export const PROMPT_CHROME_ROWS = 3;
  * `overlayReserveRows` uses) on purpose: the precise instrument would resize
  * the plan panel whenever an unrelated toast appeared, which is a worse
  * artifact than one row of over-reservation.
+ *
+ * Exported since #589: it is a fact about the FRAME, not about the plan, and
+ * `slash-picker.ts` needs the same number. Duplicating it there is what
+ * `inputRegionRows` below already calls the lesser evil in the one case where
+ * the alternative was importing a React component's module — no such excuse
+ * applies between two pure leaves.
  */
-const FRAME_CHROME_ROWS = 1 /* hint + status row */ + 2; /* busy spinner */
+export const FRAME_CHROME_ROWS = 1 /* hint + status row */ + 2; /* busy spinner */
 
 /**
  * Rows the transcript REGION keeps, below which it is not worth calling one.

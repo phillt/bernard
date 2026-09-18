@@ -8,6 +8,8 @@ import { useLineEditor } from './use-line-editor.js';
 import { BoundedLine, PROMPT_RESERVED_COLUMNS } from './BoundedLine.js';
 import { useDimensionsCtx } from './DimensionsContext.js';
 import { planPanelMaxRows } from './plan-window.js';
+import { slashPickerListRows, slashPickerMaxRows } from './slash-picker.js';
+import { useListCursor, useListWindow } from './overlays/use-list-cursor.js';
 
 /**
  * Columns the rounded box costs its children — one border cell each side.
@@ -119,19 +121,23 @@ export function Prompt({
     else editor.toLineEnd();
   }, !disabled);
   const { buffer } = editor;
-  const [selectedIndex, setSelectedIndex] = useState(0);
   // Position in `history` while browsing with ↑/↓; null = editing the live
   // buffer (not on the history rail).
   const [historyCursor, setHistoryCursor] = useState<number | null>(null);
   const colors = getThemeColors();
-  // Read here rather than inside the child so the whole box's height is one
+  // Read here rather than inside the children so the whole dock's height is one
   // readable expression: `planPanelMaxRows(rows)` above + `BoundedLine`'s
   // `max(3, min(10, floor(rows / 3)))` below, PLUS its two `▲/▼` affordance
   // rows, which sit outside its own cap — plus this border and the marginTop,
-  // which is `PROMPT_CHROME_ROWS`. The two caps stay INDEPENDENT — see
-  // `plan-window.ts` for why a shared pool would need both children to lift
-  // their demand up here — but they are jointly bounded there, because the
-  // fractions alone are not a bound once both floors are counted.
+  // which is `PROMPT_CHROME_ROWS` — plus `slashPickerMaxRows(rows)` for the
+  // popover hanging underneath (#589). The caps stay INDEPENDENT — see
+  // `plan-window.ts` for why a shared pool would need every child to lift its
+  // demand up here — but they are jointly bounded there, because the
+  // fractions alone are not a bound once the floors are counted. The picker's
+  // budget needs no term of its own in that sum: it charges the input one row
+  // where the plan's budget charges it ten, so the two overlap inside slack
+  // the plan has already reserved. `slash-picker.ts` states that, and
+  // `Prompt.test.tsx` measures the rendered dock rather than trusting it.
   const { rows } = useDimensionsCtx();
 
   // Computed every render rather than memoized: `dynamicCommands` is a stable
@@ -140,16 +146,44 @@ export function Prompt({
   // the buffer is unchanged. The match is a cheap prefix filter over a small
   // command set, so recomputing is negligible.
   const matches = matchSlashCommands(buffer, dynamicCommands?.() ?? []);
-  // Clamp selection whenever the match list shrinks (e.g. user typed another
-  // character and fewer commands match). Avoids dangling out-of-range cursor.
-  const clampedIndex = matches.length === 0 ? 0 : Math.min(selectedIndex, matches.length - 1);
+  const pickerRows = slashPickerMaxRows(rows);
 
-  // Keep the underlying state in sync with the clamped value so arrow-key
-  // handlers don't decrement from a stale high index (e.g. 19 → 18 → 17 …)
-  // when the list shrinks from 20 to 3.
-  useEffect(() => {
-    if (selectedIndex !== clampedIndex) setSelectedIndex(clampedIndex);
-  }, [selectedIndex, clampedIndex]);
+  const runPicked = (index: number) => {
+    const picked = matches[index];
+    if (!picked) return;
+    editor.clear();
+    setSelectedIndex(0);
+    setHistoryCursor(null);
+    onRecordInput?.(picked.name);
+    onSubmit(picked.name);
+  };
+
+  // The fifth copy of this keymap, finally routed through the shared one (#589).
+  // The four overlays #266 unified had already drifted; this one was missed
+  // because it lives here rather than in `overlays/`, and it wrapped where they
+  // clamp — see `wrap` on `ListCursorOptions` for why that stays, now as a
+  // decision. Two options are load-bearing and neither is the default:
+  //
+  //   `digits: false` — a digit in this buffer is TEXT. `/2` is the start of a
+  //   routine name, not "run the second row", and the shared keymap's default
+  //   would swallow it.
+  //   `total: matches.length` — `listNavIntent` answers `null` for every key
+  //   once that is 0, which is what lets `handleListKey` sit ahead of the
+  //   literal-buffer paths below without claiming Enter when no command matches.
+  //
+  // The clamp is the hook's, applied at render, so the `useEffect` that used to
+  // chase a stale index down a shrinking match list is gone.
+  const {
+    index: selectedIndex,
+    setIndex: setSelectedIndex,
+    handleKey: handleListKey,
+  } = useListCursor({
+    total: matches.length,
+    wrap: true,
+    digits: false,
+    onCommit: runPicked,
+  });
+  const { offset } = useListWindow(selectedIndex, slashPickerListRows(pickerRows), matches.length);
 
   const slashActive = matches.length > 0;
   useEffect(() => {
@@ -188,17 +222,42 @@ export function Prompt({
         }
         return;
       }
-      if (key.return) {
-        // Highlighted slash command wins over the literal buffer.
-        if (matches.length > 0) {
-          const picked = matches[clampedIndex];
-          editor.clear();
-          setSelectedIndex(0);
+      // History recall takes precedence while actively browsing — so ↑/↓ keep
+      // walking the history even when a recalled line looks like a slash command.
+      if (historyCursor !== null && key.upArrow) {
+        const next = Math.max(0, historyCursor - 1);
+        setHistoryCursor(next);
+        editor.setBuffer(history[next] ?? '');
+        return;
+      }
+      if (historyCursor !== null && key.downArrow) {
+        const next = historyCursor + 1;
+        if (next >= history.length) {
           setHistoryCursor(null);
-          onRecordInput?.(picked.name);
-          onSubmit(picked.name);
-          return;
+          editor.clear();
+        } else {
+          setHistoryCursor(next);
+          editor.setBuffer(history[next]);
         }
+        return;
+      }
+      // The shared list keystream: ↑/↓ over the matches and Enter to run the
+      // highlighted one (#589). AFTER the history rail, which outranks it so
+      // ↑/↓ keep walking history even when a recalled line looks like a slash
+      // command — that ordering has a test, and getting it wrong is silent:
+      // `listNavIntent` claims ↑ whenever anything matches, so the second ↑ of
+      // a recall would move the picker instead of the history.
+      //
+      // BEFORE the literal-buffer Enter below, which is what makes the
+      // highlighted command beat what was typed. Safe to sit there because
+      // `total === 0` makes `listNavIntent` answer `null` for every key, so
+      // with nothing matching this line is not in the way at all.
+      if (handleListKey(input, key)) return;
+      if (key.return) {
+        // A highlighted slash command has already won over the literal buffer:
+        // `handleListKey` above claims Enter whenever there are matches. This
+        // branch is the no-matches path only.
+        //
         // Trailing-\ continuation (Claude Code convention): swap the
         // backslash for a newline instead of submitting.
         if (buffer.endsWith('\\')) {
@@ -223,33 +282,6 @@ export function Prompt({
         onSubmit(text);
         return;
       }
-      // History recall takes precedence while actively browsing — so ↑/↓ keep
-      // walking the history even when a recalled line looks like a slash command.
-      if (historyCursor !== null && key.upArrow) {
-        const next = Math.max(0, historyCursor - 1);
-        setHistoryCursor(next);
-        editor.setBuffer(history[next] ?? '');
-        return;
-      }
-      if (historyCursor !== null && key.downArrow) {
-        const next = historyCursor + 1;
-        if (next >= history.length) {
-          setHistoryCursor(null);
-          editor.clear();
-        } else {
-          setHistoryCursor(next);
-          editor.setBuffer(history[next]);
-        }
-        return;
-      }
-      if (matches.length > 0 && key.upArrow) {
-        setSelectedIndex((i) => (i <= 0 ? matches.length - 1 : i - 1));
-        return;
-      }
-      if (matches.length > 0 && key.downArrow) {
-        setSelectedIndex((i) => (i >= matches.length - 1 ? 0 : i + 1));
-        return;
-      }
       // Start browsing history: ↑ on an empty buffer recalls the most recent
       // submission (survives interrupts — recorded at submit time).
       if (key.upArrow && buffer.length === 0 && history.length > 0) {
@@ -261,7 +293,7 @@ export function Prompt({
       if (matches.length > 0 && key.tab) {
         // Autocomplete: drop the highlighted command into the buffer and add a
         // trailing space so the user can type args without re-typing the name.
-        const picked = matches[clampedIndex];
+        const picked = matches[selectedIndex];
         editor.setBuffer(picked.name + ' ');
         setSelectedIndex(0);
         return;
@@ -308,7 +340,12 @@ export function Prompt({
           />
         </Box>
       </Box>
-      <SlashHints matches={matches} selectedIndex={clampedIndex} />
+      <SlashHints
+        matches={matches}
+        selectedIndex={selectedIndex}
+        offset={offset}
+        maxRows={pickerRows}
+      />
     </Box>
   );
 }

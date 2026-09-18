@@ -27,6 +27,24 @@ import { clamp, clampOffset } from './viewer-util.js';
 export interface ListCursorOptions extends ListNavOptions {
   /** Starting row, clamped into `[0, total-1]` (and `0` when `total` is 0). */
   initialIndex?: number;
+  /**
+   * Move off either end onto the other one instead of stopping there.
+   *
+   * On the CURSOR rather than in `list-nav.ts`, which is the module's own
+   * split: the keymap answers "which way, and by how much?", and the consumer
+   * answers what that means here. A delta is the same delta whether the list
+   * cycles or not.
+   *
+   * Off by default, because clamping is right for the four overlays that are
+   * forms — they carry digit shortcuts and a position row, and running past the
+   * end of one is a slip, not a gesture. The slash-command picker (#589) is the
+   * exception and turns it on: a completion popup is something the user cycles
+   * through the way every shell completion menu does, and reaching the tail of
+   * a 38-entry catalogue should not mean holding ↓ thirty-seven times. Before
+   * #589 that list wrapped because it was the one list nobody had unified, not
+   * because anyone had decided it should; this is the decision.
+   */
+  wrap?: boolean;
   /** Enter, and — unless {@link onDigit} overrides — a digit. Receives an INDEX. */
   onCommit: (index: number) => void;
   /**
@@ -53,7 +71,16 @@ export interface ListCursor {
 }
 
 export function useListCursor(opts: ListCursorOptions): ListCursor {
-  const { total, initialIndex = 0, onCommit, onDigit, onToggle, onAxis, ...nav } = opts;
+  const {
+    total,
+    initialIndex = 0,
+    wrap = false,
+    onCommit,
+    onDigit,
+    onToggle,
+    onAxis,
+    ...nav
+  } = opts;
   const last = Math.max(0, total - 1);
   const [stored, setIndex] = useState(() => clamp(initialIndex, 0, last));
 
@@ -77,7 +104,13 @@ export function useListCursor(opts: ListCursorOptions): ListCursor {
         // the render-closure `index` would collapse both moves into one. The
         // inner clamp re-applies the render rule to `prev`, which is the raw
         // stored value and may be stale-out-of-range.
-        setIndex((prev) => clamp(clamp(prev, 0, last) + intent.delta, 0, last));
+        setIndex((prev) => {
+          const next = clamp(prev, 0, last) + intent.delta;
+          // `%` is remainder, not modulo, in JS: stepping up off row 0 gives
+          // `-1 % total === -1`, which clamps straight back to 0 and the wrap
+          // silently does nothing in the one direction nobody tests first.
+          return wrap ? ((next % total) + total) % total : clamp(next, 0, last);
+        });
         return true;
       case 'commit':
         onCommit(index);
