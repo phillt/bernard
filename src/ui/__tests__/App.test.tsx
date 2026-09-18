@@ -121,6 +121,7 @@ process.env.BERNARD_HOME = TMP_HOME;
 import { App, buildResumeSeed, isScaffoldingMessage, type AppStores } from '../App.js';
 import { resolveReferences, shouldSkipResolver } from '../../reference-resolver.js';
 import { INTERRUPT_CANCEL_NOTE } from '../../react.js';
+import { INTERRUPTED_MARKER } from '../../session-markers.js';
 import { DimensionsProvider } from '../DimensionsContext.js';
 import type { CoreMessage } from 'ai';
 import type { BernardConfig } from '../../config.js';
@@ -1369,6 +1370,10 @@ describe('<App> interrupted turn leaves a durable record (#403)', () => {
     // Before this, the notice named a turn with no visible prompt above it.
     expect(frame).toContain('a long question');
     expect(frame).toContain('Turn interrupted after');
+    // Two records, one per audience: the marker is the MODEL's, and rendering
+    // it gives the user a bubble whose entire content is transcript furniture,
+    // beside the notice that already says it in their own channel.
+    expect(frame).not.toContain(INTERRUPTED_MARKER);
     unmount();
   });
 

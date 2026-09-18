@@ -490,6 +490,50 @@ describe('createWebSearchTool', () => {
       expect(detectResultFailure(result)).toBeUndefined();
     });
 
+    it('names the missing key when the only configured provider FAILED (#565)', async () => {
+      // The mixed state: one key set and that provider 500ing, one key unset,
+      // DDG empty. Nothing that could plausibly have answered ran, so this is
+      // the same situation as no keys at all — but the old guard tested "are
+      // ALL keyed providers unconfigured", which is strictly narrower, so it
+      // fell through to "try different terms" and dropped the key hint.
+      vi.stubEnv('BRAVE_API_KEY', 'test-key');
+      vi.stubGlobal(
+        'fetch',
+        createMockFetch({
+          'api.search.brave.com': () => jsonResponse({}, false),
+          'html.duckduckgo.com': () => htmlResponse(DDG_HTML_EMPTY),
+        }),
+      );
+
+      const result = await tool.execute({ query: 'obscure thing' });
+
+      expect(result).toContain('TAVILY_API_KEY');
+      expect(result).toContain('brave could not be reached');
+      expect(result).toContain('Rephrasing is unlikely to help');
+      expect(result).not.toContain('Try different or broader terms');
+      expect(detectResultFailure(result)).toBeUndefined();
+    });
+
+    it('still names a missing key even when rephrasing IS the right advice', async () => {
+      // Brave configured and answering empty, Tavily unset. A real provider
+      // ran, so the query is worth changing — but a missing key is worth naming
+      // whenever there is one, and `keyHint` used to be dropped here too.
+      vi.stubEnv('BRAVE_API_KEY', 'test-key');
+      vi.stubGlobal(
+        'fetch',
+        createMockFetch({
+          'api.search.brave.com': () => jsonResponse({ web: { results: [] } }),
+          'html.duckduckgo.com': () => htmlResponse(DDG_HTML_EMPTY),
+        }),
+      );
+
+      const result = await tool.execute({ query: 'obscure thing' });
+
+      expect(result).toContain('Try different or broader terms');
+      expect(result).toContain('TAVILY_API_KEY');
+      expect(detectResultFailure(result)).toBeUndefined();
+    });
+
     it('keeps the rephrase advice when a configured provider answered empty', async () => {
       // A real provider ran and found nothing. Here the query IS the variable
       // worth changing, so the original wording is correct and must survive.
@@ -508,28 +552,9 @@ describe('createWebSearchTool', () => {
 
       expect(result).toContain('Try different or broader terms');
       expect(result).not.toContain('not configured');
-      expect(detectResultFailure(result)).toBeUndefined();
-    });
-
-    it('says a configured provider could not be reached rather than staying silent', async () => {
-      // Brave is configured and broke; Tavily is not configured; DDG answered
-      // empty. Rephrasing is still reasonable, but "no results" alone hides
-      // that the provider most likely to have answered never did.
-      vi.stubEnv('BRAVE_API_KEY', 'test-key');
-      vi.stubGlobal(
-        'fetch',
-        createMockFetch({
-          'api.search.brave.com': () => {
-            throw new Error('network error');
-          },
-          'html.duckduckgo.com': () => htmlResponse(DDG_HTML_EMPTY),
-        }),
-      );
-
-      const result = await tool.execute({ query: 'test' });
-
-      expect(result).toContain('brave could not be reached');
-      expect(result).toContain('Try different or broader terms');
+      // Nothing is missing, so no key is named — the hint is conditional, not
+      // boilerplate appended to every message.
+      expect(result).not.toContain('API_KEY');
       expect(detectResultFailure(result)).toBeUndefined();
     });
 

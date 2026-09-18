@@ -252,6 +252,24 @@ function proseOf(result: unknown): string {
 }
 
 /**
+ * Labels Bernard mints itself AND spells literally in {@link classifyError}'s
+ * patterns, so reading them is exact rather than a guess (#565).
+ *
+ * Membership is not "whatever happens to match its own name" — `timeout` does
+ * too, and is not here, because nothing in this repo ever sets it as a
+ * `WrapperResult.error`. The property that earns a place is that BERNARD wrote
+ * the label, which is what makes it more reliable than the prose beside it.
+ * `error-taxonomy.test.ts` pins that each member still classifies to itself, so
+ * a pattern edit that broke the round trip fails there rather than silently
+ * demoting a label to the prose tier.
+ */
+const AUTHORITATIVE_LABELS: ReadonlySet<ToolErrorType> = new Set<ToolErrorType>([
+  'pool_exhausted',
+  'step_limit',
+  'parse_failed',
+]);
+
+/**
  * Classifies a failed `WrapperResult` from its DIAGNOSTIC, falling back to its
  * label (#565).
  *
@@ -266,33 +284,43 @@ function proseOf(result: unknown): string {
  * cause. The agent retried anyway, which means the guidance was not merely
  * wrong, it was ignored.
  *
- * **The fallback is by OUTCOME, not by emptiness**, and its honest scope is
- * narrow. Exactly three `ToolErrorType` names are spelled literally in
- * {@link classifyError}'s patterns — `pool_exhausted`, `step_limit`,
- * `parse_failed` — and each is there because Bernard itself emits it. A
- * free-form label does not classify: `rate_limit` misses, because the pattern
- * is `rate[\s-]?limit` and has no underscore. So consulting the label second
- * preserves Bernard's own three and little else, which is precisely why
- * consulting it FIRST was a defect rather than a defensible second-best.
+ * **Two tiers, because not every label is equally trustworthy.**
  *
- * What the fallback is really for is MODEL-AUTHORED output. Every producer in
- * this repo sets an informative `result` — checked, all nine, from
+ * {@link AUTHORITATIVE_LABELS} — `pool_exhausted`, `step_limit`,
+ * `parse_failed` — are minted by Bernard and spelled literally in
+ * {@link classifyError}'s patterns, so they are read FIRST. Every other label
+ * is free-form text the specialist wrote, and is consulted only after the prose
+ * has failed to say anything the taxonomy recognises.
+ *
+ * The tiering is not decoration; a flat prose-first rule INVERTS on the one
+ * shape `structured-output.ts` documents as legitimate — a specialist reporting
+ * a downstream parse failure as `{error: 'parse_failed', result: 'The upstream
+ * API returned 404 not found…'}`. Measured, the prose matches `not\s*found`
+ * first, so the label is never reached and the result classifies `not_found`,
+ * which for a shell wrapper is **correctable** — buying a correction-agent run
+ * for a failure no call-shape change can fix. Under the old label-first rule it
+ * was `parse_failed`, which is not.
+ *
+ * The other two cannot invert either way, and that is worth knowing before
+ * anyone flattens this: `tool-wrapper.ts` and `tool-wrapper-run.ts` both
+ * OVERWRITE `result` when they set those labels, so a model cannot author prose
+ * beside them. Nothing overwrites it on the model-authored `parse_failed` path,
+ * which is exactly why that one is the exception.
+ *
+ * **The second tier is for MODEL-AUTHORED output**, and is narrow. Every
+ * producer in this repo sets an informative `result` — checked, all nine, from
  * `No specialist found with id "x"` to `Maximum concurrent agents (4) reached.`
  * — so if those were the only sources the label could be ignored entirely. But
- * `wrapWrapperResult` parses a `result` the specialist wrote, and nothing
- * constrains it: a model is free to leave it empty, or to fill it with prose
- * the taxonomy cannot read while labelling the failure correctly. The fallback
- * is for that, and for a future producer that puts the signal only in the
- * label.
+ * `wrapWrapperResult` passes through a `result` the specialist wrote, and
+ * nothing constrains it: a model may leave it empty, or fill it with prose the
+ * taxonomy cannot read while labelling the failure correctly. A free-form label
+ * mostly classifies as nothing anyway — `rate_limit` misses, the pattern being
+ * `rate[\s-]?limit` with no underscore — which is precisely why reading it
+ * FIRST was a defect rather than a defensible second-best.
  *
- * (An earlier draft of this comment cited the pool refusal as the empty-prose
- * case. It is not: production emits the sentence above. Only a test fixture
- * carries `result: ''` there.)
- *
- * **Bernard's own three labels survive either order, by construction rather
- * than luck.** Those same first three patterns match both the label and the
- * prose it ships with — "Maximum concurrent agents", "ran out of steps", "did
- * not produce valid structured output" — so the two spellings cannot disagree.
+ * (An earlier draft cited the pool refusal as the empty-prose case. It is not:
+ * production emits the sentence above. Only a test fixture carries `result: ''`
+ * there.)
  *
  * Distinct from {@link classifyToolFailure}, which reads an already-annotated
  * result STRING and trusts the marker embedded in it. This one runs earlier, on
@@ -304,6 +332,9 @@ export function classifyWrapperFailure(input: {
   toolName?: string;
 }): Classification {
   const { error, toolName } = input;
+  if (error !== undefined && (AUTHORITATIVE_LABELS as ReadonlySet<string>).has(error)) {
+    return build(error as ToolErrorType, toolName);
+  }
   const fromProse = classifyError({ message: proseOf(input.result), toolName });
   if (fromProse.category !== 'unknown' || !error) return fromProse;
   // No ternary back to `fromProse` when the label misses too: `build` is a pure

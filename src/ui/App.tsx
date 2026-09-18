@@ -4975,10 +4975,18 @@ export function App({
       // This is deliberately a UI-only notice, the same channel the startup
       // lineup-correction and `provider-wiped` notices use: it never enters
       // `agent.history`, because the model's record of the interrupt is the
-      // `[interrupted by user]` marker `Agent.processInput` pushes (which,
-      // since #403, lands even when the abort beat the first step). Two
-      // records, one per audience — duplicating the UI text into history would
-      // make the model read its own transcript furniture as content.
+      // `INTERRUPTED_MARKER` its two producers push — `Agent.processInput`'s
+      // abort branch (which, since #403, lands even when the abort beat the
+      // first step) and `recordInterruptedInput`, for the window before
+      // `processInput` is reached at all (#478). Two records, one per audience
+      // — duplicating the UI text into history would make the model read its
+      // own transcript furniture as content.
+      //
+      // The split only holds because the transcript SKIPS the bare marker:
+      // `isScaffoldingMessage` matches it as a whole string (`session-markers.ts`).
+      // Unfiltered it rendered as an assistant bubble containing nothing but
+      // furniture, right beside this notice. A marker appended to real partial
+      // text is not matched, and still renders — that text is content.
       //
       // The chrome stays: it is the right affordance while the turn is dead but
       // before the user types. The bug was that it was the ONLY record.

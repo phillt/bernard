@@ -52,7 +52,12 @@ import { type ResolvedEntry } from './reference-resolver.js';
 import type { AgentContext } from './framework/context.js';
 import { recordTurnUsage, makeOutOfTurnUsageRecorder } from './framework/hooks/token-stats.js';
 import { computeTurnUsageReport } from './usage-report.js';
-import { CONTINUATION_PREFIX } from './session-markers.js';
+// Two producers now — `processInput`'s abort branch and
+// `recordInterruptedInput` — so the marker has one owner, and it lives in
+// `session-markers.ts` because the transcript must also skip it. Re-exported
+// because callers import it from './agent.js'.
+import { CONTINUATION_PREFIX, INTERRUPTED_MARKER } from './session-markers.js';
+export { INTERRUPTED_MARKER } from './session-markers.js';
 import { DefaultPolicyEngine, isReactEffective } from './policy/index.js';
 import type { PolicyDecision, PolicyEngine, PolicyResult } from './policy/index.js';
 import { extractCitationMarkers, type SourceItem, type TurnProvenance } from './provenance.js';
@@ -94,16 +99,6 @@ export {
   INTERRUPT_CANCEL_NOTE,
   buildEnforcementFeedback,
 } from './react.js';
-
-/**
- * What the model is told when a turn is stopped (#403).
- *
- * One owner, because there are now two producers: `processInput`'s abort branch
- * and {@link Agent.recordInterruptedInput}, which covers the window before
- * `processInput` is ever reached. Two spellings of this would be two states the
- * model has to recognise, and only one of them would be in `agent.test.ts`.
- */
-export const INTERRUPTED_MARKER = '[interrupted by user]';
 
 export interface CompactResult {
   compacted: boolean;

@@ -293,23 +293,39 @@ export function createWebSearchTool(provenance?: ProvenanceStore) {
         // evidence registration for a search that genuinely ran.
         if (empty.length > 0) {
           const head = `No results for "${query}" (searched: ${empty.join(', ')}).`;
-          // Whether rephrasing is worth trying depends on whether a provider
-          // that could plausibly have answered ever ran. With every keyed
-          // provider unconfigured the only thing that searched was the
-          // unauthenticated scrape, and no wording of the query changes that —
-          // so the advice has to name the install, not the query.
-          if (keyedProviders.length > 0 && unconfigured.length === keyedProviders.length) {
+          // Whether rephrasing is worth trying turns on whether a provider that
+          // could plausibly have answered ACTUALLY RAN — not on whether every
+          // keyed provider is unconfigured, which is a strictly narrower
+          // question and comes apart the moment one key is set and that
+          // provider 500s. Measured on exactly that shape (Brave configured and
+          // failing, Tavily unset, DDG empty): the old test said "try different
+          // terms" and dropped `keyHint` entirely, so the one missing key was
+          // never named — the #565b conflation surviving inside the branch that
+          // handles the mixed state, which is the ordinary shape of a half
+          // set-up install meeting an ordinary transient.
+          const keyedAnswered = keyedProviders.some(
+            (name) => !unconfigured.includes(name) && !failed.includes(name),
+          );
+          if (keyedProviders.length > 0 && !keyedAnswered) {
+            const why = [
+              unconfigured.length > 0
+                ? `${conjoin(unconfigured, 'and')} ${unconfigured.length === 1 ? 'is' : 'are'} not configured`
+                : '',
+              failed.length > 0 ? `${conjoin(failed, 'and')} could not be reached` : '',
+            ].filter(Boolean);
             return (
-              `${head} Only the keyless DuckDuckGo fallback ran — ` +
-              `${conjoin(unconfigured, 'and')} ${unconfigured.length === 1 ? 'is' : 'are'} not configured, ` +
+              `${head} Only the keyless DuckDuckGo fallback ran — ${why.join(', and ')}, ` +
               'so this is a gap in search coverage rather than a bad query.' +
               `${keyHint} Rephrasing is unlikely to help; if you know a likely URL, call web_read directly.`
             );
           }
+          // A keyed provider ran and found nothing, so the query IS the variable
+          // worth changing. `keyHint` rides along anyway: a missing key is worth
+          // naming whenever there is one, even where rephrasing is also sound.
           const alsoFailed =
             failed.length > 0 ? ` (${conjoin(failed, 'and')} could not be reached.)` : '';
           return (
-            `${head}${alsoFailed} ` +
+            `${head}${alsoFailed}${keyHint} ` +
             'Try different or broader terms, or call web_read with a known URL.'
           );
         }

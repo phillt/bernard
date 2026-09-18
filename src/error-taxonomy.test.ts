@@ -399,6 +399,51 @@ describe('classifyWrapperFailure — the diagnostic decides, not the label (#565
     ).toBe('pool_exhausted');
   });
 
+  it('does not invert on a model-authored parse_failure whose prose names a 404', () => {
+    // `structured-output.ts` documents this shape as legitimate: a specialist
+    // reporting a DOWNSTREAM parse failure writes `parse_failed` and its own
+    // prose. Read prose-first the `not\s*found` in that prose wins, and for a
+    // shell wrapper `not_found` is CORRECTABLE — so the correction queue buys a
+    // correction-agent run for a failure no call-shape change can fix.
+    const cls = classifyWrapperFailure({
+      result: 'The upstream API returned 404 not found for the schema endpoint.',
+      error: 'parse_failed',
+      toolName: 'shell',
+    });
+    expect(cls.category).toBe('parse_failed');
+    expect(cls.correctable).toBe(false);
+  });
+
+  it('reads an authoritative label ahead of prose, and a free-form one behind it', () => {
+    // The whole tiering in one assertion pair. Same prose, same tool; only the
+    // label differs, and that is what decides which tier applies.
+    const prose = 'The upstream API returned 404 not found for the schema endpoint.';
+    expect(classifyWrapperFailure({ result: prose, error: 'step_limit' }).category).toBe(
+      'step_limit',
+    );
+    expect(classifyWrapperFailure({ result: prose, error: 'runtime_error' }).category).toBe(
+      'not_found',
+    );
+  });
+
+  it('every authoritative label still classifies to itself', () => {
+    // What earns a label its place in the trusted tier is that `classifyError`
+    // spells it literally, so reading it is exact rather than a guess. A
+    // pattern edit that broke the round trip would silently demote it to the
+    // prose tier; this fails instead.
+    for (const label of ['pool_exhausted', 'step_limit', 'parse_failed'] as const) {
+      expect(classifyError({ message: label }).category, label).toBe(label);
+    }
+    // And membership is NOT "anything that matches its own name" — `timeout`
+    // does, and is deliberately absent, because nothing in this repo sets it as
+    // a `WrapperResult.error`.
+    expect(classifyError({ message: 'timeout' }).category).toBe('timeout');
+    expect(
+      classifyWrapperFailure({ result: 'bash: fooo: command not found', error: 'timeout' })
+        .category,
+    ).toBe('not_found');
+  });
+
   it('does not pretend a free-form label is a category', () => {
     // Only three `ToolErrorType` names are spelled literally in the patterns —
     // `pool_exhausted`, `step_limit`, `parse_failed`, each because Bernard
