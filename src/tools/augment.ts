@@ -20,6 +20,7 @@ import { breadthOptionsFor, type BreadthOption } from '../permissions/breadth.js
 import { WRITE_PATH_TOOLS } from '../permissions/matchers.js';
 import { checkWritePath } from '../permissions/write-scope.js';
 import { runOrdered } from './write-barrier.js';
+import { displayToolName, runTracked } from './in-flight.js';
 import { duplicateKeyFor, duplicateRefusal, recordSucceededCall } from './duplicate-guard.js';
 
 /**
@@ -1025,7 +1026,13 @@ export function augmentTools(
               // per call so `memory{action:'read'}` and a read-shaped `shell`
               // are correctly reads.
               envelope = await runOrdered(gates.isWrite, () =>
-                source.execute(args, execOptions as never),
+                // Registered for the duration so the spinner can name a call
+                // that is taking too long (#594). INSIDE `runOrdered`, so a read
+                // parked on the write barrier does not out-rank the write it is
+                // waiting for.
+                runTracked(displayToolName(toolName, source.meta), () =>
+                  source.execute(args, execOptions as never),
+                ),
               );
               debugLog(`augment:${toolName}:done`, {
                 ok: envelope.status === 'ok',
@@ -1142,8 +1149,12 @@ export function augmentTools(
           try {
             // The same ordering as the envelope branch above, through the same
             // helper. MCP tools take THIS branch — which is where the duplicate
-            // message came from.
-            result = await runOrdered(gates.isWrite, () => originalExecute(args, execOptions));
+            // message came from, and where the 35-minute hang lived (#594).
+            result = await runOrdered(gates.isWrite, () =>
+              runTracked(displayToolName(toolName, readToolMeta(toolDef)), () =>
+                originalExecute(args, execOptions),
+              ),
+            );
           } catch (thrown: unknown) {
             debugLog(
               `augment:${toolName}:threw`,

@@ -233,11 +233,19 @@ export const toolWrapperDefinition: AgentDefinition<ToolWrapperInput, WrapperRes
 /**
  * What every surface says when a dispatch ran out of steps with nothing to show.
  *
- * One spelling, because there were four: this function's own inline template,
- * `activity-summary.ts`'s prose preamble, `task.ts`'s, and — until it called
- * this — the persona path's. The recovery advice is read from the taxonomy
- * playbook rather than written a second time, which is the property the caller
- * below already documented and the reason the string is worth sharing at all.
+ * One spelling for the ENVELOPE paths, because there were several: this
+ * function's own inline template, `task.ts`'s, and — until it called this — the
+ * persona path's. The recovery advice is read from the taxonomy playbook rather
+ * than written a second time, which is the property the caller below already
+ * documented and the reason the string is worth sharing at all.
+ *
+ * `activity-summary.ts` keeps its own parenthetical preamble and is NOT a stale
+ * copy of this, which an earlier version of this comment said it was. The two
+ * say different things — this one is a verdict, that one explains that the log
+ * beneath it was RECONSTRUCTED from the tool-call record — and since #406 both
+ * read the same `step_limit` playbook, which is the half that must not diverge.
+ * Merging them would also make a leaf whose only import is a type depend on this
+ * module's whole graph.
  */
 export function stepLimitText(steps: number | undefined, label = 'Specialist'): string {
   return `${label} ran out of steps (${steps}) before producing a final answer. ${classifyError({ message: 'step_limit' }).playbook.model}`;

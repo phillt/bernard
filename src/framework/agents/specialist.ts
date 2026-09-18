@@ -13,7 +13,7 @@ import type { AgentContext } from '../context.js';
 import { outputHook } from '../hooks/output.js';
 import { buildStrategy } from '../strategies/build-strategy.js';
 import { retrievalQueryFor } from './retrieval.js';
-import { buildChildTools, formatExamples, stepLimitText } from './tool-wrapper.js';
+import { buildChildTools, formatExamples } from './tool-wrapper.js';
 import type { AgentDefinition, ResolvedModel } from './types.js';
 import { makeLastStepTextOnly } from './task.js';
 
@@ -220,31 +220,17 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
   },
 
   formatResult(result, _input, _ctx, meta) {
-    const body = capSubagentResult(
+    // The step-limit verdict used to be minted HERE, as an `Error: step_limit —`
+    // prefix this definition wrote for itself, and its three prose siblings —
+    // `sub`, `pac-actor`, `mcp-delegate` — still read as successes (#406). It is
+    // `appendActivitySummary`'s now: that is the one function all four share, so
+    // stamping the verdict there makes them agree by construction instead of by
+    // three copies staying in step. The marker it stamps is strictly better than
+    // the prefix it replaces — it carries a category rather than only a
+    // polarity, so "cut off" stops being rendered as an alarming failure.
+    return capSubagentResult(
       appendActivitySummary(result.text, result.steps as unknown[], 'specialist', meta),
     );
-    // A step-limited run that produced NOTHING is a failure, and it was reaching
-    // the parent as an ordinary success string.
-    //
-    // `appendActivitySummary` already writes a prose preamble for this case, but
-    // prose is not a verdict: `detectResultFailure` reads the `Error:` prefix
-    // (#364), so without it the dispatch registered as citable evidence, bumped
-    // this tool's success count, and minted no `step_limit` — leaving all three
-    // of that category's consumers silent (the user-facing print, the
-    // `[failure: …]` hint the model sees next turn, and cron alert severity).
-    //
-    // Only the empty case, which is exactly where `relabelStepLimit` draws the
-    // line on the wrapper path: a run that hit the limit and still returned real
-    // content may simply have wrapped up on its last step, and calling that a
-    // failure would throw the work away.
-    if (meta?.stepLimitHit && !result.text.trim()) {
-      // `body` already carries `appendActivitySummary`'s prose preamble for this
-      // exact case, so the prefix states the VERDICT and the recovery rather than
-      // the fact a second time — and takes both from the shared `stepLimitText`,
-      // which is what stops this becoming a fourth wording of one event.
-      return `Error: step_limit — ${stepLimitText(meta.steps)}\n\n${body}`;
-    }
-    return body;
   },
 };
 

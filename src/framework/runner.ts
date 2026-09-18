@@ -371,6 +371,27 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
   // never returns to zero and the guard stays disabled for the rest of the
   // dispatch — fail-open, which is the right direction: losing the guard costs
   // us a slow failure, a false abort costs the user completed work.
+  //
+  // **#594 revisited this exemption and kept it, which is worth stating so the
+  // next reader does not take the silence for an oversight.** That issue names
+  // the exemption as one of four gaps behind a 35-minute hang: the tool that
+  // hung was MCP, and this guard is written not to fire while a tool is in
+  // flight. The exemption is still right, because this layer cannot tell the two
+  // cases apart. What it knows is a part TYPE and a count; whether five minutes
+  // of silence is a wedged proxy or a sub-agent doing its job is a property of
+  // WHICH tool is running, and only the tool layer knows that. A budget imposed
+  // here would have to be longer than the longest legitimate sub-agent — which
+  // is longer than the hang was worth tolerating — or it would kill real work,
+  // which is #302's acceptance criteria written the other way round.
+  //
+  // So the deadline went where the knowledge is: `mcp.ts`'s wrapper now races
+  // every `tools/call` against `BERNARD_MCP_CALL_TIMEOUT_MS` and against the
+  // caller's abort signal, per call. The hang this exemption let through is
+  // covered, and the exemption keeps protecting the dispatches it was written
+  // for. What is genuinely still open is the OTHER inhabitant of the exemption:
+  // a `task` / `subagent` call has no clock of its own unless the operator sets
+  // `BERNARD_DISPATCH_TIMEOUT_MS`, so a wedged sub-agent still stalls its parent
+  // indefinitely. That needs a per-dispatch default, not a stream-level one.
   let lastProgressAt = dispatchStartedAt;
   let inFlightTools = 0;
   // Whether ANY part reached the consumer — deltas, tool calls and tool results

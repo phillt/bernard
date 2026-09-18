@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { detectResultFailure, isMCPErrorResult } from './tool-result-shape.js';
+import { ERROR_SNIPPET_MAX, detectResultFailure, isMCPErrorResult } from './tool-result-shape.js';
+import { failureMarker } from './error-taxonomy.js';
 
 describe('detectResultFailure', () => {
   describe('MCP CallToolResult', () => {
@@ -143,6 +144,23 @@ describe('detectResultFailure', () => {
 
     it('treats other strings as success', () => {
       expect(detectResultFailure('Provider: brave\n\n1. Result')).toBeUndefined();
+    });
+
+    it('detects a `[failure: …]` marker anywhere in the string (#406)', () => {
+      // A step-limited sub-agent returns PROSE — the reconstructed activity log
+      // — so before the marker it read as a SUCCESS: `status: 'ok'` in the log,
+      // truncated output registered as citable evidence, `successCount` bumped.
+      // Not anchored, because `formatWrappedResult` wraps the marker into
+      // `Error (<marker> <hint>): <detail>` before anything downstream sees it.
+      const out = `${failureMarker('step_limit')} cut off\n(subagent ran out of steps (12))`;
+      expect(detectResultFailure(out)).toBe(out.slice(0, ERROR_SNIPPET_MAX));
+    });
+
+    it('ignores a bracketed word that is not a taxonomy category', () => {
+      // `parseFailureMarker` checks membership, so prose that happens to look
+      // like a marker is not one. Without this the fix would mark any result
+      // containing `[failure: something]` as failed.
+      expect(detectResultFailure('[failure: whatever] all fine')).toBeUndefined();
     });
 
     it('treats null/undefined as success', () => {
