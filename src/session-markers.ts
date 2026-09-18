@@ -65,8 +65,37 @@ export const BOUNDARY_PREFIXES = [
   MISSING_PLAN_PREFIX,
 ];
 
-/** Exact text of every assistant-role scaffolding acknowledgement. */
-const BOUNDARY_ACKS = [SESSION_BOUNDARY_ACK, CONTEXT_SUMMARY_ACK, TRUNCATION_ACK];
+/**
+ * What the model is told when a turn is stopped (#403, #478).
+ *
+ * Lives here rather than in `agent.ts` because it is scaffolding by the same
+ * definition as everything above — addressed to the model, not something the
+ * assistant chose to say — and because the transcript has to skip it. On its
+ * own it renders as an assistant bubble whose entire content is transcript
+ * furniture, beside the `⏹ Turn interrupted` notice that already says the same
+ * thing in the user's own channel.
+ *
+ * Only the BARE marker is scaffolding. `processInput`'s abort branch appends it
+ * to whatever partial text the turn produced, and that text is real content the
+ * user should still see — so this is matched as a whole string, never as a
+ * suffix.
+ */
+export const INTERRUPTED_MARKER = '[interrupted by user]';
+
+/**
+ * Exact text of every assistant-role scaffolding message.
+ *
+ * Was `BOUNDARY_ACKS` while it held only the three acknowledgements. The
+ * interrupt marker is not an acknowledgement of anything, so the old name
+ * described three of its four entries — renamed rather than left to read as a
+ * list someone could "tidy" the odd one out of.
+ */
+const ASSISTANT_SCAFFOLDING = [
+  SESSION_BOUNDARY_ACK,
+  CONTEXT_SUMMARY_ACK,
+  TRUNCATION_ACK,
+  INTERRUPTED_MARKER,
+];
 
 /** True when `text` is a user-role scaffolding notice rather than a real turn. */
 export function isBoundaryNotice(text: string): boolean {
@@ -80,5 +109,5 @@ export function isBoundaryNotice(text: string): boolean {
  * scope (the RAG query builder).
  */
 export function isSessionScaffolding(text: string): boolean {
-  return isBoundaryNotice(text) || BOUNDARY_ACKS.includes(text);
+  return isBoundaryNotice(text) || ASSISTANT_SCAFFOLDING.includes(text);
 }

@@ -6,7 +6,9 @@ import {
   computePlanNeeds,
   computeEffectiveMaxSteps,
   REACT_MAX_STEPS_CEILING,
+  INTERRUPT_CANCEL_NOTE,
 } from './agent.js';
+import type { PlanStore } from './plan-store.js';
 import {
   CONCISE_PROMPT,
   RESPONSE_STYLE_PROMPTS,
@@ -2450,6 +2452,63 @@ describe('partial history preserved on abort (Esc)', () => {
     expect(history[0].role).toBe('user');
     expect(history[1].role).toBe('assistant');
     expect(history[1].content).toBe('[interrupted by user]');
+  });
+
+  it('records a turn interrupted before processInput ever ran (#478)', async () => {
+    // The REPL's pre-turn pipeline makes up to three LLM calls before
+    // `processInput`, and an Esc in that window used to leave NOTHING: no user
+    // message, no marker, and a "Turn interrupted after 3.2s" notice sitting
+    // above an empty transcript. #403 already decided an abort that beat the
+    // first step lands both records; this is the one window it did not reach.
+    const agent = makeAgent(makeConfig(), toolOptions, store);
+
+    const pushed = agent.recordInterruptedInput('a long question');
+
+    const history = agent.getHistory();
+    expect(history).toHaveLength(2);
+    expect(history[0]).toEqual({ role: 'user', content: 'a long question' });
+    expect(history[1]).toEqual({ role: 'assistant', content: '[interrupted by user]' });
+    // Identity, not equality: the caller marks this exact object as already
+    // rendered, so re-deriving it by scanning history afterwards would not do.
+    expect(pushed).toBe(history[0]);
+    // And it is the LAST user message, so a resume and the RAG query builder
+    // both see what was asked.
+    expect(agent.getLastUserMessage()).toBe(history[0]);
+  });
+
+  it('does not record an interrupted turn for input that was only whitespace', async () => {
+    const agent = makeAgent(makeConfig(), toolOptions, store);
+    expect(agent.recordInterruptedInput('   ')).toBeNull();
+    expect(agent.getHistory()).toHaveLength(0);
+  });
+
+  it('cancels the unresolved plan steps when the turn is interrupted (#478)', async () => {
+    // The enforcement loop that would otherwise terminate a plan lives inside
+    // `processInput`'s own try, so an abort throws past it and the steps stay
+    // `in_progress` forever — then `processInput` wipes the store at the top of
+    // the next turn and they vanish with no record they were ever running.
+    const agent = makeAgent(makeConfig(), toolOptions, store);
+    mockGenerateText.mockImplementation(async () => {
+      const plan = (agent as unknown as { planStore: PlanStore }).planStore;
+      plan.create([
+        { description: 'read the config', verification: 'file contents printed' },
+        { description: 'apply the edit', verification: 'diff shown' },
+      ]);
+      plan.update(1, 'done', { signoff: 'printed the whole file' });
+      plan.update(2, 'in_progress');
+      agent.abort();
+      throw new DOMException('Aborted', 'AbortError');
+    });
+
+    await agent.processInput('edit the config');
+
+    const steps = agent.getPlanSnapshot();
+    expect(steps[1].status).toBe('cancelled');
+    expect(steps[1].note).toBe(INTERRUPT_CANCEL_NOTE);
+    // A step that really finished keeps its own outcome — the cancel is for
+    // what was still open, not a blanket overwrite.
+    expect(steps[0].status).toBe('done');
+    expect(steps[0].note).toBeUndefined();
   });
 
   it('carries the aborted turn prompt size into the compression headroom', async () => {

@@ -138,6 +138,7 @@ import {
   type SavedFact,
 } from './clear-args.js';
 import { isSessionScaffolding } from '../session-markers.js';
+import { INTERRUPT_CANCEL_NOTE } from '../react.js';
 import { detectSpecialistCandidate } from '../specialist-detector.js';
 import { promoteCandidate } from '../candidate-bootstrap.js';
 import {
@@ -4757,6 +4758,9 @@ export function App({
     setBusy(true);
     const turnStartedAt = Date.now();
     let turnCompleted = false;
+    // Whether `agent.processInput` was reached. It is what pushes the user
+    // message, so until it runs an abort leaves nothing behind at all (#478).
+    let inputRecorded = false;
     let errorPanel: ErrorPanelData | null = null;
     const controller = new AbortController();
     turnAbortRef.current = controller;
@@ -4777,6 +4781,7 @@ export function App({
       // turn finishes. When the rewriter substituted the text, pass the
       // original so <UserMessage> displays it (the rewrite is an LLM-only
       // detail) rather than the dispatched version.
+      inputRecorded = true;
       const inflight = agent.processInput(agentInput, images, resolvedEntries, {
         ragResults,
         recallReconciliation,
@@ -4884,6 +4889,21 @@ export function App({
         errorPanel = formatAgentError(err, debug);
       }
     } finally {
+      // An interrupt during the pre-turn pipeline reaches here having pushed
+      // nothing: `runPreTurnPipeline` makes up to three LLM calls before
+      // `processInput`, and both of its abort exits — the `return` after the
+      // pipeline and the `throw` from inside it — skip the one call that
+      // records the user message. The result was a `⏹ Turn interrupted after
+      // …` notice above an empty transcript, and a model that was never told
+      // anything had been asked.
+      //
+      // Covered by a flag rather than at each exit, so a third one inherits it.
+      // Ahead of `persistAgentState` and `commitNewHistory` deliberately: both
+      // run below, and recording after either would leave the message unsaved
+      // or unrendered for the turn that produced it.
+      if (controller.signal.aborted && !inputRecorded) {
+        agent.recordInterruptedInput(input);
+      }
       persistAgentState({ agent, historyStore, provenanceHistoryStore, turnContextStore });
       submittingRef.current = false;
       turnAbortRef.current = null;
@@ -4955,21 +4975,48 @@ export function App({
       // This is deliberately a UI-only notice, the same channel the startup
       // lineup-correction and `provider-wiped` notices use: it never enters
       // `agent.history`, because the model's record of the interrupt is the
-      // `[interrupted by user]` marker `Agent.processInput` pushes (which,
-      // since #403, lands even when the abort beat the first step). Two
-      // records, one per audience — duplicating the UI text into history would
-      // make the model read its own transcript furniture as content.
+      // `INTERRUPTED_MARKER` its two producers push — `Agent.processInput`'s
+      // abort branch (which, since #403, lands even when the abort beat the
+      // first step) and `recordInterruptedInput`, for the window before
+      // `processInput` is reached at all (#478). Two records, one per audience
+      // — duplicating the UI text into history would make the model read its
+      // own transcript furniture as content.
+      //
+      // The split only holds because the transcript SKIPS the bare marker:
+      // `isScaffoldingMessage` matches it as a whole string (`session-markers.ts`).
+      // Unfiltered it rendered as an assistant bubble containing nothing but
+      // furniture, right beside this notice. A marker appended to real partial
+      // text is not matched, and still renders — that text is content.
       //
       // The chrome stays: it is the right affordance while the turn is dead but
       // before the user types. The bug was that it was the ONLY record.
       if (controller.signal.aborted) {
         const inFlight = interruptInFlightRef.current;
         interruptInFlightRef.current = 0;
+        // Where the plan stopped, named here rather than left to the panel
+        // (#478). `PlanStore` is per-turn by construction — `processInput`
+        // clears it at the top of the NEXT turn — so the `✘` the abort branch
+        // just wrote is erased by whatever the user says next, and the step
+        // that was in flight vanishes with it. The notice is a `staticItem`,
+        // which is what survives; #403's own two-records-one-per-audience
+        // pattern, with the panel as the live half.
+        //
+        // Read off the snapshot rather than tracked separately, so it can only
+        // ever report steps the cancel actually wrote.
+        const stopped = agent
+          .getPlanSnapshot()
+          .filter((step) => step.note === INTERRUPT_CANCEL_NOTE);
+        const planNote =
+          stopped.length > 0
+            ? `\nPlan stopped at: ${stopped[0].description}` +
+              (stopped.length > 1 ? ` (+${stopped.length - 1} more unresolved)` : '')
+            : '';
         pushAssistantNotice(
           `⏹ Turn interrupted after ${formatDuration(endedAt - turnStartedAt)}.` +
             (inFlight > 0
               ? ` ${inFlight} sub-dispatch${inFlight === 1 ? '' : 'es'} cancelled with it.`
-              : ''),
+              : '') +
+            planNote,
         );
       }
       // Append the error panel after the turn's committed output so it reads

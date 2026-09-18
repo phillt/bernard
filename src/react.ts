@@ -169,6 +169,19 @@ export const REACT_ENFORCEMENT_MAX_RETRIES = 2;
 export const REACT_AUTO_CANCEL_NOTE = 'auto-cancelled: enforcement retries exhausted';
 
 /**
+ * Note attached to plan steps that were still open when the user pressed Esc
+ * (#478).
+ *
+ * Deliberately NOT {@link REACT_AUTO_CANCEL_NOTE}. That one means "the model was
+ * asked to finish this and did not", which is a statement about the model; this
+ * one means "somebody stopped the work", which is a statement about the user.
+ * Reusing it would put a reason on the step that never happened — the
+ * enforcement loop runs inside `processInput`'s `try`, so an abort throws past
+ * it and it never got the chance to give up.
+ */
+export const INTERRUPT_CANCEL_NOTE = 'cancelled: you interrupted the turn';
+
+/**
  * Builds the user-facing enforcement re-prompt used when a plan still has
  * unresolved steps after the main generateText call. Shared by the agent and
  * specialist enforcement loops so the wording cannot drift between the two.

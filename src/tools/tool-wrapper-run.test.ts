@@ -846,6 +846,60 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     expect(correctionStore.enqueue).not.toHaveBeenCalled();
   });
 
+  it('enqueues when the diagnostic is correctable but the label is not (#565)', async () => {
+    // This site decides what the correction flow LEARNS, and it had the same
+    // inverted precedence as the shim. A shell wrapper that fails with the one
+    // mistake it could actually learn from — a mistyped command — labels it
+    // `runtime_error` and puts the diagnostic in `result`. Classified from the
+    // label that is `unknown`: not correctable, so it was dismissed and the
+    // profile learned nothing, which is #366's `dismissed` counter counting the
+    // wrong thing.
+    specialistStore.get.mockReturnValue(makeToolWrapperSpecialist({ targetTools: ['shell'] }));
+    vi.mocked(wrapWrapperResult).mockReturnValue({
+      status: 'error',
+      result: 'bash: fooo: command not found',
+      error: 'runtime_error',
+    } as any);
+    vi.mocked(generateText).mockResolvedValue({ text: '{}', steps: [] } as any);
+
+    const toolDef = createToolWrapperRunTool(
+      makeCtx(config, options, memoryStore, specialistStore, correctionStore),
+    );
+    await toolDef.execute(
+      { specialistId: 'shell-wrapper', input: 'run fooo' },
+      DEFAULT_EXEC_OPTIONS,
+    );
+
+    expect(correctionStore.enqueue).toHaveBeenCalledTimes(1);
+    // `not_found` is correctable only for shell, which is why the wrapper's
+    // first targetTool has to reach the classifier — the tool flavour survives
+    // the new path.
+    expect(correctionStore.enqueue.mock.calls[0][0].category).toBe('not_found');
+  });
+
+  it('does not enqueue a provider stall dressed as a runtime_error (#565)', async () => {
+    // The other half of the same fix: prose-first must not make everything
+    // correctable. A stall is environmental, and teaching a specialist's
+    // few-shot examples from it is exactly what the taxonomy gate prevents.
+    specialistStore.get.mockReturnValue(makeToolWrapperSpecialist({ targetTools: ['web_read'] }));
+    vi.mocked(wrapWrapperResult).mockReturnValue({
+      status: 'error',
+      result: 'Provider timed out — no response headers within 90s.',
+      error: 'runtime_error',
+    } as any);
+    vi.mocked(generateText).mockResolvedValue({ text: '{}', steps: [] } as any);
+
+    const toolDef = createToolWrapperRunTool(
+      makeCtx(config, options, memoryStore, specialistStore, correctionStore),
+    );
+    await toolDef.execute(
+      { specialistId: 'web-wrapper', input: 'read a page' },
+      DEFAULT_EXEC_OPTIONS,
+    );
+
+    expect(correctionStore.enqueue).not.toHaveBeenCalled();
+  });
+
   // ── No correction enqueue for meta specialists ────────────────────────────────
 
   it('does NOT enqueue a correction candidate when a meta specialist returns an error', async () => {

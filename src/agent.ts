@@ -52,7 +52,12 @@ import { type ResolvedEntry } from './reference-resolver.js';
 import type { AgentContext } from './framework/context.js';
 import { recordTurnUsage, makeOutOfTurnUsageRecorder } from './framework/hooks/token-stats.js';
 import { computeTurnUsageReport } from './usage-report.js';
-import { CONTINUATION_PREFIX } from './session-markers.js';
+// Two producers now — `processInput`'s abort branch and
+// `recordInterruptedInput` — so the marker has one owner, and it lives in
+// `session-markers.ts` because the transcript must also skip it. Re-exported
+// because callers import it from './agent.js'.
+import { CONTINUATION_PREFIX, INTERRUPTED_MARKER } from './session-markers.js';
+export { INTERRUPTED_MARKER } from './session-markers.js';
 import { DefaultPolicyEngine, isReactEffective } from './policy/index.js';
 import type { PolicyDecision, PolicyEngine, PolicyResult } from './policy/index.js';
 import { extractCitationMarkers, type SourceItem, type TurnProvenance } from './provenance.js';
@@ -81,6 +86,7 @@ import {
   REACT_COORDINATOR_PROMPT,
   REACT_MAX_STEPS_CEILING,
   STEP_LIMIT_MAX_EXPANSIONS,
+  INTERRUPT_CANCEL_NOTE,
 } from './react.js';
 export {
   REACT_COORDINATOR_PROMPT,
@@ -90,6 +96,7 @@ export {
   computeEffectiveMaxSteps,
   REACT_ENFORCEMENT_MAX_RETRIES,
   REACT_AUTO_CANCEL_NOTE,
+  INTERRUPT_CANCEL_NOTE,
   buildEnforcementFeedback,
 } from './react.js';
 
@@ -354,6 +361,40 @@ export class Agent {
   /** Snapshot of the current plan (in-memory, per-turn). Issue #140. */
   getPlanSnapshot(): Step[] {
     return this.planStore.view();
+  }
+
+  /**
+   * Records a turn that was interrupted before {@link processInput} ever ran
+   * (#478).
+   *
+   * `processInput` is what pushes the user message, and the REPL's pre-turn
+   * pipeline — up to three LLM calls: the reference resolver, the prompt
+   * rewriter, the recall filter — happens entirely before it. An Esc in that
+   * window therefore produced a `⏹ Turn interrupted after 3.2s` notice sitting
+   * above nothing at all, and left the model with no record that anything had
+   * been asked.
+   *
+   * #403 already settled what should happen here; it just did not reach this
+   * far. Its abort branch lands the user message AND the marker even when the
+   * interrupt beat the first step, on the reasoning that a user message with no
+   * reply reads on a later resume as a turn the model simply never answered.
+   * The pre-turn window is the one place that rule was not applied, so this is
+   * consistency with an existing decision rather than a new one.
+   *
+   * The RAW input, deliberately: the rewriter may not have run, and where it
+   * did its output is an LLM-only detail the transcript never shows. Returns
+   * the pushed message so the caller can mark it as already rendered, the way
+   * `injectAskUserHistoryMessages` hands its messages back — identity is the
+   * contract, so it must not be re-derived by scanning history afterwards.
+   */
+  recordInterruptedInput(input: string): CoreMessage | null {
+    const text = input.trim();
+    if (!text) return null;
+    const userMessage: CoreMessage = { role: 'user', content: input };
+    this.history.push(userMessage, { role: 'assistant', content: INTERRUPTED_MARKER });
+    this.lastUserMessage = userMessage;
+    this.lastUserInput = input;
+    return userMessage;
   }
 
   /**
@@ -1259,11 +1300,18 @@ export class Agent {
         // this turn's tool results), and an assistant message after either is
         // API-valid.
         if (text) {
-          partial.push({ role: 'assistant', content: `${text}\n\n[interrupted by user]` });
+          partial.push({ role: 'assistant', content: `${text}\n\n${INTERRUPTED_MARKER}` });
         } else {
-          partial.push({ role: 'assistant', content: '[interrupted by user]' });
+          partial.push({ role: 'assistant', content: INTERRUPTED_MARKER });
         }
         this.history.push(...partial);
+        // Mark where the work stopped, while the plan still exists (#478). The
+        // enforcement loop lives inside this `try`, so the abort threw past it
+        // and nothing else will ever move these steps out of `in_progress` —
+        // and `processInput` wipes the store at the top of the NEXT turn, so
+        // without this the panel shows an unfinished plan that then silently
+        // vanishes. `PlanPanel` already renders `cancelled` with its note.
+        this.planStore.cancelAllUnresolved(INTERRUPT_CANCEL_NOTE);
         // The clean-exit path below assigns `lastPromptTokens`, and this branch
         // returns before it. Without this, Esc-ing out of large turns grows the
         // history while the compression trigger stays frozen at the last

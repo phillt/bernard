@@ -26,7 +26,7 @@ import type { AgentContext } from '../framework/context.js';
 import { type WrapperResult, wantsStructuredOutput } from '../structured-output.js';
 import { recordDispatch } from '../reasoning-log.js';
 import { capSubagentResult, SUBAGENT_RESULT_MAX_CHARS } from './result-cap.js';
-import { classifyError } from '../error-taxonomy.js';
+import { classifyWrapperFailure } from '../error-taxonomy.js';
 import { verifyClaims, ClaimSchema } from '../claim-verifier.js';
 import { verdictOf } from '../rubric.js';
 import { makeUsageRecorder } from '../framework/hooks/token-stats.js';
@@ -409,7 +409,21 @@ export async function dispatchToolWrapper(
                 // it lets the classifier distinguish shell "command not found"
                 // (correctable) from web 404 (not).
                 const wrappedToolName = specialist.targetTools?.[0];
-                const cls = classifyError({ message: errorMessage, toolName: wrappedToolName });
+                // Prose first, label second (#565) — and this site is the half
+                // that decides what the correction flow LEARNS, not just what
+                // the model is told. A shell wrapper failing `runtime_error` /
+                // "bash: fooo: command not found" classified `unknown` here,
+                // which is not correctable, so the one failure the wrapper
+                // could actually learn from was dismissed.
+                //
+                // `errorMessage` keeps the old order deliberately: it is the
+                // text STORED on the correction candidate, where the label is
+                // the better lede and the prose follows it in `attemptedCall`.
+                const cls = classifyWrapperFailure({
+                  result: wrapped.result,
+                  error: wrapped.error,
+                  toolName: wrappedToolName,
+                });
                 if (cls.correctable) {
                   correctionStore.enqueue({
                     specialistId,

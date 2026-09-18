@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  INTERRUPTED_MARKER,
   BOUNDARY_PREFIXES,
   MISSING_PLAN_PREFIX,
   PLAN_ENFORCEMENT_PREFIX,
@@ -115,5 +116,18 @@ describe('a real user turn cannot be mistaken for scaffolding', () => {
     for (const prefix of BOUNDARY_PREFIXES) {
       expect(isBoundaryNotice(`${prefix} …`), prefix).toBe(true);
     }
+  });
+});
+
+describe('the interrupt marker is scaffolding (#478)', () => {
+  it('skips a bare marker, so it never renders as an empty assistant bubble', () => {
+    expect(isSessionScaffolding(INTERRUPTED_MARKER)).toBe(true);
+  });
+
+  it('does NOT skip a marker appended to real partial text', () => {
+    // `processInput`'s abort branch appends it to whatever the turn produced.
+    // That text is content the user should still see, so the match is on the
+    // whole string, never on a suffix.
+    expect(isSessionScaffolding(`here is half an answer\n\n${INTERRUPTED_MARKER}`)).toBe(false);
   });
 });

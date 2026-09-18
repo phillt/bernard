@@ -6,7 +6,12 @@ import {
   failureMarker,
   parseFailureMarker,
   classifyToolFailure,
+  classifyWrapperFailure,
+  AUTHORITATIVE_LABELS,
 } from './error-taxonomy.js';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 
 describe('classifyError', () => {
   describe('HTTP status mapping', () => {
@@ -331,5 +336,283 @@ describe('an error with no tool behind it', () => {
     // set, and the set has no production consumer at all — only a doc comment
     // referring to `ToolError.retryable`. Widening it here would be a claim
     // nothing reads, decided on the way past. Left alone on purpose.
+  });
+});
+
+describe('classifyWrapperFailure — the diagnostic decides, not the label (#565)', () => {
+  // `WrapperResult.error` is a label the specialist writes freely; `result`
+  // carries the prose. Preferring the label sent a retryable provider stall to
+  // the model as "unknown, do not retry", with the real cause printed on the
+  // next line.
+  //
+  // Mutation check: restoring `error ?? String(result)` as the classified
+  // string must fail the first row and only the first row — which is also why
+  // the internal-label rows are here, as the guard on the fallback.
+  it.each([
+    [
+      'a provider stall reported under a runtime_error label',
+      'runtime_error',
+      'Provider timed out — no response headers within 90s.',
+      'timeout',
+      true,
+    ],
+    [
+      'a shell failure reported under an exit-code label',
+      'exit_code_1',
+      'permission denied',
+      'permission',
+      false,
+    ],
+    // Bernard's own three labels, each beside the prose it really ships with.
+    // `pickCategory`'s first three patterns match BOTH spellings, so these
+    // cannot regress whichever way the precedence runs — which is the property
+    // that makes prose-first safe rather than lucky.
+    [
+      'a pool refusal',
+      'pool_exhausted',
+      'Maximum concurrent agents (4) reached.',
+      'pool_exhausted',
+      true,
+    ],
+    ['a step-limited run', 'step_limit', 'web-wrapper ran out of steps (13).', 'step_limit', true],
+    [
+      'an unparseable wrapper',
+      'parse_failed',
+      'Specialist did not produce valid structured output',
+      'parse_failed',
+      true,
+    ],
+  ])('reads %s as %s', (_name, error, result, category, retryable) => {
+    const cls = classifyWrapperFailure({ result, error, toolName: 'shell' });
+    expect(cls.category).toBe(category);
+    expect(cls.retryable).toBe(retryable);
+  });
+
+  it('falls back to the label when the prose says nothing recognisable', () => {
+    // `result` is model-authored — `wrapWrapperResult` parses whatever the
+    // specialist wrote — so it can be empty, or unreadable, while the label is
+    // right. Every producer in the repo sets informative prose (checked, all
+    // nine), so this is the MODEL's shape rather than Bernard's, and it is the
+    // only thing the fallback really protects.
+    expect(classifyWrapperFailure({ result: '', error: 'pool_exhausted' }).category).toBe(
+      'pool_exhausted',
+    );
+    // And an internal label beside prose the taxonomy cannot read.
+    expect(
+      classifyWrapperFailure({ result: 'the API said no', error: 'pool_exhausted' }).category,
+    ).toBe('pool_exhausted');
+  });
+
+  it('does not invert on a model-authored parse_failure whose prose names a 404', () => {
+    // `structured-output.ts` documents this shape as legitimate: a specialist
+    // reporting a DOWNSTREAM parse failure writes `parse_failed` and its own
+    // prose. Read prose-first the `not\s*found` in that prose wins, and for a
+    // shell wrapper `not_found` is CORRECTABLE — so the correction queue buys a
+    // correction-agent run for a failure no call-shape change can fix.
+    const cls = classifyWrapperFailure({
+      result: 'The upstream API returned 404 not found for the schema endpoint.',
+      error: 'parse_failed',
+      toolName: 'shell',
+    });
+    expect(cls.category).toBe('parse_failed');
+    expect(cls.correctable).toBe(false);
+  });
+
+  it('reads an authoritative label ahead of prose, and a free-form one behind it', () => {
+    // The whole tiering in one assertion pair. Same prose, same tool; only the
+    // label differs, and that is what decides which tier applies.
+    const prose = 'The upstream API returned 404 not found for the schema endpoint.';
+    expect(classifyWrapperFailure({ result: prose, error: 'step_limit' }).category).toBe(
+      'step_limit',
+    );
+    expect(classifyWrapperFailure({ result: prose, error: 'runtime_error' }).category).toBe(
+      'not_found',
+    );
+  });
+
+  it('every authoritative label still classifies to itself', () => {
+    // What earns a label its place in the trusted tier is that `classifyError`
+    // spells it literally, so reading it is exact rather than a guess. A
+    // pattern edit that broke the round trip would silently demote it to the
+    // prose tier; this fails instead.
+    for (const label of ['pool_exhausted', 'step_limit', 'parse_failed'] as const) {
+      expect(classifyError({ message: label }).category, label).toBe(label);
+    }
+    // And membership is NOT "anything that matches its own name" — `timeout`
+    // does, and is deliberately absent, because nothing in this repo sets it as
+    // a `WrapperResult.error`.
+    expect(classifyError({ message: 'timeout' }).category).toBe('timeout');
+    expect(
+      classifyWrapperFailure({ result: 'bash: fooo: command not found', error: 'timeout' })
+        .category,
+    ).toBe('not_found');
+  });
+
+  it('does not pretend a free-form label is a category', () => {
+    // Only three `ToolErrorType` names are spelled literally in the patterns —
+    // `pool_exhausted`, `step_limit`, `parse_failed`, each because Bernard
+    // itself emits them. `rate_limit` is NOT one: the pattern is
+    // `rate[\s-]?limit`, which has no underscore. So the fallback preserves
+    // Bernard's own labels and little else, which is the honest scope of it —
+    // and is exactly why classifying the label FIRST was the defect rather
+    // than a defensible second-best.
+    expect(classifyWrapperFailure({ result: '', error: 'rate_limit' }).category).toBe('unknown');
+    expect(classifyWrapperFailure({ result: '', error: 'invalid_args' }).category).toBe('unknown');
+  });
+
+  it('prefers the prose even when the label is also a category', () => {
+    // Not merely "use whichever is non-empty": the label is consulted only
+    // after the prose has failed. A specialist mislabelling a timeout as
+    // `invalid_args` must not make the model retry with a different shape.
+    const cls = classifyWrapperFailure({
+      result: 'Provider timed out — no response headers within 90s.',
+      error: 'invalid_args',
+    });
+    expect(cls.category).toBe('timeout');
+  });
+
+  it('stays unknown when neither says anything, and does not invent a category', () => {
+    const cls = classifyWrapperFailure({ result: 'something odd', error: 'runtime_error' });
+    expect(cls.category).toBe('unknown');
+  });
+
+  it('survives a result that is not a string', () => {
+    // `result` is `unknown` and arrives from a model-authored envelope. It is
+    // rendered the way `formatWrappedResult` renders it for display, so the
+    // classifier reads the same bytes the reader is shown.
+    expect(classifyWrapperFailure({ result: { detail: 'ETIMEDOUT' } }).category).toBe('timeout');
+    expect(classifyWrapperFailure({ result: undefined, error: 'step_limit' }).category).toBe(
+      'step_limit',
+    );
+
+    // A circular structure must not throw out of a classifier that every
+    // wrapper failure passes through; it degrades to the label.
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(classifyWrapperFailure({ result: circular, error: 'pool_exhausted' }).category).toBe(
+      'pool_exhausted',
+    );
+  });
+
+  it('keeps the toolName-sensitive half of the classification', () => {
+    // `not_found` is correctable for shell (a command-not-found the model can
+    // fix) and not for the web tools. The prose is what carries it now, so the
+    // tool flavour has to survive the new path.
+    const shell = classifyWrapperFailure({
+      result: 'bash: fooo: command not found',
+      error: 'runtime_error',
+      toolName: 'shell',
+    });
+    expect(shell.category).toBe('not_found');
+    expect(shell.correctable).toBe(true);
+
+    const web = classifyWrapperFailure({
+      result: 'HTTP 404 not found',
+      error: 'runtime_error',
+      toolName: 'web_read',
+    });
+    expect(web.correctable).toBe(false);
+  });
+});
+
+describe('AUTHORITATIVE_LABELS completeness is derived, not declared (#565)', () => {
+  // Every file that mints a `WrapperResult.error` as a string literal. A label
+  // that appears here and classifies to itself MUST be trusted ahead of prose;
+  // one that does not self-classify must NOT be, because the trusted branch
+  // returns `build(label)` directly and would resolve `unknown` without ever
+  // reaching the prose it was supposed to beat.
+  const PRODUCERS = [
+    'tools/tool-wrapper-run.ts',
+    'framework/agents/tool-wrapper.ts',
+    'structured-output.ts',
+  ];
+
+  // What the scan sees, and what it does not. Audited against every `error:`
+  // assignment in those three files: twelve, of which eight are snake_case
+  // label literals (matched), two are PROSE — `'Claims were reported in a shape
+  // that could not be verified.'` and a `capSubagentResult(...)` template — one
+  // is the zod schema declaration, and one is a pass-through of an existing
+  // `wrapped.error`. None of the four unmatched forms is a category label, so
+  // the derived set is complete for the code as it stands.
+  //
+  // The gap it leaves is narrow and worth stating: a label minted through a
+  // CONSTANT (`error: PARSE_FAILED_LABEL`) would be missed. It needs both
+  // halves to bite — a new label that is also a `ToolErrorType` name, written
+  // as an identifier rather than the literal every existing one uses — and it
+  // fails in the quiet direction, demoting to the prose tier rather than
+  // over-trusting. `finds the producers at all` does not catch that; only
+  // reading this does.
+  function mintedLabels(): string[] {
+    const root = path.dirname(fileURLToPath(import.meta.url));
+    const found = new Set<string>();
+    for (const rel of PRODUCERS) {
+      const src = readFileSync(path.join(root, rel), 'utf8');
+      for (const m of src.matchAll(/error: '([a-z_]+)'/g)) found.add(m[1]);
+    }
+    return [...found].sort();
+  }
+
+  it('finds the producers at all', () => {
+    // Guard the guard: if a producer is renamed or the literal style changes,
+    // the scan silently finds nothing and every assertion below passes
+    // vacuously. The real count is 8; this fails long before that is a problem.
+    expect(mintedLabels().length).toBeGreaterThanOrEqual(5);
+  });
+
+  /** The `ToolErrorType` union, read from its declaration. */
+  function allCategories(): Set<string> {
+    const root = path.dirname(fileURLToPath(import.meta.url));
+    const src = readFileSync(path.join(root, 'framework/tools/types.ts'), 'utf8');
+    const decl = /export type ToolErrorType =([\s\S]*?);/.exec(src)?.[1] ?? '';
+    return new Set([...decl.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]));
+  }
+
+  /**
+   * Correctability of a category, via the marker route — `classifyToolFailure`
+   * trusts an embedded marker, so this reaches `build(label)` without needing
+   * the private `isCorrectable`. Probed as `shell`, the most permissive tool:
+   * `not_found` is correctable only there, `invalid_args` everywhere, and a
+   * safety filter wants the worst case.
+   */
+  function correctable(label: string): boolean {
+    return classifyToolFailure({ snippet: failureMarker(label as never), toolName: 'shell' })
+      .correctable;
+  }
+
+  it('reads the category union at all', () => {
+    // Guard the guard, same reason as above: a reformat of the union would
+    // otherwise empty this and make the filter below reject everything.
+    expect(allCategories().size).toBeGreaterThanOrEqual(10);
+  });
+
+  it('trusts exactly the minted, typed, non-correctable labels', () => {
+    const categories = allCategories();
+    const derived = mintedLabels().filter((l) => categories.has(l) && !correctable(l));
+    // Not a containment check in one direction: both are failures. A minted
+    // label missing from the set falls to the prose tier and reintroduces the
+    // inversion; a set member that is not minted means trusting model text.
+    //
+    // The third condition is what BOUNDS that trust: a mislabelled correctable
+    // category enqueues a correction candidate and teaches a shipped specialist
+    // from a failure that was never a call-shape mistake.
+    //
+    // Deliberately NOT filtered on self-classification. `build` assigns the
+    // category it is handed, so the round trip is not required — and testing it
+    // excluded `not_found` purely because `not\s*found` cannot match an
+    // underscore, letting a spelling accident decide which of Bernard's own
+    // statements it may believe.
+    expect(derived.sort()).toEqual([...AUTHORITATIVE_LABELS].sort());
+  });
+
+  it('admits no correctable category, which is the condition that bounds the trust', () => {
+    for (const label of AUTHORITATIVE_LABELS) {
+      expect(correctable(label), label).toBe(false);
+    }
+    // The two a type-only rule would have admitted are exactly the correctable
+    // ones — which is why that rule was rejected. `invalid_args` is the worse
+    // of the two: `isCorrectable` returns true for it on ANY tool, where
+    // `not_found` is at least narrowed to a shell context.
+    expect(correctable('not_found')).toBe(true);
+    expect(correctable('invalid_args')).toBe(true);
   });
 });
