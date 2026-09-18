@@ -46,6 +46,14 @@ vi.mock('../../prompt-rewriter.js', () => ({
   rewritePrompt: vi.fn(async () => ({ status: 'noop' as const })),
 }));
 
+// Never reached by any other case — `makeConfig` leaves `recallFilter` unset
+// and `makeStores` supplies no `rag` — so this changes nothing for them. It is
+// here because the recall injection is the second first-use hint a turn can
+// raise (#583), and the per-turn budget is only observable with two.
+vi.mock('../../recall-filter.js', () => ({
+  recallFilter: vi.fn(async () => ({ status: 'noop' as const })),
+}));
+
 vi.mock('../../update.js', () => ({
   getLocalVersion: () => '0.0.0-test',
   interactiveUpdate: vi.fn(async () => {}),
@@ -318,7 +326,16 @@ interface HarnessOptions {
  * rather than a fourth object literal.
  */
 const ragStub = (addFacts: unknown = vi.fn(async () => 0)): RAGStore =>
-  ({ addFacts, retrievalDisabledReason: () => null }) as unknown as RAGStore;
+  ({
+    addFacts,
+    retrievalDisabledReason: () => null,
+    // `runPreTurnPipeline` invalidates the per-turn search cache before any
+    // pre-turn LLM call (#171). No case reached it until the recall hint
+    // (#583), because nothing else combined a rag store with a pipeline that
+    // runs — which is the same "answering every method a turn reaches" the
+    // note above is about.
+    clearTurnCache: vi.fn(),
+  }) as unknown as RAGStore;
 
 function renderApp(opts: HarnessOptions = {}) {
   const agentSpy: AgentSpy = {
@@ -1627,6 +1644,107 @@ describe('<App> plain-text turn', () => {
     const firstArg = agentSpy.processInput.mock.calls[0]?.[0];
     expect(firstArg).toBe('hello bernard');
     unmount();
+  });
+
+  it('announces a setting the first time Bernard uses it, once (#583)', async () => {
+    // The wiring, which no unit test can reach: `setting-hints.test.ts` proves
+    // the holder and the latch, and this proves the runtime moments are hooked
+    // up to them. Two triggers rather than one, because the per-turn budget —
+    // and therefore the `beginTurn()` reset in the pre-turn pipeline — is only
+    // observable when a second hint is waiting behind the first.
+    const { rewritePrompt } = await import('../../prompt-rewriter.js');
+    const { recallFilter } = await import('../../recall-filter.js');
+    vi.mocked(rewritePrompt).mockResolvedValue({
+      status: 'rewritten' as const,
+      text: 'reshaped',
+    } as Awaited<ReturnType<typeof rewritePrompt>>);
+    vi.mocked(recallFilter).mockResolvedValue({
+      status: 'filtered' as const,
+      facts: [{ text: 'a thing Bernard picked up', similarity: 0.9 }],
+    } as Awaited<ReturnType<typeof recallFilter>>);
+    try {
+      const first = renderApp({
+        config: { promptRewriter: true, recallFilter: true },
+        stores: { rag: ragStub() },
+      });
+      await tick();
+      // Both triggers fire on this turn; only one hint may reach the screen,
+      // or the second toast replaces the first and spends it unseen.
+      await submit(first.stdin, 'hello');
+      await tick(40);
+      const turnOne = stripAnsi(first.lastFrame() ?? '');
+      expect(turnOne).toContain('Bernard reshaped that message');
+      expect(turnOne).not.toContain('past conversations');
+
+      // The next turn re-opens the budget, so the one that waited is shown.
+      await submit(first.stdin, 'hello again');
+      await tick(40);
+      expect(stripAnsi(first.lastFrame() ?? '')).toContain('past conversations');
+      first.unmount();
+
+      // …and never again. The latch is on disk, so a second REPL is a second
+      // session — which is the half that fails silently if it is only in
+      // memory.
+      const second = renderApp({
+        config: { promptRewriter: true, recallFilter: true },
+        stores: { rag: ragStub() },
+      });
+      await tick();
+      await submit(second.stdin, 'once more');
+      await tick(40);
+      const later = stripAnsi(second.lastFrame() ?? '');
+      expect(later).not.toContain('Bernard reshaped that message');
+      expect(later).not.toContain('past conversations');
+      second.unmount();
+    } finally {
+      // `vi.clearAllMocks()` clears CALLS, not implementations, so a rewriter
+      // left returning `rewritten` would change every later case in this file.
+      vi.mocked(rewritePrompt).mockResolvedValue({
+        status: 'noop' as const,
+      } as Awaited<ReturnType<typeof rewritePrompt>>);
+      vi.mocked(recallFilter).mockResolvedValue({
+        status: 'noop' as const,
+      } as Awaited<ReturnType<typeof recallFilter>>);
+    }
+  });
+
+  it('says nothing when the curator kept nothing (#583)', async () => {
+    // `filtered` with an empty set means the curator looked and found nothing,
+    // which changes the answer not at all. Announcing it would spend the hint
+    // on a turn where a reader has no effect to attach it to.
+    const { saveActiveSettings } = await import('../../profiles.js');
+    const { recallFilter } = await import('../../recall-filter.js');
+    saveActiveSettings({ shownHints: undefined });
+    vi.mocked(recallFilter).mockResolvedValue({
+      status: 'filtered' as const,
+      facts: [],
+    } as Awaited<ReturnType<typeof recallFilter>>);
+    try {
+      const harness = renderApp({
+        config: { recallFilter: true },
+        stores: { rag: ragStub() },
+      });
+      await tick();
+      await submit(harness.stdin, 'nothing to recall');
+      await tick(40);
+      expect(stripAnsi(harness.lastFrame() ?? '')).not.toContain('past conversations');
+
+      // Guard the guard: the assertion above passes just as well if the hint
+      // was already spent, or if the trigger were never wired at all.
+      vi.mocked(recallFilter).mockResolvedValue({
+        status: 'filtered' as const,
+        facts: [{ text: 'something kept', similarity: 0.9 }],
+      } as Awaited<ReturnType<typeof recallFilter>>);
+      await submit(harness.stdin, 'now there is');
+      await tick(40);
+      expect(stripAnsi(harness.lastFrame() ?? '')).toContain('past conversations');
+      harness.unmount();
+    } finally {
+      vi.mocked(recallFilter).mockResolvedValue({
+        status: 'noop' as const,
+      } as Awaited<ReturnType<typeof recallFilter>>);
+      saveActiveSettings({ shownHints: undefined });
+    }
   });
 
   it('dismisses the alert banner after the first submit', async () => {

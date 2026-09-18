@@ -1464,6 +1464,81 @@ running risky tools.`), which tells a reader what the words mean and nothing
     shrink the walk. `setup-flow.test.ts` additionally pins Back out of the hub
     landing on the **mode** screen: the generic Back walk cannot see that, since
     with the hub returning to the welcome instead `mode` is still reached twice.
+- **A setting nobody chose announces itself once (#583).** #582's quick path is
+  what makes this necessary rather than nice: a first run now settles three
+  questions and leaves Bernard on a couple of dozen defaults nobody has seen.
+  `WizardFieldData.hint` is the data, `src/setting-hints.ts` the mechanism, and
+  the existing `speechNoticeShownRef` toast in `App.tsx` — the one hand-rolled
+  instance — is now one of its three consumers.
+  - **There is no chokepoint where a setting is READ, and a read-hook would be
+    the wrong signal anyway.** `BernardConfig` is a plain resolved object: 58
+    `config.X` reads across 14 non-test files, no getter, no proxy. And
+    `config.toolDetails` is read on every transcript-item push, so "someone read
+    the field" would fire constantly and mean nothing. What is worth announcing
+    is that Bernard **did** something, which only the code path knows.
+  - **So the acceptance criterion is met for two of its three parts, and cannot
+    be met for the third.** The SENTENCE and the LATCH are a registry edit; the
+    TRIGGER is intrinsically a line of code in a runtime path, and no registry
+    can supply a call site. Adding a hint to a setting that already has a named
+    moment is one data edit; adding one to a setting whose moment nobody has
+    named is that plus a call. Said plainly rather than claimed as complete.
+  - **The sentence is carried, not derived.** #583 hoped `label` plus a surface
+    would compose one; what a reader needs is _what just happened_, which is
+    prose about a runtime moment and not a restatement of the setting's name.
+    What IS composed is the signpost — `renderHint` appends the surface — so a
+    hint can never be written without a door out of it, which is the one thing
+    it must never be.
+  - **Toast, not `pushAssistantNotice`, and that is a decision.** The memory-cap
+    and `provider-wiped` notices use the transcript because "your settings are
+    not doing what you think" is a CORRECTION and has to outlive a keystroke. A
+    first-use hint explains something that just happened, is at its most useful
+    while it is on screen, and names a command that stays available — so what a
+    missed one costs is only what it would have taught. It also keeps the words
+    out from behind the `❮` chevron, which is Bernard's voice for answers.
+  - **Once ever, per profile, in `ProfileSettings.shownHints`** — once per
+    session is noise by the third session. Written through `saveActiveSettings`
+    the way `app-grants.ts` writes its map, so `config.ts` gains nothing, and a
+    deleted profile takes the record with it. It is bookkeeping rather than a
+    preference, which is why `settings-coverage.test.ts` **excludes** it with
+    that reason: the meta-test correctly refuses to let a record of what you have
+    been told pass as a setting.
+  - **The rate limit is load-bearing, not polish, precisely BECAUSE "once ever"
+    means a missed hint never returns.** At most one per turn — the rewriter and
+    recall triggers fire milliseconds apart in `runPreTurnPipeline`, so without
+    it the first toast is replaced by the second and marked shown unseen. And a
+    session cap of **2**, which BINDS against three declared hints: a cap set at
+    or above the number of hints is inert, i.e. code that cannot run and a test
+    that cannot fail. The refused hint is not spent, which is the guard that
+    matters — a cap that destroyed what it declined would be worse than the
+    burst.
+  - **`beginTurn()` is reset from the pre-turn pipeline, not `runAgentTurn`.**
+    Same boundary (the pipeline is the first thing every turn does), and it keeps
+    the reset in the file with two of the three triggers it bounds.
+  - **The three hints, and why those.** `rewriter:first-rewrite` (the model is
+    asked something other than what was typed, and the transcript keeps showing
+    the original — correctly, which is exactly why it is worth a sentence),
+    `recall:first-injection` (an answer drew on something the reader never said
+    in this conversation, which otherwise reads as the model knowing things it
+    should not — and only when facts were actually KEPT, since `filtered` with an
+    empty set changes nothing), and `voice:first-readback` (the migrated one,
+    still latched on a real `'normalized'` outcome rather than on the setting).
+  - **A hint can only hang on a field the registry declares, and that costs one
+    case.** The eight settings `settings-coverage.test.ts` excludes have no entry
+    to carry one — harmless for the three permission maps, which are consulted
+    constantly and have no first use, and visible exactly once: `voiceNormalizer`
+    is what the voice hint is ABOUT, and it hangs on `voiceTts` because the
+    observable moment is a readback and `/voice` owns every part of it. Lossy in
+    the direction of the home rather than of the sentence.
+  - **The union is reconciled to the registry, in the direction that fails
+    silently.** A `HintTrigger` with no declaring field is a `take()` somewhere
+    that can never fire and errors nowhere; `settings-coverage.test.ts` reads the
+    union out of the source (the `declaredSettingKeys` move) and fails on one.
+    The inverse — a sentence whose trigger nothing calls — is not checkable from
+    there, since a source scan for `take('x')` would pass on a commented-out
+    line, so the App-level case drives two real triggers instead.
+  - **Not attempted: #441.** Three registries still describe these settings and
+    only `settings-coverage.test.ts` reconciles them; this adds a field to one of
+    them rather than a fourth table, which is the direction #441 wants.
 
 ## Key Patterns
 

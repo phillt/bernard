@@ -147,6 +147,22 @@ export interface ProfileSettings {
   voiceNormalizer?: boolean;
   memoryConsolidation?: boolean;
   specialistRecall?: boolean;
+  /**
+   * First-use hints already announced on this profile (#583).
+   *
+   * Bookkeeping rather than a preference — nobody sets it, and the only thing a
+   * wizard row could do with it is clear it — which is why
+   * `settings-coverage.test.ts` excludes it with that reason rather than
+   * demanding a question. It lives here anyway, and not in a state file,
+   * because it is deleted with the profile it describes and needs no retention
+   * rule of its own; `saveActiveSettings` already merges a partial, so nothing
+   * in `config.ts` has to learn about it.
+   *
+   * To be told everything again, delete the key from `profiles.json`. There is
+   * deliberately no command for it: nobody has wanted one, and a reset control
+   * for a courtesy is more surface than the courtesy.
+   */
+  shownHints?: string[];
 }
 
 /** A single named profile entry. */

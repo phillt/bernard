@@ -79,6 +79,10 @@ const NOT_IN_SETUP: Readonly<Record<string, string>> = {
   voiceBackend: '`auto` is right until it is not, and then you are debugging — `/voice`',
   voiceRate: 'words per minute means nothing unheard — `/voice`',
   voiceWarmupMs: 'a PipeWire troubleshooting knob, not a first-run choice — `/voice`',
+  // Not a preference at all: the set of first-use hints already announced
+  // (#583). Nobody sets it, and the only thing a wizard row could do with it is
+  // clear it — a question about what you have already been told.
+  shownHints: 'bookkeeping, not a setting — which first-use hints have been shown',
   toolPermissions: 'per-tool grants — `/tool-permissions`',
   appToolGrants: 'per-applet tool grants — `bernard app-grant`',
   appCspGrants: 'per-applet CSP grants — `bernard app csp`',
@@ -184,6 +188,77 @@ describe('setup tiers', () => {
     for (const f of WIZARD_FIELDS) {
       if (f.tier === undefined) continue;
       expect(f.tier, f.key).toBe('quick');
+    }
+  });
+});
+
+/**
+ * Every named runtime moment has a sentence, and every sentence has a moment
+ * (#583).
+ *
+ * The two halves come apart silently and in opposite directions. A `HintTrigger`
+ * with no field declaring it is a `take()` call somewhere in a runtime path that
+ * can never fire — the fail-open shape, invisible because nothing errors. A hint
+ * declared on a field whose trigger nothing calls is a sentence nobody will ever
+ * read. Only the first is checkable from here: reaching the call sites means
+ * scanning `src/ui/App.tsx`, and a source scan for `take('x')` would pass on a
+ * commented-out line.
+ *
+ * The union is read out of the source for the reason `declaredSettingKeys` is: a
+ * type is erased at runtime, and a hand-written list of the same names is a
+ * second copy of the thing being checked.
+ */
+describe('first-use hints', () => {
+  const HINTS_SRC = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    'profiles-wizard-data.ts',
+  );
+
+  /** The members of `export type HintTrigger = 'a' | 'b';`, as declared. */
+  function declaredTriggers(): string[] {
+    const source = fs.readFileSync(HINTS_SRC, 'utf-8');
+    const at = source.indexOf('export type HintTrigger =');
+    expect(at).toBeGreaterThan(-1);
+    const body = source.slice(at, source.indexOf(';', at));
+    return [...body.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  }
+
+  it('reads the union it is checking', () => {
+    // Guard the guard: a regex that matched nothing makes the case below
+    // vacuously true.
+    expect(declaredTriggers().length).toBeGreaterThan(2);
+    expect(declaredTriggers()).toContain('voice:first-readback');
+  });
+
+  it('declares a hint for every trigger the union names', () => {
+    const declared = new Set(WIZARD_FIELDS.flatMap((f) => (f.hint ? [f.hint.trigger] : [])));
+    expect(declaredTriggers().filter((t) => !declared.has(t as never))).toEqual([]);
+  });
+
+  it('never gives one trigger two sentences', () => {
+    // `hintFor` takes the first match, so a duplicate would make which sentence
+    // a reader sees depend on registry order.
+    const triggers = WIZARD_FIELDS.flatMap((f) => (f.hint ? [f.hint.trigger] : []));
+    expect(new Set(triggers).size).toBe(triggers.length);
+  });
+
+  it('fits on the one line a toast gets', () => {
+    // A toast is a single row. The rendered form is what has to fit, so the
+    // surface is charged for too.
+    for (const f of WIZARD_FIELDS) {
+      if (!f.hint) continue;
+      const rendered = `${f.hint.message} ${f.hint.surface} to change it.`;
+      expect(rendered.length, f.key).toBeLessThanOrEqual(180);
+      expect(f.hint.message, f.key).not.toContain('\n');
+    }
+  });
+
+  it('names a command, not a setting', () => {
+    // The surface is where the reader GOES. A setting name there ("Natural
+    // speech") is the thing they are looking for and not the way to reach it.
+    for (const f of WIZARD_FIELDS) {
+      if (!f.hint) continue;
+      expect(f.hint.surface, f.key).toMatch(/^[/`]|^bernard /);
     }
   });
 });

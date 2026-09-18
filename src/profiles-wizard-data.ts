@@ -64,6 +64,51 @@ export type DynamicOptionSource = 'provider' | 'model' | 'lineup';
  */
 export type SetupTier = 'quick' | 'expert';
 
+/**
+ * A named runtime moment at which a setting's effect first becomes observable
+ * (#583).
+ *
+ * A closed set, and it has to be: there is no chokepoint where a setting is
+ * READ — `BernardConfig` is a plain resolved object and every consumer does
+ * `config.X` inline at 58 sites — and a read-hook would be the wrong signal
+ * anyway, since `config.toolDetails` is read on every transcript push. What is
+ * worth announcing is that Bernard DID something, which only the code path
+ * knows, so each trigger is a line somewhere in a runtime path. No registry can
+ * supply that half; this table supplies the other two.
+ */
+export type HintTrigger =
+  | 'voice:first-readback'
+  | 'rewriter:first-rewrite'
+  | 'recall:first-injection';
+
+/**
+ * What to say the first time a setting's effect is observable, and where to go
+ * and change it (#583).
+ *
+ * A setting nobody chose is a setting nobody knows about, and #582's quick path
+ * makes that the default state rather than an edge case: a first run now leaves
+ * Bernard on a couple of dozen defaults the reader has never seen.
+ *
+ * The SENTENCE is carried rather than derived. #583 hoped `label` plus a
+ * surface would compose one, and it cannot: what a reader needs is what just
+ * happened, which is prose about a runtime moment and not a restatement of the
+ * setting's name. What IS composed is the signpost — `renderHint` appends the
+ * surface — so a hint can never be written without a door out of it.
+ */
+export interface SettingHint {
+  trigger: HintTrigger;
+  /**
+   * What just happened, in the reader's terms, ending before the signpost.
+   *
+   * One line: it is rendered as a toast, which is one line wide. Say what
+   * Bernard did and why, not what the setting is — the description above
+   * already does the second, at length, on a screen the reader asked for.
+   */
+  message: string;
+  /** The command that changes it. `renderHint` appends "to change it." */
+  surface: string;
+}
+
 export type WizardFieldKind =
   | { kind: 'list'; options: Array<{ value: string; label: string; description?: string }> }
   | { kind: 'dynamic'; source: DynamicOptionSource }
@@ -174,6 +219,24 @@ export interface WizardFieldData {
    * lineup before using one.
    */
   tier?: 'quick';
+  /**
+   * Announce this setting once, the first time its effect shows (#583).
+   *
+   * Absent for most fields, and that is the rule rather than a backlog: a
+   * setting with no observable first use has nothing to announce (`theme` is
+   * visible immediately, `maxTokens` never announces itself), and a hint for
+   * one of those is noise. The bar is that Bernard DID something a reader can
+   * point at and would not otherwise be able to explain.
+   *
+   * **A hint can only hang on a field this registry declares**, which is the
+   * one lossy edge of putting it here: the eight settings
+   * `settings-coverage.test.ts` excludes have no entry to carry one. In
+   * practice that costs nothing — three are permission maps, which are
+   * consulted constantly and have no first use — and the one case where it
+   * shows is `voiceNormalizer`, whose hint hangs on `voiceTts` instead. See
+   * that field.
+   */
+  hint?: SettingHint;
 }
 
 export interface WizardCategoryData {
@@ -282,6 +345,16 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
           "Different model families want to be asked differently. This rewrites your message into the shape the one answering reads best, so you get the answer you meant without learning each model's habits. Costs one small extra call a turn, and falls back to your exact words if anything goes wrong.",
         field: { kind: 'boolean' },
         envVar: 'BERNARD_PROMPT_REWRITER',
+        // On by default and entirely invisible: the model is asked something
+        // other than what was typed, and nothing on screen says so. The
+        // transcript keeps showing the original, which is right — and is
+        // exactly why the first rewrite is worth one sentence.
+        hint: {
+          trigger: 'rewriter:first-rewrite',
+          message:
+            'Bernard reshaped that message for the model answering it — your words are what you see; Shift+Tab → Prompt & Context shows what was sent.',
+          surface: '/agent-options',
+        },
       },
       {
         key: 'recallFilter',
@@ -290,6 +363,15 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
           "Bernard pulls in things it picked up from past conversations whenever they look related to what you're asking. This casts a wider net, then has a cheap model drop whatever doesn't bear on the question — fewer tokens spent, and less chance of a stray one dragging the answer off course. It only touches what Bernard picked up by itself, never the notes you asked it to keep. All for one small extra call a turn.",
         field: { kind: 'boolean' },
         envVar: 'BERNARD_RECALL_FILTER',
+        // The first time an answer is informed by something the reader never
+        // said in this conversation. Without a word about it that reads as the
+        // model knowing things it should not.
+        hint: {
+          trigger: 'recall:first-injection',
+          message:
+            'That answer also drew on things Bernard picked up in past conversations, chosen for this question.',
+          surface: '/agent-options',
+        },
       },
       {
         key: 'memoryConsolidation',
@@ -435,6 +517,21 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
           "Reads each answer out loud as well as printing it, which is what makes Bernard usable while you're looking somewhere else. It only speaks the last answer, so anything that has scrolled past won't be read back.",
         field: { kind: 'boolean' },
         envVar: 'BERNARD_VOICE',
+        // The setting this hint is ABOUT is `voiceNormalizer`, which defaults
+        // on and which the wizard deliberately does not ask about (#447) — so
+        // it has no field of its own to carry one. It hangs here because the
+        // observable moment is a readback and `/voice` owns every part of it,
+        // including the row that turns this off. Lossy in the direction of the
+        // home rather than of the sentence, which is carried verbatim.
+        //
+        // It fires on a real `'normalized'` outcome rather than on the setting,
+        // so a reader who would hear no difference is never told about one.
+        hint: {
+          trigger: 'voice:first-readback',
+          message:
+            'Natural speech is on — Bernard reads a listener-friendly version of each reply, so what you hear differs a little from what is on screen.',
+          surface: '/voice',
+        },
       },
     ],
   },
