@@ -122,10 +122,14 @@ import {
   App,
   acceptInRange,
   acceptInteger,
+  acceptNumber,
   buildResumeSeed,
   isScaffoldingMessage,
+  pickGenerationParamsInk,
+  pickWizardField,
   type AppStores,
 } from '../App.js';
+import { WIZARD_FIELDS } from '../../profiles-wizard-data.js';
 import { resolveReferences, shouldSkipResolver } from '../../reference-resolver.js';
 import { INTERRUPT_CANCEL_NOTE } from '../../react.js';
 import { INTERRUPTED_MARKER } from '../../session-markers.js';
@@ -848,13 +852,94 @@ describe('acceptInteger / acceptInRange (#440)', () => {
     expect(acceptInteger('999999', 0)).toBe(999999);
   });
 
-  it('leaves the parse to the caller, so a float keeps parseFloat leniency', () => {
-    // Deliberate, not an oversight: `runThresholdPrompt`'s own toast offers
-    // `0.8 or 80`, and `String(Number.parseFloat('0.50'))` is `'0.5'`, so the
-    // integer round trip would refuse the most ordinary temperature entry.
-    expect(acceptInRange(Number.parseFloat('0.50'), 0, 1)).toBe(0.5);
+  // The fractional half. `Number` is the predicate the integer round trip
+  // cannot be: it keeps `0.50`, which `String(parsed) !== raw` would refuse,
+  // and refuses `0.15abc`, which `parseFloat` silently reads as `0.15`.
+  it.each([
+    ['0.50', 0.5],
+    ['.5', 0.5],
+    ['0', 0],
+    ['1', 1],
+    ['0.15abc', null],
+    ['80%', null],
+    // `Number('')` is 0, which is IN range at a 0-1 field — so a blank entry
+    // would be stored as a real setting rather than refused. Guarded in the
+    // helper, not at the three callers that each happen to be safe today by a
+    // different accident.
+    ['', null],
+    ['   ', null],
+    ['nope', null],
+    ['Infinity', null],
+  ])('reads %j as %j, fractionally', (raw, expected) => {
+    expect(acceptNumber(raw as string, 0, 1)).toBe(expected);
+  });
+
+  it('refuses trailing junk in the profile wizard too', async () => {
+    // The third swap, and a mutation check found it was the one nothing could
+    // see: this file's header records `/profiles` as deliberately not driven
+    // through Ink, so the only route to it is calling it with its two injected
+    // dependencies. The field is the REAL registry entry, so the test also
+    // fails if `scratchSubjectThreshold` stops being a `float01`.
+    const field = WIZARD_FIELDS.find((f) => f.field.kind === 'float01');
+    expect(field, 'no float01 field in the wizard registry').toBeDefined();
+    const menu = vi.fn();
+    const answer = (raw: string) =>
+      pickWizardField(
+        field!,
+        0.5,
+        menu as never,
+        (async () => ({
+          cancelled: false,
+          raw,
+        })) as never,
+      );
+
+    await expect(answer('0.15abc')).resolves.toBeUndefined();
+    await expect(answer('0.15')).resolves.toBe(0.15);
+    // A float01 row is a free-text prompt, never a menu — if this fired, the
+    // assertions above would be about a branch they do not mean to test.
+    expect(menu).not.toHaveBeenCalled();
+  });
+
+  it('refuses trailing junk at temperature, which is the field this is really about', async () => {
+    // The site the review named: a swallowed suffix here silently runs the
+    // model at a number nobody chose, and `80%` means nothing at a 0-2 box —
+    // so unlike `runThresholdPrompt` there is no reading worth preserving.
+    // Driven directly; the only other route is the whole `/model` chain.
+    const answer = async (raw: string) => {
+      let call = 0;
+      const menu = (async (entries: { label?: string }[]) => {
+        // First pass pick Temperature, second pass leave — the loop re-shows
+        // its menu until told to stop, so a stub that always picks never ends.
+        const want = call++ === 0 ? 'Temperature' : 'Done';
+        const index = entries.findIndex((e) => e.label === want);
+        expect(index, `no ${want} row`).toBeGreaterThanOrEqual(0);
+        return { cancelled: false, item: entries[index], index };
+      }) as never;
+      return pickGenerationParamsInk(
+        'openai',
+        'gpt-4o',
+        undefined,
+        undefined,
+        menu,
+        (async () => ({ cancelled: false, raw })) as never,
+        vi.fn() as never,
+      );
+    };
+
+    await expect(answer('0.15abc')).resolves.toBeUndefined();
+    // Guard-the-guard, and the exact entry the integer round trip would have
+    // refused: `String(Number.parseFloat('0.50'))` is `'0.5'`.
+    await expect(answer('0.50')).resolves.toEqual({ temperature: 0.5 });
+  });
+
+  it('leaves the parse to the caller, which is what lets one prompt stay lenient', () => {
+    // `runThresholdPrompt` is the single exception and calls `acceptInRange`
+    // directly: it is a 0-100 box whose own toast offers `0.8 or 80`, so a
+    // trailing `%` is a reading someone plausibly meant. Nowhere else does a
+    // suffix mean anything, which is why every other float prompt is strict.
     expect(acceptInRange(Number.parseFloat('80%'), 0, 100)).toBe(80);
-    expect(acceptInRange(Number.parseFloat('nope'), 0, 1)).toBeNull();
+    expect(acceptNumber('80%', 0, 100)).toBeNull();
     expect(acceptInRange(Number.POSITIVE_INFINITY, 0)).toBeNull();
   });
 });
@@ -921,6 +1006,85 @@ describe('<App> /options numeric entry (#440)', () => {
     await answerOption(stdin, 2, '0');
 
     expect(config.tokenWindow).toBe(0);
+    unmount();
+  });
+});
+
+/**
+ * The float half of the same defect, and the one prompt deliberately left out
+ * of it (#440). Both rows live on the `/agent-options` tab.
+ */
+describe('<App> /agent-options numeric entry (#440)', () => {
+  beforeEach(() => {
+    process.env.BERNARD_HOME = TMP_HOME;
+  });
+
+  /**
+   * Land on a row and answer its value prompt. The row is asserted by LABEL
+   * before Enter: an arrow count is the only way to reach a row and it goes
+   * stale the moment one is inserted above, so without this the test would
+   * quietly start exercising a different setting.
+   */
+  async function answerAgentOption(
+    stdin: { write: (s: string) => void },
+    lastFrame: () => string | undefined,
+    row: number,
+    label: string,
+    text: string,
+  ): Promise<void> {
+    await submit(stdin, '/agent-options');
+    for (let i = 0; i < row; i += 1) {
+      stdin.write(ARROW_DOWN);
+      await tick();
+    }
+    expect(stripAnsi(lastFrame() ?? '')).toMatch(new RegExp(`>\\s+\\d+\\.\\s+${label}`));
+    stdin.write(ENTER);
+    await tick(40);
+    stdin.write(text);
+    await tick(20);
+    stdin.write(ENTER);
+    await tick(60);
+  }
+
+  it('refuses trailing junk at the scratch threshold', async () => {
+    // Measured before the fix: this stored `0.15` and reported it back as a
+    // success. `parseFloat` reads the prefix exactly as `parseInt` does; only
+    // the integer half of #440 was ever noticed.
+    const { stdin, lastFrame, config, unmount } = renderApp({
+      config: { scratchSubjectThreshold: 0.5 },
+    });
+    await tick();
+    await answerAgentOption(stdin, lastFrame, 13, 'Scratch subject-change threshold', '0.15abc');
+
+    expect(config.scratchSubjectThreshold).toBe(0.5);
+    unmount();
+  });
+
+  it('still stores an ordinary fraction', async () => {
+    // Guard-the-guard, and the case the strict integer predicate could not
+    // have served: `String(Number.parseFloat('0.50'))` is `'0.5'`.
+    const { stdin, lastFrame, config, unmount } = renderApp({
+      config: { scratchSubjectThreshold: 0.5 },
+    });
+    await tick();
+    await answerAgentOption(stdin, lastFrame, 13, 'Scratch subject-change threshold', '0.15');
+
+    expect(config.scratchSubjectThreshold).toBe(0.15);
+    unmount();
+  });
+
+  it('keeps reading 80% as 80 at the one box where that means something', async () => {
+    // The deliberate exception, pinned so a later sweep toward consistency has
+    // to argue with a failing test rather than with a comment. This field is
+    // dual-scale — its own toast offers `0.8 or 80` — and runs through
+    // `normalizeThreshold`, so `80%` lands on 0.8.
+    const { stdin, lastFrame, config, unmount } = renderApp({
+      config: { autoCreateThreshold: 0.5 },
+    });
+    await tick();
+    await answerAgentOption(stdin, lastFrame, 2, 'Auto-create threshold', '80%');
+
+    expect(config.autoCreateThreshold).toBe(0.8);
     unmount();
   });
 });

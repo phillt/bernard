@@ -738,18 +738,16 @@ function openOverlay<T>(
  * therefore tests `=== null`, never falsiness — a `if (!value)` here silently
  * refuses the one entry the field documents.
  *
- * The caller supplies the parse, which is what keeps the float prompts out of
- * {@link acceptInteger} below: `parseFloat`'s leniency is arguably wanted on a
- * percentage box (`80%` reads as 80, and `runThresholdPrompt`'s own toast
- * offers `0.8 or 80`), where `parseInt`'s is never wanted on `max-tokens`. The
- * strict round trip that fixes the integer case cannot be transplanted anyway —
- * `String(Number.parseFloat('0.50'))` is `'0.5'`, so it would refuse the most
- * ordinary thing anyone types into a temperature field. Closing the float half
- * needs a different predicate and is its own decision.
+ * **The caller supplies the parse, and that is the whole point**: it is what
+ * lets the strict prompts be strict and the one lenient prompt stay lenient
+ * with the difference legible at the call site, one token wide. Three of the
+ * four float prompts go through {@link acceptNumber}; `runThresholdPrompt`
+ * alone calls this directly with a `Number.parseFloat`, and that one line is
+ * the whole exception.
  *
- * One deliberate tightening over the two float sites this absorbed, which
- * tested `Number.isNaN`: `±Infinity` past an absent bound was accepted there
- * and is refused here. Unreachable today — both live `range` descriptors in
+ * One deliberate tightening over the float sites this absorbed, which tested
+ * `Number.isNaN`: `±Infinity` past an absent bound was accepted there and is
+ * refused here. Unreachable today — both live `range` descriptors in
  * `providers/model-params.ts` carry a `min` and a `max`, and the two threshold
  * prompts bound both ends — so nothing observable moves; it is stated because
  * `ParamDescriptor.max` is optional and the next descriptor need not have one.
@@ -759,6 +757,47 @@ export function acceptInRange(value: number, min?: number, max?: number): number
   if (min !== undefined && value < min) return null;
   if (max !== undefined && value > max) return null;
   return value;
+}
+
+/**
+ * A fractional answer, with the same refusal of a partial read (#440).
+ *
+ * The first cut of this change left every float prompt on `Number.parseFloat`
+ * and argued that the integer round trip could not be transplanted. That is
+ * true — `String(Number.parseFloat('0.50'))` is `'0.5'`, so it would refuse the
+ * most ordinary thing anyone types into a temperature box — and it was being
+ * read as "no predicate exists", which is a different claim and a false one.
+ * **`Number` is the predicate**: `Number('0.50')` is `0.5`, `Number('0.15abc')`
+ * is `NaN`. Measured before the swap, `/agent-options → Scratch subject-change
+ * threshold` really did take `0.15abc` and store `0.15`.
+ *
+ * `Number('')` is `0`, which at a 0-1 field is IN range — so an empty entry
+ * would be stored as a real setting rather than refused. Guarded here rather
+ * than at the callers, all three of which happen to be safe today by three
+ * DIFFERENT accidents (`val.cancelled`, `if (!trimmed)`, `if (raw === '')`).
+ * Same argument as `acceptInteger`'s `trim()`: the helper holds on its own
+ * terms, not by a property of whoever called it.
+ *
+ * **`runThresholdPrompt` is the one prompt that keeps `parseFloat`, and the
+ * distinction is per-field, not "floats are different".** It is a 0-100 box
+ * whose own toast offers `0.8 or 80` and whose value runs through
+ * `normalizeThreshold`, so `parseFloat('80%') === 80 → 0.8` is a reading a user
+ * plausibly meant — verified live. Nowhere else does a trailing suffix mean
+ * anything: `80%` is nonsense at a 0-1 threshold and at `temperature`, where a
+ * swallowed suffix silently runs the model at a number nobody chose.
+ *
+ * A second candidate reason — that `Number('') === 0` would turn a blank submit
+ * into a stored `0` at the threshold prompts — does NOT hold and is recorded so
+ * it is not re-adopted. `TextInputOverlay`'s `cancelOnEmpty` defaults to `true`
+ * (`options.cancelOnEmpty !== false`), so a blank Enter resolves `cancelled`
+ * and never reaches a parse; measured at both threshold prompts, where the
+ * setting was left untouched. It is the same shape as #440's trim claim: a
+ * hazard the overlay had already closed.
+ */
+export function acceptNumber(raw: string, min?: number, max?: number): number | null {
+  const trimmed = raw.trim();
+  if (trimmed === '') return null;
+  return acceptInRange(Number(trimmed), min, max);
 }
 
 /**
@@ -3824,7 +3863,7 @@ export function App({
       label: 'New subject-change threshold (0-1, e.g. 0.15)',
     });
     if (val.cancelled) return;
-    const parsed = acceptInRange(Number.parseFloat(val.raw), 0, 1);
+    const parsed = acceptNumber(val.raw, 0, 1);
     if (parsed === null) {
       flashToast('Threshold must be a number between 0 and 1 (e.g. 0.15)', 'error');
       return;
@@ -3885,6 +3924,11 @@ export function App({
   async function runThresholdPrompt(): Promise<void> {
     const val = await requestTextInput({ label: 'New threshold (0-100)' });
     if (val.cancelled) return;
+    // **The one numeric prompt that keeps `parseFloat`'s leniency**, and the
+    // only one where a trailing suffix means something: this is the dual-scale
+    // box whose own toast offers `0.8 or 80`, so `80%` → 80 → `0.8` is a
+    // reading someone plausibly meant. Its 0-1 sibling above takes
+    // `acceptNumber`, because `80%` is nonsense there. See `acceptNumber`.
     const parsed = acceptInRange(Number.parseFloat(val.raw), 0, 100);
     if (parsed === null) {
       flashToast('Threshold must be a number between 0 and 100 (e.g. 0.8 or 80)', 'error');
@@ -4158,8 +4202,15 @@ export function App({
           // `settings-coverage.test.ts` reconciles them in the meantime.
           const val = acceptInteger(valResult.raw, minVal);
           if (val === null) {
+            // Says what the entry must LOOK LIKE, not what it must be. The
+            // predecessor read "Must be a positive integer", which was true of
+            // every input it accepted and false of two it now refuses: `007`
+            // and `+8192` are both positive integers. This PR is about a value
+            // accepted or dropped in silence, and a refusal that misstates its
+            // own reason is that one layer over — the user re-types the same
+            // thing because they were told nothing wrong with it.
             flashToast(
-              `Invalid value. Must be ${minVal === 0 ? 'a non-negative integer' : 'a positive integer'}.`,
+              `Invalid value. Enter digits only (no sign, units or leading zeros), at least ${minVal}.`,
               'error',
             );
             return;
@@ -6124,7 +6175,15 @@ async function confirmDeletion(requestMenu: RequestMenu, name: string): Promise<
   return !confirm.cancelled && confirm.index === 0;
 }
 
-async function pickWizardField(
+/**
+ * Exported for `App.test.tsx` alone, and the reason is the float01 branch
+ * (#440). It takes both of its dependencies as parameters, so it is directly
+ * drivable with two stubs — where the only other route to it is the whole
+ * `/profiles` → create wizard, which this file's own header records as
+ * deliberately not exercised through Ink. A mutation check found this line was
+ * the one swap in that change nothing could see.
+ */
+export async function pickWizardField(
   field: WizardFieldData,
   current: unknown,
   requestMenu: RequestMenu,
@@ -6174,7 +6233,7 @@ async function pickWizardField(
   // not.
   if (kind.kind === 'int') return acceptInteger(trimmed, kind.min, kind.max) ?? undefined;
   // float01
-  return acceptInRange(Number.parseFloat(trimmed), 0, 1) ?? undefined;
+  return acceptNumber(trimmed, 0, 1) ?? undefined;
 }
 
 /**
@@ -6562,7 +6621,14 @@ function formatCatalogFooter(): string {
  * until the user picks Done (or Esc). Returns the chosen {@link ModelParams},
  * or `undefined` when nothing is set (clean disk record = model defaults).
  */
-async function pickGenerationParamsInk(
+/**
+ * Exported for `App.test.tsx`, for the same reason `pickWizardField` is: all
+ * three dependencies are injected, and a mutation check found its float branch
+ * — `temperature` and `topP`, the fields #440's float half is really about —
+ * was the one swap in that change nothing could see. The only other route here
+ * is the whole `/model` → generation-params chain.
+ */
+export async function pickGenerationParamsInk(
   provider: string,
   model: string,
   sdk: SupportedSdk | undefined,
@@ -6630,11 +6696,10 @@ async function pickGenerationParamsInk(
         continue;
       }
       // The one site holding both modes, so it is also where the difference
-      // between them is visible: the bounds are shared, only the junk check
-      // differs — see `acceptInRange` for why a float cannot take the integer's.
-      const parsed = isFloat
-        ? acceptInRange(Number.parseFloat(raw), d.min, d.max)
-        : acceptInteger(raw, d.min, d.max);
+      // between them is visible: the bounds are shared and only the junk check
+      // differs. Both are strict here — `temperature` and `topP` are exactly
+      // the fields where a swallowed suffix costs something and means nothing.
+      const parsed = isFloat ? acceptNumber(raw, d.min, d.max) : acceptInteger(raw, d.min, d.max);
       if (parsed === null) {
         flashToast(
           `${d.label} must be a ${isFloat ? 'number' : 'whole number'} in ${bounds}.`,
