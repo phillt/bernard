@@ -1141,8 +1141,30 @@ coordinator)`, which translated one piece of jargon into another beside every
         the allowance it offers — the block gate's session allowance is keyed
         on the tool NAME, the confirm gate's on `name:hash(args)`, so
         `read-only`'s is the coarser, which is not an argument for keeping it
-        as a row. `toolModeFor` reads `write`+`strict` back as the first row,
-        which is that claim stated as code rather than left in prose.
+        as a row.
+      - **But `toolModeFor` does NOT read `write`+`strict` back as that row**,
+        and it used to — "they stop the same calls" is a claim about what the
+        two postures STOP, which is not what that function decides. It is the
+        PRESELECTOR, and both surfaces decode a row through
+        `{...TOOL_MODE_SETTINGS[value]}`, which writes all three keys: so a
+        `write`+`strict` user opened `/setup` on a row that was not their
+        state and, by accepting what was shown, wrote `read-only`+`auto` over
+        it — writes lost one way, `strict` the other, from a keystroke that
+        changed nothing. That is this wizard's own "a step never invents the
+        answer it opens on", which is a rule about what Continue WRITES; and
+        it is the `⚠ Never ask` row's own argument applied consistently, since
+        `confirmMode` is the value left holding the answer when the safeguards
+        come back. Both un-representable pairs answer `null` now and the step
+        opens unticked. The invariant is stated over the whole space rather
+        than for the pair that broke it: a row is offered as preselected only
+        when re-applying it reproduces the state it was read from.
+      - **`read-only`+`strict` is the one remaining lossy pair, and is left
+        alone deliberately.** Re-applying writes `auto` over the user's
+        `strict` — but the row is RIGHT about the mode, only an inert field
+        moves, and writing what is correct the moment it stops being inert is
+        exactly the documented `⚠ Never ask` decision. Preserving it instead
+        would mean a row that writes some of its keys, which is the state that
+        left `skipPermissions: true` standing.
       - **It was very nearly a silent capability removal.** `strict` and `off`
         lose their setup rows, and the registry they left is the ONLY wizard
         surface — `OPTIONS_REGISTRY` is the four numeric settings, and

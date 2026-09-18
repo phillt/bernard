@@ -287,11 +287,23 @@ export async function runDefinition<TInput, TFormatted>(
     // string per field and catches nothing a reformat would not break.
     //
     // Spreading makes forwarding TOTAL by construction: every current and
-    // future `ToolOptions` field arrives, and the seven that `AugmentOptions`
-    // declares are all plain `ToolOptions['…']` aliases. The explicit fields
-    // below stay AFTER it and therefore still win — which is what keeps
-    // `toolMode` and `confirmThreshold` coming from the policy decision rather
-    // than from a same-named field a future `ToolOptions` might grow.
+    // future `ToolOptions` field arrives. Seven of `AugmentOptions`' sixteen
+    // fields are shared by name — six declared as `ToolOptions['…']` aliases,
+    // plus `sessionToolAllowlist`, which restates `Set<string>` directly. The
+    // rest are this call site's own and are spelled out below.
+    //
+    // The explicit fields stay AFTER the spread so the policy decision still
+    // owns `toolMode` and `confirmThreshold`. **That ordering is also the one
+    // hazard here**: an explicit `undefined` OVERWRITES a spread value rather
+    // than falling through to it, and `ctx.policyDecision?.toolMode?.mode` is
+    // `undefined` on every dispatch assembled without a policy decision. So if
+    // `ToolOptions` ever grows a `toolMode` or `confirmThreshold`, this line
+    // silently drops it for exactly those dispatches — the same silent-omission
+    // failure the spread was introduced to close, arriving through it. Neither
+    // name is declared on `ToolOptions` today, so there is nothing to lose yet;
+    // whoever adds one must make these two conditional rather than reordering,
+    // since a spread placed last would let a tool option override the gate's
+    // own mode.
     ...ctx.toolOptions,
     profileStore: ctx.stores.toolProfiles,
     confirmThreshold: ctx.policyDecision?.toolMode?.confirmThreshold,

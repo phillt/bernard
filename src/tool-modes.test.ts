@@ -161,14 +161,40 @@ describe('one question decides all three keys', () => {
     }
   });
 
-  it('reads write+strict back as "ask before every change"', () => {
-    // The collapse that makes this three rows rather than four: `strict`
-    // confirms at medium and up, and an ordinary local write is medium, so it
-    // stops on exactly the calls `read-only` blocks on. If this is wrong the
-    // merge is wrong, which is why it is asserted rather than left in prose.
-    expect(toolModeFor({ toolMode: 'write', skipPermissions: false, confirmMode: 'strict' })).toBe(
-      'read-only',
-    );
+  it('reads write+strict back as no row at all', () => {
+    // This used to answer `read-only`, on the argument that `strict` confirms
+    // at medium and up — every ordinary write — so it stops on exactly the
+    // calls the first row blocks on. That is true, and it is a claim about
+    // what the two postures STOP, which is not what `toolModeFor` decides.
+    //
+    // It is the PRESELECTOR, and every surface decodes a row through
+    // `{...TOOL_MODE_SETTINGS[value]}`, which writes all three keys. So the
+    // collapse opened `/setup` on a row that was not the user's state and,
+    // by accepting what was shown, wrote `read-only` + `auto` over
+    // `write` + `strict`: writes lost one way, `strict` the other, from a
+    // keystroke that changed nothing.
+    expect(
+      toolModeFor({ toolMode: 'write', skipPermissions: false, confirmMode: 'strict' }),
+    ).toBeNull();
+  });
+
+  it('every row round-trips, and anything that does not opens unticked', () => {
+    // The property the collapse broke, stated over the whole space rather than
+    // for the one pair that broke it: a row is offered as preselected ONLY when
+    // re-applying it reproduces the state it was read from. Otherwise Continue
+    // is a silent settings change.
+    for (const m of TOOL_MODES) {
+      const stored = TOOL_MODE_SETTINGS[m.value];
+      const row = toolModeFor(stored);
+      expect(row, m.value).toBe(m.value);
+      expect(TOOL_MODE_SETTINGS[row!], m.value).toEqual(stored);
+    }
+    for (const orphan of [
+      { toolMode: 'write' as const, skipPermissions: false, confirmMode: 'strict' as const },
+      { toolMode: 'write' as const, skipPermissions: false, confirmMode: 'off' as const },
+    ]) {
+      expect(toolModeFor(orphan), JSON.stringify(orphan)).toBeNull();
+    }
   });
 
   it('reads write+off back as no row at all', () => {

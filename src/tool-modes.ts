@@ -130,10 +130,24 @@ export function toolModeFor(s: Partial<ToolModeSettings>): ToolModeChoice | null
   if (s.skipPermissions === true) return UNRESTRICTED;
   if (s.toolMode === 'read-only') return 'read-only';
   if (s.toolMode !== 'write') return null;
-  // The collapse argued in the module docstring: `strict` confirms at medium
-  // and up, which is every write, so it stops on the same calls the first row
-  // blocks on.
-  if (s.confirmMode === 'strict') return 'read-only';
+  // `write` + `strict` is NOT folded onto the first row, and the collapse the
+  // module docstring argues for is a statement about what the two postures
+  // STOP — which is true, and is not what this function decides.
+  //
+  // It is the PRESELECTOR. `setup-wizard.ts` and `App.tsx` both decode a row
+  // through `{...TOOL_MODE_SETTINGS[value]}`, which writes all three keys
+  // unconditionally, so returning `read-only` here meant a `write`+`strict`
+  // user opened `/setup` on a row that was not their state and, by accepting
+  // what was shown, silently became `read-only` + `auto` — losing writes in one
+  // direction and `strict` in the other, having changed nothing.
+  //
+  // That is this wizard's own "a step never invents the answer it opens on",
+  // which is a rule about what Continue WRITES rather than about what a label
+  // claims. It is also the `⚠ Never ask` row's argument two functions up,
+  // applied consistently: `confirmMode` is the value left holding the answer
+  // when the safeguards come back, so a row must not overwrite a level the user
+  // set. Both un-representable pairs now answer `null` and the step opens with
+  // nothing ticked, which is the honest preselection.
   return s.confirmMode === 'auto' ? 'write' : null;
 }
 
