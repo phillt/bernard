@@ -253,3 +253,112 @@ export function listSubdirectories(dir: string): string[] {
     return [];
   }
 }
+
+/** Marks a directory that has been renamed aside and is being removed. */
+const REMOVING_SUFFIX = '.removing';
+
+/**
+ * True for a name {@link atomicRemoveDirectorySync} minted, and nothing else.
+ *
+ * Both halves are required. The suffix alone would match a workspace whose owner
+ * really is called `foo.removing`; the leading dot alone would match any hidden
+ * directory somebody put there. Together they name a shape nothing else writes.
+ */
+export function isRemovalTombstone(name: string): boolean {
+  return name.startsWith('.') && name.endsWith(REMOVING_SUFFIX);
+}
+
+/** `rmSync` that never throws. A tree that is busy stays; the next sweep retries. */
+function removeTree(target: string): void {
+  try {
+    fs.rmSync(target, { recursive: true, force: true });
+  } catch {
+    // Best-effort — a busy or unreadable tree is not something a caller can act on.
+  }
+}
+
+/**
+ * Removes a directory so that it is gone *by name* the instant this returns,
+ * whatever happens to the rest of the walk.
+ *
+ * `fs.rmSync(dir, { recursive: true, force: true })` is depth-first and is not
+ * atomic: an `EBUSY`/`EACCES` part-way through, or a crash, leaves the directory
+ * under its original name holding whatever was not reached — a half-removed
+ * workspace, which the next run then adopts as though it were its own output. A
+ * same-directory rename *is* atomic, so the disappearance is atomic even though
+ * the removal is not, and a failed walk leaves a `.<name>.<pid>.<hex>.removing`
+ * tombstone that {@link pruneSubdirectoriesByAge} collects unconditionally.
+ *
+ * The rename can itself fail (a permission the caller does not have; a directory
+ * that was already gone). Removing in place is then strictly better than
+ * removing nothing, so that is the fallback — with the weaker guarantee, stated
+ * rather than silently assumed.
+ *
+ * Named for the property it pairs with: {@link atomicWriteFileSync} makes an
+ * appearance atomic, this makes a disappearance atomic, and both do it by
+ * renaming.
+ */
+export function atomicRemoveDirectorySync(dir: string): void {
+  const tombstone = path.join(
+    path.dirname(dir),
+    `.${path.basename(dir)}.${process.pid}.${randomBytes(4).toString('hex')}${REMOVING_SUFFIX}`,
+  );
+  try {
+    fs.renameSync(dir, tombstone);
+    removeTree(tombstone);
+  } catch {
+    removeTree(dir);
+  }
+}
+
+/**
+ * Removes every subdirectory of `dir` whose mtime is older than `maxAgeMs`,
+ * plus every tombstone left by an interrupted {@link atomicRemoveDirectorySync},
+ * whatever its age.
+ *
+ * The directory-shaped sibling of `jsonl.pruneFilesByMtime`, and it had to be
+ * written rather than reused: `listFilesByMtime` filters `e.isFile()`, so the
+ * file-shaped pruners drop directories before they ever rank them, and their
+ * `fs.unlinkSync` would fail on one anyway inside a `catch {}`. Handing either a
+ * directory root is a silent no-op twice over — which is what #585 assumed would
+ * work.
+ *
+ * It ranks nothing against anything, unlike its file-shaped siblings: each
+ * subdirectory is judged on its own age, so a caller with fifty live ones does
+ * not evict any of them. What the mtime *means* is the caller's to decide — see
+ * `ensureRunWorkspace`, which stamps it per run so age reads as "time since last
+ * used" rather than "time since the last file landed".
+ *
+ * `now` is a parameter so a caller sweeping several directories judges them all
+ * against one reading of the clock, rather than each against a slightly later
+ * one. Small, but it is the difference between a pure function of its inputs and
+ * one whose answer depends on when in the loop it was reached.
+ */
+export function pruneSubdirectoriesByAge(
+  dir: string,
+  maxAgeMs: number,
+  now: number = Date.now(),
+): void {
+  for (const name of listSubdirectories(dir)) {
+    const full = path.join(dir, name);
+    if (isRemovalTombstone(name)) {
+      // Already renamed out of the way, so it is nobody's workspace — remove it
+      // in place rather than minting a second tombstone for the same tree.
+      removeTree(full);
+      continue;
+    }
+    let mtimeMs: number;
+    try {
+      mtimeMs = fs.statSync(full).mtimeMs;
+    } catch {
+      // Vanished between readdir and stat, or unreadable. Treat as young: a
+      // directory we cannot measure is not evidence that it is stale, which is
+      // the call `work-queue.enqueuedAtFromName` makes for a name it cannot
+      // read. Note this is the OPPOSITE of `jsonl.listFilesByMtime`, which sorts
+      // an unstattable file as oldest — right for a ranking, wrong here, where
+      // "oldest" is immediately a recursive delete.
+      continue;
+    }
+    if (now - mtimeMs > maxAgeMs) atomicRemoveDirectorySync(full);
+  }
+}

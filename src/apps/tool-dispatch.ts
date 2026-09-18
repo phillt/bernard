@@ -17,7 +17,9 @@ import { directInvocableRefusal } from './direct-tool.js';
 import { detectResultFailure } from '../tool-result-shape.js';
 import { ARG_REF_PREFIX, formatZodError, type ToolDispatch } from './manifest.js';
 import type { ResolvedInvocation } from './invocation.js';
-import * as fs from 'node:fs';
+// A leaf like the posture module above: `node:fs` + `node:path` only, so the
+// cheap path stays cheap.
+import { ensureRunWorkspace } from '../workspaces.js';
 import { clearDuplicateGuard } from '../tools/duplicate-guard.js';
 
 /**
@@ -95,12 +97,12 @@ export async function dispatchToolAction(opts: DispatchToolActionOpts): Promise<
     toolPermissions: loadAppGrants(appId),
   });
   if (posture.toolPermissions?.length) await initShellParser();
-  try {
-    fs.mkdirSync(posture.writeScope!.workspace, { recursive: true });
-  } catch {
-    // A tool that needs it will fail with a real filesystem error, which says
-    // more than anything this could report.
-  }
+  // The same helper `runHeadless` uses, which this path deliberately does not
+  // go through (#445). It stamps the workspace as used and applies retention
+  // (#585); a failure to create it is swallowed here because a tool that needs
+  // the directory fails with a real filesystem error, which says more than
+  // anything this could report.
+  ensureRunWorkspace(posture.writeScope!.workspace);
 
   // Deliberately NOT `loadConfig()`, which calls `validateConfig` and throws
   // when no provider API key is configured. A `kind: 'tool'` action makes no

@@ -65,6 +65,7 @@ import type { RAGStore, RAGSearchResult } from '../rag.js';
 import type { MCPManager } from '../mcp.js';
 import { CronStore } from '../cron/store.js';
 import { CronLogStore } from '../cron/log-store.js';
+import { deleteCronJob } from '../cron/lifecycle.js';
 import { isDaemonRunning, startDaemon, stopDaemon } from '../cron/client.js';
 import { getDomain, getDomainIds } from '../domains.js';
 import { MCP_CONFIG_PATH } from '../paths.js';
@@ -2225,10 +2226,11 @@ export function App({
           showInfo(`Logs — ${job.name}`, lines);
           return;
         }
-        // Delete path — confirm, then remove the job + its logs.
+        // Delete path — confirm, then the whole sweep: the row, its logs, its
+        // notes and its run workspace (#585). This was the FOURTH copy of
+        // "delete the row and the logs", which is why the sweep is a module.
         if (!(await confirmDeletion(requestMenu, job.name))) continue; // back to list
-        store.deleteJob(job.id);
-        new CronLogStore().deleteJobLogs(job.id);
+        deleteCronJob(job.id, { store, logStore: new CronLogStore() });
         syncDaemon();
         flashToast(`Deleted ${job.name}.`, 'success');
         continue;

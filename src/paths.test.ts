@@ -195,4 +195,36 @@ describe('paths', () => {
       expect(paths.CRON_LOG_FILE.startsWith(paths.STATE_DIR)).toBe(true);
     });
   });
+
+  /**
+   * The run workspaces (#585). `runWorkspace` had no coverage here at all,
+   * which is how the layout it promises — `<namespace>/<stable id>`, two levels
+   * under one root — could have drifted without anything noticing; the sweep in
+   * `src/workspaces.ts` walks exactly those two levels.
+   */
+  describe('run workspaces', () => {
+    it('WORKSPACES_DIR is under DATA_DIR', async () => {
+      const paths = await loadPaths();
+      expect(paths.WORKSPACES_DIR.startsWith(paths.DATA_DIR)).toBe(true);
+    });
+
+    it('is namespace then id, directly under the root', async () => {
+      const paths = await loadPaths();
+      expect(paths.runWorkspace('cron', 'job-1')).toBe(
+        path.join(paths.WORKSPACES_DIR, 'cron', 'job-1'),
+      );
+    });
+
+    it('keeps namespaces apart', async () => {
+      const paths = await loadPaths();
+      expect(paths.runWorkspace('cron', 'x')).not.toBe(paths.runWorkspace('apps', 'x'));
+    });
+
+    // The bound is stated beside the layout deliberately — the two are one
+    // decision. A monthly cron job has to survive its own gap.
+    it('bounds a workspace at 30 days', async () => {
+      const paths = await loadPaths();
+      expect(paths.WORKSPACE_MAX_AGE_MS).toBe(30 * 24 * 60 * 60 * 1000);
+    });
+  });
 });

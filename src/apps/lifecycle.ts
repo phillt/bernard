@@ -1,5 +1,6 @@
-import * as fs from 'node:fs';
-import { appletDataDir, runWorkspace } from '../paths.js';
+import { appletDataDir } from '../paths.js';
+import { atomicRemoveDirectorySync } from '../fs-utils.js';
+import { removeRunWorkspace } from '../workspaces.js';
 import { SpecialistStore } from '../specialists.js';
 import { deleteSpecialist } from '../specialist-lifecycle.js';
 import { AppletBriefStore } from './brief-store.js';
@@ -54,10 +55,12 @@ export function deleteApplet(appId: string): DeleteResult {
   // 2. Release the SQLite handle before touching the file. `closeAppletStore`
   //    is idempotent and safe when the daemon already closed it.
   closeAppletStore(appId);
-  fs.rmSync(appletDataDir(appId), { recursive: true, force: true });
+  atomicRemoveDirectorySync(appletDataDir(appId));
 
-  // 3. The action write scope.
-  fs.rmSync(runWorkspace('apps', appId), { recursive: true, force: true });
+  // 3. The action write scope. Through the shared helper (#585), which renames
+  //    it aside before removing so a walk that fails part-way cannot leave a
+  //    half-emptied workspace under the id a re-added applet would adopt.
+  removeRunWorkspace('apps', appId);
 
   // 4. Per-app permission rules. `[]` removes the entry rather than leaving an
   //    empty one behind for a future app to inherit by id collision.

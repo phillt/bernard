@@ -3,6 +3,7 @@ import { z } from 'zod';
 import cron from 'node-cron';
 import { CronStore } from '../cron/store.js';
 import { CronLogStore } from '../cron/log-store.js';
+import { deleteCronJob } from '../cron/lifecycle.js';
 import { isDaemonRunning, startDaemon, stopDaemon } from '../cron/client.js';
 import { debugLog } from '../logger.js';
 import { attachActionMeta } from '../framework/tools/adapter.js';
@@ -162,12 +163,13 @@ export const CRON_ACTIONS = {
     return `Job updated:\n  ID: ${job.id}\n  Name: ${job.name}\n  Schedule: ${job.schedule}\n  Enabled: ${job.enabled}`;
   },
 
-  delete: async ({ store, logStore }, { id }) => {
+  delete: async (deps, { id }) => {
     if (!id) return missing('delete', 'id', '{"action":"delete","id":"<job-id>"}');
-    const deleted = store.deleteJob(id);
+    // The whole sweep, not just the row (#585): logs, notes and the run
+    // workspace go with it.
+    const deleted = deleteCronJob(id, deps);
     if (!deleted) return `Error: No job found with ID "${id}".`;
-    logStore.deleteJobLogs(id);
-    const suffix = stopIfNoEnabledJobs(store);
+    const suffix = stopIfNoEnabledJobs(deps.store);
     if (suffix) return `Job deleted.${suffix}`;
     return `Job "${id}" deleted.`;
   },

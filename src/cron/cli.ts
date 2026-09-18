@@ -3,10 +3,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { CronStore } from './store.js';
 import { CronLogStore } from './log-store.js';
+import { deleteCronJob } from './lifecycle.js';
 import { runJob } from './runner.js';
 import { isDaemonRunning, startDaemon, stopDaemon } from './client.js';
 import { printInfo, printError } from '../output.js';
-import { runWorkspace } from '../paths.js';
+import { runWorkspace, WORKSPACE_MAX_AGE_MS } from '../paths.js';
 import { parseGrantSpec, type PermissionRule } from '../tool-permissions.js';
 
 /** Stops the daemon automatically when no enabled jobs remain. */
@@ -159,8 +160,7 @@ export async function cronDelete(ids: string[]): Promise<void> {
   }
 
   for (const job of found) {
-    store.deleteJob(job.id);
-    logStore.deleteJobLogs(job.id);
+    deleteCronJob(job.id, { store, logStore });
     printInfo(`Deleted: ${job.name}`);
   }
 
@@ -192,8 +192,7 @@ export async function cronDeleteAll(): Promise<void> {
   }
 
   for (const job of jobs) {
-    store.deleteJob(job.id);
-    logStore.deleteJobLogs(job.id);
+    deleteCronJob(job.id, { store, logStore });
   }
 
   if (isDaemonRunning()) {
@@ -368,7 +367,14 @@ export async function cronGrant(
   if (paths.length === 0) {
     const current = job.writePaths ?? [];
     printInfo(`Job "${job.name}" (${job.id})`);
+    // Says the retention out loud (#585): this is the one screen where a user
+    // is told the workspace is theirs to write to, so it is where they have to
+    // learn it is not permanent. A month idle and it goes — which for a live
+    // job never happens, since every run stamps it.
     printInfo(`  Workspace: ${runWorkspace('cron', job.id)} (always writable)`);
+    printInfo(
+      `             removed after ${WORKSPACE_MAX_AGE_MS / 86_400_000} days without a run — grant a path below for anything durable`,
+    );
     printInfo(
       current.length > 0
         ? `  Also granted:\n${current.map((p) => `    ${p}`).join('\n')}`
