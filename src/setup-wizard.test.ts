@@ -239,16 +239,52 @@ describe('tool mode folds skipPermissions in', () => {
   });
 
   it('leaves a stored confirm level alone when the row is not changed', () => {
-    // The change test in `settingsPatch` is what protects someone who set
-    // `strict` deliberately: they accept the row already in force, the answer
-    // equals the initial, and nothing is emitted. A row that wrote its keys
-    // unconditionally would silently pull them back to `auto`.
+    // NOTE the mechanism, which changed: this used to pass because `strict`
+    // preselected a row and accepting it emitted nothing. It now passes
+    // because no row is preselected at all, so the answer is `''` and matches
+    // none. Same outcome, different reason — the case below is what pins the
+    // reason, since this one would keep passing if the preselection came back.
     const c = ctx();
     (c.current as Record<string, unknown>).toolMode = 'write';
     (c.current as Record<string, unknown>).confirmMode = 'strict';
     const { spec, steps } = toolModeStep(c);
     const answers = acceptAll(spec.steps.map((s) => ({ initial: s.initial ?? '' })));
     expect(settingsPatch(steps, answers)).not.toHaveProperty('confirmMode');
+  });
+
+  it.each([
+    ['write', 'strict'],
+    ['write', 'off'],
+    ['read-only', 'strict'],
+    ['read-only', 'off'],
+  ])('opens UNTICKED for %s + %s, which no row represents', (toolMode, confirmMode) => {
+    // The state the step opens on, not just what it emits. Every one of these
+    // is a posture a user can reach from `/agent-options`, and a row ticked
+    // here would make a bare Enter a silent settings change — writes lost one
+    // way, the confirm level the other. `confirmMode` is armed under BOTH
+    // modes: `runBlockGate` and `runGate` are independent, and `runGate` never
+    // reads `toolMode`.
+    const c = ctx();
+    (c.current as Record<string, unknown>).toolMode = toolMode;
+    (c.current as Record<string, unknown>).confirmMode = confirmMode;
+    (c.current as Record<string, unknown>).skipPermissions = false;
+    expect(toolModeStep(c).step.initial).toBe('');
+  });
+
+  it('still opens ON the row for every state that has one', () => {
+    // Guard the guard: the four cases above pass trivially if the step opened
+    // unticked for everything.
+    for (const [toolMode, skipPermissions] of [
+      ['read-only', false],
+      ['write', false],
+      ['write', true],
+    ] as const) {
+      const c = ctx();
+      (c.current as Record<string, unknown>).toolMode = toolMode;
+      (c.current as Record<string, unknown>).confirmMode = 'auto';
+      (c.current as Record<string, unknown>).skipPermissions = skipPermissions;
+      expect(toolModeStep(c).step.initial, `${toolMode}/${skipPermissions}`).not.toBe('');
+    }
   });
 });
 

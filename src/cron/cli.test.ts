@@ -60,7 +60,15 @@ vi.mock('./runner.js', () => ({
   runJob: mockRunJob,
 }));
 
-import { cronList, cronRun, cronDelete, cronDeleteAll, cronStop, cronBounce } from './cli.js';
+import {
+  cronList,
+  cronRun,
+  cronDelete,
+  cronDeleteAll,
+  cronStop,
+  cronBounce,
+  cronGrant,
+} from './cli.js';
 
 afterAll(() => {
   vi.restoreAllMocks();
@@ -534,6 +542,65 @@ describe('cron CLI commands', () => {
       await cronBounce(['j1']);
 
       expect(mockClient.startDaemon).toHaveBeenCalled();
+    });
+  });
+  // ==================== cron-grant ====================
+
+  /**
+   * `cronGrant` had no coverage at all, and a refusal was added to it (#447).
+   *
+   * It is the producer for the one lever that lets an unattended job run a
+   * command the confirm gate would otherwise deny, so a spec it accepts and
+   * stores wrongly is a grant the user believes they made and that matches
+   * nothing — on the path with no operator watching, which is the deny-loop
+   * shape `--allow` exists to end.
+   */
+  describe('cron-grant --allow', () => {
+    const job = {
+      id: 'j1',
+      name: 'nightly',
+      schedule: '* * * * *',
+      prompt: 'p',
+      enabled: true,
+      createdAt: '',
+    };
+
+    it('stores a well-formed spec as a rule', async () => {
+      mockStore.getJob.mockReturnValue(job);
+      await cronGrant('j1', [], { allow: ['shell:gh *'] });
+      expect(mockStore.updateJob).toHaveBeenCalledWith('j1', {
+        toolPermissions: [{ effect: 'allow', tool: 'shell', specifier: 'gh *', _v: 2 }],
+      });
+    });
+
+    it.each([':foo', 'gh:', '', '   '])('refuses %o and stores nothing', async (spec) => {
+      // The half the local copy of the parser had dropped: each of these used
+      // to mint a rule — `{tool: ''}` or a specifier silently gone — and
+      // persist it, so the grant read as accepted and matched nothing forever.
+      mockStore.getJob.mockReturnValue(job);
+      await cronGrant('j1', [], { allow: [spec] });
+      expect(mockStore.updateJob).not.toHaveBeenCalled();
+      expect(mockOutput.printError).toHaveBeenCalledWith(
+        expect.stringContaining('Not a tool spec'),
+      );
+      expect(process.exitCode).toBe(1);
+    });
+
+    it('refuses the WHOLE batch when any one spec is bad', async () => {
+      // A partial grant is the worst outcome available: the user is told it
+      // worked, and only some of what they asked for is in force.
+      mockStore.getJob.mockReturnValue(job);
+      await cronGrant('j1', [], { allow: ['shell:gh *', ':foo'] });
+      expect(mockStore.updateJob).not.toHaveBeenCalled();
+    });
+
+    it('appends to existing grants rather than replacing them', async () => {
+      const existing = { effect: 'allow' as const, tool: 'web_read', _v: 2 as const };
+      mockStore.getJob.mockReturnValue({ ...job, toolPermissions: [existing] });
+      await cronGrant('j1', [], { allow: ['shell:gh *'] });
+      expect(mockStore.updateJob).toHaveBeenCalledWith('j1', {
+        toolPermissions: [existing, { effect: 'allow', tool: 'shell', specifier: 'gh *', _v: 2 }],
+      });
     });
   });
 });
