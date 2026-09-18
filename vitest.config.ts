@@ -12,5 +12,14 @@ export default defineConfig({
     // `globalSetup` file exports `setup`/`teardown`, and an unknown config key
     // is ignored silently, so getting this wrong is invisible.
     globalSetup: ['./src/__tests__/global-run-root.ts'],
+    // `*.dst.test.ts` files set `process.env.TZ` to pin a daylight-saving
+    // transition, and that only works in a forked child. Vitest's default pool
+    // runs each file in a worker THREAD, where `process.env` is a thread-local
+    // copy that never reaches the OS `setenv` — so V8's timezone cache is never
+    // invalidated and the assignment is silently ignored. Measured: the same
+    // file passes under `--pool=forks` and fails under threads, with the
+    // process's own zone answering instead. A filename convention rather than a
+    // path, so a second such file needs no config edit.
+    poolMatchGlobs: [['**/*.dst.test.ts', 'forks']],
   },
 });

@@ -137,7 +137,26 @@ export class CronStore {
     const jobs = this.loadJobs();
     const idx = jobs.findIndex((j) => j.id === id);
     if (idx === -1) return undefined;
+    const previousSchedule = jobs[idx].schedule;
     Object.assign(jobs[idx], updates);
+    // `nextRunAt` is COMPUTED from `schedule`, so changing the input has to
+    // invalidate the cached output — and here rather than at each caller,
+    // because a caller that forgets leaves a boundary belonging to an
+    // expression that no longer exists. The scheduler then trusts it: it
+    // re-seeds a held job whose schedule changed, but a job it is not holding
+    // (the daemon was down, or the job was disabled when the edit landed) comes
+    // back through the same "prefer what is on disk" path and inherits the
+    // stale boundary. Worse, if that boundary is in the past the miss report
+    // fires and names three causes — asleep, stopped, powered off — none of
+    // which happened, on the one feature whose whole point is telling the truth
+    // about dropped fires.
+    if (
+      updates.schedule !== undefined &&
+      updates.schedule !== previousSchedule &&
+      updates.nextRunAt === undefined
+    ) {
+      delete jobs[idx].nextRunAt;
+    }
     this.saveJobs(jobs);
     return jobs[idx];
   }

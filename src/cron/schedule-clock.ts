@@ -212,15 +212,74 @@ export function matchesAt(fields: CronFields, date: Date): boolean {
   );
 }
 
+const SECOND_MS = 1_000;
+const MINUTE_MS = 60_000;
+
+/**
+ * Whether this expression should traverse a repeated hour or step over it.
+ *
+ * On a fall-back day one local hour happens twice, and the two readings a
+ * scheduler can give are both defensible — which is why this is a property of
+ * the EXPRESSION rather than a bug to be fixed one way. Vixie cron decides it
+ * with `MIN_STAR` / `HOUR_STAR`: a job that recurs within the day runs at each
+ * wall-clock occurrence, so `0 * * * *` fires 25 times that day; a job naming a
+ * time of day runs once, because `30 1 * * *` means "half past one", not "half
+ * past one, and again". Both readings are what a user of each kind expects, and
+ * a single rule gets one of them wrong.
+ *
+ * Approximated on the parsed sets rather than on the raw `*`, so `0-23` behaves
+ * as `*` does — which is what it means.
+ */
+function repeatsWithinTheDay(fields: CronFields): boolean {
+  return fields.hour.size === 24 || fields.minute.size === 60;
+}
+
 /**
  * Advances `d` to the start of the next whole `unit`, always forward.
  *
- * The monotonicity guard is not decoration: these are local-time setters, and a
- * daylight-saving transition can land the result on the same instant (a local
- * time that does not exist is normalised onto one that does). Without it the
- * walk could sit still and burn its whole step budget.
+ * **`traverseFold` picks the arithmetic for the sub-minute steps, and that is
+ * the whole of the daylight-saving story.** Local-time setters cannot name the
+ * *second* occurrence of a repeated hour — `setMinutes(m + 1, 0, 0)` from 01:59
+ * EDT on a fall-back day yields 02:00 EST, stepping straight over the whole of
+ * 01:00–01:59 EST — so they step over the fold. That is exactly right for a
+ * fixed-time job and loses a fire for a recurring one: measured, `0 * * * *`
+ * fired 24 times that day instead of 25 and `*\/30` 48 instead of 50, and
+ * because `countBoundaries` walks this same function the lost fire was not
+ * counted as missed either. Adding milliseconds and trimming back to the local
+ * unit start traverses the fold instead, because epoch arithmetic has no
+ * ambiguity to resolve.
+ *
+ * Spring-forward needs neither: a local time that does not exist normalises onto
+ * one that does under both, and both correctly skip it.
+ *
+ * **`hour`, `day` and `month` stay on setters under either rule**, and the hour
+ * one is a measured decision rather than an oversight. An expression that
+ * traverses the fold has `hour` either unrestricted (so the hour step is never
+ * taken) or paired with an unrestricted `minute` (so the fold is crossed by the
+ * minute step before the hour step is reached). Switching it to epoch arithmetic
+ * as well was tried and checked against a brute-force scan over five zones: it
+ * changed no answer anywhere, and introduced one wrong answer in
+ * `Australia/Lord_Howe`. `day` and `month` target local midnight, which is past
+ * the fold rather than inside it.
+ *
+ * **Known gap, measured rather than assumed.** In the two zones whose transition
+ * is not on a local hour boundary — `Pacific/Chatham` (+12:45/+13:45) and
+ * `Australia/Lord_Howe` (+10:30/+11:00) — an expression naming specific hours
+ * with an unrestricted minute (`* 2 * * *`) still loses the part of the repeated
+ * span that the hour step jumps. Closing it needs the hour step to search for
+ * the next local-hour change rather than compute it, which is a different shape
+ * of code for a population of about a thousand people; it is written down here
+ * instead.
+ *
+ * The monotonicity guard is not decoration: a transition can land a setter on
+ * the instant it started from, and without it the walk would sit still and burn
+ * its whole step budget.
  */
-function rollForward(d: Date, unit: 'month' | 'day' | 'hour' | 'minute' | 'second'): void {
+function rollForward(
+  d: Date,
+  unit: 'month' | 'day' | 'hour' | 'minute' | 'second',
+  traverseFold: boolean,
+): void {
   const before = d.getTime();
   switch (unit) {
     case 'month':
@@ -235,10 +294,19 @@ function rollForward(d: Date, unit: 'month' | 'day' | 'hour' | 'minute' | 'secon
       d.setHours(d.getHours() + 1, 0, 0, 0);
       break;
     case 'minute':
-      d.setMinutes(d.getMinutes() + 1, 0, 0);
+      if (traverseFold) {
+        d.setTime(d.getTime() + MINUTE_MS);
+        d.setTime(d.getTime() - (d.getSeconds() * SECOND_MS + d.getMilliseconds()));
+      } else {
+        d.setMinutes(d.getMinutes() + 1, 0, 0);
+      }
       break;
     case 'second':
-      d.setSeconds(d.getSeconds() + 1, 0);
+      if (traverseFold) {
+        d.setTime(d.getTime() + SECOND_MS - d.getMilliseconds());
+      } else {
+        d.setSeconds(d.getSeconds() + 1, 0);
+      }
       break;
   }
   if (d.getTime() <= before) d.setTime(before + 1000);
@@ -252,29 +320,35 @@ function rollForward(d: Date, unit: 'month' | 'day' | 'hour' | 'minute' | 'secon
  * not 44,640 — which is what keeps a four-year wait affordable.
  */
 export function nextMatchAfter(fields: CronFields, after: Date): Date | null {
-  const d = new Date(after.getTime());
-  d.setMilliseconds(0);
-  d.setSeconds(d.getSeconds() + 1);
+  // Epoch arithmetic, not `setSeconds`, and under BOTH rules. "Strictly after"
+  // is a statement about instants with no fold decision in it — where the local
+  // setter has one to make and makes it wrong: on a fall-back day
+  // `setSeconds(s + 1)` from 01:00:00 EST names the local time 01:00:01, which
+  // JS resolves to the FIRST (EDT) occurrence, an hour EARLIER than the instant
+  // it was asked to advance past. The walk then re-derived a boundary it had
+  // already returned, and `*\/30` went backwards.
+  const d = new Date(after.getTime() + SECOND_MS - after.getMilliseconds());
+  const traverseFold = repeatsWithinTheDay(fields);
 
   for (let step = 0; step < MAX_WALK_STEPS; step++) {
     if (!fields.month.has(d.getMonth() + 1)) {
-      rollForward(d, 'month');
+      rollForward(d, 'month', traverseFold);
       continue;
     }
     if (!fields.dayOfMonth.has(d.getDate()) || !fields.dayOfWeek.has(d.getDay())) {
-      rollForward(d, 'day');
+      rollForward(d, 'day', traverseFold);
       continue;
     }
     if (!fields.hour.has(d.getHours())) {
-      rollForward(d, 'hour');
+      rollForward(d, 'hour', traverseFold);
       continue;
     }
     if (!fields.minute.has(d.getMinutes())) {
-      rollForward(d, 'minute');
+      rollForward(d, 'minute', traverseFold);
       continue;
     }
     if (!fields.second.has(d.getSeconds())) {
-      rollForward(d, 'second');
+      rollForward(d, 'second', traverseFold);
       continue;
     }
     return d;

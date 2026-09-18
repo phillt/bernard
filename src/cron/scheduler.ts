@@ -3,6 +3,7 @@ import { CronStore } from './store.js';
 import { runJob, resolveCronJobTimeoutMs, type RunJobResult } from './runner.js';
 import {
   countBoundaries,
+  matchesAt,
   nextMatchAfter,
   parseCronFields,
   type CronFields,
@@ -42,6 +43,14 @@ const DEFAULT_MAX_CONCURRENT = 3;
  * The wait is `min(this, time until the earliest boundary)`, so a
  * seconds-granularity expression is still honoured exactly and an idle daemon
  * still wakes only twice a minute.
+ *
+ * It doubles as the lateness threshold in {@link Scheduler.fireDue}, which has
+ * one consequence worth knowing: for a schedule whose period is at or below
+ * this, the threshold equals the job's own period, so such a job is never
+ * classified late and never reports a miss. That is the right answer anyway —
+ * a job due every ten seconds has no useful notion of a fire worth catching up
+ * — but it means the miss reporting is meaningfully about minute-granularity
+ * schedules and coarser.
  */
 const MAX_TICK_WAIT_MS = 30_000;
 
@@ -178,7 +187,22 @@ export class Scheduler {
     }
 
     const persisted = opts.fresh ? NaN : Date.parse(job.nextRunAt ?? '');
-    if (!Number.isNaN(persisted)) return { fields, dueAt: persisted };
+    if (!Number.isNaN(persisted)) {
+      // A boundary is only ever written by this file, and only ever from
+      // `nextMatchAfter` — so one that does not match the current expression
+      // was computed from a different one. `CronStore.updateJob` clears it on
+      // every schedule change made through Bernard, which covers every code
+      // path; this catches the one it cannot, a `jobs.json` edited by hand
+      // while the daemon was down. It answers exactly the question that
+      // matters — "was this boundary computed from THIS expression" — where
+      // comparing it against `nextMatchAfter(now)` could not tell a stale
+      // boundary from a legitimately distant one.
+      if (matchesAt(fields, new Date(persisted))) return { fields, dueAt: persisted };
+      this.log(
+        `Job "${job.name}" (${job.id}) had a stored next run (${job.nextRunAt}) that its ` +
+          `schedule (${job.schedule}) does not match — recomputing.`,
+      );
+    }
 
     const next = nextMatchAfter(fields, new Date());
     if (!next) {

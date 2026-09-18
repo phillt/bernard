@@ -10,7 +10,7 @@ vi.mock('./runner.js', () => ({
 }));
 
 import { Scheduler } from './scheduler.js';
-import type { CronStore } from './store.js';
+import { CronStore } from './store.js';
 
 /**
  * These tests drive the scheduler's own clock, not an operating system.
@@ -303,6 +303,95 @@ describe('Scheduler', () => {
       store.jobs[0].enabled = false;
       scheduler.reconcile();
       expect(scheduler.activeCount).toBe(0);
+      scheduler.stopAll();
+    });
+  });
+
+  describe('a schedule edited while the scheduler was not holding the job', () => {
+    /**
+     * Real `CronStore`, because the whole question is what survives the round
+     * trip through `jobs.json` — and because the invalidation being tested
+     * lives in the store, so a double that re-implemented it would be asserting
+     * against itself. `setup-test-home.ts` already points `BERNARD_HOME` at a
+     * throwaway directory per test file.
+     */
+    function realStore(): CronStore {
+      const store = new CronStore();
+      store.saveJobs([]);
+      return store;
+    }
+
+    it('does not inherit a boundary from the expression it replaced', async () => {
+      // The path no other test shape reaches: the daemon is up throughout, so
+      // `reconcile`'s schedule-change branch never runs — disabling removed the
+      // job from the map, and it comes back through the "prefer what is on
+      // disk" path. Before this, `nextRunAt` still named the old daily 03:00.
+      vi.setSystemTime(at(2026, 6, 15, 1, 0, 0));
+      const store = realStore();
+      const created = store.createJob('Monitor', '0 3 * * *', 'check replies');
+      const { scheduler, lines } = makeScheduler(store as unknown as TestStore);
+
+      scheduler.reconcile();
+      expect(store.getJob(created.id)?.nextRunAt).toBe(at(2026, 6, 15, 3, 0).toISOString());
+
+      store.updateJob(created.id, { enabled: false });
+      scheduler.reconcile();
+      store.updateJob(created.id, { schedule: '0 * * * *' });
+      store.updateJob(created.id, { enabled: true });
+      scheduler.reconcile();
+
+      expect(store.getJob(created.id)?.nextRunAt).toBe(at(2026, 6, 15, 2, 0).toISOString());
+
+      // …and the run that follows is on time, with nothing claiming the daemon
+      // was asleep. A fabricated miss report is worse than the silence it
+      // replaces: it is the one a user would act on by turning catchUp on for a
+      // job that never needed it.
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(mockRunJob).toHaveBeenCalledTimes(1);
+      expect(lines.some((l) => l.includes('missed'))).toBe(false);
+      expect(store.getJob(created.id)?.missedRuns).toBe(0);
+      scheduler.stopAll();
+    });
+
+    it('discards a hand-edited boundary the current expression cannot produce', async () => {
+      // `jobs.json` is a file the daemon watches and users edit; an edit made
+      // while the daemon was down never passes through `updateJob`, so the
+      // store's invalidation cannot run. A boundary is only ever written from
+      // `nextMatchAfter`, so one the expression does not match was computed
+      // from a different expression.
+      vi.setSystemTime(at(2026, 6, 15, 6, 0, 0));
+      const store = realStore();
+      const created = store.createJob('Monitor', '0 9 * * *', 'check replies');
+      store.saveJobs(
+        store.loadJobs().map((j) => ({ ...j, nextRunAt: at(2026, 6, 15, 2, 0).toISOString() })),
+      );
+
+      const { scheduler, lines } = makeScheduler(store as unknown as TestStore);
+      scheduler.reconcile();
+
+      expect(store.getJob(created.id)?.nextRunAt).toBe(at(2026, 6, 15, 9, 0).toISOString());
+      expect(lines.some((l) => l.includes('does not match'))).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(3 * 60 * 60_000);
+      expect(mockRunJob).toHaveBeenCalledTimes(1);
+      expect(lines.some((l) => l.includes('missed'))).toBe(false);
+      scheduler.stopAll();
+    });
+
+    it('keeps a stored boundary the expression does match', async () => {
+      // The other direction, and the one that must not regress: a legitimately
+      // distant boundary — a daemon restarted minutes after seeding — is what
+      // makes a stopped daemon a missed fire rather than a silent re-seed.
+      vi.setSystemTime(at(2026, 6, 15, 1, 0, 0));
+      const store = realStore();
+      const created = store.createJob('Monitor', '0 3 * * *', 'check replies');
+      store.updateJob(created.id, { nextRunAt: at(2026, 6, 15, 3, 0).toISOString() });
+
+      const { scheduler, lines } = makeScheduler(store as unknown as TestStore);
+      scheduler.reconcile();
+
+      expect(store.getJob(created.id)?.nextRunAt).toBe(at(2026, 6, 15, 3, 0).toISOString());
+      expect(lines.some((l) => l.includes('does not match'))).toBe(false);
       scheduler.stopAll();
     });
   });
