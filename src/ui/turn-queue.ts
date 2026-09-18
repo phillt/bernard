@@ -30,20 +30,21 @@
  * "a queue protects a singleton — a notice contends for none of them". That is
  * still true of a notice. A turn contends for all three.
  *
- * ## What is deliberately NOT here: the `+ <request>` prefix
+ * ## The `+ <request>` prefix, which this module used to record as absent
  *
- * #202's user-facing half needs the user to be able to TYPE while a turn runs,
- * and they cannot: `<Prompt disabled={busy}>` gates keystrokes, so the branch
- * would be unreachable. Enabling input mid-turn is not a one-line change either
- * — `Prompt.tsx` says outright that *"while a turn is busy the Prompt is
- * disabled and App owns Esc for interrupt"*, and Ink broadcasts to every
- * mounted handler with no stop-propagation, so an enabled prompt puts its own
- * Esc (clear the buffer) in competition with App's (abort the turn). Resolving
- * that ownership is #200/#202's real cost and belongs with them.
+ * It is here now (#202), and it really was "a parser and a branch on top of
+ * this": the queue, the ordering, the drain loop and the per-turn lifecycle all
+ * carried over untouched. What cost something was the input path — `<Prompt
+ * disabled={busy}>` gated every keystroke, so the branch would have been
+ * unreachable — and dropping `busy` from that expression puts the Prompt's own
+ * Esc (dismiss the picker) against App's (abort the turn), which Ink cannot
+ * arbitrate because it broadcasts every key to every mounted handler with no
+ * stop-propagation.
  *
- * The queue lands anyway because a wake needs it and has two producers that do
- * not require typing: a watcher firing, and `bernard say --run`. When the
- * prefix arrives it is a parser and a branch on top of this, not a rewrite.
+ * The resolution is App **declining** rather than Prompt consuming: `Prompt`
+ * reports the boolean that IS its own Esc guard and App skips the abort while
+ * it is set, so the first Esc dismisses and the second interrupts. See
+ * `Prompt.tsx`'s `onEscapeGuardChange`.
  */
 
 import type { UntrustedData } from '../framework/agents/user-message.js';
@@ -54,7 +55,9 @@ export type QueuedTurnSource =
   /** A watcher fired. */
   | { kind: 'watcher'; watcherId: string; name: string; reason: string }
   /** A `bernard say --run` arrived from another process (#493). */
-  | { kind: 'remote'; label: string };
+  | { kind: 'remote'; label: string }
+  /** The user typed `+ <request>` while a turn was in flight (#202). */
+  | { kind: 'user' };
 
 export interface QueuedTurn {
   id: string;
@@ -131,17 +134,73 @@ export class TurnQueue {
     return this.items.shift() ?? null;
   }
 
+  /**
+   * Everything still waiting, oldest first — what `/queue` lists.
+   *
+   * A copy, so a caller holding the result across an `await` (every overlay
+   * does) cannot watch the live array shift under it while the drain loop or a
+   * watcher mutates it.
+   */
+  list(): readonly QueuedTurn[] {
+    return [...this.items];
+  }
+
+  /**
+   * Drops a waiting turn. `false` when the id names nothing — which is the
+   * ordinary outcome of removing from a menu whose rows were read before the
+   * previous turn finished, since the drain may have taken it in between.
+   */
+  remove(id: string): boolean {
+    const i = this.items.findIndex((t) => t.id === id);
+    if (i === -1) return false;
+    this.items.splice(i, 1);
+    return true;
+  }
+
   get size(): number {
     return this.items.length;
   }
 }
 
-/** One line describing where a queued turn came from, for the panel. */
-export function describeSource(source: QueuedTurnSource): string {
+/** What the transcript panel says about a queued turn. */
+export interface QueuedTurnAnnouncement {
+  /**
+   * The panel's title. Plain glyphs only — an emoji here makes the header row
+   * a different width from every other row in the box and breaks the border
+   * (see `glyph-width.ts`).
+   */
+  title: string;
+  /** The dim meta beside it: where the turn came from. */
+  origin: string;
+}
+
+/**
+ * One table for the whole panel vocabulary, so a new source cannot be announced
+ * under another one's words.
+ *
+ * It returns the title as well as the origin because the two are not
+ * independent: "Woken" is true of a watcher and of a message from another
+ * process, and false of a request the user queued themselves — so a source
+ * supplying only the meta row would have rendered under a title contradicting
+ * it. The switch has no `default` arm on purpose: a new {@link
+ * QueuedTurnSource} is then a compile error here until it has been given
+ * something to say.
+ */
+export function announcementFor(source: QueuedTurnSource): QueuedTurnAnnouncement {
   switch (source.kind) {
     case 'watcher':
-      return `watcher "${source.name}" — ${source.reason}`;
+      return { title: WOKEN_TITLE, origin: `watcher "${source.name}" — ${source.reason}` };
     case 'remote':
-      return `sent by ${source.label}`;
+      return { title: WOKEN_TITLE, origin: `sent by ${source.label}` };
+    case 'user':
+      return { title: '◷ Queued', origin: 'by you, with `+`' };
   }
 }
+
+/**
+ * Exported for `buildResumeSeed`, which rebuilds a wake panel from the
+ * persisted message alone: the source object is gone by then, so without this
+ * the title would be hand-written there — a second copy of a cell in the table
+ * above, free to drift from it.
+ */
+export const WOKEN_TITLE = '◷ Woken';

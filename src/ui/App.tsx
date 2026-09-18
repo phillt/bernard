@@ -114,7 +114,8 @@ import { formatRelative, parseWhen } from '../watchers/duration.js';
 import {
   TurnQueue,
   MAX_QUEUED_TURNS,
-  describeSource,
+  announcementFor,
+  WOKEN_TITLE,
   type EnqueueResult,
   type QueuedTurnSource,
 } from './turn-queue.js';
@@ -650,6 +651,7 @@ export function buildResumeSeed(history: CoreMessage[], toolDetails: boolean): S
         key: `resume-${items.length}`,
         toolDetails,
         wake: {
+          title: WOKEN_TITLE,
           source: 'a watcher',
           instruction: truncate(parseUserMessage(split.instruction).body, RESUME_REPLAY_MAX_CHARS),
           observation: split.observation,
@@ -875,6 +877,33 @@ const is = (text: string, command: DispatchedCommand): boolean => text === comma
  */
 const startsWithCmd = (text: string, command: DispatchedCommand): boolean =>
   text.startsWith(`${command} `);
+
+/**
+ * `+ <request>` — queue this to run after the current turn (#202).
+ *
+ * The whitespace after the `+` is load-bearing rather than cosmetic: without it
+ * `+1 to that` and a pasted diff hunk both read as queue directives, and
+ * silently becoming a deferred instruction is the worst available outcome for
+ * a line the user meant literally. A bare `+` matches (`$`) so the prefix can
+ * explain itself rather than being submitted as a one-character question.
+ */
+const QUEUE_PREFIX_RE = /^\+(?:\s+|$)/;
+
+/**
+ * What the prompt accepts while a turn is in flight (#202).
+ *
+ * The Prompt is live mid-turn now, which reaches every slash command in the
+ * dispatch chain — and every one of them was written against an idle REPL.
+ * Several mutate `agent.history` or swap the model underneath a running loop,
+ * and `/clear`'s own re-entrancy guard returns SILENTLY, which is precisely the
+ * invisible no-op this change exists to remove rather than multiply.
+ *
+ * So the rule is an allow-list and the default is refusal: a command added
+ * later is refused mid-turn until somebody decides it is safe there, which is
+ * the direction that fails loudly. `/queue` is on it because it is the one
+ * command whose entire subject is the turn that has not started yet.
+ */
+const BUSY_ALLOWED_COMMANDS: readonly DispatchedCommand[] = ['/queue'];
 
 /**
  * Standalone toggles consolidated into `/agent-options` or `/options` in
@@ -1109,6 +1138,29 @@ export function App({
    */
   const queueFullNoticedRef = useRef(false);
   /**
+   * Whether `<Prompt>` would claim the next Esc for itself (#202).
+   *
+   * The Prompt is live during a turn now, so both Esc handlers fire on one
+   * keystroke and **Ink has no stop-propagation** — neither can consume it.
+   * The arbitration is therefore this component standing down: with a slash
+   * picker open or a history line recalled, Esc backs out of the smallest
+   * thing first and the turn is untouched; press it again with nothing left to
+   * dismiss and it interrupts, as it always has.
+   *
+   * A ref rather than state because nothing renders from it and a keystroke
+   * must not have to wait for a repaint to mean the right thing. It holds the
+   * PRE-Esc value by construction — `Prompt` reports from an effect, which
+   * runs after both handlers have already been called — and that is the value
+   * that describes what was on screen when the key was pressed.
+   */
+  const escapeGuardedRef = useRef(false);
+  // Stable identity, so `Prompt`'s reporting effect does not re-fire on every
+  // render of this component — the reason `onSlashActiveChange` gets a bare
+  // `setSlashActive` rather than an inline arrow.
+  const reportEscapeGuard = useCallback((guarded: boolean) => {
+    escapeGuardedRef.current = guarded;
+  }, []);
+  /**
    * Watcher records. One store per session; the poller below drives it.
    *
    * Lazily, because React evaluates a `useRef` ARGUMENT on every render and
@@ -1280,9 +1332,15 @@ export function App({
       }
       if (key.escape) {
         // This handler only runs when no overlay is open (isActive gate), so
-        // Esc here can only mean "interrupt the in-flight turn". Each overlay
-        // owns its own Esc-to-close via its own useInput.
-        debugLog('app:esc', { busy, hasTurnAbort: !!turnAbortRef.current });
+        // Esc here means "interrupt the in-flight turn" — unless the Prompt has
+        // something smaller to back out of first, which is what
+        // `escapeGuardedRef` reports. Each overlay owns its own Esc-to-close
+        // via its own useInput.
+        debugLog('app:esc', {
+          busy,
+          hasTurnAbort: !!turnAbortRef.current,
+          promptGuarded: escapeGuardedRef.current,
+        });
         // Esc silences the voice, busy or not (#432). Previously it aborted the
         // turn and left the utterance playing — and the readback itself starts
         // *after* `busy` clears, so the not-busy branch is the one that matters.
@@ -1293,6 +1351,11 @@ export function App({
         // handler — to stop a service that, never having been constructed,
         // cannot be speaking.
         _voiceService?.stop();
+        // Stand down when the Prompt would handle this Esc (#202) — but only
+        // for the ABORT. Silencing speech above is unconditional and always
+        // was: both handlers already ran on every idle Esc, so gating the
+        // voice here would take away behaviour nobody asked to lose.
+        if (escapeGuardedRef.current) return;
         if (busy) {
           interruptInFlightRef.current = getActiveCount();
           setInterrupted(true);
@@ -1728,6 +1791,59 @@ export function App({
     if (toast) setToast(null);
     // Dismiss the alert banner once the user starts interacting.
     if (bannerVisible) setBannerVisible(false);
+
+    // ── `+ <request>`: run this AFTER the current turn (#202) ──
+    //
+    // Ahead of the slash chain because nothing in it can start with `+`, and
+    // ahead of the busy refusal below because this is the one thing the prompt
+    // is live for while Bernard works.
+    //
+    // Uniform, not forked on `busy`: `requestTurn` already owns "run it now
+    // when idle, queue it when busy" — that is its whole docstring — so
+    // deciding again here would be a second copy of the one decision, keyed on
+    // `busy`, which lags `submittingRef` by a render.
+    if (QUEUE_PREFIX_RE.test(text)) {
+      const request = text.replace(QUEUE_PREFIX_RE, '').trim();
+      if (request.length === 0) {
+        flashToast('`+ <request>` queues a new request to run after the current turn.', 'error');
+        return;
+      }
+      const queuedWhileBusy = submittingRef.current;
+      if (!requestTurn({ text: request, source: { kind: 'user' } }).ok) return;
+      // Only when it really is waiting behind something. Idle, `requestTurn`
+      // drains it on the next macrotask and the turn starting is the
+      // acknowledgement — a toast saying "queued" over a turn already running
+      // would be describing the wrong state.
+      //
+      // A toast rather than a transcript notice, unlike the queue-full warning
+      // beside it: the durable record is the `◷ Queued` panel this turn renders
+      // when it runs, and writing both would put two entries in the transcript
+      // for one request.
+      if (queuedWhileBusy) {
+        const pending = turnQueueRef.current.size;
+        flashToast(
+          `Queued for after this turn — ${pending} waiting. /queue to see or drop them.`,
+          'success',
+        );
+      }
+      return;
+    }
+
+    // ── Everything else is refused while a turn is in flight (#202) ──
+    //
+    // The silent `submittingRef` return inside `runAgentTurn` is right for the
+    // double-Enter it was written for and wrong the moment the prompt is live:
+    // a message typed deliberately, accepted by the input line, and then
+    // discarded with nothing on screen is worse than the disabled prompt this
+    // replaces. `Prompt` calls `onRecordInput` BEFORE `onSubmit`, so the text
+    // is one `↑` away — which is what makes naming the remedy enough.
+    if (submittingRef.current && !BUSY_ALLOWED_COMMANDS.some((c) => is(text, c))) {
+      flashToast(
+        'Bernard is working. Press ↑ and prefix it with "+ " to run it after this turn, or esc to interrupt.',
+        'error',
+      );
+      return;
+    }
 
     // ── Simple one-shot slash commands (no overlay, no agent turn) ──
     if (is(text, '/exit') || is(text, '/quit')) {
@@ -2263,6 +2379,66 @@ export function App({
         }
         store.remove(w.id);
         flashToast(`Removed "${w.name}".`, 'success');
+      }
+    }
+    if (is(text, '/queue')) {
+      let listIndex = 0;
+      for (;;) {
+        // Re-read every pass: this menu is one of the few that stays open
+        // ACROSS turn boundaries, so the drain loop can take a row out from
+        // under it while the user is deciding.
+        const items = turnQueueRef.current.list();
+        if (items.length === 0) {
+          flashToast('Nothing waiting. While Bernard is working, "+ <request>" queues one.');
+          return;
+        }
+        const entries: MenuEntry[] = items.map((t) => ({
+          // No hand-written index: `MenuList` prints its own, and a second
+          // number beside it is the row claiming a digit shortcut it has not
+          // got.
+          label: truncate(t.text.replace(/\s+/g, ' '), 64),
+          annotation: announcementFor(t.source).origin,
+          // `formatRelative` takes a DURATION, not a timestamp — handed
+          // `queuedAt` it formats the epoch and every row reads "19894d 12h".
+          description: `queued ${formatRelative(Date.now() - t.queuedAt)} ago`,
+          value: t.id,
+        }));
+        const pick = await requestMenu(entries, {
+          title: 'Waiting to run — oldest first',
+          headerLines: [
+            'Each runs as its own top-level turn, in order, once the one before it finishes.',
+          ],
+          initialIndex: listIndex,
+        });
+        if (pick.cancelled) return;
+        listIndex = pick.index;
+        const chosen = items[pick.index];
+        if (!chosen) continue;
+        const action = await requestMenu(
+          [
+            // Branch on `value`, never the label — the sibling menus in
+            // `/watchers` and `/cron` make the same rule.
+            { label: 'Drop it', value: 'remove' },
+            { label: 'Back', value: 'back' },
+          ],
+          {
+            title: announcementFor(chosen.source).origin,
+            // The whole request, because that is what Bernard will be told to
+            // do and the row above it is truncated.
+            headerLines: [chosen.text],
+          },
+        );
+        if (action.cancelled || action.item.value === 'back') continue;
+        if (!turnQueueRef.current.remove(chosen.id)) {
+          flashToast('That one already started.', 'error');
+          continue;
+        }
+        releaseWake(chosen.source);
+        // The queue has room again, so the next refusal is worth saying out
+        // loud — `requestTurn` latches that notice and only clears it on a
+        // successful enqueue, which dropping a turn is not.
+        queueFullNoticedRef.current = false;
+        flashToast('Dropped.', 'success');
       }
     }
     if (is(text, '/cron')) {
@@ -5197,6 +5373,10 @@ export function App({
     if (submittingRef.current) return;
     const next = turnQueueRef.current.take();
     if (!next) return;
+    // Title and meta together, from the one table — a `+` turn is not a wake,
+    // and announcing the user's own words under "◷ Woken" is the panel getting
+    // wrong the single thing it exists to state.
+    const { title, origin } = announcementFor(next.source);
     setStaticItems((prev) => [
       ...prev,
       {
@@ -5206,7 +5386,8 @@ export function App({
         // hard-coded lie is worse than an absent one.
         toolDetails: config.toolDetails,
         wake: {
-          source: describeSource(next.source),
+          title,
+          source: origin,
           instruction: next.text,
           ...(next.observation ? { observation: next.observation } : {}),
         },
@@ -5224,10 +5405,23 @@ export function App({
       // Cleared only once the turn is DONE, which is the span the queue cannot
       // see. In a `finally` because an aborted or failed turn must still let
       // its watcher wake again.
-      if (next.source.kind === 'watcher') {
-        outstandingWakesRef.current.delete(next.source.watcherId);
-      }
+      releaseWake(next.source);
     }
+  }
+
+  /**
+   * Let a watcher wake again.
+   *
+   * One writer for both ways a queued wake can end — running (the drain's
+   * `finally`, above) and being dropped from `/queue`. Written twice, the
+   * second copy is the one that gets forgotten, and forgetting it is silent
+   * and permanent: `requestTurn` refuses every later fire from that watcher
+   * for the life of the session, so the watcher simply stops waking. That is
+   * the exact inertness the whole feature exists to remove, reintroduced by a
+   * menu row.
+   */
+  function releaseWake(source: QueuedTurnSource): void {
+    if (source.kind === 'watcher') outstandingWakesRef.current.delete(source.watcherId);
   }
 
   /**
@@ -5878,11 +6072,18 @@ export function App({
       )}
       {toast && <Toast message={toast.message} variant={toast.variant} />}
       <Prompt
-        disabled={busy || activeOverlay !== null}
+        // NOT `busy || …` (#202). Typing during a turn is the whole feature:
+        // `+ <request>` queues work for after it, and the refusal at the top of
+        // `handleSubmit` is what keeps everything else from running against a
+        // turn in flight. Losing `busy` here also gives the input line back its
+        // cursor and its accent border while Bernard works, which is the only
+        // thing on screen saying the prompt is live.
+        disabled={activeOverlay !== null}
         onSubmit={handleSubmit}
         onSlashActiveChange={setSlashActive}
         onEmptyChange={setPromptEmpty}
         onEmptySubmit={actOnPendingMessage}
+        onEscapeGuardChange={reportEscapeGuard}
         history={inputHistory}
         onRecordInput={recordInput}
         dynamicCommands={getDynamicCommands}

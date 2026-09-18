@@ -4,6 +4,7 @@ import { render } from 'ink-testing-library';
 import stripAnsi from 'strip-ansi';
 
 import { WakePanel } from '../WakePanel.js';
+import { announcementFor, WOKEN_TITLE } from '../turn-queue.js';
 import { WAKE_EXCERPT_CHARS } from '../../watchers/wake.js';
 import type { WakeData } from '../Thread.js';
 
@@ -17,8 +18,13 @@ import type { WakeData } from '../Thread.js';
  * Every case drives the real component from props alone: none of this needs a
  * watcher, a poll or a turn.
  */
-function frameOf(data: WakeData, toolDetails: boolean): string {
-  const r = render(createElement(WakePanel, { data, toolDetails }));
+function frameOf(data: Omit<WakeData, 'title'> & { title?: string }, toolDetails: boolean): string {
+  // Defaulted, because the title is a wake's in every case but the one that
+  // tests it — spelling it out ten times would bury the one row where it is
+  // the subject.
+  const r = render(
+    createElement(WakePanel, { data: { title: WOKEN_TITLE, ...data }, toolDetails }),
+  );
   const text = stripAnsi(r.lastFrame() ?? '');
   r.unmount();
   return text;
@@ -148,6 +154,23 @@ describe('WakePanel', () => {
     expect(text).toContain('check the deploy');
     expect(text).not.toContain('observed');
     expect(text).not.toContain('↳');
+  });
+
+  it('announces a queued request as the user\u2019s own, not as a wake (#202)', () => {
+    // `+ <request>` is the user asking for something next, and "Woken" over
+    // their own words is the panel getting wrong the single thing it exists to
+    // state. Driven through `announcementFor` rather than a literal so the
+    // assertion follows the table the drain really reads.
+    const { title, origin } = announcementFor({ kind: 'user' });
+    const text = frameOf({ title, source: origin, instruction: 'text Sarah the summary' }, false);
+
+    expect(text).toContain('Queued');
+    expect(text).not.toContain('Woken');
+    expect(text).toContain('text Sarah the summary');
+    // It is still a turn nobody is typing right now, so it still takes neither
+    // chevron and still says Bernard is acting on it.
+    expect(text).not.toContain('❯');
+    expect(text).toContain('Bernard is acting on this now.');
   });
 
   it('never takes a chevron', () => {

@@ -8,7 +8,10 @@ import { TranscriptPanel } from './TranscriptPanel.js';
 import type { WakeData } from './Thread.js';
 
 /**
- * Announces a turn that nobody typed (#479/#493).
+ * Announces a turn that is starting without a keystroke (#479/#493/#202).
+ *
+ * Three of them: a watcher fired, another process sent `bernard say --run`, or
+ * the user queued one with `+` and the turn they were waiting on has finished.
  *
  * ## Why it renders BEFORE the turn rather than after
  *
@@ -43,6 +46,14 @@ import type { WakeData } from './Thread.js';
  * capped at the mint in `summariseObservation`, because this item lives in an
  * append-only array for the whole session and the thing it describes can be
  * megabytes of somebody's inbox.
+ *
+ * ## Why the title is a prop
+ *
+ * A turn the user queued with `+` is not a wake, and "◷ Woken" over their own
+ * words would be the panel asserting something false about provenance — which
+ * is the one thing this component exists to get right. `announcementFor` owns
+ * the whole vocabulary, title and meta together, so the two halves of one row
+ * cannot come to disagree.
  *
  * ## Detail level
  *
@@ -86,7 +97,7 @@ export function WakePanel({ data, toolDetails }: { data: WakeData; toolDetails: 
   return (
     <TranscriptPanel
       color={colors.accent}
-      title="◷ Woken"
+      title={data.title}
       meta={` · ${data.source}`}
       body={collapsed ? collapsed.first : data.instruction}
       detail={detail}
