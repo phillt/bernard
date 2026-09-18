@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render } from 'ink-testing-library';
+import { cleanup, render } from 'ink-testing-library';
 import { createElement } from 'react';
 import stripAnsi from 'strip-ansi';
 import { StatusBar } from '../StatusBar.js';
 import { COMPRESSION_THRESHOLD } from '../../context.js';
+import { flushEffects } from './_keys.js';
 import type { Agent } from '../../agent.js';
 
 /**
@@ -31,6 +32,51 @@ function stubAgent(usedFrac: number): Agent {
 function gauge(frame: string): string {
   // Strip everything except the gauge glyphs.
   return frame.replace(/[^●◐○]/g, '');
+}
+
+/**
+ * Unmount every bar this file rendered.
+ *
+ * `ink-testing-library` keeps each `render()` in a module-level list and
+ * unmounts none of them, so without this the file accumulates a dozen live
+ * `<StatusBar>`s, each holding its own 500 ms interval and, for a moment after
+ * mounting, its own pending passive effect. That is not merely untidy: a later
+ * test that installs fake timers inherits those strangers' effects, which then
+ * arm THEIR intervals on ITS clock — which is how `renderWithPoll` below can be
+ * handed a timer that is not the one it is waiting for.
+ */
+afterEach(cleanup);
+
+/**
+ * Render the bar and wait until *its own* 500 ms poll interval exists.
+ *
+ * The assertion is the whole point, not ceremony. The poll lives in a
+ * `useEffect`, so it is NOT installed when `render()` returns — see
+ * `flushEffects`. Every timer-driven test below is about what that interval
+ * does, and without the wait the fake clock was advanced past a timer that had
+ * never been scheduled: no callback, no state change, no frame, and an
+ * assertion counting frames read `expected 1 to be greater than 1` (#558). That
+ * failure is indistinguishable from a broken pulse, which is why the
+ * precondition is checked here rather than inferred from the frames.
+ *
+ * Two details are load-bearing, and both were found by running this file under
+ * a deliberately saturated machine rather than reasoned out. It waits in a
+ * **loop**, because one check-phase turn is not guaranteed to drain the
+ * scheduler: React's work loop yields on a 5 ms budget, so under contention it
+ * can reschedule itself and leave the effect pending. And it asserts on the
+ * **delta**, exactly one new timer, because a bare `getTimerCount() > 0` was
+ * satisfied by a leaked earlier instance's interval while ours was still
+ * pending — the clock then advanced, the wrong component's poll fired, and the
+ * readout never moved.
+ */
+async function renderWithPoll(agent: Agent) {
+  const before = vi.getTimerCount();
+  const instance = render(createElement(StatusBar, { agent }));
+  for (let i = 0; i < 20 && vi.getTimerCount() === before; i++) {
+    await flushEffects();
+  }
+  expect(vi.getTimerCount()).toBe(before + 1);
+  return instance;
 }
 
 describe('<StatusBar> context gauge (half-dot resolution)', () => {
@@ -168,16 +214,23 @@ describe('<StatusBar> session cost cell (#258)', () => {
 });
 
 describe('<StatusBar> idle-tick guard (#232)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('still refreshes the readout when spinnerStats changes between polls', async () => {
     // The poll only forces a re-render when a rendered value actually moved
     // (#232). This guards the positive path: an in-place mutation of the
     // stable spinnerStats object (exactly how the token hooks update it) must
     // surface on the next poll, so the equality snapshot can't be over-eager.
     const agent = stubAgent(0.55);
-    const { lastFrame } = render(createElement(StatusBar, { agent }));
+    const { lastFrame } = await renderWithPoll(agent);
     expect(stripAnsi(lastFrame() ?? '')).toMatch(/turn\s+1\.2k↑/);
     (agent.spinnerStats as { turnPromptTokens: number }).turnPromptTokens = 2222;
-    await new Promise((r) => setTimeout(r, 600)); // past the 500ms poll interval
+    vi.advanceTimersByTime(500); // the poll tick, driven rather than waited on
     expect(stripAnsi(lastFrame() ?? '')).toMatch(/turn\s+2\.2k↑/);
   });
 });
@@ -196,8 +249,15 @@ describe('<StatusBar> token counter pulse (#246)', () => {
     //   2. setUpPulse(false) — on the decay timeout (+ 250 ms)
     // Each state transition forces a new frame, so frames.length must grow
     // by at least 2 compared to idle (no new frames when nothing changes).
+    //
+    // The clock is advanced synchronously. Ink drives a legacy-mode container,
+    // where a `setState` from a timer callback is flushed before that callback
+    // returns — so once the interval exists, every frame this test counts is
+    // written inside the `advanceTimersByTime` call. The async variants' yields
+    // to the real event loop would buy nothing here and are the only remaining
+    // seam through which scheduling luck could re-enter (#558).
     const agent = stubAgent(0.55);
-    const { frames } = render(createElement(StatusBar, { agent }));
+    const { frames } = await renderWithPoll(agent);
 
     const framesBeforePoll = frames.length;
 
@@ -205,14 +265,14 @@ describe('<StatusBar> token counter pulse (#246)', () => {
     (agent.spinnerStats as { turnPromptTokens: number }).turnPromptTokens = 5000;
 
     // Advance to 500 ms → poll fires, snapshot changes, setUpPulse(true) + force() called.
-    await vi.advanceTimersByTimeAsync(500);
+    vi.advanceTimersByTime(500);
     const framesAfterPoll = frames.length;
 
     // At least one new frame from the poll re-render (pulse on + counter value update).
     expect(framesAfterPoll).toBeGreaterThan(framesBeforePoll);
 
     // Advance another 250 ms → decay timeout fires, setUpPulse(false) called.
-    await vi.advanceTimersByTimeAsync(250);
+    vi.advanceTimersByTime(250);
     const framesAfterDecay = frames.length;
 
     // At least one more frame from the decay re-render.
@@ -225,19 +285,24 @@ describe('<StatusBar> token counter pulse (#246)', () => {
 
   it('triggers an extra re-render for the ↓ counter when completion tokens increase (pulse on), then again when it decays (pulse off)', async () => {
     const agent = stubAgent(0.55);
-    const { frames } = render(createElement(StatusBar, { agent }));
+    const { frames } = await renderWithPoll(agent);
+    const timersBeforePoll = vi.getTimerCount(); // just the 500 ms poll itself
 
     const framesBeforePoll = frames.length;
 
     // Increase completion tokens — the poll will see this at 500 ms.
     (agent.spinnerStats as { turnCompletionTokens: number }).turnCompletionTokens = 3000;
 
-    await vi.advanceTimersByTimeAsync(500);
+    vi.advanceTimersByTime(500);
+    // Exactly one decay armed: the ↓ one. Prompt tokens did not move, so an ↑
+    // pulse here would be the mirror of the bug the next test guards against —
+    // and frame counts cannot see it, for the reason spelled out there.
+    expect(vi.getTimerCount()).toBe(timersBeforePoll + 1);
     const framesAfterPoll = frames.length;
 
     expect(framesAfterPoll).toBeGreaterThan(framesBeforePoll);
 
-    await vi.advanceTimersByTimeAsync(250);
+    vi.advanceTimersByTime(250);
     const framesAfterDecay = frames.length;
 
     expect(framesAfterDecay).toBeGreaterThan(framesAfterPoll);
@@ -248,18 +313,26 @@ describe('<StatusBar> token counter pulse (#246)', () => {
 
   it('does NOT trigger a ↓ pulse when only prompt tokens increase', async () => {
     // When turnCompletionTokens stays constant, only the ↑ pulse fires.
-    // We verify this by confirming that the decay timer for ↓ never fires an
-    // extra frame after the ↑ decay is already done.
+    //
+    // The armed-timer count is what carries that, and the frame counts below
+    // cannot: both decays are scheduled by the same poll callback, so they come
+    // due at the same instant and a spurious ↓ pulse adds no frame anywhere
+    // this test looks. Relaxing the component's `currentDown > prevDownRef` to
+    // `>=` — a ↓ pulse on every poll, for ever — left the whole file green.
+    // Counting the decays the poll armed states the claim directly.
     const agent = stubAgent(0.55);
-    const { frames } = render(createElement(StatusBar, { agent }));
+    const { frames } = await renderWithPoll(agent);
+    const timersBeforePoll = vi.getTimerCount(); // just the 500 ms poll itself
 
     // Only increase prompt tokens; completion tokens stay at 567.
     (agent.spinnerStats as { turnPromptTokens: number }).turnPromptTokens = 5000;
 
     // Advance well past both the poll (500 ms) and the decay (250 ms).
-    await vi.advanceTimersByTimeAsync(500);
+    vi.advanceTimersByTime(500);
+    // Exactly one decay armed: the ↑ one. A ↓ pulse would arm a second.
+    expect(vi.getTimerCount()).toBe(timersBeforePoll + 1);
     const framesAtPoll = frames.length;
-    await vi.advanceTimersByTimeAsync(250);
+    vi.advanceTimersByTime(250);
     const framesAfterUpDecay = frames.length;
 
     // ↑ pulse should have fired (at least one new frame).
@@ -267,8 +340,10 @@ describe('<StatusBar> token counter pulse (#246)', () => {
 
     // Now advance a further 500 ms with no token changes — no new frames
     // should appear, because the ↓ pulse never fired and there's nothing else
-    // to re-render.
-    await vi.advanceTimersByTimeAsync(500);
+    // to re-render. This is the one exact-equality assertion in the file, so it
+    // is also the one a stray frame arriving late off the real event loop would
+    // break — another reason the advance is synchronous.
+    vi.advanceTimersByTime(500);
     const framesAfterIdle = frames.length;
     expect(framesAfterIdle).toBe(framesAfterUpDecay);
 

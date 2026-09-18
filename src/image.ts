@@ -328,7 +328,7 @@ export function stripImagePaths(text: string): string {
 export function isVisionCapableModel(provider: string, model: string): boolean {
   // Provider-scoped FIRST. `findModelMetaByName` searches every built-in
   // provider and returns the first hit, so a custom-provider model whose name
-  // collides with a catalog entry — an Ollama or internal-proxy `llava`, say —
+  // collides with a catalog entry — an Ollama or internal-gateway `llava`, say —
   // would inherit a stranger's capability tags. The name-only lookup stays as
   // a fallback, because a custom provider is not in `BUILTIN_PROVIDERS` and
   // `getModelMeta` returns null for it by design.

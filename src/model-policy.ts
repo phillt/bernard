@@ -188,7 +188,7 @@ export function resolveSiteModel(
   // intent. When no `activeLineupId` is set the user hasn't expressed a
   // lineup-level preference, so the pin is the strongest signal and we
   // leave it alone. Custom-provider pins (Ollama, LM Studio, internal
-  // proxies) are also exempt: those are deliberate, often privacy- or
+  // gateways) are also exempt: those are deliberate, often privacy- or
   // cost-motivated bindings, and silently rerouting them to a lineup tier
   // would ship a local-model workload to a remote API.
   if (

@@ -31,7 +31,7 @@ const EPHEMERAL = { type: 'ephemeral' as const };
  * True when Anthropic prompt-cache markers should be emitted: the flag is on and
  * the active provider is the built-in `anthropic`. Custom providers can never be
  * named `anthropic` (it's a reserved name), so the name check is sufficient to
- * exclude local/proxy endpoints.
+ * exclude local/gateway endpoints.
  */
 export function isAnthropicPromptCacheActive(config: BernardConfig, provider: string): boolean {
   return config.promptCache && provider === 'anthropic';
@@ -51,7 +51,7 @@ export function isAnthropicPromptCacheActive(config: BernardConfig, provider: st
  * {@link noPromptCacheHint} tell users to "switch to a caching provider" on
  * precisely the long-prefix turns that were already mostly cache-served.
  *
- * Custom providers point at arbitrary endpoints (Ollama, proxies) with no such
+ * Custom providers point at arbitrary endpoints (Ollama, gateways) with no such
  * guarantee, so by name they correctly resolve to `false`.
  */
 const PROMPT_CACHE_PROVIDERS: ReadonlySet<string> = new Set(['anthropic', 'openai', 'xai']);

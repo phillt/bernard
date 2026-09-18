@@ -6,7 +6,7 @@
  * `@ai-sdk/anthropic`, `@ai-sdk/xai`) with a custom `baseURL` and API key.
  *
  * Lets the user route Bernard at OpenAI/Anthropic/xAI-compatible servers
- * (Ollama, LM Studio, vLLM, OpenRouter, Together, internal proxies, ...)
+ * (Ollama, LM Studio, vLLM, OpenRouter, Together, internal gateways, ...)
  * and have several such endpoints configured at once alongside the
  * built-in providers.
  *

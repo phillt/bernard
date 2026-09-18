@@ -67,7 +67,7 @@ function family(provider: string, sdk?: SupportedSdk): string {
 /**
  * Catalog-first reasoning detection mirroring `getModelProfile`. Returns the
  * catalog tag when present, else applies the same family heuristics so a
- * catalog miss (custom proxy, brand-new model) still classifies correctly.
+ * catalog miss (custom gateway, brand-new model) still classifies correctly.
  */
 function isReasoningModel(provider: string, model: string, sdk?: SupportedSdk): boolean {
   const meta = getModelMeta(provider, model) ?? findModelMetaByName(model);

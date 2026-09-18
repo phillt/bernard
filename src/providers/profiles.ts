@@ -144,7 +144,7 @@ export function getModelProfile(
   // `reasoning` it overrides the family heuristics below. The catalog lookup
   // is name-only (no provider) because custom providers may have a name
   // mismatch but still wrap an SDK whose underlying model id is in the
-  // catalog (e.g. an OpenRouter proxy of `gpt-5.2`).
+  // catalog (e.g. OpenRouter serving `gpt-5.2`).
   const meta = findModelMetaByName(model);
   const catalogReasoning = meta?.tags.includes('reasoning') ?? null;
 

@@ -34,6 +34,42 @@ export const PAGE_DOWN = '\x1b[6~';
 export const tick = (ms = 10): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
+ * The real `setImmediate`, captured at import — i.e. before any `beforeEach`
+ * can reach `vi.useFakeTimers()`, which replaces the global with a fake.
+ */
+const realSetImmediate = setImmediate;
+
+/**
+ * Let React commit its pending passive effects — the `useEffect` bodies.
+ *
+ * A component that installs its timers in an effect (`<StatusBar>`'s 500 ms
+ * poll, `<Spinner>`'s animation interval) has NOT installed them by the time
+ * `render()` returns. React schedules the passive-effect flush through the
+ * `scheduler` package, which captures `setImmediate` into a module-local at its
+ * OWN evaluation — long before a test can fake anything — so that flush rides
+ * the real `setImmediate` and no amount of advancing the fake clock will run
+ * it.
+ *
+ * Such a test usually passes anyway because `vi.advanceTimersByTimeAsync`
+ * yields to the real loop between timers via `setTimeout(0)`: the timers phase
+ * and the check phase interleave favourably and the effect lands first. Their
+ * relative order is the classic Node race, and load flips it — whereupon the
+ * fake clock is advanced past an interval that was never installed and the test
+ * observes nothing at all (#558).
+ *
+ * Awaiting one real check-phase turn settles it: React's callback was queued
+ * during the synchronous `render()`, so it sits ahead of ours in the immediate
+ * queue's FIFO order. Harmless under real timers, where it is just a macrotask
+ * yield. It does not guarantee React finished — a flush that yields would
+ * reschedule itself — so a caller that depends on what the effect did should
+ * assert it (`vi.getTimerCount()` for an installed timer), not assume it.
+ */
+export const flushEffects = (): Promise<void> =>
+  new Promise((resolve) => {
+    realSetImmediate(resolve);
+  });
+
+/**
  * Home/End, in the four encodings terminals actually send for each. They are
  * NOT bindable through `useInput` — Ink parses them and drops the name, so they
  * arrive as empty input with no flags — which is why they were absent here
