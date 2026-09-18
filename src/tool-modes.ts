@@ -121,14 +121,39 @@ export const TOOL_MODE_SETTINGS: Readonly<Record<ToolModeChoice, ToolModeSetting
  *
  * `skipPermissions` is tested first because that is the order `toolModePolicy`
  * itself short-circuits in: with it set, the other two decide nothing, so any
- * pair beside it still reads as the last row.
+ * pair beside it still reads as the last row. Those rows normalise `confirmMode`
+ * by design — see `TOOL_MODE_SETTINGS`.
  *
- * `confirmMode` is then ignored under `read-only`, because what asks there is
- * the block gate, which the confirm level does not reach.
+ * Every OTHER row is offered only when re-applying it reproduces the state it
+ * was read from, so a `confirmMode` the user set is never overwritten by a
+ * keystroke that accepted what was shown. That is uniform across both armed
+ * modes; the asymmetry it replaced rested on a claim that is false.
  */
 export function toolModeFor(s: Partial<ToolModeSettings>): ToolModeChoice | null {
   if (s.skipPermissions === true) return UNRESTRICTED;
-  if (s.toolMode === 'read-only') return 'read-only';
+  // **`confirmMode` is NOT inert under `read-only`.** This used to return the
+  // first row for any confirm level, on the reasoning that "what asks there is
+  // the block gate, which the confirm level does not reach" — which is a claim
+  // about the gates, and is false about them: `runBlockGate` and `runGate` are
+  // independent, and `runGate` never reads `toolMode` at all, so a call the
+  // block gate PASSES still meets the confirm gate at its own threshold.
+  //
+  // The population that diverges is the one `shouldBlockInReadOnly`
+  // deliberately lets through — a tool with no meta (its docstring: so
+  // "legacy/foreign tools without classification don't get bricked silently")
+  // and a `kind:'read'` tool declaring `risk:'medium'`. Both are `medium`, so
+  // `strict` confirms them and `auto` does not:
+  //
+  //     meta                          blocked  risk    auto   strict
+  //     none (legacy/foreign)         false    medium  false  true
+  //     kind:'read' + risk:'medium'   false    medium  false  true
+  //
+  // Latent rather than live — no in-tree tool declares `risk: 'medium'`,
+  // `riskForCall` can only answer `'high'` or `null`, and everything in-tree is
+  // classified through `attachMeta` or `wrapMCPTool`. The true statement is
+  // about the tool TABLE, which is weaker and could change without anyone
+  // touching this file; so the row is withheld rather than resting on it.
+  if (s.toolMode === 'read-only') return s.confirmMode === 'auto' ? 'read-only' : null;
   if (s.toolMode !== 'write') return null;
   // `write` + `strict` is NOT folded onto the first row, and the collapse the
   // module docstring argues for is a statement about what the two postures

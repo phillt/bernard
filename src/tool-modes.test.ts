@@ -5,6 +5,7 @@ import {
   TOOL_MODE_SETTINGS,
   UNRESTRICTED,
   toolModeFor,
+  UNRESTRICTED,
   toolModeLabel,
 } from './tool-modes.js';
 import { WIZARD_FIELDS } from './profiles-wizard-data.js';
@@ -192,8 +193,36 @@ describe('one question decides all three keys', () => {
     for (const orphan of [
       { toolMode: 'write' as const, skipPermissions: false, confirmMode: 'strict' as const },
       { toolMode: 'write' as const, skipPermissions: false, confirmMode: 'off' as const },
+      // `read-only` is armed too: `runBlockGate` and `runGate` are independent
+      // and `runGate` never reads `toolMode`, so a call the block gate passes
+      // still meets the confirm gate at its own threshold.
+      { toolMode: 'read-only' as const, skipPermissions: false, confirmMode: 'strict' as const },
+      { toolMode: 'read-only' as const, skipPermissions: false, confirmMode: 'off' as const },
     ]) {
       expect(toolModeFor(orphan), JSON.stringify(orphan)).toBeNull();
+    }
+  });
+
+  it('never loses a setting anywhere in the 12-state space', () => {
+    // The invariant over the WHOLE space rather than the pairs that happened
+    // to break it. Every state either round-trips, opens unticked, or is one
+    // of the `skipPermissions` rows, which normalise `confirmMode` by design
+    // — see `TOOL_MODE_SETTINGS`: an inert field should hold what is correct
+    // the moment it stops being inert, which is why the last row writes
+    // `auto` and must not write `off`.
+    for (const toolMode of ['read-only', 'write'] as const) {
+      for (const skipPermissions of [false, true]) {
+        for (const confirmMode of ['auto', 'strict', 'off'] as const) {
+          const stored = { toolMode, skipPermissions, confirmMode };
+          const row = toolModeFor(stored);
+          if (row === null) continue;
+          if (skipPermissions) {
+            expect(row, JSON.stringify(stored)).toBe(UNRESTRICTED);
+            continue;
+          }
+          expect(TOOL_MODE_SETTINGS[row], JSON.stringify(stored)).toEqual(stored);
+        }
+      }
     }
   });
 

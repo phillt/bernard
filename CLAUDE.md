@@ -1158,13 +1158,26 @@ coordinator)`, which translated one piece of jargon into another beside every
         opens unticked. The invariant is stated over the whole space rather
         than for the pair that broke it: a row is offered as preselected only
         when re-applying it reproduces the state it was read from.
-      - **`read-only`+`strict` is the one remaining lossy pair, and is left
-        alone deliberately.** Re-applying writes `auto` over the user's
-        `strict` — but the row is RIGHT about the mode, only an inert field
-        moves, and writing what is correct the moment it stops being inert is
-        exactly the documented `⚠ Never ask` decision. Preserving it instead
-        would mean a row that writes some of its keys, which is the state that
-        left `skipPermissions: true` standing.
+      - **`confirmMode` is NOT inert under `read-only`**, and the sentence that
+        said so was false about the mechanism it named. `runBlockGate` and
+        `runGate` are independent and `runGate` never reads `toolMode`, so a
+        call the block gate PASSES still meets the confirm gate at its own
+        threshold. The diverging population is precisely the one
+        `shouldBlockInReadOnly` lets through on purpose — a tool with no meta
+        (so "legacy/foreign tools without classification don't get bricked
+        silently") and a `kind:'read'` tool declaring `risk:'medium'`; both
+        measure `medium`, which `strict` confirms and `auto` does not.
+        **Latent, not live**: nothing in-tree declares `risk:'medium'`,
+        `riskForCall` can only answer `'high'` or `null`, and everything
+        in-tree is classified. So the true statement is about the tool TABLE,
+        which is weaker and can change without anyone touching `tool-modes.ts`
+        — the row is withheld rather than resting on it, and both armed modes
+        now behave the same way. The earlier objection that preserving it
+        would need "a row that writes some of its keys" was wrong: `null`
+        writes nothing, which is the mechanism the `write` half already uses.
+        The `skipPermissions` rows still normalise by design, which is the
+        `⚠ Never ask` decision and is why that row writes `auto` and must not
+        write `off`. The invariant is pinned over the whole 12-state space.
       - **It was very nearly a silent capability removal.** `strict` and `off`
         lose their setup rows, and the registry they left is the ONLY wizard
         surface — `OPTIONS_REGISTRY` is the four numeric settings, and
