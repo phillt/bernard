@@ -217,9 +217,42 @@ describe('eligibility', () => {
     // `mcp.ts`'s reconnect retry can never see a folded argument — and
     // `mcp.test.ts` explains an absent test by it. Pinned here so a divergence
     // fails rather than silently reopening that gap.
-    for (const name of ['send_email', 'create_event', 'get_message', 'write_file', 'focus_app']) {
-      expect(emitsProse(name)).toBe(!isReadOnlyMCPToolName(name) && hasEmitVerb(name));
+    //
+    // **The fixture list is the whole test, and the first draft's was inert.**
+    // This recomputes the expression inline, so it can only fail on a name where
+    // the two halves DISAGREE — and `send_email` / `create_event` are true under
+    // either conjunct while `get_message` / `write_file` / `focus_app` are false
+    // under either, so dropping `!isRead` entirely passed all five. Measured.
+    //
+    // A discriminator exists because `EMIT_VERBS` is not a subset of
+    // `WRITE_VERBS`: `publish`, `submit`, `invite`, `email` and `notify` emit
+    // without writing. `get_email` is therefore a READ that carries an emit
+    // verb — conjunction false, `hasEmitVerb` alone true — so under that
+    // mutation it becomes foldable and `search_email({subject})` has its SEARCH
+    // TERM rewritten. `search_email` is here as well because it is the shape
+    // where the harm is legible rather than merely possible.
+    for (const name of [
+      'send_email',
+      'create_event',
+      'get_message',
+      'write_file',
+      'focus_app',
+      'get_email',
+      'search_email',
+    ]) {
+      expect(emitsProse(name), name).toBe(!isReadOnlyMCPToolName(name) && hasEmitVerb(name));
     }
+  });
+
+  it('refuses a read that happens to carry an emit verb', () => {
+    // The conjunct the loop above exists to protect, stated as a fact about the
+    // function rather than as an identity between two expressions — so it fails
+    // even if somebody "simplifies" both sides of that comparison together.
+    expect(emitsProse('get_email')).toBe(false);
+    expect(emitsProse('search_email')).toBe(false);
+    expect(foldProseArgs({ subject: `a ${EM} b` }, 'search_email')).toEqual({
+      subject: `a ${EM} b`,
+    });
   });
 });
 

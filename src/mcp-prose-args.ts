@@ -36,17 +36,29 @@
  * classification, and its own docstring is the argument: *"A message is sent, a
  * calendar event is created, a row is appended — each repeat is a new artefact
  * somebody receives."* That is exactly the population whose text lands in front
- * of a human through a transport we do not control. `write_file` and `edit_file`
- * carry write verbs and **not** emit verbs, so a filesystem server is ineligible
- * by construction — which is the fold's own stated exclusion principle
- * ("folding an em dash out of a document the user asked for is corruption")
- * enforced rather than merely written down.
+ * of a human through a transport we do not control.
+ *
+ * **What this gate does NOT do, stated because the first draft of this paragraph
+ * claimed it did.** It excludes `write_file` and `edit_file`, which carry write
+ * verbs and no emit verb. It does **not** exclude "a filesystem server": `create`
+ * and `add` ARE emit verbs, so `create_file`, `create_note`, `create_page`,
+ * `create_document` and `add_note` all pass it — measured. So the thing standing
+ * between a document store and a rewritten document is gate 2, not this one, and
+ * the table's own entry for `content` was already saying so while this paragraph
+ * said otherwise. Which layer does the work is worth getting right: read alone,
+ * this made the allowlist look like belt-and-braces.
  *
  * **2. The argument must be NAMED here.** An allowlist, so a new argument on a
  * new server is not folded until somebody declares it and says why. The failure
  * directions are wildly asymmetric: a miss costs one em dash in an email, a
  * false positive silently rewrites data. Fail-closed is the only defensible
  * default, and it is what makes adding a server a one-line, reviewable edit.
+ *
+ * It is what carries the `create_*` population above: `content` and `title` are
+ * absent, so a `create_note(title, body)` server folds only `body` — and that IS
+ * a judgement rather than an oversight, since a note body is prose somebody
+ * reads. If a store turns up whose `body` is a document, the answer is a
+ * per-server declaration, not a wider or narrower verb set.
  *
  * ## And a value guard on top of both
  *
@@ -106,9 +118,19 @@ const PROSE_ARG_NAMES: ReadonlySet<string> = new Set(PROSE_ARGS.map((a) => a.nam
 /**
  * Whether this MCP tool is eligible at all.
  *
- * ANDed with the read test exactly as `ToolMeta.nonIdempotent` is, and for the
- * same reason `hasEmitVerb`'s docstring gives: `list_drafts` and `search_posts`
- * carry emit verbs and are lookups. A lookup has no outbound prose.
+ * ANDed with the read test exactly as `ToolMeta.nonIdempotent` is, and the
+ * conjunct is load-bearing rather than defensive — but the examples
+ * `hasEmitVerb`'s own docstring reaches for do not show it. Measured,
+ * `hasEmitVerb('list_drafts')` and `hasEmitVerb('search_posts')` are both
+ * **false**: neither carries an emit verb at all, so both are refused by the
+ * second conjunct alone and neither demonstrates why the first exists.
+ *
+ * The names that do are the emit-only verbs — `publish`, `submit`, `invite`,
+ * `email`, `notify`, none of which is in `WRITE_VERBS`. `get_email` and
+ * `search_email` are reads (no write verb anywhere) that carry an emit verb, so
+ * `hasEmitVerb` alone would call them eligible. Dropping `!isRead` would put
+ * `search_email({subject: "…"})` through the fold and rewrite the SEARCH TERM,
+ * which is the concrete harm rather than a tidiness argument.
  */
 export function emitsProse(rawToolName: string): boolean {
   return !isReadOnlyMCPToolName(rawToolName) && hasEmitVerb(rawToolName);
