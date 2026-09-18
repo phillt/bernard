@@ -559,22 +559,60 @@ describe('AUTHORITATIVE_LABELS completeness is derived, not declared (#565)', ()
     expect(mintedLabels().length).toBeGreaterThanOrEqual(5);
   });
 
-  it('trusts exactly the minted labels that classify to themselves', () => {
-    const derived = mintedLabels().filter(
-      (label) => classifyError({ message: label }).category === label,
-    );
+  /** The `ToolErrorType` union, read from its declaration. */
+  function allCategories(): Set<string> {
+    const root = path.dirname(fileURLToPath(import.meta.url));
+    const src = readFileSync(path.join(root, 'framework/tools/types.ts'), 'utf8');
+    const decl = /export type ToolErrorType =([\s\S]*?);/.exec(src)?.[1] ?? '';
+    return new Set([...decl.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]));
+  }
+
+  /**
+   * Correctability of a category, via the marker route — `classifyToolFailure`
+   * trusts an embedded marker, so this reaches `build(label)` without needing
+   * the private `isCorrectable`. Probed as `shell`, the most permissive tool:
+   * `not_found` is correctable only there, `invalid_args` everywhere, and a
+   * safety filter wants the worst case.
+   */
+  function correctable(label: string): boolean {
+    return classifyToolFailure({ snippet: failureMarker(label as never), toolName: 'shell' })
+      .correctable;
+  }
+
+  it('reads the category union at all', () => {
+    // Guard the guard, same reason as above: a reformat of the union would
+    // otherwise empty this and make the filter below reject everything.
+    expect(allCategories().size).toBeGreaterThanOrEqual(10);
+  });
+
+  it('trusts exactly the minted, typed, non-correctable labels', () => {
+    const categories = allCategories();
+    const derived = mintedLabels().filter((l) => categories.has(l) && !correctable(l));
     // Not a containment check in one direction: both are failures. A minted
     // label missing from the set falls to the prose tier and reintroduces the
     // inversion; a set member that is not minted means trusting model text.
+    //
+    // The third condition is what BOUNDS that trust: a mislabelled correctable
+    // category enqueues a correction candidate and teaches a shipped specialist
+    // from a failure that was never a call-shape mistake.
+    //
+    // Deliberately NOT filtered on self-classification. `build` assigns the
+    // category it is handed, so the round trip is not required — and testing it
+    // excluded `not_found` purely because `not\s*found` cannot match an
+    // underscore, letting a spelling accident decide which of Bernard's own
+    // statements it may believe.
     expect(derived.sort()).toEqual([...AUTHORITATIVE_LABELS].sort());
   });
 
-  it('holds no label that fails to round-trip', () => {
-    // The property that makes reading a label exact. A pattern edit that broke
-    // one would otherwise silently start returning `unknown` from the trusted
-    // branch — worse than the bug this tier exists to fix.
+  it('admits no correctable category, which is the condition that bounds the trust', () => {
     for (const label of AUTHORITATIVE_LABELS) {
-      expect(classifyError({ message: label }).category, label).toBe(label);
+      expect(correctable(label), label).toBe(false);
     }
+    // The two a type-only rule would have admitted are exactly the correctable
+    // ones — which is why that rule was rejected. `invalid_args` is the worse
+    // of the two: `isCorrectable` returns true for it on ANY tool, where
+    // `not_found` is at least narrowed to a shell context.
+    expect(correctable('not_found')).toBe(true);
+    expect(correctable('invalid_args')).toBe(true);
   });
 });

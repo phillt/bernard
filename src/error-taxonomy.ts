@@ -256,13 +256,51 @@ function proseOf(result: unknown): string {
  * patterns, so reading them is exact rather than a guess (#565).
  *
  * Membership is DERIVABLE rather than a judgement, which is what makes it
- * checkable: a label belongs here iff Bernard mints it as a
- * `WrapperResult.error` AND it classifies to itself. Both halves are needed.
- * Minting is what makes it more reliable than the prose beside it — `timeout`
- * matches its own name and is absent, because nothing here ever sets it. And
- * self-classification is what makes reading it exact: this returns
- * `build(label)` directly, so a member that did NOT round-trip would resolve
- * `unknown` and never reach the prose it was supposed to beat.
+ * checkable. A label belongs here iff all three hold: **Bernard mints it** as a
+ * `WrapperResult.error`, **it is a `ToolErrorType`**, and **it is not
+ * correctable**.
+ *
+ * The third is the one that carries the weight, and there is a plainer way to
+ * say what it selects: **the three members are facts about Bernard's own
+ * machinery** — it ran out of slots, it ran out of steps, it could not parse its
+ * own child's output. `not_found` and `invalid_args` are facts about the request
+ * or the world, which is why a model can legitimately write them, why the prose
+ * is better placed than a label to separate "your call was malformed" from "the
+ * thing genuinely is not there", and why they are exactly the two that feed
+ * `isCorrectable`. Correctability is the mechanical test; that distinction is
+ * the reason it is the right one.
+ *
+ * The mechanism behind it is that this tier trusts MODEL text. `wrapWrapperResult` passes a specialist's JSON through, and
+ * nothing downstream can tell a Bernard-minted label from a model-written one —
+ * that is the typed channel #365 would add and today does not exist. So trusting
+ * a label has to be safe when the model is WRONG, and the bound on wrong is
+ * whether the category can reach the learning loop. A mislabelled
+ * `pool_exhausted` costs a fall-through to the raw tool; a mislabelled
+ * `invalid_args` is `correctable`, so it enqueues a correction candidate and
+ * teaches a shipped specialist from a failure that was never a call-shape
+ * mistake — the #565 defect, re-entered through the door built to fix it.
+ *
+ * `new Set<ToolErrorType>([...])` enforces the second condition, so the
+ * CONSTRUCTION type is load-bearing: widening it to `string` makes
+ * {@link isAuthoritativeLabel} a lie with nothing complaining. The annotation is
+ * `ReadonlySet<string>` only so membership needs no cast at the call site.
+ *
+ * **Two earlier rules were wrong and are worth recording, because both look
+ * right.** The first added "and it classifies to itself", justified by the claim
+ * that a member which did not round-trip "would resolve `unknown`" — **false**,
+ * since `build` assigns the category it is handed and never classifies. It also
+ * filtered by accident: testing a label against `pickCategory`'s patterns, which
+ * are written for PROSE, excluded `not_found` purely because `not\s*found`
+ * cannot match an underscore.
+ *
+ * The second, proposed in review once that was found, was to drop the filter and
+ * keep "mints it AND is a `ToolErrorType`" — which admits `not_found` and
+ * `invalid_args`. That is the rule this docstring nearly shipped, and a test
+ * caught it: a specialist mislabelling a provider stall as `invalid_args` would
+ * then beat the prose saying `Provider timed out`, and be told to retry with a
+ * different call shape. The correctability condition is what the round trip was
+ * accidentally standing in for — the original three are exactly the
+ * non-correctable ones.
  *
  * Exported so `error-taxonomy.test.ts` can DERIVE the expected set from the
  * producers and compare — the completeness of this list is a test, not a
@@ -270,8 +308,8 @@ function proseOf(result: unknown): string {
  * prose tier and reintroduce the inversion below.
  *
  * Measured incidentally: the early return skips `proseOf`'s `JSON.stringify`
- * entirely, so these three are **156x cheaper** to classify than a free-form
- * label (0.0004 ms against 0.0626 at a 16 KB result).
+ * entirely, so a trusted label is **156x cheaper** to classify than a free-form
+ * one (0.0004 ms against 0.0626 at a 16 KB result).
  */
 export const AUTHORITATIVE_LABELS: ReadonlySet<string> = new Set<ToolErrorType>([
   'pool_exhausted',
