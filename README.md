@@ -1,6 +1,6 @@
 # Bernard
 
-A local CLI AI agent that executes terminal commands, manages scheduled tasks, remembers context across sessions, and connects to external tool servers — all through natural language. Supports multiple LLM providers (Anthropic, OpenAI, xAI) via the Vercel AI SDK, plus user-registered **custom providers** that point those SDKs at any compatible endpoint (Ollama, LM Studio, OpenRouter, internal proxies, …).
+A local CLI AI agent that executes terminal commands, manages scheduled tasks, remembers context across sessions, and connects to external tool servers — all through natural language. Supports multiple LLM providers (Anthropic, OpenAI, xAI) via the Vercel AI SDK, plus user-registered **custom providers** that point those SDKs at any compatible endpoint (Ollama, LM Studio, OpenRouter, internal gateways, …).
 
 ## Table of Contents
 
@@ -126,7 +126,7 @@ bernard providers
 
 ### Custom Providers
 
-If you run your own LLM (Ollama, LM Studio, vLLM, ...) or use an OpenAI/Anthropic/xAI-compatible aggregator (OpenRouter, Together, Fireworks, internal proxies), register it as a **custom provider**. You pick a name, pick which of the three installed SDKs to wrap, supply a base URL, and Bernard treats that name like any other provider.
+If you run your own LLM (Ollama, LM Studio, vLLM, ...) or use an OpenAI/Anthropic/xAI-compatible aggregator (OpenRouter, Together, Fireworks, internal gateways), register it as a **custom provider**. You pick a name, pick which of the three installed SDKs to wrap, supply a base URL, and Bernard treats that name like any other provider.
 
 ```bash
 # CLI
@@ -148,12 +148,12 @@ Reserved names: `anthropic`, `openai`, `xai` (these are the built-ins). Custom-p
 
 ### One-shot Base URL Override
 
-For ephemeral routing — testing an OpenAI-compatible gateway, a staging endpoint, or an internal proxy without registering a custom provider — you can override a built-in provider's base URL for a single session:
+For ephemeral routing — testing an OpenAI-compatible endpoint, a staging deployment, or an internal LLM gateway without registering a custom provider — you can override a built-in provider's base URL for a single session:
 
 ```bash
 bernard -p openai \
   --allow-provider-base-url \
-  --provider-base-url https://proxy.company.internal/v1
+  --provider-base-url https://gateway.company.internal/v1
 ```
 
 Rules:
