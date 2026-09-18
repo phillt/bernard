@@ -7,7 +7,11 @@ import {
   parseFailureMarker,
   classifyToolFailure,
   classifyWrapperFailure,
+  AUTHORITATIVE_LABELS,
 } from './error-taxonomy.js';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 
 describe('classifyError', () => {
   describe('HTTP status mapping', () => {
@@ -508,5 +512,54 @@ describe('classifyWrapperFailure — the diagnostic decides, not the label (#565
       toolName: 'web_read',
     });
     expect(web.correctable).toBe(false);
+  });
+});
+
+describe('AUTHORITATIVE_LABELS completeness is derived, not declared (#565)', () => {
+  // Every file that mints a `WrapperResult.error` as a string literal. A label
+  // that appears here and classifies to itself MUST be trusted ahead of prose;
+  // one that does not self-classify must NOT be, because the trusted branch
+  // returns `build(label)` directly and would resolve `unknown` without ever
+  // reaching the prose it was supposed to beat.
+  const PRODUCERS = [
+    'tools/tool-wrapper-run.ts',
+    'framework/agents/tool-wrapper.ts',
+    'structured-output.ts',
+  ];
+
+  function mintedLabels(): string[] {
+    const root = path.dirname(fileURLToPath(import.meta.url));
+    const found = new Set<string>();
+    for (const rel of PRODUCERS) {
+      const src = readFileSync(path.join(root, rel), 'utf8');
+      for (const m of src.matchAll(/error: '([a-z_]+)'/g)) found.add(m[1]);
+    }
+    return [...found].sort();
+  }
+
+  it('finds the producers at all', () => {
+    // Guard the guard: if a producer is renamed or the literal style changes,
+    // the scan silently finds nothing and every assertion below passes
+    // vacuously. The real count is 8; this fails long before that is a problem.
+    expect(mintedLabels().length).toBeGreaterThanOrEqual(5);
+  });
+
+  it('trusts exactly the minted labels that classify to themselves', () => {
+    const derived = mintedLabels().filter(
+      (label) => classifyError({ message: label }).category === label,
+    );
+    // Not a containment check in one direction: both are failures. A minted
+    // label missing from the set falls to the prose tier and reintroduces the
+    // inversion; a set member that is not minted means trusting model text.
+    expect(derived.sort()).toEqual([...AUTHORITATIVE_LABELS].sort());
+  });
+
+  it('holds no label that fails to round-trip', () => {
+    // The property that makes reading a label exact. A pattern edit that broke
+    // one would otherwise silently start returning `unknown` from the trusted
+    // branch — worse than the bug this tier exists to fix.
+    for (const label of AUTHORITATIVE_LABELS) {
+      expect(classifyError({ message: label }).category, label).toBe(label);
+    }
   });
 });

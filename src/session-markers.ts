@@ -82,8 +82,15 @@ export const BOUNDARY_PREFIXES = [
  */
 export const INTERRUPTED_MARKER = '[interrupted by user]';
 
-/** Exact text of every assistant-role scaffolding message. */
-const BOUNDARY_ACKS = [
+/**
+ * Exact text of every assistant-role scaffolding message.
+ *
+ * Was `BOUNDARY_ACKS` while it held only the three acknowledgements. The
+ * interrupt marker is not an acknowledgement of anything, so the old name
+ * described three of its four entries — renamed rather than left to read as a
+ * list someone could "tidy" the odd one out of.
+ */
+const ASSISTANT_SCAFFOLDING = [
   SESSION_BOUNDARY_ACK,
   CONTEXT_SUMMARY_ACK,
   TRUNCATION_ACK,
@@ -102,5 +109,5 @@ export function isBoundaryNotice(text: string): boolean {
  * scope (the RAG query builder).
  */
 export function isSessionScaffolding(text: string): boolean {
-  return isBoundaryNotice(text) || BOUNDARY_ACKS.includes(text);
+  return isBoundaryNotice(text) || ASSISTANT_SCAFFOLDING.includes(text);
 }
