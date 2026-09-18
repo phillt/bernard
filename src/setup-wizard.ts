@@ -18,6 +18,15 @@
  * loads. Back does not cross the boundary, which is the honest behaviour:
  * changing provider invalidates every model answer after it.
  *
+ * ## Two tiers, because 29 questions is the wrong first impression
+ *
+ * `buildSettingsSpec` takes a {@link SetupTier}. `expert` is every declared
+ * field — what this asked before #582 — and `quick` is the three whose default
+ * cannot be right for everyone and which a reader can answer before they have
+ * used Bernard. Both come out of one registry through one predicate (`inTier`),
+ * which is also what the progress rail filters on, so a quick walk cannot be
+ * told it is about to visit a section it will never reach.
+ *
  * ## The rule that matters: only what changed is written
  *
  * `loadConfig` resolves a setting as `prefs.X ?? env ?? DEFAULT`, so writing a
@@ -41,6 +50,7 @@
 
 import {
   WIZARD_CATEGORIES_DATA,
+  type SetupTier,
   type WizardCategoryData,
   type WizardFieldData,
 } from './profiles-wizard-data.js';
@@ -439,14 +449,30 @@ function buildStep(
 const PROVIDER_SECTIONS = ['Welcome', 'Providers'];
 
 /**
+ * Whether this field is asked on this walk — the ONE tier predicate (#582).
+ *
+ * Both the question loop and the rail read it, which is the whole point: a rail
+ * built from `WIZARD_CATEGORIES_DATA` wholesale would name sections a quick walk
+ * never reaches, and two copies of "is this field in?" is how that happens
+ * without anyone noticing. Stage A's own fields are excluded here rather than at
+ * each caller, for the same reason.
+ */
+function inTier(field: WizardFieldData, tier: SetupTier): boolean {
+  if (STAGE_A_KEYS.has(field.key)) return false;
+  return tier === 'expert' || field.tier === 'quick';
+}
+
+/**
  * Stage B's sections, derived from the registry rather than written out again.
  *
  * A hand-written copy is a second list of the same thing, and the failure is
  * silent: a new category appears in the walk and never in the rail, so the
- * reader is told there are fewer sections left than there are.
+ * reader is told there are fewer sections left than there are. Filtered by the
+ * same predicate the walk uses, so a category whose only questions are
+ * expert-only does not appear on a quick run's rail.
  */
-function settingsSections(): string[] {
-  return WIZARD_CATEGORIES_DATA.filter((c) => c.fields.some((f) => !STAGE_A_KEYS.has(f.key))).map(
+function settingsSections(tier: SetupTier): string[] {
+  return WIZARD_CATEGORIES_DATA.filter((c) => c.fields.some((f) => inTier(f, tier))).map(
     (c) => c.title,
   );
 }
@@ -492,7 +518,88 @@ export function buildWelcomeSpec(): WizardSpec {
         nextLabel: 'Start setup',
       },
     ],
-    railContext: { after: ['Providers', ...settingsSections()] },
+    // Nothing has chosen a tier yet, so the rail names what setup CAN cover.
+    // The mode screen is where that gets shortened, and the rail losing its
+    // expert-only sections right afterwards is the clearest confirmation of
+    // what was just picked.
+    railContext: { after: ['Providers', ...settingsSections('expert')] },
+  };
+}
+
+/**
+ * The mode screen's rows, keyed by the tier each one means.
+ *
+ * One table, read by the builder, by its decode, and by the flow's tests —
+ * `PROVIDERS_DONE`'s reason, generalised. Labels are the answer vocabulary, so
+ * the question counts ride in `trailing` rather than being spliced into them;
+ * a decoder that had to strip "— 3 questions" back off would be a second copy
+ * of the formatting.
+ */
+export const SETUP_MODE_ROWS: Readonly<Record<SetupTier, string>> = {
+  quick: 'Quick setup',
+  expert: 'Full setup',
+};
+
+/**
+ * How much of the walk to ask for (#582).
+ *
+ * Setup asked 29 settings questions on a first run. That is the right surface
+ * for someone tuning Bernard and the wrong one for someone meeting it, so the
+ * choice is put in front of the reader rather than guessed — and it is put
+ * SECOND, right after the welcome, because every stage from the provider hub
+ * onwards paints a rail naming the sections still to come, and those depend on
+ * the answer.
+ *
+ * The counts are COMPUTED from the specs this same module would build, never
+ * written down: a hand-typed "3 questions" is a second copy of the registry,
+ * and the one that goes stale is the one on the screen. They are exact for the
+ * quick row by construction — none of its three fields is a list that can be
+ * dropped for having no options — and can differ by one on the full row when a
+ * catalog cannot be read, which is a screen saying "about this many" rather
+ * than a promise.
+ */
+export function buildModeSpec(
+  ctx: SetupContext,
+  current: SetupTier = 'quick',
+): { spec: WizardSpec; decode: (answers: readonly WizardAnswer[]) => SetupTier } {
+  const count = (tier: SetupTier): number => buildSettingsSpec(ctx, tier).spec.steps.length;
+  const plural = (n: number): string => `${n} question${n === 1 ? '' : 's'}`;
+  const rowFor = (tier: SetupTier): string => SETUP_MODE_ROWS[tier];
+  return {
+    spec: {
+      title: 'Setup',
+      // One question, and the row IS the act: a check-your-answers screen over
+      // "which walk did you pick" is the page you just left.
+      skipReview: true,
+      // Back returns to the welcome.
+      backExits: true,
+      steps: [
+        {
+          id: 'mode',
+          // The same section as the welcome: this is still "what are we doing
+          // here", and a rail row of its own for a single hinge screen would
+          // make the journey look a step longer than it is.
+          section: 'Welcome',
+          question: 'How much do you want to set up now?',
+          hint: 'Quick asks only the settings whose right answer depends on you — what Bernard may do on its own before it checks with you, which model it spends, and whether you can read the screen. Everything else has a working default and is reachable later from /options, /agent-options and /voice. Full walks all of them, each opening on its current value.',
+          field: {
+            kind: 'choice',
+            choices: [rowFor('quick'), rowFor('expert')],
+            values: [rowFor('quick'), rowFor('expert')],
+            trailing: {
+              [rowFor('quick')]: { text: plural(count('quick')) },
+              [rowFor('expert')]: { text: plural(count('expert')) },
+            },
+          },
+          // Opens on quick, which is what makes a first run short by default.
+          // A reader who wants everything is one keypress away and can see the
+          // count on the row.
+          initial: rowFor(current),
+        },
+      ],
+      railContext: { after: ['Providers', ...settingsSections('expert')] },
+    },
+    decode: (answers) => (answers[0] === SETUP_MODE_ROWS.expert ? 'expert' : 'quick'),
   };
 }
 
@@ -511,7 +618,7 @@ const KEY_MASK = '****';
  * and the key hints true: they describe what is on disk NOW, not what was there
  * when the wizard opened.
  */
-export function buildProviderHubSpec(ctx: SetupContext): WizardSpec {
+export function buildProviderHubSpec(ctx: SetupContext, tier: SetupTier): WizardSpec {
   // The label is the provider and nothing else — it is the answer vocabulary,
   // and a decoder that had to strip a decorated suffix back off would be a
   // second copy of the formatting. Status is right-aligned detail instead.
@@ -551,7 +658,7 @@ export function buildProviderHubSpec(ctx: SetupContext): WizardSpec {
         },
       },
     ],
-    railContext: { before: ['Welcome'], after: settingsSections() },
+    railContext: { before: ['Welcome'], after: settingsSections(tier) },
   };
 }
 
@@ -569,6 +676,7 @@ export function providerFromHubRow(ctx: SetupContext, row: WizardAnswer): string
 export function buildKeyEntrySpec(
   ctx: SetupContext,
   provider: string,
+  tier: SetupTier,
   /**
    * The optional "is this key any good?" probe, INJECTED and never imported.
    *
@@ -612,7 +720,7 @@ export function buildKeyEntrySpec(
           check,
         },
       ],
-      railContext: { before: ['Welcome'], after: settingsSections() },
+      railContext: { before: ['Welcome'], after: settingsSections(tier) },
     },
     decode: (answers) => (typeof answers[0] === 'string' ? answers[0].trim() : ''),
   };
@@ -632,7 +740,10 @@ export function buildKeyEntrySpec(
  * the answer is forced, and a question whose answer is forced is a screen that
  * only costs a keystroke.
  */
-export function buildDefaultProviderSpec(ctx: SetupContext): {
+export function buildDefaultProviderSpec(
+  ctx: SetupContext,
+  tier: SetupTier,
+): {
   spec: WizardSpec;
   decode: (answers: readonly WizardAnswer[]) => string;
 } | null {
@@ -684,7 +795,7 @@ export function buildDefaultProviderSpec(ctx: SetupContext): {
           initial: labelFor(options, currentProvider),
         },
       ],
-      railContext: { before: ['Welcome'], after: settingsSections() },
+      railContext: { before: ['Welcome'], after: settingsSections(tier) },
     },
     decode: (answers) => options.find((o) => o.label === answers[0])?.value ?? currentProvider,
   };
@@ -699,12 +810,12 @@ export function buildDefaultProviderSpec(ctx: SetupContext): {
  * category of its own. Group titles ride on each question instead, so the walk
  * still reads as sections.
  */
-export function buildSettingsSpec(ctx: SetupContext): SetupStageSpec {
+export function buildSettingsSpec(ctx: SetupContext, tier: SetupTier): SetupStageSpec {
   const steps: WizardStep[] = [];
   const setup: SetupStep[] = [];
   for (const category of WIZARD_CATEGORIES_DATA) {
     for (const field of category.fields) {
-      if (STAGE_A_KEYS.has(field.key)) continue;
+      if (!inTier(field, tier)) continue;
       const built = buildStep(field, category, ctx);
       if (built === null) continue;
       steps.push(built.step);
@@ -714,7 +825,11 @@ export function buildSettingsSpec(ctx: SetupContext): SetupStageSpec {
   return {
     spec: {
       intro:
-        'Each question opens on its current value, so Continue keeps it. Enter picks a different one.',
+        tier === 'quick'
+          ? // Says what was left out as well as what is coming, so a quick walk
+            // is never a dead end the reader cannot see the edge of.
+            'Each question opens on its current value, so Continue keeps it. Everything not asked here keeps its default — `bernard setup --expert` walks all of them.'
+          : 'Each question opens on its current value, so Continue keeps it. Enter picks a different one.',
       title: 'Settings',
       // Back off question one returns to the provider stage rather than leaving
       // the reader with no way out but Esc.

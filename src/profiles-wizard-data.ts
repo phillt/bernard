@@ -53,6 +53,17 @@ import type { ProfileSettings } from './profiles.js';
  */
 export type DynamicOptionSource = 'provider' | 'model' | 'lineup';
 
+/**
+ * How much of the settings walk a run asks for (#582).
+ *
+ * `quick` is the handful of questions in {@link WizardFieldData.tier};
+ * `expert` is every declared field, which is what setup asked before this
+ * existed. The two are built from the SAME registry by one predicate, so they
+ * cannot come to disagree about what a question is — a pair of hand-written
+ * lists is how one of them quietly stops containing a setting.
+ */
+export type SetupTier = 'quick' | 'expert';
+
 export type WizardFieldKind =
   | { kind: 'list'; options: Array<{ value: string; label: string; description?: string }> }
   | { kind: 'dynamic'; source: DynamicOptionSource }
@@ -124,6 +135,45 @@ export interface WizardFieldData {
    * remove.
    */
   livePreview?: 'theme';
+  /**
+   * Asked on the QUICK path as well as the full one (#582).
+   *
+   * A closed set of one, the {@link WizardFieldData.livePreview} idiom: absent
+   * means expert-only, so a setting added later lands on the long walk and is
+   * still reachable — the safe direction, and the one
+   * `settings-coverage.test.ts` can keep checking.
+   *
+   * The bar is deliberately narrow, and it is two clauses rather than
+   * "important". A question earns a place here only when **no default can be
+   * right for everyone** AND **it is answerable from the screen, now, by
+   * somebody who has not used Bernard yet**. Importance on its own is an
+   * argument for a good default, not for a question; and a question nobody can
+   * answer yet is a screen they press Enter on.
+   *
+   * Three qualify, and each fails a different way when it is wrong:
+   *
+   *  - `toolMode` — the security posture, and the only one of the three whose
+   *    default is silent until it bites. It also decides `confirmMode` and
+   *    `skipPermissions` through `covers`, so one screen settles the whole
+   *    permission question.
+   *  - `modelMode` — what every turn costs. Left at `balanced`, `main` resolves
+   *    through the lineup's PREMIUM slot, which is the most expensive model the
+   *    vendor sells, on every turn, with the bill arriving at the provider
+   *    rather than in the terminal.
+   *  - `theme` — the cheapest question in the product: the screen IS the answer,
+   *    since it repaints as the cursor moves. And no default can serve someone
+   *    who needs high-contrast or colorblind-safe colours.
+   *
+   * **`model` is deliberately NOT here, and it is the one that looks essential.**
+   * `SITE_ROLE.main` is `orchestrator`, whose `balanced` tier is `premium`, so
+   * on a default install `config.model` decides nothing — it is the fallback for
+   * when model mode is OFF. A reader who picked the cheap model on a quick path
+   * to save money would still be billed for the premium one, which is worse than
+   * not being asked. `activeLineupId` is out for the second clause instead: the
+   * fallback (`resolveActiveLineup`) is already correct, and nobody can judge a
+   * lineup before using one.
+   */
+  tier?: 'quick';
 }
 
 export interface WizardCategoryData {
@@ -206,6 +256,9 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
           ],
         },
         envVar: 'BERNARD_MODEL_MODE',
+        // Quick: what every turn costs. `balanced` sends `main` to the lineup's
+        // premium slot, and nothing in the terminal says what that is spending.
+        tier: 'quick',
       },
       {
         key: 'subagentPac',
@@ -294,6 +347,10 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         // `storedExplicitly` — a profile storing only the confirm level HAS
         // answered this question.
         covers: ['skipPermissions', 'confirmMode'],
+        // Quick: the one security-shaped question, and the only default here
+        // that is silent until it bites. `covers` means this screen settles the
+        // whole permission posture rather than a third of it.
+        tier: 'quick',
       },
       {
         // Beside the two tool gates rather than under Automation: those govern
@@ -359,6 +416,10 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         // The whole wizard repaints as the cursor moves, so the question's own
         // answer is what it looks like. The only field that declares it.
         livePreview: 'theme',
+        // Quick, and it is the live preview above that earns it: the screen is
+        // the answer, so the question costs one keystroke — and no default can
+        // serve a reader who needs high-contrast or colorblind-safe colours.
+        tier: 'quick',
       },
     ],
   },

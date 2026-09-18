@@ -43,10 +43,11 @@ import { listLineups, loadLineups, resolveActiveLineup } from './lineups.js';
 import { resolveSiteModel } from './model-policy.js';
 import { validateModel, type ModelProbeResult } from './model-validate.js';
 import type { ToolErrorType } from './framework/tools/types.js';
-import { WIZARD_FIELDS } from './profiles-wizard-data.js';
+import { WIZARD_FIELDS, type SetupTier } from './profiles-wizard-data.js';
 import {
   buildDefaultProviderSpec,
   buildKeyEntrySpec,
+  buildModeSpec,
   buildProviderHubSpec,
   buildSettingsSpec,
   buildWelcomeSpec,
@@ -78,6 +79,20 @@ export interface SetupFlowDeps {
    * unconditionally would say it was checking while `verify: false` skipped it.
    */
   onProgress?: (message: string) => void;
+  /**
+   * Walk this tier instead of asking which one (#582).
+   *
+   * `bernard setup --expert` is the caller that supplies it. Absent means the
+   * mode screen is shown — which is deliberately what `/setup` and a first run
+   * both do, because a remembered choice makes the other path unreachable by
+   * the route people take: someone who ran quick on Monday and wants to change
+   * a limit on Friday would be handed the quick walk again with nothing on
+   * screen saying the long one exists. It is also not a setting about Bernard's
+   * behaviour — storing it would make it the 41st `ProfileSettings` field and
+   * oblige `settings-coverage.test.ts` to demand a wizard question about which
+   * wizard you get.
+   */
+  tier?: SetupTier;
 }
 
 export type SetupOutcome =
@@ -89,6 +104,8 @@ export type SetupOutcome =
   | {
       status: 'saved';
       provider: string;
+      /** Which walk was taken, so the closing lines can name the other one. */
+      tier: SetupTier;
       /** Settings actually written. Empty when the user accepted every value. */
       changed: Array<keyof ProfileSettings>;
       /** Providers whose key was entered or replaced on this run. */
@@ -334,8 +351,13 @@ export async function runSetupFlow(deps: SetupFlowDeps): Promise<SetupOutcome> {
   // Each stage says where Back goes, and `backExits` on the spec is what makes
   // the overlay offer it there at all.
   const keysStored: string[] = [];
-  let stage: 'welcome' | 'providers' | 'default' | 'settings' = 'welcome';
+  let stage: 'welcome' | 'mode' | 'providers' | 'default' | 'settings' = 'welcome';
   let provider = startingProvider;
+  // Supplied by `--expert`, otherwise chosen on the mode screen. `askedMode`
+  // is what tells Back out of the hub whether there is a screen behind it,
+  // exactly as `askedDefault` does for the default-provider question.
+  const askedMode = deps.tier === undefined;
+  let tier: SetupTier = deps.tier ?? 'quick';
   let askedDefault = false;
   let settingsStage!: ReturnType<typeof buildSettingsSpec>;
   let settingsAnswers!: readonly WizardAnswer[];
@@ -346,6 +368,25 @@ export async function runSetupFlow(deps: SetupFlowDeps): Promise<SetupOutcome> {
         // Nothing precedes it, so no `backExits` and no Back control.
         const welcome = await deps.requestWizard(signed(buildWelcomeSpec()), deps.signal);
         if (welcome.cancelled) return { status: 'cancelled', stage: 'provider' };
+        stage = askedMode ? 'mode' : 'providers';
+        break;
+      }
+
+      case 'mode': {
+        // Second, not last. Every stage from the hub onwards paints a rail
+        // naming the sections still to come, and which those are is exactly
+        // what this screen decides — asked any later, four screens would
+        // promise a walk the reader had already shortened.
+        const modeStage = buildModeSpec(buildContext(tryLoadConfig(), provider), tier);
+        const picked = await deps.requestWizard(signed(modeStage.spec), deps.signal);
+        if (picked.cancelled) {
+          if (picked.back === true) {
+            stage = 'welcome';
+            continue stages;
+          }
+          return { status: 'cancelled', stage: 'provider' };
+        }
+        tier = modeStage.decode(picked.answers);
         stage = 'providers';
         break;
       }
@@ -362,14 +403,14 @@ export async function runSetupFlow(deps: SetupFlowDeps): Promise<SetupOutcome> {
         for (;;) {
           const hubCtx = buildContext(tryLoadConfig(), provider);
           const picked = await deps.requestWizard(
-            signed(buildProviderHubSpec(hubCtx)),
+            signed(buildProviderHubSpec(hubCtx, tier)),
             deps.signal,
           );
           if (picked.cancelled) {
             // Back returns to the welcome; Esc on the HUB leaves setup, because
             // the hub is the screen you are on.
             if (picked.back === true) {
-              stage = 'welcome';
+              stage = askedMode ? 'mode' : 'welcome';
               continue stages;
             }
             return { status: 'cancelled', stage: 'provider' };
@@ -377,7 +418,12 @@ export async function runSetupFlow(deps: SetupFlowDeps): Promise<SetupOutcome> {
           const picking = providerFromHubRow(hubCtx, picked.answers[0] ?? '');
           if (picking === null) break;
 
-          const entry = buildKeyEntrySpec(hubCtx, picking, keyCheckFor(picking, startingConfig));
+          const entry = buildKeyEntrySpec(
+            hubCtx,
+            picking,
+            tier,
+            keyCheckFor(picking, startingConfig),
+          );
           const typed = await deps.requestWizard(signed(entry.spec), deps.signal);
           // Back and Esc mean the same thing on a page opened FROM the hub:
           // return to it. Nothing is written either way.
@@ -392,7 +438,7 @@ export async function runSetupFlow(deps: SetupFlowDeps): Promise<SetupOutcome> {
         const keyed = getProviderKeyStatus()
           .filter((p) => p.hasKey)
           .map((p) => p.provider);
-        // Nothing can be configured without one, and walking 35 settings
+        // Nothing can be configured without one, and walking the settings
         // questions to arrive at "no API key is stored" wastes the session.
         if (keyed.length === 0) return { status: 'no-key' };
         if (!keyed.includes(provider)) provider = keyed[0];
@@ -406,7 +452,10 @@ export async function runSetupFlow(deps: SetupFlowDeps): Promise<SetupOutcome> {
         // to show a keyless provider as unpickable. Skipped when the answer is
         // forced — and then Back from the settings must skip it too, which is
         // what `askedDefault` records.
-        const defaultStage = buildDefaultProviderSpec(buildContext(tryLoadConfig(), provider));
+        const defaultStage = buildDefaultProviderSpec(
+          buildContext(tryLoadConfig(), provider),
+          tier,
+        );
         askedDefault = defaultStage !== null;
         if (defaultStage !== null) {
           const chosen = await deps.requestWizard(signed(defaultStage.spec), deps.signal);
@@ -424,7 +473,7 @@ export async function runSetupFlow(deps: SetupFlowDeps): Promise<SetupOutcome> {
       }
 
       case 'settings': {
-        settingsStage = buildSettingsSpec(buildContext(tryLoadConfig(), provider));
+        settingsStage = buildSettingsSpec(buildContext(tryLoadConfig(), provider), tier);
         const answered = await deps.requestWizard(signed(settingsStage.spec), deps.signal);
         if (answered.cancelled) {
           if (answered.back === true) {
@@ -451,11 +500,12 @@ export async function runSetupFlow(deps: SetupFlowDeps): Promise<SetupOutcome> {
   const patch = settingsPatch(settingsStage.steps, settingsAnswers);
   const changed = Object.keys(patch) as Array<keyof ProfileSettings>;
   if (changed.length > 0) saveActiveSettings(patch);
-  debugLog('setup:saved', { provider, keysStored, changed });
+  debugLog('setup:saved', { provider, tier, keysStored, changed });
 
   const saved = {
     status: 'saved' as const,
     provider,
+    tier,
     changed,
     keysStored,
   };
@@ -544,6 +594,15 @@ export function describeOutcome(outcome: SetupOutcome): string[] {
       ? 'Settings: no changes — every value you kept is still inherited.'
       : `Settings changed: ${outcome.changed.join(', ')}.`,
   );
+  // The quick walk's own acceptance item: it must never be a path whose edge
+  // the reader cannot see. Named doors rather than a count of what was skipped
+  // — a number here would have to be derived from a spec this function does not
+  // hold, and "26" tells nobody where to go.
+  if (outcome.tier === 'quick') {
+    lines.push(
+      'Everything not asked kept its default — /options, /agent-options and /voice reach the rest, or `bernard setup --expert` walks all of them.',
+    );
+  }
   if (outcome.probe) {
     lines.push(
       outcome.probe.ok

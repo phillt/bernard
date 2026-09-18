@@ -869,13 +869,21 @@ program
 
 program
   .command('setup')
-  .description('Walk provider, key and every setting, then check the result can make a call')
+  .description('Walk provider, key and your settings, then check the result can make a call')
   .option('--no-verify', 'Skip the closing probe that confirms the model answers')
-  .action(async (opts: { verify?: boolean }) => {
+  .option('--expert', 'Walk every setting, skipping the quick-or-full question')
+  .action(async (opts: { verify?: boolean; expert?: boolean }) => {
     // Deliberately does NOT call `loadConfig` — that throws without a key, and a
     // keyless install is the case this command most needs to serve. The
     // `voice-test` precedent.
-    const outcome = await runSetupHost({ verify: opts.verify !== false });
+    //
+    // `--expert` is for someone who already knows they want the long walk;
+    // there is deliberately no `--quick`, since that is the row the mode screen
+    // opens on and Enter takes it.
+    const outcome = await runSetupHost({
+      verify: opts.verify !== false,
+      ...(opts.expert === true ? { tier: 'expert' as const } : {}),
+    });
     for (const line of describeOutcome(outcome)) printInfo(`  ${line}`);
     // A failed probe is a real failure of the thing this command promises, so it
     // exits non-zero the way `validate-lineup` does. A cancellation is not.

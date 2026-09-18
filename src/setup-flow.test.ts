@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import { useTempHome } from './__tests__/temp-home.js';
 import type { WizardAnswer, WizardResult, WizardSpec } from './ui/overlays/wizard-types.js';
-import { PROVIDERS_DONE } from './setup-wizard.js';
+import { PROVIDERS_DONE, SETUP_MODE_ROWS } from './setup-wizard.js';
+import { WIZARD_FIELDS, type SetupTier } from './profiles-wizard-data.js';
 
 /**
  * The setup flow against a real, empty `BERNARD_HOME` (#447).
@@ -37,12 +38,22 @@ beforeEach(() => {
  * than a list of answers because the flow decides how many times to show each
  * spec, and a fixture that assumed a fixed sequence would encode that decision.
  */
-function drive(keys: Record<string, string> = {}, settings: Record<string, WizardAnswer> = {}) {
+function drive(
+  keys: Record<string, string> = {},
+  settings: Record<string, WizardAnswer> = {},
+  /**
+   * Which row to take on the mode screen (#582). `expert` by default, because
+   * these cases are about the settings machinery and a quick walk asks three
+   * questions — the quick path has its own cases below.
+   */
+  tier: SetupTier = 'expert',
+) {
   const pending = new Set(Object.keys(keys));
   const seen: string[][] = [];
   const answer = (spec: WizardSpec): Promise<WizardResult> => {
     seen.push(spec.steps.map((s) => s.id));
     const answers = spec.steps.map((step) => {
+      if (step.id === 'mode') return SETUP_MODE_ROWS[tier];
       if (step.id === 'providers') {
         const next = [...pending][0];
         if (next === undefined) return PROVIDERS_DONE;
@@ -262,7 +273,10 @@ describe('runSetupFlow on an empty home', () => {
     expect(settings).toContain('model');
     expect(settings).not.toContain('provider');
     expect(driver.seen[0]).toEqual(['welcome']);
-    expect(driver.seen[1]).toEqual(['providers']);
+    // The mode screen sits between the welcome and the hub, because every stage
+    // from the hub onwards paints a rail naming the sections still to come.
+    expect(driver.seen[1]).toEqual(['mode']);
+    expect(driver.seen[2]).toEqual(['providers']);
   });
 
   it('opens every question on something Enter can accept', async () => {
@@ -298,7 +312,7 @@ describe('runSetupFlow on an empty home', () => {
 
   it('stops rather than walking the settings with no key at all', async () => {
     // Leaving the hub with nothing entered means nothing can be configured, and
-    // walking 35 questions to arrive at "no API key is stored" wastes the whole
+    // walking the settings questions to arrive at "no API key is stored" wastes the
     // session.
     const { runSetupFlow, describeOutcome } = await flow();
     const driver = drive();
@@ -324,12 +338,15 @@ describe('runSetupFlow on an empty home', () => {
   });
 
   it('walks Back across every stage boundary', async () => {
-    // Setup is three wizards because the model list needs a provider first, but
-    // it is one journey — and a straight run of awaits has no way back across a
-    // seam, which is why Back had quietly disappeared from four of five screens.
+    // Setup is several wizards because the model list needs a provider first,
+    // but it is one journey — and a straight run of awaits has no way back
+    // across a seam, which is why Back had quietly disappeared from four of five
+    // screens. `mode` is the newest seam (#582) and is walked back through here
+    // rather than in a case of its own, so the assertion stays about the
+    // machine rather than about one stage.
     const { runSetupFlow } = await flow();
     const seen: string[][] = [];
-    const backFrom = new Set(['providers', 'model']);
+    const backFrom = new Set(['mode', 'providers', 'model']);
     const driver = drive({ anthropic: 'sk-test-key' });
     await runSetupFlow({
       verify: false,
@@ -351,9 +368,132 @@ describe('runSetupFlow on an empty home', () => {
     });
 
     const firsts = seen.map((ids) => ids[0]);
-    // welcome → hub → (back) → welcome → hub → … → settings → (back) → …
+    // welcome → mode → (back) → welcome → mode → hub → (back) → mode → hub → …
+    // → settings → (back) → … Each of the three is reached at least twice,
+    // which is what "Back returned to it" means from the outside.
     expect(firsts.filter((id) => id === 'welcome').length).toBeGreaterThanOrEqual(2);
+    expect(firsts.filter((id) => id === 'mode').length).toBeGreaterThanOrEqual(2);
+    expect(firsts.filter((id) => id === 'providers').length).toBeGreaterThanOrEqual(2);
     expect(firsts.filter((id) => id === 'model').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('asks three settings questions on the quick path, and writes nothing', async () => {
+    // The whole of #582 from the outside: a first run can be completed with a
+    // small number of questions and a working Bernard. The count is derived
+    // from the registry, not written, so promoting a field to the quick tier
+    // moves this rather than breaking it.
+    const { runSetupFlow } = await flow();
+    const driver = drive({ anthropic: 'sk-test-key' }, {}, 'quick');
+    const outcome = await runSetupFlow({ verify: false, requestWizard: driver.answer });
+    expect(outcome.status).toBe('saved');
+    if (outcome.status !== 'saved') return;
+    expect(outcome.tier).toBe('quick');
+
+    const asked = driver.seen.find((ids) => ids.includes('toolMode')) ?? [];
+    expect(asked).toEqual(WIZARD_FIELDS.filter((f) => f.tier === 'quick').map((f) => f.key));
+    // …and the env-shadowing rule still holds on the short walk: accepting
+    // every value writes nothing but the provider.
+    expect(outcome.changed).toEqual([]);
+    expect(Object.keys(profilesJson()).sort()).toEqual(['provider']);
+  });
+
+  it('leaves a setting the quick path never asked about inheriting', async () => {
+    // The acceptance item that a skipped question must not land in the profile:
+    // a written default would shadow BERNARD_MAX_STEPS forever, for a question
+    // the reader was never shown.
+    const previous = process.env.BERNARD_MAX_STEPS;
+    process.env.BERNARD_MAX_STEPS = '99';
+    try {
+      const { runSetupFlow } = await flow();
+      const driver = drive({ anthropic: 'sk-test-key' }, {}, 'quick');
+      await runSetupFlow({ verify: false, requestWizard: driver.answer });
+      expect(driver.seen.flat()).not.toContain('maxSteps');
+      expect(profilesJson().maxSteps).toBeUndefined();
+    } finally {
+      if (previous === undefined) delete process.env.BERNARD_MAX_STEPS;
+      else process.env.BERNARD_MAX_STEPS = previous;
+    }
+  });
+
+  it('skips the mode screen entirely when the caller already knows the tier', async () => {
+    // `bernard setup --expert`. Asking anyway would make the flag a suggestion.
+    const { runSetupFlow } = await flow();
+    const driver = drive({ anthropic: 'sk-test-key' });
+    const outcome = await runSetupFlow({
+      verify: false,
+      tier: 'expert',
+      requestWizard: driver.answer,
+    });
+    expect(driver.seen.flat()).not.toContain('mode');
+    expect(driver.seen[1]).toEqual(['providers']);
+    expect(outcome.status).toBe('saved');
+    if (outcome.status !== 'saved') return;
+    expect(outcome.tier).toBe('expert');
+  });
+
+  it('points at the other doors after a quick run, and says nothing after a full one', async () => {
+    const { describeOutcome } = await flow();
+    const at = (tier: SetupTier) =>
+      describeOutcome({
+        status: 'saved',
+        tier,
+        provider: 'anthropic',
+        changed: [],
+        keysStored: ['anthropic'],
+      }).join('\n');
+    expect(at('quick')).toContain('bernard setup --expert');
+    expect(at('quick')).toContain('/options');
+    // The full walk has nothing to disclose: every question was asked.
+    expect(at('expert')).not.toContain('--expert');
+  });
+
+  it('puts Back out of the hub on the mode screen, not the welcome', async () => {
+    // The generic Back walk above cannot see this: with the hub returning to
+    // the welcome instead, `mode` is still reached twice — once on the way out
+    // and once on the way back in — so only the immediate successor tells the
+    // two apart. Which matters because the mode screen is the one thing a
+    // reader stepping back out of the providers stage is likely to be after.
+    const { runSetupFlow } = await flow();
+    const seen: string[] = [];
+    let backed = false;
+    const driver = drive({ anthropic: 'sk-test-key' });
+    await runSetupFlow({
+      verify: false,
+      requestWizard: (spec) => {
+        seen.push(spec.steps[0].id);
+        if (!backed && spec.steps[0].id === 'providers') {
+          backed = true;
+          return Promise.resolve({ cancelled: true, answered: [], back: true } as WizardResult);
+        }
+        return driver.answer(spec);
+      },
+    });
+    const hubAt = seen.indexOf('providers');
+    expect(hubAt).toBeGreaterThan(-1);
+    expect(seen[hubAt + 1]).toBe('mode');
+  });
+
+  it('has nowhere to go back to when the caller supplied the tier', async () => {
+    // Guard the guard: `--expert` skips the mode screen, so Back out of the hub
+    // must reach the welcome rather than a stage that was never shown.
+    const { runSetupFlow } = await flow();
+    const seen: string[] = [];
+    let backed = false;
+    const driver = drive({ anthropic: 'sk-test-key' });
+    await runSetupFlow({
+      verify: false,
+      tier: 'expert',
+      requestWizard: (spec) => {
+        seen.push(spec.steps[0].id);
+        if (!backed && spec.steps[0].id === 'providers') {
+          backed = true;
+          return Promise.resolve({ cancelled: true, answered: [], back: true } as WizardResult);
+        }
+        return driver.answer(spec);
+      },
+    });
+    const hubAt = seen.indexOf('providers');
+    expect(seen[hubAt + 1]).toBe('welcome');
   });
 
   it('re-derives the model when the provider changes, and leaves it alone otherwise', async () => {
@@ -392,6 +532,7 @@ describe('describeOutcome', () => {
     const { describeOutcome } = await flow();
     const lines = describeOutcome({
       status: 'saved',
+      tier: 'expert',
       provider: 'anthropic',
       changed: [],
       keysStored: [],
@@ -406,6 +547,7 @@ describe('describeOutcome', () => {
     const at = (category: 'auth' | 'not_found' | 'rate_limit') =>
       describeOutcome({
         status: 'saved',
+        tier: 'expert',
         provider: 'anthropic',
         changed: [],
         keysStored: ['anthropic'],
@@ -428,6 +570,7 @@ describe('describeOutcome', () => {
     const { describeOutcome } = await flow();
     const lines = describeOutcome({
       status: 'saved',
+      tier: 'expert',
       provider: 'anthropic',
       changed: [],
       keysStored: ['anthropic'],
@@ -448,6 +591,7 @@ describe('describeOutcome', () => {
     const { describeOutcome } = await flow();
     const lines = describeOutcome({
       status: 'saved',
+      tier: 'expert',
       provider: 'anthropic',
       changed: [],
       keysStored: ['anthropic'],

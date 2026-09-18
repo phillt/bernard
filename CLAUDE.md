@@ -1394,9 +1394,76 @@ running risky tools.`), which tells a reader what the words mean and nothing
     same reason: block lettering cannot reflow, so a banner that does not fit is
     worse present than absent. Measured with `stringWidth`, not `.length` — the
     rows are box-drawing today and a future banner need not be.
-- **The 31 questions are a starting point, not the answer.** This phase exists to
-  be walked end to end so the day-one subset can be chosen from experience.
-  Trimming, and the splash copy that says what Bernard is, are follow-ups.
+- **Quick and full, and the quick set is THREE (#582).** #447 left this open —
+  "a starting point, not the answer", to be settled once someone had walked it —
+  and the count it deferred was wrong in both directions: the issue says 30 and
+  `setup-flow.ts` said 35, where the real stage-B figure is **29** (30 declared
+  fields minus `provider`, which stage A settles), deciding 31 settings because
+  `toolMode` `covers` two more. `WizardFieldData.tier?: 'quick'` is the marker,
+  `inTier` the one predicate, and a mode screen between the welcome and the
+  provider hub is where the reader chooses.
+  - **The bar is two clauses, not "important".** A question earns the quick path
+    only when **no default can be right for everyone** AND **it is answerable
+    from the screen by somebody who has not used Bernard yet**. Importance alone
+    argues for a good default, not for a question; and a question nobody can
+    answer yet is a screen they press Enter on. `toolMode` (the security
+    posture, silent until it bites, and `covers` makes it settle all three
+    permission keys), `modelMode` (what every turn costs) and `theme` (the
+    screen IS the answer, and no default serves high-contrast or colorblind).
+  - **`model` is the one that looks essential and is a TRAP.** `SITE_ROLE.main`
+    is `orchestrator`, whose `balanced` tier — the default `modelMode` — is
+    `premium`, so on a default install `config.model` decides nothing; it is the
+    fallback for when model mode is OFF. A reader who picked the cheap model on
+    a short walk to save money would still be billed for the premium one, which
+    is worse than not being asked. That is also the positive argument for
+    `modelMode` being quick instead: it is the only one of the three
+    model-family questions whose answer changes anything given the other
+    defaults. `activeLineupId` fails the second clause — the fallback
+    (`resolveActiveLineup`) is already correct and nobody can judge a lineup
+    before using one.
+  - **The frozen-array objection does not survive contact.** #582 assumed
+    branching was the constraint; `buildSettingsSpec` already builds a fresh
+    array per call from a filter over the registry and already drops steps
+    (`STAGE_A_KEYS`, and `built === null`). A tier is one more term in that
+    filter. What it is NOT is "skip steps in one spec": the two specs are built
+    up front and `railContext` still spans the seams.
+  - **The rail derives from the FILTERED list, and that is the whole reason the
+    mode screen is SECOND.** `settingsSections(tier)` shares `inTier` with the
+    question loop, so a quick walk is never told it is about to visit "Memory &
+    context". Every stage from the hub onwards paints that rail, so the choice
+    has to precede them — asked any later, four screens would promise a walk the
+    reader had already shortened. Before the answer there is no tier at all, so
+    the welcome and the mode screen name the **superset**: the rail losing its
+    expert-only sections immediately afterwards is the clearest confirmation of
+    what was just picked.
+  - **The counts on the rows are COMPUTED, never written.** Each row's trailing
+    detail is `buildSettingsSpec(ctx, tier).spec.steps.length`, so a hand-typed
+    "3 questions" cannot go stale — it is the same registry the walk reads.
+    Exact for the quick row by construction (none of its three fields is a list
+    that can be dropped for having no options) and off by one on the full row
+    only where a catalog cannot be read.
+  - **The choice is deliberately NOT remembered per profile.** It is not a
+    setting about Bernard's behaviour — storing it makes it the 41st
+    `ProfileSettings` field and obliges `settings-coverage.test.ts` to demand a
+    wizard question about which wizard you get — and, worse, remembering it
+    makes the other path unreachable by the route people take: someone who ran
+    quick on Monday and wants to change a limit on Friday would be handed the
+    quick walk again with nothing on screen saying the long one exists. The
+    same argument #447 made for `^o` opening the mode menu when nothing is
+    pending. `bernard setup --expert` exists for someone who already knows;
+    there is no `--quick`, because that is the row the screen opens on.
+  - **"Does the expert path start from the quick answers?" dissolves.** The
+    choice is made before any settings question, so there is nothing in hand to
+    carry — and a later `--expert` run opens every step on what the quick run
+    stored, which is the same thing by way of disk.
+  - **`settings-coverage.test.ts` is the named guard and gained two directions.**
+    Expert-only is fine; unreachable from **either** path is the regression, and
+    those assertions do not read `tier` at all, so quick-⊆-expert is asserted
+    separately along with the exact quick set (written out, record-to-table) and
+    a value check, since `tier: true` would read as expert-only and silently
+    shrink the walk. `setup-flow.test.ts` additionally pins Back out of the hub
+    landing on the **mode** screen: the generic Back walk cannot see that, since
+    with the hub returning to the welcome instead `mode` is still reached twice.
 
 ## Key Patterns
 

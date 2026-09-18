@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   PROVIDERS_DONE,
+  SETUP_MODE_ROWS,
   buildDefaultProviderSpec,
   buildKeyEntrySpec,
+  buildModeSpec,
   buildProviderHubSpec,
   buildWelcomeSpec,
   providerFromHubRow,
@@ -86,7 +88,7 @@ function acceptAll(steps: { initial: string | string[] }[]): Array<string | stri
 
 describe('buildSettingsSpec', () => {
   it('asks about every declared field except the ones stage A settles', () => {
-    const { spec } = buildSettingsSpec(ctx());
+    const { spec } = buildSettingsSpec(ctx(), 'expert');
     const asked = spec.steps.map((s) => s.id);
     const expected = WIZARD_FIELDS.map((f) => f.key).filter((k) => k !== 'provider');
     expect(asked).toEqual(expected);
@@ -97,7 +99,7 @@ describe('buildSettingsSpec', () => {
     // populate opens a choice step on no row, the cursor falls to row one, and
     // an accepting Enter silently writes a value the user never chose. That is
     // invisible in a walkthrough and permanent on disk.
-    const { spec } = buildSettingsSpec(ctx());
+    const { spec } = buildSettingsSpec(ctx(), 'expert');
     const blank = spec.steps.filter((s) => s.initial === '' || s.initial === undefined);
     // NO exceptions. There was one — `voiceVoice`, blank because blank was its
     // real value — and it left this assertion carrying a carve-out that had to
@@ -107,13 +109,13 @@ describe('buildSettingsSpec', () => {
   });
 
   it('drops a list with nothing to choose from rather than asking an empty question', () => {
-    const { spec } = buildSettingsSpec(ctx({ models: [], lineups: [] }));
+    const { spec } = buildSettingsSpec(ctx({ models: [], lineups: [] }), 'expert');
     expect(spec.steps.map((s) => s.id)).not.toContain('model');
     expect(spec.steps.map((s) => s.id)).not.toContain('activeLineupId');
   });
 
   it('carries the group title as its own field, so a flat walk still reads as sections', () => {
-    const { spec } = buildSettingsSpec(ctx());
+    const { spec } = buildSettingsSpec(ctx(), 'expert');
     const step = spec.steps.find((s) => s.id === 'toolMode');
     expect(step?.section).toBe('Tool safety');
     // Not baked into the question — the renderer styles the two differently, and
@@ -122,18 +124,128 @@ describe('buildSettingsSpec', () => {
   });
 });
 
+describe('the quick tier', () => {
+  /** The section names a spec's own steps declare, in walk order. */
+  function sectionsOf(spec: { steps: { section?: string }[] }): string[] {
+    const seen: string[] = [];
+    for (const step of spec.steps) {
+      if (step.section !== undefined && !seen.includes(step.section)) seen.push(step.section);
+    }
+    return seen;
+  }
+
+  it('asks only the fields that declare it', () => {
+    const { spec } = buildSettingsSpec(ctx(), 'quick');
+    expect(spec.steps.map((s) => s.id)).toEqual(
+      WIZARD_FIELDS.filter((f) => f.tier === 'quick').map((f) => f.key),
+    );
+  });
+
+  it('is a subset of what the expert walk asks, never a different set', () => {
+    // The acceptance item: expert-only is fine, unreachable-from-either is the
+    // regression. Asserted as containment rather than by counting, because a
+    // count passes while the two sets drift apart.
+    const quick = buildSettingsSpec(ctx(), 'quick').spec.steps.map((s) => s.id);
+    const expert = buildSettingsSpec(ctx(), 'expert').spec.steps.map((s) => s.id);
+    for (const id of quick) expect(expert, id).toContain(id);
+    expect(quick.length).toBeLessThan(expert.length);
+  });
+
+  it('builds the rail from the FILTERED list, not from the whole registry', () => {
+    // The failure this catches is a rail that promises sections the walk never
+    // reaches — "Memory & context" listed as still to come on a walk that asks
+    // nothing in it. The hub is where it shows, because the settings spec's own
+    // rail is derived from its own steps and is filtered for free.
+    const quickAfter = buildProviderHubSpec(ctx(), 'quick').railContext?.after ?? [];
+    const expertAfter = buildProviderHubSpec(ctx(), 'expert').railContext?.after ?? [];
+    expect(quickAfter).toEqual(sectionsOf(buildSettingsSpec(ctx(), 'quick').spec));
+    expect(expertAfter).toEqual(sectionsOf(buildSettingsSpec(ctx(), 'expert').spec));
+    expect(quickAfter.length).toBeLessThan(expertAfter.length);
+    for (const name of quickAfter) expect(expertAfter, name).toContain(name);
+  });
+
+  it('says on the screen that the rest kept their defaults', () => {
+    // A path whose edge the reader cannot see is a dead end. The expert walk
+    // has nothing to disclose and must not carry the sentence.
+    expect(buildSettingsSpec(ctx(), 'quick').spec.intro).toContain('--expert');
+    expect(buildSettingsSpec(ctx(), 'expert').spec.intro).not.toContain('--expert');
+  });
+});
+
+describe('the mode screen', () => {
+  it('counts the questions each row actually costs, rather than saying a number', () => {
+    // A hand-typed "3 questions" is a second copy of the registry, and the copy
+    // that goes stale is the one on the screen.
+    const c = ctx();
+    const { spec } = buildModeSpec(c);
+    const field = spec.steps[0].field;
+    expect(field.kind).toBe('choice');
+    if (field.kind !== 'choice') return;
+    const quick = buildSettingsSpec(c, 'quick').spec.steps.length;
+    const expert = buildSettingsSpec(c, 'expert').spec.steps.length;
+    expect(field.trailing?.[SETUP_MODE_ROWS.quick]).toEqual({ text: `${quick} questions` });
+    expect(field.trailing?.[SETUP_MODE_ROWS.expert]).toEqual({ text: `${expert} questions` });
+    // Guard the guard: identical counts would satisfy the two assertions above
+    // while saying nothing about the choice.
+    expect(quick).toBeLessThan(expert);
+  });
+
+  it('follows the catalog rather than a fixed number', () => {
+    // The full row's count moves with what can be asked — a list with nothing
+    // to choose from is dropped, so a machine whose catalog could not be read
+    // is honestly offered a shorter walk.
+    const field = buildModeSpec(ctx({ models: [], lineups: [] })).spec.steps[0].field;
+    if (field.kind !== 'choice') return;
+    const full = buildSettingsSpec(ctx({ models: [], lineups: [] }), 'expert').spec.steps.length;
+    expect(field.trailing?.[SETUP_MODE_ROWS.expert]).toEqual({ text: `${full} questions` });
+  });
+
+  it('opens on quick, which is what makes a first run short', () => {
+    expect(buildModeSpec(ctx()).spec.steps[0].initial).toBe(SETUP_MODE_ROWS.quick);
+    // …and re-opens on whatever was in force, so Back does not silently change
+    // the answer the reader already gave.
+    expect(buildModeSpec(ctx(), 'expert').spec.steps[0].initial).toBe(SETUP_MODE_ROWS.expert);
+  });
+
+  it('decodes a row back to its tier, and treats anything else as quick', () => {
+    const { decode } = buildModeSpec(ctx());
+    expect(decode([SETUP_MODE_ROWS.quick])).toBe('quick');
+    expect(decode([SETUP_MODE_ROWS.expert])).toBe('expert');
+    // An answer matching no row means the reader never decided; the short walk
+    // is the one it is safe to fall back to, since nothing it skips is written.
+    expect(decode(['something else'])).toBe('quick');
+  });
+
+  it('shares the welcome’s rail row rather than adding one of its own', () => {
+    // A single hinge screen with a row to itself makes the journey read as a
+    // step longer than it is.
+    expect(buildModeSpec(ctx()).spec.steps[0].section).toBe('Welcome');
+    expect(buildWelcomeSpec().steps[0].section).toBe('Welcome');
+  });
+
+  it('names every section setup can cover, since nothing has been chosen yet', () => {
+    // Before the answer there is no tier, so the honest thing to show is the
+    // superset — and the rail shortening straight afterwards is the clearest
+    // confirmation of what was just picked.
+    const after = buildModeSpec(ctx()).spec.railContext?.after ?? [];
+    expect(after).toEqual(buildWelcomeSpec().railContext?.after);
+    expect(after).toContain('Providers');
+    expect(after).toContain('Memory & context');
+  });
+});
+
 describe('settingsPatch — only what changed is written', () => {
   it('writes nothing when every answer is the one it opened with', () => {
     // The env-shadowing guard. `loadConfig` resolves `prefs ?? env ?? default`,
     // so writing back a value nobody touched would freeze whatever a BERNARD_*
     // variable happened to hold and leave the variable dead forever.
-    const { spec, steps } = buildSettingsSpec(ctx());
+    const { spec, steps } = buildSettingsSpec(ctx(), 'expert');
     const answers = acceptAll(spec.steps.map((s) => ({ initial: s.initial ?? '' })));
     expect(settingsPatch(steps, answers)).toEqual({});
   });
 
   it('writes exactly the fields that moved', () => {
-    const { spec, steps } = buildSettingsSpec(ctx());
+    const { spec, steps } = buildSettingsSpec(ctx(), 'expert');
     const answers = acceptAll(spec.steps.map((s) => ({ initial: s.initial ?? '' })));
     const themeAt = spec.steps.findIndex((s) => s.id === 'theme');
     const stepsAt = spec.steps.findIndex((s) => s.id === 'maxSteps');
@@ -143,7 +255,7 @@ describe('settingsPatch — only what changed is written', () => {
   });
 
   it('decodes a boolean row, not the label', () => {
-    const { spec, steps } = buildSettingsSpec(ctx());
+    const { spec, steps } = buildSettingsSpec(ctx(), 'expert');
     const answers = acceptAll(spec.steps.map((s) => ({ initial: s.initial ?? '' })));
     const at = spec.steps.findIndex((s) => s.id === 'conciseMode');
     expect(spec.steps[at].initial).toBe('Off');
@@ -152,7 +264,7 @@ describe('settingsPatch — only what changed is written', () => {
   });
 
   it('decodes a list row back to its value, not its label', () => {
-    const { spec, steps } = buildSettingsSpec(ctx());
+    const { spec, steps } = buildSettingsSpec(ctx(), 'expert');
     const answers = acceptAll(spec.steps.map((s) => ({ initial: s.initial ?? '' })));
     const at = spec.steps.findIndex((s) => s.id === 'coordinatorMode');
     // The label a reader picks and the value written to disk are deliberately
@@ -162,14 +274,14 @@ describe('settingsPatch — only what changed is written', () => {
   });
 
   it('ignores an answer that matches no row', () => {
-    const { spec, steps } = buildSettingsSpec(ctx());
+    const { spec, steps } = buildSettingsSpec(ctx(), 'expert');
     const answers = acceptAll(spec.steps.map((s) => ({ initial: s.initial ?? '' })));
     answers[spec.steps.findIndex((s) => s.id === 'theme')] = 'not-a-theme';
     expect(settingsPatch(steps, answers)).toEqual({});
   });
 
   it('rejects a bad number rather than writing NaN', () => {
-    const { spec, steps } = buildSettingsSpec(ctx());
+    const { spec, steps } = buildSettingsSpec(ctx(), 'expert');
     const answers = acceptAll(spec.steps.map((s) => ({ initial: s.initial ?? '' })));
     answers[spec.steps.findIndex((s) => s.id === 'maxSteps')] = 'abc';
     expect(settingsPatch(steps, answers)).toEqual({});
@@ -185,7 +297,7 @@ describe('tool mode folds skipPermissions in', () => {
   const rowFor = (value: string) => TOOL_MODES.find((m) => m.value === value)!.label;
 
   function toolModeStep(c: SetupContext) {
-    const { spec, steps } = buildSettingsSpec(c);
+    const { spec, steps } = buildSettingsSpec(c, 'expert');
     const at = spec.steps.findIndex((s) => s.id === 'toolMode');
     return { step: spec.steps[at], steps, at, spec };
   }
@@ -294,7 +406,7 @@ describe('every list step carries its values', () => {
     // so `values` is how a step that previews a row the cursor is merely
     // passing over can act on it (#447). The ALIGNMENT is the whole contract,
     // and index-aligned arrays are the kind of thing that drifts silently.
-    const { spec } = buildSettingsSpec(ctx());
+    const { spec } = buildSettingsSpec(ctx(), 'expert');
     const lists = spec.steps.filter((s) => s.field.kind === 'choice');
     expect(lists.length).toBeGreaterThan(5);
     for (const step of lists) {
@@ -310,7 +422,7 @@ describe('every list step carries its values', () => {
     // The step that previews. Asserted against `THEMES` rather than against the
     // labels, because for this one field they are identical — which is exactly
     // the coincidence the renderer must not lean on.
-    const { spec } = buildSettingsSpec(ctx());
+    const { spec } = buildSettingsSpec(ctx(), 'expert');
     const step = spec.steps.find((s) => s.id === 'theme')!;
     expect(step.preview).toBe('theme');
     const field = step.field as { values?: readonly string[] };
@@ -321,7 +433,7 @@ describe('every list step carries its values', () => {
 describe('the recommendation rides on the row it recommends', () => {
   /** The choice step this field builds, whatever else the settings spec holds. */
   function stepFor(key: string, c = ctx()) {
-    const { spec } = buildSettingsSpec(c);
+    const { spec } = buildSettingsSpec(c, 'expert');
     const step = spec.steps.find((s) => s.id === key)!;
     expect(step, key).toBeDefined();
     return step;
@@ -455,7 +567,7 @@ describe('the provider hub', () => {
     // A page each asked about three providers in a row when almost everyone
     // wants one, gave no view of the set, and made "which am I actually using"
     // a thing you had to remember across screens. Here the state is the screen.
-    const spec = buildProviderHubSpec(ctx());
+    const spec = buildProviderHubSpec(ctx(), 'expert');
     expect(spec.steps).toHaveLength(1);
     const field = spec.steps[0].field;
     expect(field.kind).toBe('choice');
@@ -475,7 +587,7 @@ describe('the provider hub', () => {
         { name: 'openai', hasKey: false, custom: false },
       ],
     };
-    const field = buildProviderHubSpec(c).steps[0].field;
+    const field = buildProviderHubSpec(c, 'expert').steps[0].field;
     if (field.kind !== 'choice') return;
     // The LABEL is the provider and nothing else — it is the answer vocabulary,
     // and a decoder that had to strip a decorated suffix would be a second copy
@@ -490,7 +602,7 @@ describe('the provider hub', () => {
 
   it('never ends the walk from a row that names a provider', () => {
     const c = ctx();
-    const field = buildProviderHubSpec(c).steps[0].field;
+    const field = buildProviderHubSpec(c, 'expert').steps[0].field;
     if (field.kind !== 'choice') return;
     for (const row of field.choices) expect(providerFromHubRow(c, row)).not.toBeNull();
     expect(providerFromHubRow(c, PROVIDERS_DONE)).toBeNull();
@@ -506,9 +618,9 @@ describe('the provider hub', () => {
   it('resolves on the pick, with no check-your-answers screen', () => {
     // The review is for a BATCH of answers. A hub whose rows are things to do
     // has none, and a summary reading "Providers — anthropic" is unactionable.
-    expect(buildProviderHubSpec(ctx()).skipReview).toBe(true);
+    expect(buildProviderHubSpec(ctx(), 'expert').skipReview).toBe(true);
     expect(buildWelcomeSpec().skipReview).toBe(true);
-    expect(buildKeyEntrySpec(ctx(), 'anthropic').spec.skipReview).toBe(true);
+    expect(buildKeyEntrySpec(ctx(), 'anthropic', 'expert').spec.skipReview).toBe(true);
   });
 });
 
@@ -517,7 +629,7 @@ describe('the key entry page', () => {
     // The page already draws `← Back`. This button read "Back to providers",
     // so it drew two controls a reader could only tell apart by trying one.
     const label = (provider: string, typed: string): string =>
-      nextLabelFor(buildKeyEntrySpec(ctx(), provider).spec.steps[0], typed, 'fallback');
+      nextLabelFor(buildKeyEntrySpec(ctx(), provider, 'expert').spec.steps[0], typed, 'fallback');
     for (const provider of ['anthropic', 'openai']) {
       expect(label(provider, 'sk-typed')).toBe('Save key');
       expect(label(provider, '')).not.toMatch(/back/i);
@@ -530,12 +642,12 @@ describe('the key entry page', () => {
   it('treats blank as "leave this provider alone", which Esc also does', () => {
     // So the page can never be a dead end.
     for (const provider of ['anthropic', 'openai']) {
-      expect(buildKeyEntrySpec(ctx(), provider).spec.steps[0].optional).toBe(true);
+      expect(buildKeyEntrySpec(ctx(), provider, 'expert').spec.steps[0].optional).toBe(true);
     }
   });
 
   it('trims what it returns, and returns nothing for a blank', () => {
-    const { decode } = buildKeyEntrySpec(ctx(), 'anthropic');
+    const { decode } = buildKeyEntrySpec(ctx(), 'anthropic', 'expert');
     expect(decode(['  sk-test  '])).toBe('sk-test');
     expect(decode(['   '])).toBe('');
   });
@@ -552,7 +664,10 @@ describe('the model step and a catalog that does not list what is in use', () =>
     // CLAUDE.md records both directions: `grok-3-mini` dispatches and is in no
     // snapshot. Dropped, the step opens on nothing and a reader who takes the
     // page at face value trades a working model for the catalog's first entry.
-    const { spec } = buildSettingsSpec(withModel(['listed-a', 'listed-b'], 'unlisted-but-working'));
+    const { spec } = buildSettingsSpec(
+      withModel(['listed-a', 'listed-b'], 'unlisted-but-working'),
+      'expert',
+    );
     const step = spec.steps.find((s) => s.id === 'model')!;
     const choices = (step.field as { choices: string[] }).choices;
     expect(choices[0]).toContain('unlisted-but-working');
@@ -562,7 +677,7 @@ describe('the model step and a catalog that does not list what is in use', () =>
   it('adds nothing when the catalog already lists it', () => {
     // Guard the guard: an unconditional row would duplicate the model on every
     // ordinary install.
-    const { spec } = buildSettingsSpec(withModel(['m1', 'm2'], 'm1'));
+    const { spec } = buildSettingsSpec(withModel(['m1', 'm2'], 'm1'), 'expert');
     const choices = (spec.steps.find((s) => s.id === 'model')!.field as { choices: string[] })
       .choices;
     expect(choices).toEqual(['m1', 'm2']);
@@ -571,7 +686,7 @@ describe('the model step and a catalog that does not list what is in use', () =>
   it('asks nothing at all when the catalog could not be read', () => {
     // An empty list is "we do not know", not "here is your one option" — a
     // one-row page is a screen that costs a keystroke and decides nothing.
-    const { spec } = buildSettingsSpec(withModel([], 'whatever'));
+    const { spec } = buildSettingsSpec(withModel([], 'whatever'), 'expert');
     expect(spec.steps.find((s) => s.id === 'model')).toBeUndefined();
   });
 });
@@ -582,7 +697,7 @@ describe('a question that another answer can make inert', () => {
     // rule, so picking unrestricted makes the confirm-mode answer dead — and
     // the two are asked on separate screens with nothing else connecting them.
     // The warning existed in the registry and rendered nowhere.
-    const { spec } = buildSettingsSpec(ctx());
+    const { spec } = buildSettingsSpec(ctx(), 'expert');
     const step = spec.steps.find((s) => s.id === 'toolMode')!;
     const field = step.field as { choices: string[]; notes?: Record<string, string> };
     const unrestricted = TOOL_MODES.find((m) => m.value === UNRESTRICTED)!.label;
@@ -597,14 +712,14 @@ describe('a question that another answer can make inert', () => {
     // be answered into a state the previous screen had already made inert. The
     // merge (#447) removes the step, so the note on the unrestricted row above
     // is the whole of what is left to say.
-    const { spec } = buildSettingsSpec(ctx());
+    const { spec } = buildSettingsSpec(ctx(), 'expert');
     expect(spec.steps.find((s) => s.id === 'confirmMode')).toBeUndefined();
   });
 
   it('adds no notes to a step whose options declare none', () => {
     // Guard the guard: an always-present `notes` map would satisfy the first
     // case while telling the renderer every row has something to say.
-    const { spec } = buildSettingsSpec(ctx());
+    const { spec } = buildSettingsSpec(ctx(), 'expert');
     const step = spec.steps.find((s) => s.id === 'theme')!;
     expect((step.field as { notes?: unknown }).notes).toBeUndefined();
   });
@@ -634,14 +749,14 @@ describe('buildDefaultProviderSpec', () => {
         { name: 'openai', hasKey: false, custom: false },
       ],
     };
-    expect(buildDefaultProviderSpec(oneKeyed)).toBeNull();
-    expect(buildDefaultProviderSpec(twoKeyed())).not.toBeNull();
+    expect(buildDefaultProviderSpec(oneKeyed, 'expert')).toBeNull();
+    expect(buildDefaultProviderSpec(twoKeyed(), 'expert')).not.toBeNull();
   });
 
   it('greys a keyless provider and says why, rather than hiding it', () => {
     // Hidden, the row answers no question: a provider missing from the list
     // looks unsupported, where a greyed one with a reason says what to do.
-    const stage = buildDefaultProviderSpec(twoKeyed())!;
+    const stage = buildDefaultProviderSpec(twoKeyed(), 'expert')!;
     const field = stage.spec.steps[0].field;
     expect(field.kind).toBe('choice');
     if (field.kind !== 'choice') return;
@@ -653,18 +768,18 @@ describe('buildDefaultProviderSpec', () => {
   it('carries no key-status badge on the row itself', () => {
     // The badge read as a selection: `✓` already means "this is the one", and
     // the cursor marker means "this is where you are". Status is the greying.
-    const stage = buildDefaultProviderSpec(twoKeyed())!;
+    const stage = buildDefaultProviderSpec(twoKeyed(), 'expert')!;
     const field = stage.spec.steps[0].field;
     if (field.kind !== 'choice') return;
     for (const row of field.choices) expect(row).not.toContain('key set');
   });
 
   it('opens on the provider already in use', () => {
-    expect(buildDefaultProviderSpec(twoKeyed())!.spec.steps[0].initial).toBe('anthropic');
+    expect(buildDefaultProviderSpec(twoKeyed(), 'expert')!.spec.steps[0].initial).toBe('anthropic');
   });
 
   it('decodes a row back to the bare provider name', () => {
-    const stage = buildDefaultProviderSpec(twoKeyed())!;
+    const stage = buildDefaultProviderSpec(twoKeyed(), 'expert')!;
     expect(stage.decode(['openai'])).toBe('openai');
   });
 
@@ -675,12 +790,12 @@ describe('buildDefaultProviderSpec', () => {
     // `runSetupFlow` hands out a spec and takes a `WizardResult` back, so the
     // review is entirely a renderer concern and every flow test passes either
     // way.
-    expect(buildDefaultProviderSpec(twoKeyed())!.spec.skipReview).toBe(true);
+    expect(buildDefaultProviderSpec(twoKeyed(), 'expert')!.spec.skipReview).toBe(true);
   });
 
   it('does not skip the review on the stage that has a batch to check', () => {
     // Guard the guard: skipping everywhere would satisfy the assertion above
-    // while removing the check-your-answers screen 35 questions exist for.
-    expect(buildSettingsSpec(ctx()).spec.skipReview).not.toBe(true);
+    // while removing the check-your-answers screen a long walk exists for.
+    expect(buildSettingsSpec(ctx(), 'expert').spec.skipReview).not.toBe(true);
   });
 });

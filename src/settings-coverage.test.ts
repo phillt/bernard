@@ -136,6 +136,59 @@ describe('settings coverage', () => {
 });
 
 /**
+ * The quick path asks a small, named set — and nothing is quick-ONLY (#582).
+ *
+ * Both halves matter and they fail in opposite directions. Left alone, the
+ * `tier` marker creeps: it is one word per field, every field's owner thinks
+ * theirs is important, and nobody notices the quick walk growing back to 29.
+ * And a field that were somehow reachable ONLY from the quick path would be
+ * invisible to the coverage assertions above, which do not read `tier` at all —
+ * that is the regression this milestone must not introduce, since the whole
+ * promise is that the expert walk still asks everything.
+ *
+ * The list is written out rather than computed, in the record-to-table
+ * direction: deriving it from `tier` would make the assertion agree with
+ * whatever the registry says, which is the thing being checked.
+ */
+describe('setup tiers', () => {
+  const QUICK: readonly string[] = ['modelMode', 'toolMode', 'theme'];
+
+  it('asks exactly the three whose default cannot be right for everyone', () => {
+    expect(WIZARD_FIELDS.filter((f) => f.tier === 'quick').map((f) => f.key)).toEqual(QUICK);
+  });
+
+  it('keeps the security question on it', () => {
+    // The one that is silent until it bites, and the one most likely to be
+    // argued out of the quick path for being "advanced". It also decides
+    // `confirmMode` and `skipPermissions` through `covers`, so dropping it
+    // would leave three settings unasked on the path most people walk.
+    const toolMode = WIZARD_FIELDS.find((f) => f.key === 'toolMode')!;
+    expect(toolMode.tier).toBe('quick');
+    expect(toolMode.covers).toContain('confirmMode');
+    expect(toolMode.covers).toContain('skipPermissions');
+  });
+
+  it('leaves every quick field reachable from the expert walk too', () => {
+    // Quick is a SUBSET, never a second list. `inTier` makes that true by
+    // construction today; asserted because the construction is one line and a
+    // future tier could be written as a filter that partitions instead.
+    const quick = new Set(WIZARD_FIELDS.filter((f) => f.tier === 'quick').map((f) => f.key));
+    const expert = new Set(WIZARD_FIELDS.map((f) => f.key));
+    for (const key of quick) expect(expert.has(key), key).toBe(true);
+  });
+
+  it('marks a field as quick only with a value the type admits', () => {
+    // Guard the guard: `tier: 'Quick'` or `tier: true` would read as
+    // expert-only and silently shrink the quick walk, since every consumer
+    // tests `=== 'quick'`.
+    for (const f of WIZARD_FIELDS) {
+      if (f.tier === undefined) continue;
+      expect(f.tier, f.key).toBe('quick');
+    }
+  });
+});
+
+/**
  * `OPTIONS_REGISTRY` and the wizard both describe the four numeric options, and
  * neither derives from the other — `/options` reads one, the wizard reads the
  * other, and a bound changed in one is invisible to the other.

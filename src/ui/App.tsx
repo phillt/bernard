@@ -1597,14 +1597,14 @@ export function App({
   // exists there is nothing left for it to collect.
   //
   // What remains is telling a new user the command exists. A notice rather than
-  // an overlay: the walk is 37 questions, and a fresh session should open on a
-  // prompt the user can type into, not on a form they did not ask for.
+  // an overlay: even the quick walk is a form, and a fresh session should open
+  // on a prompt the user can type into rather than on one they did not ask for.
   const onboardingRanRef = useRef(false);
   useEffect(() => {
     if (!isFreshInstall || onboardingRanRef.current) return;
     onboardingRanRef.current = true;
     pushAssistantNotice(
-      'Welcome. Run `/setup` to walk every setting with its current value shown, or just start typing — the defaults work.',
+      'Welcome. Run `/setup` to settle the few settings whose right answer depends on you — or every one of them, if you would rather — or just start typing, because the defaults work.',
     );
   }, [isFreshInstall]);
 
