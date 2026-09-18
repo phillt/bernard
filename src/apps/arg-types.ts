@@ -37,7 +37,10 @@ import { z } from 'zod';
  * the version demand, the page control and `OWNERS`. Nothing branches on a
  * type id outside the table — {@link ArgTypeHandler.check} exists so that a
  * rule only one type has does not become the `switch` this replaced, wearing a
- * different hat.
+ * different hat. The two places that do branch, branch on a **closed
+ * vocabulary this table owns**: `page-template.ts` on {@link ArgControl.tag}
+ * to build markup, and the generated page script on `data-decode`, whose arms
+ * are pinned to the declared decoders by `page-validate.test.ts`.
  *
  * The drift that remains is checked rather than trusted: an id with no entry
  * is a compile error (see `_everyArgTypeHasAnEntry`), a prompt that names a
@@ -53,17 +56,29 @@ import { z } from 'zod';
  * than a recursive one — the set of expressible shapes is enumerable, which is
  * the property this module exists to keep. And `src/tools/applet.ts`
  * advertises this schema to a model through `zod-to-json-schema`, which the AI
- * SDK calls with `$refStrategy: 'none'`; a recursive schema there emits `$ref`
- * cycles into a provider tool definition, which is the #341 hazard class one
- * level up.
+ * SDK calls with `$refStrategy: 'none'` — read off the installed package,
+ * `@ai-sdk/ui-utils/dist/index.mjs:1573-1576`, where `useReferences` defaults
+ * to `false` and nothing in `tool()`'s path sets it. So a `$ref` encoding is
+ * not available to share a repeated level: `z.lazy` would have nothing to
+ * share and would emit `$ref` cycles into a provider tool definition, which is
+ * the #341 hazard class one level up. Load-bearing rather than stylistic.
  *
  * Eager expansion has a price and it is measured rather than assumed. The
  * level-0 JSON Schema goes from 429 bytes to 4,579, taking the `applet` tool
  * from 9,183 to 13,333 and the main agent's tool block from 41,968 to 46,118 —
  * **+9.9%**, on a prompt-cached prefix, so ~1,040 tokens written once per
- * session and read at a tenth of that per step. It cannot be made conditional:
- * `createTools` is a pure function of its arguments precisely so that block
- * stays byte-stable for the cache (#269).
+ * session and read at a tenth of that per step.
+ *
+ * It cannot be made conditional **on anything turn-scoped** — and the narrower
+ * claim is the true one, so it is worth stating precisely, because this is
+ * where someone trying to shrink the prefix will land. The prompt cache needs
+ * the block byte-stable across turns *within* a session (#269), which is why
+ * `createTools` is a pure function of its arguments; but purity *in its
+ * arguments* is exactly what permits argument-driven conditionality, and
+ * `opts.surface` already varies this same block that way. A session-resolved
+ * flag would preserve byte-stability as `surface` does. It is not built
+ * because gating applet authoring hides a capability rather than costing one,
+ * and 4,150 bytes is a fair price for it — not because the door is closed.
  *
  * Two knobs hold that number down, and both are declarative rather than
  * hand-tuned per level. `nestedOnly` keeps `object` out of level 0, where the

@@ -93,10 +93,12 @@ describe('the arg-type table (#588)', () => {
    * renders as nothing and the action is called with the field missing.
    *
    * Only the TAG is checked here, because that is what `page-template.ts`
-   * branches on to build markup. That the page script has an arm for every
-   * declared DECODER is asserted where the page is rendered, against the real
-   * output — a list of decoder names repeated here would be a second copy of
-   * the union, checked against itself.
+   * branches on to build markup. The generated page script branches on the
+   * other half — `data-decode`, the closed decoder vocabulary this table owns
+   * — and that its arms cover every DECLARED decoder is asserted where the
+   * page is rendered, against the real output. A list of decoder names
+   * repeated here would be a second copy of the union, checked against
+   * itself.
    */
   it('every type declares a control the renderer knows how to build', () => {
     for (const handler of ARG_TYPES) {
