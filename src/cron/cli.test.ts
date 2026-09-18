@@ -584,6 +584,14 @@ describe('cron CLI commands', () => {
         expect.stringContaining('Not a tool spec'),
       );
       expect(process.exitCode).toBe(1);
+      // NAMES the offender, not merely that something was wrong. The prefix
+      // alone passes for `printError('Not a tool spec')` with no list — and
+      // naming it is the whole diagnostic, since refusing the batch as a unit
+      // (which is right) means nothing else in the output separates the good
+      // specs from the bad one.
+      if (spec.trim() !== '') {
+        expect(mockOutput.printError).toHaveBeenCalledWith(expect.stringContaining(spec));
+      }
     });
 
     it('refuses the WHOLE batch when any one spec is bad', async () => {
@@ -592,6 +600,11 @@ describe('cron CLI commands', () => {
       mockStore.getJob.mockReturnValue(job);
       await cronGrant('j1', [], { allow: ['shell:gh *', ':foo'] });
       expect(mockStore.updateJob).not.toHaveBeenCalled();
+      // And says WHICH one. Refused as a unit with no name, the user bisects
+      // their own typo on the CLI whose job is ending a deny loop.
+      const printed = mockOutput.printError.mock.calls.flat().join('\n');
+      expect(printed).toContain(':foo');
+      expect(printed).not.toContain('shell:gh *');
     });
 
     it('appends to existing grants rather than replacing them', async () => {
