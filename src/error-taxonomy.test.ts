@@ -527,6 +527,21 @@ describe('AUTHORITATIVE_LABELS completeness is derived, not declared (#565)', ()
     'structured-output.ts',
   ];
 
+  // What the scan sees, and what it does not. Audited against every `error:`
+  // assignment in those three files: twelve, of which eight are snake_case
+  // label literals (matched), two are PROSE — `'Claims were reported in a shape
+  // that could not be verified.'` and a `capSubagentResult(...)` template — one
+  // is the zod schema declaration, and one is a pass-through of an existing
+  // `wrapped.error`. None of the four unmatched forms is a category label, so
+  // the derived set is complete for the code as it stands.
+  //
+  // The gap it leaves is narrow and worth stating: a label minted through a
+  // CONSTANT (`error: PARSE_FAILED_LABEL`) would be missed. It needs both
+  // halves to bite — a new label that is also a `ToolErrorType` name, written
+  // as an identifier rather than the literal every existing one uses — and it
+  // fails in the quiet direction, demoting to the prose tier rather than
+  // over-trusting. `finds the producers at all` does not catch that; only
+  // reading this does.
   function mintedLabels(): string[] {
     const root = path.dirname(fileURLToPath(import.meta.url));
     const found = new Set<string>();
