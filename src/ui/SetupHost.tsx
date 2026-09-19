@@ -5,6 +5,7 @@ import { DimensionsProvider } from './DimensionsContext.js';
 import { WizardOverlay } from './overlays/WizardOverlay.js';
 import type { WizardResult, WizardSpec } from './overlays/wizard-types.js';
 import { runSetupFlow, type SetupOutcome } from '../setup-flow.js';
+import type { SetupTier } from '../profiles-wizard-data.js';
 
 /**
  * The smallest possible Ink host: a frame, and one wizard at a time (#447).
@@ -36,9 +37,12 @@ interface PendingWizard {
 function SetupApp({
   onOutcome,
   verify,
+  tier,
 }: {
   onOutcome: (o: SetupOutcome) => void;
   verify: boolean;
+  /** Skip the mode screen and walk this one. Absent means ask. */
+  tier?: SetupTier;
 }) {
   const colors = getThemeColors();
   const { exit } = useApp();
@@ -57,6 +61,7 @@ function SetupApp({
       try {
         outcome = await runSetupFlow({
           verify,
+          ...(tier === undefined ? {} : { tier }),
           onProgress: setStatus,
           requestWizard: (spec) =>
             new Promise<WizardResult>((resolve) => {
@@ -76,7 +81,7 @@ function SetupApp({
       onOutcome(outcome);
       exit();
     })();
-  }, [exit, onOutcome, verify]);
+  }, [exit, onOutcome, verify, tier]);
 
   return (
     <Box flexDirection="column" paddingX={2} paddingY={pending ? 0 : 1}>
@@ -109,7 +114,9 @@ function SetupApp({
  * has unmounted puts it on a screen Ink no longer owns, which is the same
  * ordering `src/index.ts` keeps between `fullScreen.teardown()` and `cleanup()`.
  */
-export async function runSetupHost(opts: { verify?: boolean } = {}): Promise<SetupOutcome> {
+export async function runSetupHost(
+  opts: { verify?: boolean; tier?: SetupTier } = {},
+): Promise<SetupOutcome> {
   // Ink's `useInput` puts stdin in raw mode on mount and THROWS when it cannot —
   // out of a `render()` that has already returned, so it surfaces as an
   // unhandled rejection and a React stack trace rather than anything a reader
@@ -126,6 +133,7 @@ export async function runSetupHost(opts: { verify?: boolean } = {}): Promise<Set
       null,
       createElement(SetupApp, {
         verify: opts.verify !== false,
+        ...(opts.tier === undefined ? {} : { tier: opts.tier }),
         onOutcome: (o: SetupOutcome) => {
           outcome = o;
         },

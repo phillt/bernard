@@ -8,6 +8,7 @@ import type { WizardResult, WizardSpec } from '../overlays/wizard-types.js';
 import {
   buildDefaultProviderSpec,
   buildKeyEntrySpec,
+  buildModeSpec,
   buildProviderHubSpec,
   buildSettingsSpec,
   buildWelcomeSpec,
@@ -100,11 +101,16 @@ async function walkWithChord(spec: WizardSpec, presses: number) {
 describe('ctrl+n walks every stage of the real setup flow', () => {
   const stages: Array<[string, WizardSpec]> = [
     ['welcome', buildWelcomeSpec()],
-    ['provider hub', buildProviderHubSpec(CTX)],
-    ['key entry (key already stored)', buildKeyEntrySpec(CTX, 'anthropic').spec],
-    ['key entry (no key yet)', buildKeyEntrySpec(CTX, 'xai').spec],
-    ['default provider', buildDefaultProviderSpec(CTX)!.spec],
-    ['settings', buildSettingsSpec(CTX).spec],
+    // The mode screen (#582) is a stage of the real flow, so it is walked here
+    // like the rest — a chord advertised in the key line and inert on one
+    // screen is the defect this block exists for.
+    ['mode', buildModeSpec(CTX).spec],
+    ['provider hub', buildProviderHubSpec(CTX, 'expert')],
+    ['key entry (key already stored)', buildKeyEntrySpec(CTX, 'anthropic', 'expert').spec],
+    ['key entry (no key yet)', buildKeyEntrySpec(CTX, 'xai', 'expert').spec],
+    ['default provider', buildDefaultProviderSpec(CTX, 'expert')!.spec],
+    ['settings (full)', buildSettingsSpec(CTX, 'expert').spec],
+    ['settings (quick)', buildSettingsSpec(CTX, 'quick').spec],
   ];
 
   it.each(stages)('%s', async (_name, spec) => {
@@ -115,9 +121,9 @@ describe('ctrl+n walks every stage of the real setup flow', () => {
   });
 
   it('reaches the settings review, having answered every question', async () => {
-    // The stage that matters most: 36 questions, and a chord that silently held
+    // The stage that matters most: every declared setting, and a chord that held
     // on any one of them would leave the walk short with nothing saying so.
-    const { spec, steps } = buildSettingsSpec(CTX);
+    const { spec, steps } = buildSettingsSpec(CTX, 'expert');
     const { onResolve } = await walkWithChord(spec, spec.steps.length + 2);
     const result = onResolve.mock.calls[0][0];
     expect(result.cancelled).toBe(false);
@@ -133,7 +139,7 @@ describe('ctrl+n walks every stage of the real setup flow', () => {
     // "Back to providers", so the row had two controls a reader could only tell
     // apart by pressing one.
     for (const provider of ['anthropic', 'xai']) {
-      const { frame } = await walkWithChord(buildKeyEntrySpec(CTX, provider).spec, 0);
+      const { frame } = await walkWithChord(buildKeyEntrySpec(CTX, provider, 'expert').spec, 0);
       const controls = frame.split('\n').find((l) => l.includes('← Back')) ?? '';
       expect(controls, provider).toContain('← Back');
       // One "back" on the row, not two.

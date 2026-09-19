@@ -151,6 +151,7 @@ import {
 } from '../reference-resolver.js';
 import { rewritePrompt } from '../prompt-rewriter.js';
 import { recallFilter } from '../recall-filter.js';
+import { FirstUseHints } from '../setting-hints.js';
 import { loadRewriterHints } from '../memory.js';
 import { stripImagePaths } from '../image.js';
 import { getModelProfile } from '../providers/index.js';
@@ -1102,11 +1103,19 @@ export function App({
   // not fit, so the notice fires once/session rather than on every turn while
   // the store stays over budget.
   const memoryCapWarnedRef = useRef(false);
-  // Speech normalization (#432) is on by default, so the first time it actually
-  // changes what a listener hears, say so — once per session. Latched on a real
-  // `'normalized'` outcome rather than on the setting, so nobody who wouldn't
-  // notice a difference gets told.
-  const speechNoticeShownRef = useRef(false);
+  /**
+   * First-use hints (#583): a setting nobody chose announces itself once, the
+   * first time Bernard's use of it is observable.
+   *
+   * Replaces the hand-rolled speech-notice ref this used to be. That one was
+   * the shape — a latch on a real `'normalized'` outcome rather than on the
+   * setting, so nobody who would hear no difference was told — and what was
+   * missing is that the other twenty-odd defaults would each have needed their
+   * own ref and their own sentence. The sentence is registry data now, the
+   * latch is `ProfileSettings.shownHints`, and this holds only the two rate
+   * limits, which are per session and therefore genuinely state.
+   */
+  const hintsRef = useRef(new FirstUseHints());
   // Synchronous guard against double-Enter: setBusy schedules a re-render but
   // a second submit can land before Prompt sees `disabled={busy}` flip.
   const submittingRef = useRef(false);
@@ -1677,14 +1686,14 @@ export function App({
   // exists there is nothing left for it to collect.
   //
   // What remains is telling a new user the command exists. A notice rather than
-  // an overlay: the walk is 37 questions, and a fresh session should open on a
-  // prompt the user can type into, not on a form they did not ask for.
+  // an overlay: even the quick walk is a form, and a fresh session should open
+  // on a prompt the user can type into rather than on one they did not ask for.
   const onboardingRanRef = useRef(false);
   useEffect(() => {
     if (!isFreshInstall || onboardingRanRef.current) return;
     onboardingRanRef.current = true;
     pushAssistantNotice(
-      'Welcome. Run `/setup` to walk every setting with its current value shown, or just start typing — the defaults work.',
+      'Welcome. Run `/setup` to settle the few settings whose right answer depends on you — or every one of them, if you would rather — or just start typing, because the defaults work.',
     );
   }, [isFreshInstall]);
 
@@ -4802,6 +4811,11 @@ export function App({
   }> {
     const pipelineStartedAt = Date.now();
     debugLog('pre-turn:start', { inputLen: input.length });
+    // The per-turn budget for first-use hints (#583). Reset here rather than in
+    // `runAgentTurn`: this runs first on every turn, so the boundary is the
+    // same one, and it keeps the reset in the file with two of the three
+    // triggers it bounds.
+    hintsRef.current.beginTurn();
     // Per-turn RAG cache invalidation (#171). Must run before any resolver /
     // rewriter LLM call so they see only this turn's facts.
     stores.rag?.clearTurnCache();
@@ -4863,6 +4877,11 @@ export function App({
             original: input,
             rewritten: result.text,
           });
+          // The model was asked something other than what was typed, and the
+          // transcript keeps showing the original — correctly, since the
+          // rewrite is an LLM-only detail. Once, the first time it happens.
+          const firstRewrite = hintsRef.current.take('rewriter:first-rewrite');
+          if (firstRewrite !== null) flashToast(firstRewrite, 'info');
         }
       } catch (err: unknown) {
         debugLog('app:prompt-rewriter', err instanceof Error ? err.message : String(err));
@@ -4891,6 +4910,15 @@ export function App({
           ragResults = result.facts;
           recallReconciliation = result.reconciliation;
           memoryPriority = result.memoryPriority;
+          // Only when something was actually kept: `filtered` with an empty set
+          // means the curator looked and found nothing, which changes the
+          // answer not at all and is not worth a sentence. The rewriter above
+          // may already have spent this turn's budget, in which case this waits
+          // for the next turn it fires on — which is what one-per-turn is for.
+          if (ragResults.length > 0) {
+            const firstRecall = hintsRef.current.take('recall:first-injection');
+            if (firstRecall !== null) flashToast(firstRecall, 'info');
+          }
         }
       } catch (err: unknown) {
         debugLog('app:recall-filter', err instanceof Error ? err.message : String(err));
@@ -5050,12 +5078,10 @@ export function App({
     if (!config.voiceTts) return;
     await startSpeech(writtenForm, {
       onNormalized: () => {
-        if (speechNoticeShownRef.current) return;
-        speechNoticeShownRef.current = true;
-        flashToast(
-          'Natural speech is on — Bernard reads a listener-friendly version of each reply. /voice to turn it off.',
-          'info',
-        );
+        // The moment, not the setting: this fires only when the LLM pass really
+        // changed what a listener hears.
+        const hint = hintsRef.current.take('voice:first-readback');
+        if (hint !== null) flashToast(hint, 'info');
       },
     });
   }

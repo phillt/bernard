@@ -1426,9 +1426,164 @@ running risky tools.`), which tells a reader what the words mean and nothing
     same reason: block lettering cannot reflow, so a banner that does not fit is
     worse present than absent. Measured with `stringWidth`, not `.length` — the
     rows are box-drawing today and a future banner need not be.
-- **The 31 questions are a starting point, not the answer.** This phase exists to
-  be walked end to end so the day-one subset can be chosen from experience.
-  Trimming, and the splash copy that says what Bernard is, are follow-ups.
+- **Quick and full, and the quick set is THREE (#582).** #447 left this open —
+  "a starting point, not the answer", to be settled once someone had walked it —
+  and the count it deferred was wrong in both directions: the issue says 30 and
+  `setup-flow.ts` said 35, where the real stage-B figure is **29** (30 declared
+  fields minus `provider`, which stage A settles), deciding 31 settings because
+  `toolMode` `covers` two more. `WizardFieldData.tier?: 'quick'` is the marker,
+  `inTier` the one predicate, and a mode screen between the welcome and the
+  provider hub is where the reader chooses.
+  - **The bar is two clauses, not "important".** A question earns the quick path
+    only when **no default can be right for everyone** AND **it is answerable
+    from the screen by somebody who has not used Bernard yet**. Importance alone
+    argues for a good default, not for a question; and a question nobody can
+    answer yet is a screen they press Enter on. `toolMode` (the security
+    posture, silent until it bites, and `covers` makes it settle all three
+    permission keys), `modelMode` (what every turn costs) and `theme` (the
+    screen IS the answer, and no default serves high-contrast or colorblind).
+  - **`model` is the one that looks essential and is a TRAP.** `SITE_ROLE.main`
+    is `orchestrator`, whose `balanced` tier — the default `modelMode` — is
+    `premium`, so on a default install `config.model` decides nothing for the
+    turn a reader is having. A reader who picked the cheap model on a short walk
+    to save money would still be billed for the premium one, which is worse than
+    not being asked. That is also the positive argument for `modelMode` being
+    quick instead: it is the only one of the three model-family questions whose
+    answer changes anything given the other defaults. `activeLineupId` fails the
+    second clause — the fallback (`resolveActiveLineup`) is already correct and
+    nobody can judge a lineup before using one.
+    - **What `config.model` is, exactly**, because the loose version of that
+      sentence — "the fallback for when model mode is OFF" — supports a stronger
+      claim than the code makes, and the stronger claim is what a later reader
+      would act on. `resolveSiteModel` reaches it for `main` on exactly one
+      branch: the resolved lineup slot's provider has **no key**, so it falls
+      through to the session global with `source: 'fallback'` — **at any mode**.
+      That branch cannot fire on a first run, which has one key and a
+      provider-named lineup, so "on a default install" is the correct scope; it
+      becomes reachable the moment a mixed lineup exists. And `'off'` is a
+      LEGACY mode value that `normalizeStoredModelMode` migrates to
+      `'optimize-performance'` at the read boundary, so there is no
+      mode-is-off branch at the resolver to appeal to at all. Both directions
+      strengthen the drop rather than weakening it: `config.model` decides even
+      less than the original sentence claimed.
+  - **The frozen-array objection does not survive contact.** #582 assumed
+    branching was the constraint; `buildSettingsSpec` already builds a fresh
+    array per call from a filter over the registry and already drops steps
+    (`STAGE_A_KEYS`, and `built === null`). A tier is one more term in that
+    filter. What it is NOT is "skip steps in one spec": the two specs are built
+    up front and `railContext` still spans the seams.
+  - **The rail derives from the FILTERED list, and that is the whole reason the
+    mode screen is SECOND.** `settingsSections(tier)` shares `inTier` with the
+    question loop, so a quick walk is never told it is about to visit "Memory &
+    context". Every stage from the hub onwards paints that rail, so the choice
+    has to precede them — asked any later, four screens would promise a walk the
+    reader had already shortened. Before the answer there is no tier at all, so
+    the welcome and the mode screen name the **superset**: the rail losing its
+    expert-only sections immediately afterwards is the clearest confirmation of
+    what was just picked.
+  - **The counts on the rows are COMPUTED, never written.** Each row's trailing
+    detail is `buildSettingsSpec(ctx, tier).spec.steps.length`, so a hand-typed
+    "3 questions" cannot go stale — it is the same registry the walk reads.
+    Exact for the quick row by construction (none of its three fields is a list
+    that can be dropped for having no options) and off by one on the full row
+    only where a catalog cannot be read.
+  - **The choice is deliberately NOT remembered per profile.** It is not a
+    setting about Bernard's behaviour — storing it makes it the 41st
+    `ProfileSettings` field and obliges `settings-coverage.test.ts` to demand a
+    wizard question about which wizard you get — and, worse, remembering it
+    makes the other path unreachable by the route people take: someone who ran
+    quick on Monday and wants to change a limit on Friday would be handed the
+    quick walk again with nothing on screen saying the long one exists. The
+    same argument #447 made for `^o` opening the mode menu when nothing is
+    pending. `bernard setup --expert` exists for someone who already knows;
+    there is no `--quick`, because that is the row the screen opens on.
+  - **"Does the expert path start from the quick answers?" dissolves.** The
+    choice is made before any settings question, so there is nothing in hand to
+    carry — and a later `--expert` run opens every step on what the quick run
+    stored, which is the same thing by way of disk.
+  - **`settings-coverage.test.ts` is the named guard and gained two directions.**
+    Expert-only is fine; unreachable from **either** path is the regression, and
+    those assertions do not read `tier` at all, so quick-⊆-expert is asserted
+    separately along with the exact quick set (written out, record-to-table) and
+    a value check, since `tier: true` would read as expert-only and silently
+    shrink the walk. `setup-flow.test.ts` additionally pins Back out of the hub
+    landing on the **mode** screen: the generic Back walk cannot see that, since
+    with the hub returning to the welcome instead `mode` is still reached twice.
+- **A setting nobody chose announces itself once (#583).** #582's quick path is
+  what makes this necessary rather than nice: a first run now settles three
+  questions and leaves Bernard on a couple of dozen defaults nobody has seen.
+  `WizardFieldData.hint` is the data, `src/setting-hints.ts` the mechanism, and
+  the existing `speechNoticeShownRef` toast in `App.tsx` — the one hand-rolled
+  instance — is now one of its three consumers.
+  - **There is no chokepoint where a setting is READ, and a read-hook would be
+    the wrong signal anyway.** `BernardConfig` is a plain resolved object: 58
+    `config.X` reads across 14 non-test files, no getter, no proxy. And
+    `config.toolDetails` is read on every transcript-item push, so "someone read
+    the field" would fire constantly and mean nothing. What is worth announcing
+    is that Bernard **did** something, which only the code path knows.
+  - **So the acceptance criterion is met for two of its three parts, and cannot
+    be met for the third.** The SENTENCE and the LATCH are a registry edit; the
+    TRIGGER is intrinsically a line of code in a runtime path, and no registry
+    can supply a call site. Adding a hint to a setting that already has a named
+    moment is one data edit; adding one to a setting whose moment nobody has
+    named is that plus a call. Said plainly rather than claimed as complete.
+  - **The sentence is carried, not derived.** #583 hoped `label` plus a surface
+    would compose one; what a reader needs is _what just happened_, which is
+    prose about a runtime moment and not a restatement of the setting's name.
+    What IS composed is the signpost — `renderHint` appends the surface — so a
+    hint can never be written without a door out of it, which is the one thing
+    it must never be.
+  - **Toast, not `pushAssistantNotice`, and that is a decision.** The memory-cap
+    and `provider-wiped` notices use the transcript because "your settings are
+    not doing what you think" is a CORRECTION and has to outlive a keystroke. A
+    first-use hint explains something that just happened, is at its most useful
+    while it is on screen, and names a command that stays available — so what a
+    missed one costs is only what it would have taught. It also keeps the words
+    out from behind the `❮` chevron, which is Bernard's voice for answers.
+  - **Once ever, per profile, in `ProfileSettings.shownHints`** — once per
+    session is noise by the third session. Written through `saveActiveSettings`
+    the way `app-grants.ts` writes its map, so `config.ts` gains nothing, and a
+    deleted profile takes the record with it. It is bookkeeping rather than a
+    preference, which is why `settings-coverage.test.ts` **excludes** it with
+    that reason: the meta-test correctly refuses to let a record of what you have
+    been told pass as a setting.
+  - **The rate limit is load-bearing, not polish, precisely BECAUSE "once ever"
+    means a missed hint never returns.** At most one per turn — the rewriter and
+    recall triggers fire milliseconds apart in `runPreTurnPipeline`, so without
+    it the first toast is replaced by the second and marked shown unseen. And a
+    session cap of **2**, which BINDS against three declared hints: a cap set at
+    or above the number of hints is inert, i.e. code that cannot run and a test
+    that cannot fail. The refused hint is not spent, which is the guard that
+    matters — a cap that destroyed what it declined would be worse than the
+    burst.
+  - **`beginTurn()` is reset from the pre-turn pipeline, not `runAgentTurn`.**
+    Same boundary (the pipeline is the first thing every turn does), and it keeps
+    the reset in the file with two of the three triggers it bounds.
+  - **The three hints, and why those.** `rewriter:first-rewrite` (the model is
+    asked something other than what was typed, and the transcript keeps showing
+    the original — correctly, which is exactly why it is worth a sentence),
+    `recall:first-injection` (an answer drew on something the reader never said
+    in this conversation, which otherwise reads as the model knowing things it
+    should not — and only when facts were actually KEPT, since `filtered` with an
+    empty set changes nothing), and `voice:first-readback` (the migrated one,
+    still latched on a real `'normalized'` outcome rather than on the setting).
+  - **A hint can only hang on a field the registry declares, and that costs one
+    case.** The eight settings `settings-coverage.test.ts` excludes have no entry
+    to carry one — harmless for the three permission maps, which are consulted
+    constantly and have no first use, and visible exactly once: `voiceNormalizer`
+    is what the voice hint is ABOUT, and it hangs on `voiceTts` because the
+    observable moment is a readback and `/voice` owns every part of it. Lossy in
+    the direction of the home rather than of the sentence.
+  - **The union is reconciled to the registry, in the direction that fails
+    silently.** A `HintTrigger` with no declaring field is a `take()` somewhere
+    that can never fire and errors nowhere; `settings-coverage.test.ts` reads the
+    union out of the source (the `declaredSettingKeys` move) and fails on one.
+    The inverse — a sentence whose trigger nothing calls — is not checkable from
+    there, since a source scan for `take('x')` would pass on a commented-out
+    line, so the App-level case drives two real triggers instead.
+  - **Not attempted: #441.** Three registries still describe these settings and
+    only `settings-coverage.test.ts` reconciles them; this adds a field to one of
+    them rather than a fourth table, which is the direction #441 wants.
 
 ## Key Patterns
 
