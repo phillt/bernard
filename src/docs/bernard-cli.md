@@ -1,6 +1,6 @@
 ---
 title: The bernard command line
-description: What you can do from a shell rather than from the prompt, grouped by what it is for, with the handful of commands most people actually type. Read when the user asks how to do something without opening a session.
+description: What you can do from a shell rather than the prompt, grouped by what it is for, with the commands most people type. Read when the user asks how to do something without opening a session.
 ---
 
 # The command line

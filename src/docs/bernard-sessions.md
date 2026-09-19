@@ -1,6 +1,6 @@
 ---
 title: Working in a session
-description: What one turn is, resuming, queueing work while Bernard is busy, interrupting it, attaching images, and how much of its working it shows you. Read when the user asks about the prompt itself rather than a subsystem.
+description: What one turn is, resuming, queueing work while Bernard is busy, interrupting it, and attaching images. Read when the user asks about the prompt itself rather than about a subsystem.
 ---
 
 # Working in a session
