@@ -2,7 +2,6 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import {
   SpecialistStore,
-  type Specialist,
   type SpecialistUpdates,
   type SpecialistExample,
   type SpecialistBadExample,
