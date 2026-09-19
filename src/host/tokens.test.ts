@@ -6,7 +6,9 @@ import {
   TOKENS_PATH,
   tokensStylesheet,
 } from './tokens.js';
+import { readFileSync } from 'node:fs';
 import { contrastOver, HEX_LITERAL_RE } from '../color.js';
+import { generatedDocs } from '../docs-generated.js';
 import { getThemeColors, setTheme, DEFAULT_THEME } from '../theme.js';
 
 describe('applet design tokens (#424)', () => {
@@ -283,5 +285,138 @@ describe('the scale record (#465 follow-up)', () => {
     for (const name of Object.keys(APPLET_SCALE_TOKENS)) {
       expect(APPLET_COLOR_TOKENS).not.toHaveProperty(name);
     }
+  });
+});
+
+/**
+ * The floor targets a desktop browser, and the sheet says so (#608).
+ *
+ * This describe exists for the reason the contrast table above does. Layout is
+ * mostly not decidable without a render — but these four facts are arithmetic
+ * over the served string, and all four were, before this, asserted only in
+ * `applet-ux-planner`'s prompt and in a comment. The `.field` bound especially:
+ * the change's own claim is that it is the load-bearing half, and deleting it
+ * failed nothing — nor, in the first cut of this block, did REPLACING it with
+ * the page cap, which is the same bug under a passing assertion.
+ *
+ * It also pins the sheet side of a claim the planner prompt makes to a model —
+ * that the floor carries no width breakpoint — so the prompt cannot quietly
+ * become a description of a sheet that grew one.
+ */
+describe('the floor targets a desktop browser (#608)', () => {
+  const sheet = tokensStylesheet();
+
+  /** The declarations of the first rule whose head is exactly `selector`. */
+  function ruleBody(selector: string): string {
+    const head = sheet.indexOf(`\n${selector} {`);
+    expect(head, `no rule for \`${selector}\``).toBeGreaterThan(-1);
+    return sheet.slice(head, sheet.indexOf('}', head));
+  }
+
+  /** A rule's `max-width` in rem, which every bound here is expressed in. */
+  function maxWidthRem(selector: string): number {
+    const m = /max-width:\s*(\d+(?:\.\d+)?)rem/.exec(ruleBody(selector));
+    expect(m, `\`${selector}\` has no rem max-width`).not.toBeNull();
+    return Number(m![1]);
+  }
+
+  it('gives the page a desktop width rather than a prose column', () => {
+    // 42rem was a reading measure, and it made every applet a phone screen
+    // centred in a desktop window. The floor is bounded here rather than
+    // unbounded so an ultrawide does not stretch a line of text across 3440px.
+    const rem = maxWidthRem('main, .app');
+    expect(rem).toBeGreaterThanOrEqual(64);
+    expect(rem).toBeLessThanOrEqual(96);
+  });
+
+  it('bounds the control materially below the page, not merely at all', () => {
+    // The half that is easy to lose: nothing bounded a field anywhere before
+    // this — `flex: 1 1 12rem` has GROW 1, so it filled its container whether
+    // that was a `.row` or the page.
+    //
+    // Asserted as a RATIO against the page cap rather than as "a max-width is
+    // present", which was the first cut. That one passes on `max-width: 100%`,
+    // and passes on `max-width: 72rem` — the original bug written back
+    // verbatim, a field that widens with the page. The mutation check behind
+    // it covered deletion and not substitution, which is the shape of a guard
+    // that reads as strong and is not.
+    expect(maxWidthRem('.field')).toBeLessThan(maxWidthRem('main, .app') * 0.75);
+  });
+
+  it('collapses its card grid with no breakpoint, at both ends', () => {
+    const cards = ruleBody('.cards');
+    // `auto-fit` is what removes the need for a breakpoint at the wide end:
+    // one column in a narrow window, as many as fit in a wide one.
+    //
+    // `auto-fit` and not `auto-fill`, and the difference is this change's own
+    // subject: `auto-fill` keeps its empty tracks at full width, so two cards
+    // in a wide window leave a third of the row blank. Asserted so a swap back
+    // is a decision rather than a one-word edit nothing notices.
+    expect(cards).toContain('auto-fit');
+    // And `min()` is what makes that true at the NARROW end. A `minmax`
+    // minimum cannot shrink, so a bare track wider than its container
+    // overflows it — reachable on a half-screen window, and on an ordinary
+    // one under a large root font size.
+    expect(cards).toMatch(/minmax\(\s*min\(/);
+  });
+
+  it('carries no width breakpoint, so there is one layout and not two', () => {
+    // `prefers-reduced-motion` is a preference query and stays. A width query
+    // is the mobile/desktop fork this change exists to avoid, and the planner
+    // prompt tells a model the floor has none.
+    const atRules = [...sheet.matchAll(/@media([^{]*)\{/g)].map((m) => m[1].trim());
+    expect(atRules.length, 'no @media rules found — the scan matched nothing').toBeGreaterThan(0);
+    expect(atRules.filter((q) => /width/.test(q))).toEqual([]);
+  });
+});
+
+/**
+ * The layout contract reaches the two models that can undo it (#608 review).
+ *
+ * The four assertions above pin the sheet. They say nothing about whether
+ * anyone was TOLD — and the review found that gap: `applet-styler` writes an
+ * applet's own `.css` and had no idea `.cards` had become a grid, so it could
+ * still emit `.cards { display: flex; flex-direction: column }` (undoing the
+ * change for that applet) or `.cards > li { flex: 1 }` (inert under a grid,
+ * failing silently), with nothing anywhere to stop it.
+ *
+ * Sheet → prose, which is the direction the mistake is made in: the sheet is
+ * what changes, and a doc that describes the old one is worse than a doc that
+ * describes nothing. `APPLET_STYLED_SELECTORS` is pinned both ways already;
+ * this is about the layout BEHAVIOUR behind two of those selectors, which that
+ * record cannot express.
+ */
+describe('the layout contract is stated where CSS gets written (#608)', () => {
+  const sheet = tokensStylesheet();
+  const stylingDoc = generatedDocs().find((d) => d.id === 'applet-styling');
+  const styler = JSON.parse(
+    readFileSync(new URL('../builtin-specialists/applet-styler.json', import.meta.url), 'utf8'),
+  ) as { systemPrompt: string };
+
+  /** Every surface that tells a model how to write CSS against this sheet. */
+  const surfaces: Array<[string, string]> = [
+    ['the applet-styling doc', stylingDoc?.body ?? ''],
+    ['the applet-styler prompt', styler.systemPrompt],
+  ];
+
+  it('has a doc to pin — a scan over an absent body passes', () => {
+    expect(stylingDoc, 'applet-styling is no longer a generated doc').toBeDefined();
+    for (const [name, body] of surfaces) expect(body.length, name).toBeGreaterThan(500);
+  });
+
+  it.each(surfaces)('%s says `.cards` is a grid', (_name, body) => {
+    // Guarded on the sheet, so this cannot outlive the fact it describes: if
+    // `.cards` stops being a grid the guard stops applying rather than
+    // demanding prose about a rule that is gone.
+    expect(sheet).toContain('display: grid');
+    // Case-SENSITIVE, and anchored on the whole phrase. The first cut was
+    // `/i` with a loose gap, so it matched the later "inert under a grid"
+    // sentence and survived the mutation that deleted the claim it is named
+    // for — a guard that reads as strong and pins a neighbour.
+    expect(body).toMatch(/`?\.cards`? is a GRID\b/);
+  });
+
+  it.each(surfaces)('%s warns against a width breakpoint', (_name, body) => {
+    expect(body).toMatch(/no width [`@]*media|width `?@media`? rule/i);
   });
 });
