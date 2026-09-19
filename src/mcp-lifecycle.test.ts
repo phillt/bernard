@@ -32,6 +32,8 @@ let m: {
   loadProfiles: typeof import('./profiles.js').loadProfiles;
   saveAppGrants: typeof import('./apps/app-grants.js').saveAppGrants;
   loadAppGrants: typeof import('./apps/app-grants.js').loadAppGrants;
+  createProfile: typeof import('./profiles.js').createProfile;
+  loadActiveProfileRules: typeof import('./profiles.js').loadActiveProfileRules;
 };
 
 beforeEach(async () => {
@@ -153,7 +155,8 @@ describe('removeMCPServerEverywhere', () => {
   });
 
   it('leaves a bare unattributable profile alone', () => {
-    // The 73-of-193 population. A bare name carries no server, and two
+    // The 62-of-144 population (71 namespaced and 11 delegate rows are both
+    // attributable and both swept). A bare name carries no server, and two
     // configured servers exported this one, so deleting it is a coin toss with
     // a live server's learned history on the table.
     seedConfig('playwright', 'browsermcp');
@@ -235,8 +238,8 @@ describe('permission grants', () => {
     const result = m.removeMCPServerEverywhere('playwright');
 
     expect(result.rulesRemoved).toEqual([
-      `${click} *`,
-      `delegate_${m.mcpServerSegment('playwright')} (any args)`,
+      { label: `${click} *`, profile: 'default' },
+      { label: `delegate_${m.mcpServerSegment('playwright')} (any args)`, profile: 'default' },
     ]);
     const kept = m.getActiveSettings(m.loadProfiles().file).toolPermissions ?? [];
     // Order is what the engine scans, so it must survive a removal intact.
@@ -251,22 +254,114 @@ describe('permission grants', () => {
 
     const result = m.removeMCPServerEverywhere('playwright');
 
-    expect(Object.keys(result.appRulesRemoved)).toEqual(['demo']);
+    expect(result.rulesRemoved).toEqual([{ label: `${click} *`, profile: 'default', app: 'demo' }]);
+    // The app has to survive into the line, or the report says a per-app grant
+    // was one of the user's own.
+    expect(m.describeMCPRemoval('playwright', result)).toContain(
+      `  App "demo" rule removed: ${click} *`,
+    );
     expect(m.loadAppGrants('demo')?.map((r) => r.tool)).toEqual(['shell']);
     expect(m.loadAppGrants('other')?.map((r) => r.tool)).toEqual(['web_read']);
+  });
+
+  it('drops the entry outright when an app loses its last rule', () => {
+    // `[]` removes the key rather than leaving an empty one for a future app to
+    // inherit by id collision — `deleteApplet`'s rule.
+    seedConfig('playwright');
+    m.saveAppGrants('demo', [rule(m.mcpToolName('playwright', 'browser_click'), '*')]);
+
+    m.removeMCPServerEverywhere('playwright');
+
+    expect(m.loadAppGrants('demo')).toBeNull();
+    expect(m.getActiveSettings(m.loadProfiles().file).appToolGrants).toEqual({});
+  });
+
+  it('sweeps every profile, because mcp.json is global and grants are not', () => {
+    // The asymmetry this crosses profiles for: one `mcp.json` row removed for
+    // everyone, grants stored per profile. Swept only in the active one they
+    // survive where `/tool-permissions` cannot show them — and re-arm on
+    // re-add, since `mcpServerSegment` hashes the server name alone.
+    seedConfig('playwright');
+    const click = m.mcpToolName('playwright', 'browser_click');
+    m.saveActiveSettings({ toolPermissions: [rule(click, '*'), rule('shell', 'ls')] });
+    m.createProfile('Work', {
+      toolPermissions: [rule(click, '*'), rule('web_read')],
+      appToolGrants: { demo: [rule(click), rule('shell', 'ls')] },
+    });
+
+    const result = m.removeMCPServerEverywhere('playwright');
+
+    const work = Object.values(m.loadProfiles().file.profiles).find((p) => p.name === 'Work')!;
+    expect(work.settings.toolPermissions).toEqual([rule('web_read')]);
+    expect(work.settings.appToolGrants).toEqual({ demo: [rule('shell', 'ls')] });
+    // Every dropped rule names the profile it came from, so a report of a
+    // non-active profile cannot read as one about the active one.
+    expect(
+      result.rulesRemoved.map((r) => `${r.profile}${r.app ? '/' + r.app : ''}`).sort(),
+    ).toEqual(['default', work.id, `${work.id}/demo`].sort());
+    // The active profile is still swept, and is still the active one.
+    expect(m.getActiveSettings(m.loadProfiles().file).toolPermissions).toEqual([
+      rule('shell', 'ls'),
+    ]);
+  });
+
+  it('names a non-active profile in the report and leaves the active one unqualified', () => {
+    seedConfig('playwright');
+    const click = m.mcpToolName('playwright', 'browser_click');
+    m.saveActiveSettings({ toolPermissions: [rule(click, '*')] });
+    const work = m.createProfile('Work', { toolPermissions: [rule(click, '*')] });
+
+    const lines = m.describeMCPRemoval('playwright', m.removeMCPServerEverywhere('playwright'));
+
+    expect(lines).toContain(`  Permission rule removed: ${click} *`);
+    expect(lines).toContain(`  Permission rule removed (profile "${work.id}"): ${click} *`);
+  });
+
+  it('cannot be resurrected by the next grant the REPL writes', () => {
+    // The live bug the sweep had on its own. `config.toolPermissions` is an
+    // in-memory array the gates read through a thunk, and `App.tsx`'s writers
+    // used to compose the new list from it — so one "always allow" answered
+    // after a removal wrote every swept rule back, silently and permanently.
+    // The writers now compose from `loadActiveProfileRules`, which is what this
+    // replays; `saveAppGrants` never had the bug because it re-reads on every
+    // write, and that is the shape copied.
+    seedConfig('playwright');
+    const click = m.mcpToolName('playwright', 'browser_click');
+    m.saveActiveSettings({ toolPermissions: [rule(click, '*'), rule('shell', 'ls')] });
+
+    m.removeMCPServerEverywhere('playwright');
+
+    // `persistPermissionRule`'s append-and-save, verbatim.
+    const updated = [...m.loadActiveProfileRules(), rule('web_read')];
+    m.saveActiveSettings({ toolPermissions: updated });
+
+    expect(
+      (m.getActiveSettings(m.loadProfiles().file).toolPermissions as PermissionRule[]).map(
+        (r) => r.tool,
+      ),
+    ).toEqual(['shell', 'web_read']);
   });
 
   it('leaves the settings untouched when nothing matched', () => {
     // A no-op sweep must not rewrite `profiles.json`: the write is what would
     // migrate an unrelated hand-edited field through the sanitizer.
+    //
+    // Non-canonical spacing, for the reason `profiles.test.ts` gives at its own
+    // copy: a re-serialize of an unchanged object is byte-identical, so a
+    // comparison of a file Bernard wrote cannot see the write at all.
     seedConfig('playwright');
     m.saveActiveSettings({ toolPermissions: [rule('shell', 'git *')] });
-    const before = fs.readFileSync(m.paths.PROFILES_PATH, 'utf-8');
+    const scruffy = JSON.stringify(
+      JSON.parse(fs.readFileSync(m.paths.PROFILES_PATH, 'utf-8')),
+      null,
+      4,
+    );
+    fs.writeFileSync(m.paths.PROFILES_PATH, scruffy);
 
     const result = m.removeMCPServerEverywhere('playwright');
 
     expect(result.rulesRemoved).toEqual([]);
-    expect(fs.readFileSync(m.paths.PROFILES_PATH, 'utf-8')).toBe(before);
+    expect(fs.readFileSync(m.paths.PROFILES_PATH, 'utf-8')).toBe(scruffy);
   });
 });
 

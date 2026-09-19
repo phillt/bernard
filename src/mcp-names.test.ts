@@ -4,6 +4,7 @@ import {
   mcpServerSegment,
   mcpToolName,
   mcpNameOwnedBy,
+  unownedMCPNames,
   parseMCPToolName,
   aliasesOf,
   buildMCPAliasIndex,
@@ -223,5 +224,42 @@ describe('mcpNameOwnedBy', () => {
     expect(mcpServerSegment('my.server')).not.toBe(mcpServerSegment('my-server'));
     expect(mcpNameOwnedBy(mcpToolName('my.server', 't'), 'my.server')).toBe(true);
     expect(mcpNameOwnedBy(mcpToolName('my.server', 't'), 'my-server')).toBe(false);
+  });
+});
+
+/**
+ * The standing counterpart: not "is this that server's?" but "is any server
+ * left that could answer it?" (#377). Backs the dangling-fence notice on
+ * `specialist list` / `read`.
+ */
+describe('unownedMCPNames', () => {
+  it('reports only names no configured server owns', () => {
+    const live = mcpToolName('playwright', 'browser_click');
+    const dead = mcpToolName('browsermcp', 'browser_click');
+    expect(unownedMCPNames([live, dead], ['playwright', 'beeper'])).toEqual([dead]);
+  });
+
+  it('covers both delegate spellings', () => {
+    expect(
+      unownedMCPNames(
+        [`delegate_${mcpServerSegment('gone')}`, 'delegate_gone', 'delegate_beeper'],
+        ['beeper'],
+      ),
+    ).toEqual([`delegate_${mcpServerSegment('gone')}`, 'delegate_gone']);
+  });
+
+  it('never reports a bare name, however MCP-ish', () => {
+    // The population that is never attributed is also never flagged: from here
+    // a bare name is indistinguishable from a Bernard built-in, and reporting
+    // it would bury the one entry that matters under every `shell` in every
+    // fence on the install.
+    expect(
+      unownedMCPNames(['browser_click', 'shell', 'web_read', 'file_read_lines'], ['beeper']),
+    ).toEqual([]);
+  });
+
+  it('reports everything MCP-shaped when nothing is configured', () => {
+    const name = mcpToolName('playwright', 'browser_click');
+    expect(unownedMCPNames([name, 'shell'], [])).toEqual([name]);
   });
 });

@@ -136,3 +136,90 @@ describe('profiles store', () => {
     expect(prefs.modelMode).toBe('optimize-performance');
   });
 });
+
+/**
+ * The two writers #377 needed: one that reads the stored rules, and one that
+ * crosses profiles.
+ */
+describe('profile rules and cross-profile edits', () => {
+  let tmpDir: string;
+  let origHome: string | undefined;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bernard-profile-rules-'));
+    origHome = process.env.BERNARD_HOME;
+    process.env.BERNARD_HOME = tmpDir;
+  });
+
+  afterEach(() => {
+    if (origHome === undefined) delete process.env.BERNARD_HOME;
+    else process.env.BERNARD_HOME = origHome;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  const rule = (tool: string) => ({ effect: 'allow' as const, tool, _v: 2 as const });
+
+  it('reads the rules as stored, not a copy held from before', async () => {
+    // The whole point: `config.toolPermissions` is an in-memory array the REPL
+    // mutates, and anything else that writes `profiles.json` mid-session leaves
+    // it stale. A writer composing from the stale copy writes the other
+    // writer's removals back. This reader is what the writers compose from now.
+    const m = await loadModule();
+    m.saveActiveSettings({ toolPermissions: [rule('shell'), rule('web_read')] });
+    const captured = m.loadActiveProfileRules();
+
+    // Somebody else prunes a rule, the way the MCP sweep does.
+    m.saveActiveSettings({ toolPermissions: [rule('web_read')] });
+
+    expect(captured.map((r) => r.tool)).toEqual(['shell', 'web_read']);
+    expect(m.loadActiveProfileRules().map((r) => r.tool)).toEqual(['web_read']);
+  });
+
+  it('migrates a legacy v1 blob on read rather than handing it back raw', async () => {
+    const m = await loadModule();
+    m.saveActiveSettings({ toolPermissions: { web_read: 'allow' } });
+    const rules = m.loadActiveProfileRules();
+    expect(rules).toHaveLength(1);
+    expect(rules[0]).toMatchObject({ tool: 'web_read', effect: 'allow', _v: 2 });
+  });
+
+  it('edits every profile in one write and leaves the others alone', async () => {
+    const m = await loadModule();
+    m.saveActiveSettings({ toolPermissions: [rule('shell')] });
+    const work = m.createProfile('Work', { toolPermissions: [rule('shell'), rule('web_read')] });
+    m.createProfile('Spare', { toolPermissions: [rule('web_read')] });
+
+    m.updateAllProfileSettings((settings) => {
+      const kept = (settings.toolPermissions as ReturnType<typeof rule>[]).filter(
+        (r) => r.tool !== 'shell',
+      );
+      return kept.length === (settings.toolPermissions as unknown[]).length
+        ? null
+        : { ...settings, toolPermissions: kept };
+    });
+
+    const file = m.loadProfiles().file;
+    expect(file.profiles['default'].settings.toolPermissions).toEqual([]);
+    expect(file.profiles[work.id].settings.toolPermissions).toEqual([rule('web_read')]);
+  });
+
+  it('does not rewrite the file when every profile is left alone', async () => {
+    // A no-op sweep must not re-stamp `updatedAt` on every profile.
+    //
+    // Asserted against a **non-canonical** file on purpose: `writeFile`
+    // re-serializes with `JSON.stringify(file, null, 2)`, so an unconditional
+    // write of an unchanged object produces byte-identical output and a
+    // before/after comparison of a file Bernard wrote passes either way —
+    // measured, that is exactly what the first version of this test did. Odd
+    // spacing is what makes "was it written?" observable at all.
+    const m = await loadModule();
+    m.saveActiveSettings({ toolPermissions: [rule('shell')] });
+    const file = path.join(tmpDir, 'bernard', 'profiles.json');
+    const scruffy = JSON.stringify(JSON.parse(fs.readFileSync(file, 'utf-8')), null, 4);
+    fs.writeFileSync(file, scruffy);
+
+    m.updateAllProfileSettings(() => null);
+
+    expect(fs.readFileSync(file, 'utf-8')).toBe(scruffy);
+  });
+});

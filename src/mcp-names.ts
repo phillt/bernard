@@ -228,6 +228,33 @@ export function mcpNameOwnedBy(name: string, server: string): boolean {
   return name === `delegate_${mcpServerSegment(server)}` || name === `delegate_${server}`;
 }
 
+/**
+ * The names in `names` that are shaped like an MCP registry key or delegate
+ * name and belong to **none** of `servers`.
+ *
+ * The standing counterpart to {@link mcpNameOwnedBy}: that one answers "is this
+ * this server's?", this one answers "is there any server left that could
+ * answer it?". Its consumer is a specialist's `targetTools` fence, which names
+ * tools by string and drops silently when one matches nothing (#331) — so a
+ * fence entry left behind by a removed server is the quietest failure in this
+ * area, and asking for it needs no live registry, only `mcp.json`.
+ *
+ * A **bare** name is never reported, for the reason it is never attributed:
+ * `browser_click` is indistinguishable from a Bernard built-in from here, and
+ * flagging every built-in in every fence would bury the one entry that matters.
+ * So this is strictly the population the namespace made legible.
+ *
+ * In this leaf rather than beside the sweep so the caller supplies its own
+ * server list: a consumer that already knows the configured keys should not
+ * acquire an edge to `mcp.ts` to have them read again.
+ */
+export function unownedMCPNames(names: readonly string[], servers: readonly string[]): string[] {
+  return names.filter((name) => {
+    if (!parseMCPToolName(name) && !name.startsWith('delegate_')) return false;
+    return !servers.some((server) => mcpNameOwnedBy(name, server));
+  });
+}
+
 /** `<label>_<6hex>` -> `<label>`, or `null` when there is no hash to strip. */
 function stripHash(segment: string): string | null {
   const m = new RegExp(`^(.*)_[0-9a-f]{${MCP_HASH_LEN}}$`).exec(segment);

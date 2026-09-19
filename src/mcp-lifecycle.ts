@@ -3,9 +3,8 @@ import { mcpNameOwnedBy, serverFromCategory, toolNameFromProfileKey } from './mc
 import { ToolProfileStore, type ToolProfile } from './tool-profiles.js';
 import { SpecialistStore } from './specialists.js';
 import { permissionsFor } from './specialist-authority.js';
-import { getActiveSettings, loadProfiles, saveActiveSettings } from './profiles.js';
+import { loadProfiles, updateAllProfileSettings } from './profiles.js';
 import { sanitizePermissionRules, ruleLabel, type PermissionRule } from './tool-permissions.js';
-import { listGrantedApps, saveAppGrants } from './apps/app-grants.js';
 import { debugLog } from './logger.js';
 
 /**
@@ -45,13 +44,20 @@ import { debugLog } from './logger.js';
  * available at the moment the decision has to be made.
  *
  * What that leaves out is the pre-#413 population: Bernard registered **bare**
- * tool names for years, and 73 of the 193 profiles on that same install still
- * carry one with no server anywhere in it. A bare `browser_click` was exported
- * by two of the five configured servers there, so guessing is not merely
- * imprecise, it deletes a live server's learned history. Those are **named,
- * never removed** — which is the same answer `makeAliasResolver` already gives
- * one layer up, where an ambiguous stored name resolves to `null` and every
- * consumer fails closed.
+ * tool names for years. Over `list()`'s 144 live profiles on that install: 71
+ * namespaced, 11 `delegate_*` — which ARE attributable, since both delegate
+ * rungs match — and **62** carrying a bare tool name with no server anywhere in
+ * it. A bare `browser_click` was exported by two of the five configured servers
+ * there, so guessing is not merely imprecise, it deletes a live server's
+ * learned history.
+ *
+ * Those 62 are **left alone**, which is not the same as reported: nothing in
+ * {@link MCPRemovalResult} names them and {@link describeMCPRemoval} never
+ * mentions them, because naming them on a *particular* server's removal would
+ * be the guess this refuses to make. `bernard tool-profiles` lists them like
+ * any other profile, and that is the whole of their visibility. It is the same
+ * answer `makeAliasResolver` gives one layer up, where an ambiguous stored name
+ * resolves to `null` and every consumer fails closed.
  *
  * The one bare name that *is* attributable is a legacy profile a namespaced
  * successor claims through {@link ToolProfile.supersedes}, and even that is
@@ -92,6 +98,16 @@ export interface AffectedSpecialist {
   isProtected: boolean;
 }
 
+/** One permission rule the sweep dropped, and where it was stored. */
+export interface DroppedRule {
+  /** The rule as `ruleLabel` renders it. */
+  label: string;
+  /** The profile that held it — not necessarily the active one. */
+  profile: string;
+  /** The app it was scoped to, when it was a per-app grant (#420). */
+  app?: string;
+}
+
 /** What the sweep removed, kept, and could not decide. */
 export interface MCPRemovalResult {
   /** Whether an `mcp.json` row was there to remove. */
@@ -106,10 +122,14 @@ export interface MCPRemovalResult {
    * would eventually remove them.
    */
   legacyKept: Array<{ name: string; claimedBy: string }>;
-  /** Permission rules dropped from the active profile, as `ruleLabel` renders them. */
-  rulesRemoved: string[];
-  /** Per-app rules dropped, by app id. */
-  appRulesRemoved: Record<string, string[]>;
+  /**
+   * Permission rules dropped, across every profile — the user's own and each
+   * app's, in one flat list rather than two nested maps keyed by profile and
+   * app. Flat because every consumer wants a count or a line per rule, and a
+   * shape a reader has to walk twice to answer "how many" is one `sweptNothing`
+   * can get wrong.
+   */
+  rulesRemoved: DroppedRule[];
   /** Specialists that lose tools. Reported, never edited. */
   specialists: AffectedSpecialist[];
 }
@@ -145,8 +165,7 @@ export function removeMCPServerEverywhere(
 
   const profileStore = deps.profiles ?? new ToolProfileStore({ seed: false });
   const { profilesRemoved, legacyRemoved, legacyKept } = sweepProfiles(profileStore, key);
-  const rulesRemoved = sweepProfileRules(key);
-  const appRulesRemoved = sweepAppRules(key);
+  const rulesRemoved = sweepGrants(key);
   const specialists = affectedSpecialists(key, deps.specialists);
 
   debugLog('mcp:remove:sweep', {
@@ -156,7 +175,7 @@ export function removeMCPServerEverywhere(
     legacy: legacyRemoved.length,
     legacyKept: legacyKept.length,
     rules: rulesRemoved.length,
-    appRules: Object.keys(appRulesRemoved).length,
+    profilesTouched: new Set(rulesRemoved.map((r) => r.profile)).size,
     specialists: specialists.length,
   });
 
@@ -166,7 +185,6 @@ export function removeMCPServerEverywhere(
     legacyRemoved,
     legacyKept,
     rulesRemoved,
-    appRulesRemoved,
     specialists,
   };
 }
@@ -211,11 +229,27 @@ function ownedBy(profile: ToolProfile, key: string): boolean {
  * `playwright` and `browsermcp`, because both servers export them. Removing one
  * must leave the other's history intact.
  *
- * This is `buildMCPAliasIndex`'s tombstone rule with the inputs swapped: there,
- * two live tools claiming one alias makes it unresolvable; here, two profiles
- * claiming one ancestor makes it unremovable. Same asymmetry, same direction —
- * keeping something dead costs a file, dropping something live costs history
- * nobody can rebuild.
+ * **This is a refcount, and deliberately not `buildMCPAliasIndex`'s tombstone.**
+ * The comparison is tempting and wrong in the direction that matters: a
+ * tombstone's defining property is that it *persists* — that module says so in
+ * as many words, because an entry that stopped saying "no" would let a third
+ * claimant silently un-ambiguate the alias. Here the opposite is wanted. The
+ * ancestor is kept while a claimant survives and removed the moment the last
+ * one goes, which is what makes `remove-mcp browsermcp` after
+ * `remove-mcp playwright` finish the job instead of leaving a file nothing can
+ * ever collect. A reader who takes the analogy literally and makes it
+ * persistent reintroduces exactly the debris this exists to remove.
+ *
+ * **The residual, stated because the asymmetry above would otherwise claim more
+ * than it delivers.** A survivor is a profile that *claims* the ancestor
+ * through `supersedes`, and that link only exists once the other server has
+ * actually recorded an outcome for that tool. So a configured, live server
+ * exporting the same bare name that has simply never been called for it is not
+ * a survivor, and the shared pre-#413 history goes with the removed server —
+ * the very cost this paragraph says it is avoiding. It cannot be closed from
+ * here: knowing that server exports the name needs the live registry no CLI
+ * path has. Checked on the reference install, it does not occur: every ancestor
+ * that would be deleted is exported only by the server being removed.
  */
 function legacyAncestors(
   all: ToolProfile[],
@@ -251,32 +285,78 @@ function sweepProfiles(
 }
 
 /**
- * Drops the user's own grants for this server's tools.
+ * Drops every grant for this server's tools, in **every** profile.
  *
- * Whole-list replacement through `saveActiveSettings`, the one writer, so the
- * rules stay an ordered list the engine scans rather than a set something here
- * has re-derived an order for. Read through `sanitizePermissionRules` first
- * because `profiles.json` is hand-editable and a malformed rule that survived
- * to the engine would be matched against, not ignored — the same reason
- * `app-grants.ts` gives.
+ * `saveActiveSettings` is the right writer for a preference and the wrong one
+ * here, and the asymmetry is the whole reason this crosses profiles: there is
+ * one `mcp.json`, so removing a server removes it for every profile, while its
+ * grants sit in each profile's own settings. Swept only in the active one, a
+ * grant survives in every profile that happened not to be live — reachable by
+ * switching and by nothing else, since `/tool-permissions` shows only the
+ * active profile. And it is not inert debris: `mcpServerSegment` hashes the
+ * server name **alone**, which is the stability property `mcp-names.ts` was
+ * built for, so re-adding the server under the same key re-arms a grant the
+ * user believes they revoked when they removed it.
+ *
+ * Editing a profile the user is not looking at is acceptable **here and not in
+ * general**, which is why `updateAllProfileSettings` says so at its own
+ * declaration: this only ever removes an entry addressing a tool that no longer
+ * exists anywhere. It never widens a grant and never adds one.
+ *
+ * Both maps go in one pass rather than through `saveAppGrants`, which is
+ * correctly active-profile-only — so a failure cannot leave a profile's own
+ * rules swept and its app grants not.
  */
-function sweepProfileRules(key: string): string[] {
-  const rules = sanitizePermissionRules(getActiveSettings(loadProfiles().file).toolPermissions);
-  const { kept, dropped } = partitionRules(rules, key);
-  if (dropped.length > 0) saveActiveSettings({ toolPermissions: kept });
-  return dropped.map(ruleLabel);
+function sweepGrants(key: string): DroppedRule[] {
+  const dropped: DroppedRule[] = [];
+
+  updateAllProfileSettings((settings, profile) => {
+    // Sanitized on the way in for the reason `app-grants.ts` gives: this file
+    // is hand-editable, and a malformed rule that survived to the engine would
+    // be matched against rather than ignored.
+    const own = partitionRules(sanitizePermissionRules(settings.toolPermissions), key);
+    for (const rule of own.dropped) dropped.push({ label: ruleLabel(rule), profile });
+
+    const apps: Record<string, PermissionRule[]> = {};
+    let appsChanged = false;
+    for (const [appId, raw] of Object.entries(settings.appToolGrants ?? {})) {
+      const split = partitionRules(sanitizePermissionRules(raw), key);
+      for (const rule of split.dropped) {
+        dropped.push({ label: ruleLabel(rule), profile, app: appId });
+        appsChanged = true;
+      }
+      // `[]` removes the entry rather than leaving an empty one behind for a
+      // future app to inherit by id collision — `deleteApplet`'s rule.
+      if (split.kept.length > 0) apps[appId] = split.kept;
+    }
+
+    if (own.dropped.length === 0 && !appsChanged) return null;
+    return {
+      ...settings,
+      toolPermissions: own.kept,
+      ...(appsChanged ? { appToolGrants: apps } : {}),
+    };
+  });
+
+  return dropped;
 }
 
-/** The same, per app (#420). An app's grants are the user's too, just narrower. */
-function sweepAppRules(key: string): Record<string, string[]> {
-  const out: Record<string, string[]> = {};
-  for (const [appId, rules] of Object.entries(listGrantedApps())) {
-    const { kept, dropped } = partitionRules(rules, key);
-    if (dropped.length === 0) continue;
-    saveAppGrants(appId, kept);
-    out[appId] = dropped.map(ruleLabel);
+/**
+ * The active profile's id, for the report alone.
+ *
+ * Read at render rather than carried on every {@link DroppedRule}: the profile
+ * a rule was stored in is a fact about the sweep, while which profile is active
+ * is a fact about right now, and folding them would make the record claim
+ * something it cannot know once it is read back.
+ */
+function activeProfileId(): string {
+  try {
+    return loadProfiles().file.activeProfileId;
+  } catch {
+    // A profiles file that cannot be read is not a reason to lose the report;
+    // every line simply gets its profile named.
+    return '';
   }
-  return out;
 }
 
 function partitionRules(
@@ -335,8 +415,7 @@ export function sweptNothing(result: MCPRemovalResult): boolean {
     result.profilesRemoved.length === 0 &&
     result.legacyRemoved.length === 0 &&
     result.legacyKept.length === 0 &&
-    result.rulesRemoved.length === 0 &&
-    Object.keys(result.appRulesRemoved).length === 0
+    result.rulesRemoved.length === 0
   );
 }
 
@@ -358,9 +437,14 @@ export function describeMCPRemoval(key: string, result: MCPRemovalResult): strin
 
   const swept = result.profilesRemoved.length + result.legacyRemoved.length;
   if (swept > 0) lines.push(`  Tool profiles removed: ${swept}`);
-  for (const rule of result.rulesRemoved) lines.push(`  Permission rule removed: ${rule}`);
-  for (const [appId, rules] of Object.entries(result.appRulesRemoved)) {
-    for (const rule of rules) lines.push(`  App "${appId}" rule removed: ${rule}`);
+  // The profile is named only when it is not the one in use: qualifying every
+  // line with the active profile's own name is noise on the common path, and
+  // silence on the uncommon one is what this sweep exists to end.
+  const active = activeProfileId();
+  for (const rule of result.rulesRemoved) {
+    const where = rule.app ? `App "${rule.app}" rule` : 'Permission rule';
+    const whose = rule.profile === active ? '' : ` (profile "${rule.profile}")`;
+    lines.push(`  ${where} removed${whose}: ${rule.label}`);
   }
 
   // Named, never removed — and named with the thing that WOULD remove them,
