@@ -238,6 +238,42 @@ describe('the shipped corpus', () => {
     }
   });
 
+  it('documents every `bernard` command, or says why not', () => {
+    // The record-to-table direction, which is the one the mistake is made in:
+    // a command added to `src/index.ts` works, ships, and is simply absent from
+    // the manual, which nothing notices. `settings-coverage.test.ts` makes the
+    // same argument for `ProfileSettings`.
+    //
+    // A `Record`, never a `string[]`. Requiring a sentence is the cheapest
+    // thing that makes a lazy exclusion visible in review — "we did not get to
+    // it" does not survive being written down next to the name.
+    const excluded: Record<string, string> = {
+      'validate-lineup':
+        'a diagnostic probe; `bernard-models` tells the reader to run it without tabulating it as a command',
+      'voice-test':
+        'a diagnostic; `bernard-cli` names it under diagnostics and `/voice` is the surface people use',
+      'tool-profiles': 'a diagnostic readout of what Bernard learned, named under diagnostics',
+    };
+    // Backticked spans, with a leading `bernard ` optional, because a document
+    // grouping a family writes `` `remove-key` `` and a document showing an
+    // invocation writes `` `bernard say <text>` ``. Matching the bare word in
+    // prose would accept `app`, `usage`, `update` and `script` by accident,
+    // which are the four this guard most needs to be right about.
+    const mentioned = new Set<string>();
+    for (const doc of docs) {
+      for (const span of doc.body.match(/`[^`\n]+`/g) ?? []) {
+        const inner = span.slice(1, -1).replace(/^bernard\s+/, '');
+        const head = /^([a-z][a-z0-9-]*)/.exec(inner);
+        // Whole token: `cron-delete-all` must not stand in for `cron-delete`.
+        if (head) mentioned.add(head[1]);
+      }
+    }
+    for (const name of cliCommands) {
+      if (name in excluded) continue;
+      expect([...mentioned], `\`bernard ${name}\` is documented nowhere`).toContain(name);
+    }
+  });
+
   it('never names a CLI flag that does not exist, in any document', () => {
     // The flag half of the same guarantee. Flags are where a manual rots
     // fastest: a command survives a rename far more often than its options do.
