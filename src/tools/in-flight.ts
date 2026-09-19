@@ -32,12 +32,28 @@
  * this one answers "what is the user waiting on", and the user is waiting on all
  * of them at once.
  */
+import { getCurrentDispatchId } from '../framework/dispatch-context.js';
 import type { ToolMeta } from '../framework/tools/types.js';
 
 /** A call the product is currently inside. */
 interface InFlightCall {
   label: string;
   startedAt: number;
+  /**
+   * The dispatch that issued it, captured from the ALS at registration (#607).
+   *
+   * `augmentTools`' wrapper runs inside `runWithDispatchId`, which the AI SDK
+   * preserves across `tool.execute` — measured, not assumed — so this is the
+   * `runAgent` whose step is blocked on the call. A NESTED dispatch's own tools
+   * register under the child's id instead, which is what makes the liveness
+   * guard in `framework/runner.ts` recursive: a parent blocked on `subagent`
+   * sees its own tool in flight and pauses, while the child's guard is the one
+   * watching the child.
+   *
+   * `undefined` outside any dispatch — `apps/tool-dispatch.ts` runs a tool with
+   * no model at all, and nothing there is waiting on a step boundary.
+   */
+  dispatchId: string | undefined;
 }
 
 /**
@@ -52,7 +68,7 @@ let nextId = 1;
 /** A call has started. The returned id must be handed back to {@link endToolCall}. */
 export function beginToolCall(label: string): number {
   const id = nextId++;
-  calls.set(id, { label, startedAt: Date.now() });
+  calls.set(id, { label, startedAt: Date.now(), dispatchId: getCurrentDispatchId() });
   return id;
 }
 
@@ -77,6 +93,31 @@ export async function runTracked<T>(label: string, run: () => Promise<T>): Promi
   } finally {
     endToolCall(id);
   }
+}
+
+/**
+ * How many tool calls this dispatch is currently inside (#607).
+ *
+ * Read by the runner's liveness guard on the non-streaming branch, where there
+ * is no per-part signal and a step boundary is the only proof of life — and a
+ * step boundary fires only *after* the step's tools have returned, so without
+ * this a dispatch legitimately waiting on `ask_user` or on a nested sub-agent
+ * would be indistinguishable from a wedged one.
+ *
+ * Counted, never timestamped: `onStepFinish` fires immediately after the last
+ * tool of a step resolves (measured), so the runner's own progress stamp lands
+ * within microseconds of the count returning to zero and there is no window in
+ * which the clock is both running and stale.
+ *
+ * A linear scan rather than a second map keyed by dispatch: the registry holds
+ * one entry per call the process is currently inside, which the agent pool caps
+ * near twenty, and a parallel index is a second thing to keep in step for a
+ * saving nothing can measure.
+ */
+export function inFlightForDispatch(dispatchId: string): number {
+  let n = 0;
+  for (const call of calls.values()) if (call.dispatchId === dispatchId) n += 1;
+  return n;
 }
 
 /**

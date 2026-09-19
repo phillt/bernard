@@ -259,15 +259,27 @@ describe('subagent tool', () => {
   });
 
   it('passes abortSignal to inner generateText', async () => {
-    mockGenerateText.mockResolvedValue({ text: 'Done' });
+    // Not identity since #607 — see the note on the same case in
+    // `specialist-run.test.ts`. The property is that Esc still reaches the model
+    // call, observed while the dispatch is running.
+    let forwarded: AbortSignal | undefined;
+    mockGenerateText.mockImplementation((args: { abortSignal?: AbortSignal }) => {
+      forwarded = args.abortSignal;
+      return new Promise(() => {});
+    });
     const controller = new AbortController();
     const agentTool = createSubAgentTool(makeCtx(makeConfig(), toolOptions, memoryStore));
-    await agentTool.execute!(
+    const done = agentTool.execute!(
       { task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: controller.signal },
-    );
-    const call = mockGenerateText.mock.calls[0][0];
-    expect(call.abortSignal).toBe(controller.signal);
+    ).catch(() => 'aborted');
+    await new Promise((r) => setTimeout(r, 10));
+    expect(forwarded).toBeInstanceOf(AbortSignal);
+    expect(forwarded).not.toBe(controller.signal);
+    expect(forwarded!.aborted).toBe(false);
+    controller.abort();
+    expect(forwarded!.aborted).toBe(true);
+    await done;
   });
 
   it('calls printSubAgentStart and printSubAgentEnd lifecycle hooks', async () => {

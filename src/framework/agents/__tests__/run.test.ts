@@ -524,12 +524,31 @@ describe('runDefinition', () => {
   });
 
   it('forwards abortSignal to runAgent and repair hook', async () => {
+    // Not identity since #607 — the runner chains its own controller off the
+    // caller's so it can self-abort on a liveness budget, and forwards that. The
+    // contract is unchanged where it matters: the caller's abort still reaches
+    // the model call. Observed while the dispatch is running, since the chain is
+    // released once it unwinds.
+    let forwarded: AbortSignal | undefined;
+    (generateText as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (args: { abortSignal?: AbortSignal }) => {
+        forwarded = args.abortSignal;
+        return new Promise(() => {});
+      },
+    );
     const def = fakeDefinition();
     const ctx = makeCtx();
     const ctrl = new AbortController();
-    await runDefinition(ctx, def, { text: 'x' }, { abortSignal: ctrl.signal });
-    const arg = (generateText as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(arg.abortSignal).toBe(ctrl.signal);
+    const done = runDefinition(ctx, def, { text: 'x' }, { abortSignal: ctrl.signal }).catch(
+      () => 'aborted',
+    );
+    await new Promise((r) => setTimeout(r, 10));
+    expect(forwarded).toBeInstanceOf(AbortSignal);
+    expect(forwarded).not.toBe(ctrl.signal);
+    expect(forwarded!.aborted).toBe(false);
+    ctrl.abort();
+    expect(forwarded!.aborted).toBe(true);
+    await done;
   });
 });
 

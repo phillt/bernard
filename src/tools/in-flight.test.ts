@@ -7,7 +7,9 @@ import {
   endToolCall,
   pendingCallNotice,
   runTracked,
+  inFlightForDispatch,
 } from './in-flight.js';
+import { runWithDispatchId } from '../framework/dispatch-context.js';
 import type { ToolMeta } from '../framework/tools/types.js';
 
 describe('the in-flight registry (#594)', () => {
@@ -96,5 +98,57 @@ describe('what a call is called', () => {
     expect(displayToolName('beeper_654785__send_message', meta({ category: 'mcp.beeper' }))).toBe(
       'beeper_654785__send_message',
     );
+  });
+});
+
+/**
+ * The per-dispatch view (#607). The runner's liveness guard on the
+ * non-streaming branch has no per-part signal, so this is the only thing
+ * standing between "parked inside `ask_user`" and "wedged".
+ */
+describe('inFlightForDispatch (#607)', () => {
+  beforeEach(() => __resetInFlightCalls());
+
+  it('counts only the calls this dispatch issued', async () => {
+    // Keying on the dispatch is what makes the guard recursive: a parent blocked
+    // on `subagent` pauses on its OWN tool, while the child's tools belong to the
+    // child's clock. Counted globally, one busy dispatch would silence every
+    // other dispatch's guard for as long as it ran.
+    const seen: Record<string, number> = {};
+    await Promise.all([
+      runWithDispatchId('aaaa', async () => {
+        beginToolCall('subagent');
+        await runWithDispatchId('bbbb', async () => {
+          beginToolCall('beeper.send_message');
+          beginToolCall('web_read');
+          seen.childFromChild = inFlightForDispatch('bbbb');
+          seen.parentFromChild = inFlightForDispatch('aaaa');
+        });
+      }),
+    ]);
+    expect(seen).toEqual({ childFromChild: 2, parentFromChild: 1 });
+    expect(inFlightForDispatch('cccc')).toBe(0);
+  });
+
+  it('returns to zero when the call settles, however it settles', async () => {
+    await runWithDispatchId('aaaa', async () => {
+      await runTracked('web_read', async () => {
+        expect(inFlightForDispatch('aaaa')).toBe(1);
+      });
+      await expect(
+        runTracked('shell', async () => {
+          throw new Error('boom');
+        }),
+      ).rejects.toThrow('boom');
+    });
+    expect(inFlightForDispatch('aaaa')).toBe(0);
+  });
+
+  it('registers nothing when no dispatch is active', () => {
+    // `apps/tool-dispatch.ts` runs a tool with no model at all. Nothing there is
+    // waiting on a step boundary, so an un-keyed entry must not be attributable
+    // to some other dispatch's id.
+    beginToolCall('file_write');
+    expect(inFlightForDispatch('aaaa')).toBe(0);
   });
 });
