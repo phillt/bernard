@@ -34,10 +34,18 @@ import { WIZARD_CATEGORIES_DATA } from './profiles-wizard-data.js';
  * The whole index, which is what `docs list` returns.
  *
  * Measured rather than chosen: the corpus rendered 1,656 characters over 7
- * documents when this was raised, i.e. about 222 per row, and a manual of
- * roughly 22 topics lands near 5,000. The previous bound was 2,000 — one spare
- * row — so writing a manual against it fails on the SECOND file, on an
- * assertion naming whichever document happened to be added last.
+ * documents when this was raised, i.e. about 222 per row. The previous bound
+ * was 2,000 — one spare row — so writing a manual against it fails on the
+ * SECOND file, on an assertion naming whichever document happened to be added
+ * last.
+ *
+ * The finished manual measures **5,471 over 22 documents**, about 250 a row:
+ * the estimate this was set from was low, because the older corpus had shorter
+ * titles and terser descriptions. So the remaining headroom is two or three
+ * documents rather than a dozen, and the right response to the next one that
+ * does not fit is to cut a routing line rather than to raise this — the index
+ * is what a model reads before choosing, and a line that names its trigger in
+ * fewer words is a better line.
  *
  * Affordable because the index is returned on a `list` CALL, never carried in
  * the cached prefix: `docs.ts`'s `DESCRIPTION` deliberately does not enumerate
@@ -238,6 +246,19 @@ describe('the shipped corpus', () => {
     }
   });
 
+  it('routes to every other document from `bernard-capabilities`', () => {
+    // That document is the one the base prompt points at for "what can you
+    // do?", so a topic it does not name is a topic reachable only by a model
+    // that already guessed the id. There is no search — `renderIndex` is the
+    // whole retrieval layer — so the router is the other half of discovery,
+    // and it is the half that rots, since adding a document does not touch it.
+    const body = findDoc('bernard-capabilities')!.body;
+    for (const doc of docs) {
+      if (doc.id === 'bernard-capabilities') continue;
+      expect(body, `nothing routes to ${doc.id}`).toContain(doc.id);
+    }
+  });
+
   it('documents every `bernard` command, or says why not', () => {
     // The record-to-table direction, which is the one the mistake is made in:
     // a command added to `src/index.ts` works, ships, and is simply absent from
@@ -391,10 +412,15 @@ describe('the shipped corpus', () => {
     // stops a wizard description wrapping inside its first sentence or
     // containing a pipe — it is prose written for a full-screen step — and
     // either one silently breaks the table for every row after it.
+    // EXACTLY three cells, not "at most". A pipe inside a cell gives too many
+    // and a newline inside one gives too few, by splitting the row across two
+    // lines — and only the first of those two failures is the one that springs
+    // to mind, which is how a `toBeLessThanOrEqual` here would have shipped
+    // blind to the likelier half.
     const body = findDoc('bernard-settings')!.body;
     for (const line of body.split('\n')) {
       if (!line.startsWith('| ')) continue;
-      expect(line.split(/(?<!\\)\|/).length, `row: ${line}`).toBeLessThanOrEqual(5);
+      expect(line.split(/(?<!\\)\|/).length, `row: ${line}`).toBe(5);
     }
   });
 

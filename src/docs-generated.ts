@@ -17,9 +17,11 @@ import type { DocEntry } from './docs-store.js';
 /**
  * The documents that are DERIVED, not authored.
  *
- * Four of the corpus restate records that already exist — the colour and scale
+ * Seven of the corpus restate records that already exist — the colour and scale
  * tokens with the styled selectors, the brief's intent fields, the
- * slash-command catalogue, and the UI runtime's own path, global and rule.
+ * slash-command catalogue, the UI runtime's own path, global and rule, the
+ * permission and planning mode tables, the model roles with their tier grid,
+ * and the settings registry.
  * Writing those into a `.md` file makes the file a second copy of the artefact,
  * which is the drift #424 built the served stylesheet to end and
  * `applet-styler`'s token pin needs a test to police.
