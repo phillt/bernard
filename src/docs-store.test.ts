@@ -25,6 +25,69 @@ import { UI_RUNTIME_PATH } from './host/ui-runtime.js';
 import { INTENT_FIELDS, INTENT_FIELD_LABELS } from './apps/brief.js';
 import { SLASH_COMMANDS } from './ui/slash-commands.js';
 
+/**
+ * The whole index, which is what `docs list` returns.
+ *
+ * Measured rather than chosen: the corpus rendered 1,656 characters over 7
+ * documents when this was raised, i.e. about 222 per row, and a manual of
+ * roughly 22 topics lands near 5,000. The previous bound was 2,000 — one spare
+ * row — so writing a manual against it fails on the SECOND file, on an
+ * assertion naming whichever document happened to be added last.
+ *
+ * Affordable because the index is returned on a `list` CALL, never carried in
+ * the cached prefix: `docs.ts`'s `DESCRIPTION` deliberately does not enumerate
+ * the documents for exactly that reason. So this is a per-call cost on a tool
+ * used once or twice in a session, not a per-turn tax — which is the only
+ * reason raising it is cheap, and the reason it must not become the place the
+ * corpus grows without anyone noticing.
+ */
+const MAX_INDEX_CHARS = 6_000;
+
+/**
+ * One row of that index. See the per-document assertion for why a sum needs a
+ * per-row ceiling as well.
+ */
+const MAX_DESCRIPTION_CHARS = 220;
+
+/** `src/index.ts`, read once — the only statement of what the CLI accepts. */
+const cliSource = fs.readFileSync(path.join('src', 'index.ts'), 'utf-8');
+
+/** Every `.command('<name> …')` Commander is given, in declaration order. */
+const cliCommands = [...cliSource.matchAll(/\.command\('([a-z][a-z0-9-]*)/g)].map((m) => m[1]);
+
+/**
+ * Commander's own flags, which are real and appear in no `.option()` call.
+ * `--version` is registered by `.version()`, `--help` by Commander itself.
+ */
+const BUILTIN_FLAGS = new Set(['--help', '--version']);
+
+/**
+ * Words that follow `bernard` in a backticked span without naming a command,
+ * each with the reason — a `Record`, never a bare list, so a lazy exclusion has
+ * to be argued for in review (`settings-coverage.test.ts`'s rule).
+ *
+ * The collision is real rather than sloppy: `bernard` is ALSO the JavaScript
+ * global an applet page calls, and the browser's own message for a missing one
+ * is quoted verbatim in `applet-page` — verbatim being the entire value, since
+ * a reader greps the console text. Excluded by the following word rather than
+ * by loosening the pattern, because every looser rule that skips this also
+ * skips a real reference: dropping three-token spans loses `bernard app list`,
+ * and requiring a flag loses `bernard setup`.
+ */
+const NOT_A_SUBCOMMAND: Record<string, string> = {
+  is: "the browser error `bernard is not defined`, where `bernard` is the page's JS global",
+};
+
+/** Every `.ts`/`.tsx` file under `src/`, excluding tests. */
+function sourceFiles(dir = 'src', out: string[] = []): string[] {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) sourceFiles(full, out);
+    else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) out.push(full);
+  }
+  return out;
+}
+
 describe('the document budget', () => {
   it('leaves a budget-sized document under the only cut a tool result meets', () => {
     // The whole verbatim guarantee, and the reason there is no new mechanism.
@@ -129,6 +192,63 @@ describe('the shipped corpus', () => {
     }
   });
 
+  it('never names a `bernard` command that does not exist, in any document', () => {
+    // Same shape as the served-path guard above, and the direction that has
+    // actually failed: `docs/manual.html` still tells people to set
+    // `BERNARD_REFERENCE_LOOKUP`, which #447 deleted along with the module it
+    // gated. A manual naming a command that was removed is worse than one that
+    // omits it — the reader types it, gets an error, and distrusts the rest.
+    //
+    // BACKTICKED only. Prose legitimately says "ask bernard to check the
+    // deploy", and a bare-word scan would read `to` as a subcommand.
+    for (const doc of docs) {
+      for (const span of doc.body.match(/`[^`\n]+`/g) ?? []) {
+        const named = /^`bernard\s+([a-z][a-z0-9-]*)/.exec(span);
+        if (!named || named[1] in NOT_A_SUBCOMMAND) continue;
+        expect(cliCommands, `${doc.id} names \`bernard ${named[1]}\``).toContain(named[1]);
+      }
+    }
+  });
+
+  it('never names a CLI flag that does not exist, in any document', () => {
+    // The flag half of the same guarantee. Flags are where a manual rots
+    // fastest: a command survives a rename far more often than its options do.
+    //
+    // CSS custom properties share the `--name` spelling and are checked by
+    // their own guard above, so they are excluded here rather than matched
+    // loosely — a regex narrow enough to miss `--img-src` would also miss
+    // `--no-open`.
+    const cssTokens = new Set([
+      ...Object.keys(APPLET_COLOR_TOKENS),
+      ...Object.keys(APPLET_SCALE_TOKENS),
+    ]);
+    for (const doc of docs) {
+      for (const m of doc.body.match(/(?<![\w-])--[a-z][a-z0-9-]*/g) ?? []) {
+        if (cssTokens.has(m) || BUILTIN_FLAGS.has(m)) continue;
+        expect(cliSource, `${doc.id} names ${m}`).toContain(m);
+      }
+    }
+  });
+
+  it('never names a `BERNARD_*` variable nothing reads, in any document', () => {
+    // The third direction of the same rule, and the one the 0.9 manual got
+    // wrong. A variable that is documented and read by nothing is a setting the
+    // reader believes they have changed: they set it, nothing happens, and
+    // there is no error to search for.
+    //
+    // Read sites rather than a registry, because there is no registry — a
+    // setting reaches `loadConfig` as `prefs.X ?? process.env.BERNARD_X ??
+    // DEFAULT`, written inline at each field.
+    const reads = sourceFiles()
+      .map((f) => fs.readFileSync(f, 'utf-8'))
+      .join('\n');
+    for (const doc of docs) {
+      for (const m of doc.body.match(/\bBERNARD_[A-Z0-9_]+/g) ?? []) {
+        expect(reads, `${doc.id} names ${m}`).toContain(`process.env.${m}`);
+      }
+    }
+  });
+
   it('derives the brief document from the field record', () => {
     const body = findDoc('applet-brief')!.body;
     for (const field of INTENT_FIELDS) {
@@ -160,6 +280,11 @@ describe('the shipped corpus', () => {
     expect(doc.description.length).toBeGreaterThan(40);
     expect(doc.description).toMatch(/\b(read|use|consult|check)\b/i);
     expect(doc.title.length).toBeLessThan(60);
+    // And an upper bound, because {@link MAX_INDEX_CHARS} is a SUM. Without a
+    // per-row ceiling one expansive description silently spends three other
+    // documents' share of the index, and the failure then surfaces on whichever
+    // document happened to be added last — which is never the one at fault.
+    expect(doc.description.length).toBeLessThanOrEqual(MAX_DESCRIPTION_CHARS);
   });
 
   it.each(cases)('%s round-trips byte-identically through read', (_id, doc) => {
@@ -181,7 +306,7 @@ describe('the shipped corpus', () => {
   it('keeps the index small enough to hand over whole', () => {
     // L1 is what makes the corpus discoverable without paying for it. If the
     // index itself needs paging, the design has stopped working.
-    expect(renderIndex(docIndex()).length).toBeLessThan(2_000);
+    expect(renderIndex(docIndex()).length).toBeLessThan(MAX_INDEX_CHARS);
   });
 
   it('lists every document it can serve', () => {
