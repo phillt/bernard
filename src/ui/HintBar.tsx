@@ -66,7 +66,15 @@ function pickHints(state: HintBarProps): KeyHint[] {
     return [HINT_CLOSE];
   }
   if (state.busy) {
-    return [{ key: KEY.esc, label: 'interrupt' }];
+    // The prompt is live during a turn now (#202), and this row is the only
+    // thing on screen that says what typing into it will do. `+` first,
+    // because it is the new affordance and the cheaper of the two: interrupt
+    // throws away the work already done, which is the cost #200/#202 exist to
+    // stop the user paying to say one sentence.
+    return [
+      { key: '+', label: 'queue for after' },
+      { key: KEY.esc, label: 'interrupt' },
+    ];
   }
   if (state.slashActive) {
     return [

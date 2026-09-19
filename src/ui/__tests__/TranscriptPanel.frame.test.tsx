@@ -7,6 +7,7 @@ import { Box, Text } from 'ink';
 import { ErrorPanel } from '../ErrorPanel.js';
 import { NoticePanel } from '../NoticePanel.js';
 import { WakePanel } from '../WakePanel.js';
+import { announcementFor } from '../turn-queue.js';
 import { hasPresentationChoice, presentationAmbiguousGlyphs } from '../../glyph-width.js';
 import { PlanPanel } from '../PlanPanel.js';
 import { PlanStore } from '../../plan-store.js';
@@ -42,7 +43,11 @@ describe('a bordered panel renders a square frame', () => {
     [
       'WakePanel',
       createElement(WakePanel, {
-        data: { source: 'sent by claude', instruction: LONG },
+        data: {
+          ...announcementFor({ kind: 'remote', label: 'claude' }),
+          source: 'sent by claude',
+          instruction: LONG,
+        },
         toolDetails: false,
       }),
     ],
@@ -88,14 +93,25 @@ describe('no bordered title carries a glyph whose width is a presentation choice
     return stripAnsi(lastFrame() ?? '').split('\n')[1] ?? '';
   }
 
+  // Both titles the table can produce, read OUT of it rather than written here:
+  // a hand-copied literal would go on passing after a title changed, which is
+  // the one way a rule about rendered titles can quietly stop checking one.
+  const wakeTitles: Array<[string, string]> = [
+    ['◷ Woken', announcementFor({ kind: 'remote', label: 'ci' }).title],
+    ['◷ Queued', announcementFor({ kind: 'user' }).title],
+  ];
+
   it.each([
-    [
-      'WakePanel',
-      createElement(WakePanel, {
-        data: { source: 'sent by ci', instruction: 'x' },
-        toolDetails: false,
-      }),
-    ],
+    ...wakeTitles.map(
+      ([name, title]) =>
+        [
+          `WakePanel (${name})`,
+          createElement(WakePanel, {
+            data: { title, source: 'sent by ci', instruction: 'x' },
+            toolDetails: false,
+          }),
+        ] as [string, React.ReactElement],
+    ),
     [
       'NoticePanel',
       createElement(NoticePanel, {

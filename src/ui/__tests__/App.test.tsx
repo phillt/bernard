@@ -1641,6 +1641,314 @@ describe('<App> plain-text turn', () => {
     expect(lastFrame()).not.toContain('CRON_ALERT — job foo');
     unmount();
   });
+
+  // ── Typing while Bernard is working (#202) ────────────────────────────
+  //
+  // `<Prompt disabled={busy}>` used to gate every keystroke for the whole
+  // turn, so none of what follows was reachable at all. Each case here drives
+  // the real keystream: the harness holds the first turn open and then types
+  // into a prompt that is, for the first time, live underneath it.
+
+  /** Starts a turn that hangs until the returned `release` is called. */
+  function heldTurn() {
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let calls = 0;
+    const harness = renderApp({
+      agent: {
+        processInput: vi.fn(async () => {
+          calls += 1;
+          if (calls === 1) await held;
+        }),
+      },
+    });
+    return { ...harness, release };
+  }
+
+  it('accepts keystrokes while a turn is in flight', async () => {
+    // The premise everything else here rests on. Before this the input line
+    // was inert for the whole turn, which is why `+` had nowhere to live.
+    const { stdin, lastFrame, release, unmount } = heldTurn();
+    await tick();
+    await submit(stdin, 'the first question');
+    stdin.write('half a thought');
+    await tick(40);
+    expect(stripAnsi(lastFrame() ?? '')).toContain('half a thought');
+    release();
+    await tick(60);
+    unmount();
+  });
+
+  it('queues `+ <request>` for after the current turn instead of disturbing it', async () => {
+    const { stdin, lastFrame, agentSpy, release, unmount } = heldTurn();
+    await tick();
+    await submit(stdin, 'the first question');
+    expect(agentSpy.processInput).toHaveBeenCalledTimes(1);
+
+    await submit(stdin, '+ text Sarah the summary');
+    await tick(40);
+    // The turn in flight is untouched — that is the whole difference from Esc.
+    expect(agentSpy.processInput).toHaveBeenCalledTimes(1);
+    expect(stripAnsi(lastFrame() ?? '')).toContain('Queued for after this turn');
+
+    release();
+    await tick(200);
+    expect(agentSpy.processInput).toHaveBeenCalledTimes(2);
+    // The `+` is a directive, not part of the request.
+    expect(agentSpy.processInput.mock.calls[1]?.[0]).toBe('text Sarah the summary');
+    unmount();
+  });
+
+  it('announces a queued turn as the user\u2019s own, never as a wake', async () => {
+    // #202's acceptance criterion, and the reason `announcementFor` carries the
+    // title: the drain's panel is the only thing on screen when a queued turn
+    // starts, minutes after it was typed, and "◷ Woken" over the user's own
+    // words would be it asserting something false.
+    const { stdin, lastFrame, release, unmount } = heldTurn();
+    await tick();
+    await submit(stdin, 'the first question');
+    await submit(stdin, '+ text Sarah the summary');
+    release();
+    await tick(200);
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toContain('Queued');
+    expect(frame).toContain('by you');
+    expect(frame).not.toContain('Woken');
+    unmount();
+  });
+
+  it('runs several queued requests in the order they were typed', async () => {
+    const { stdin, agentSpy, release, unmount } = heldTurn();
+    await tick();
+    await submit(stdin, 'the first question');
+    await submit(stdin, '+ second');
+    await submit(stdin, '+ third');
+    release();
+    await tick(300);
+    const seen = agentSpy.processInput.mock.calls.map(([t]) => String(t));
+    expect(seen).toEqual(['the first question', 'second', 'third']);
+    unmount();
+  });
+
+  it('refuses a bare mid-turn submit out loud rather than swallowing it', async () => {
+    // `runAgentTurn`'s `submittingRef` guard returns SILENTLY — right for the
+    // double-Enter it was written for, and fatal now that the prompt is live:
+    // a sentence typed deliberately, accepted by the input line and then
+    // discarded with nothing on screen is worse than the disabled prompt this
+    // replaces. Refusing keeps #200's design space open; queueing it here would
+    // pre-empt that issue's semantics and flip under anyone who learned them.
+    const { stdin, lastFrame, agentSpy, release, unmount } = heldTurn();
+    await tick();
+    await submit(stdin, 'the first question');
+    await submit(stdin, 'a second thing entirely');
+    await tick(40);
+    expect(agentSpy.processInput).toHaveBeenCalledTimes(1);
+    expect(stripAnsi(lastFrame() ?? '')).toContain('Bernard is working');
+
+    release();
+    await tick(200);
+    // Refused, not quietly queued: nothing runs it afterwards either.
+    expect(agentSpy.processInput).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+
+  it('refuses a slash command mid-turn, because the whole chain assumes an idle REPL', async () => {
+    // The allow-list's default. `/clear` is the sharpest case: its own
+    // re-entrancy guard returns silently, so without the refusal it becomes an
+    // invisible no-op the moment the prompt goes live.
+    const { stdin, lastFrame, agent, release, unmount } = heldTurn();
+    await tick();
+    await submit(stdin, 'the first question');
+    await submit(stdin, '/clear');
+    await tick(40);
+    expect(stripAnsi(lastFrame() ?? '')).toContain('Bernard is working');
+    expect(agent.clearHistory).not.toHaveBeenCalled();
+    release();
+    await tick(100);
+    unmount();
+  });
+
+  it('explains `+` rather than queueing an empty request', async () => {
+    const { stdin, lastFrame, agentSpy, release, unmount } = heldTurn();
+    await tick();
+    await submit(stdin, 'the first question');
+    await submit(stdin, '+');
+    await tick(40);
+    expect(stripAnsi(lastFrame() ?? '')).toContain('queues a new request');
+    release();
+    await tick(200);
+    expect(agentSpy.processInput).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+
+  it('treats `+1` as text, not as a queue directive', async () => {
+    // The whitespace in the prefix is load-bearing: a line the user meant
+    // literally must not silently become a deferred instruction.
+    const { stdin, agentSpy, unmount } = renderApp();
+    await tick();
+    await submit(stdin, '+1 to that');
+    await tick(40);
+    expect(agentSpy.processInput.mock.calls[0]?.[0]).toBe('+1 to that');
+    unmount();
+  });
+
+  it('spends the first Esc on the picker, leaving the turn running', async () => {
+    // Ink broadcasts every key to every mounted handler with no
+    // stop-propagation, so the Prompt cannot consume this: App has to decline.
+    const { stdin, lastFrame, release, unmount } = heldTurn();
+    await tick();
+    await submit(stdin, 'the first question');
+    stdin.write('/he');
+    await tick(40);
+    expect(stripAnsi(lastFrame() ?? '')).toContain('/help');
+
+    stdin.write(ESC);
+    await tick(40);
+    expect(stripAnsi(lastFrame() ?? '')).not.toContain('/help');
+
+    // Let the turn end on its own before asking whether it was interrupted.
+    // The notice is pushed from `runAgentTurn`'s `finally`, so a frame taken
+    // while the turn is still in flight says nothing either way — which is how
+    // the first cut of this test passed with the decline deleted.
+    release();
+    await tick(200);
+    expect(stripAnsi(lastFrame() ?? '')).not.toContain('Turn interrupted');
+    unmount();
+  });
+
+  it('spends the second Esc on the turn', async () => {
+    const { stdin, lastFrame, release, unmount } = heldTurn();
+    await tick();
+    await submit(stdin, 'the first question');
+    stdin.write('/he');
+    await tick(40);
+    stdin.write(ESC);
+    await tick(40);
+    stdin.write(ESC);
+    await tick(40);
+    release();
+    await tick(200);
+    expect(stripAnsi(lastFrame() ?? '')).toContain('Turn interrupted');
+    unmount();
+  });
+
+  it('interrupts on the first Esc when there is nothing to dismiss', async () => {
+    // The other half, and the one a too-eager guard would break: declining
+    // whenever the Prompt is merely mounted would take Esc away entirely.
+    const { stdin, lastFrame, release, unmount } = heldTurn();
+    await tick();
+    await submit(stdin, 'the first question');
+    stdin.write(ESC);
+    await tick(40);
+    release();
+    await tick(200);
+    expect(stripAnsi(lastFrame() ?? '')).toContain('Turn interrupted');
+    unmount();
+  });
+
+  it('says nothing is waiting when /queue is opened on an empty queue', async () => {
+    const { stdin, lastFrame, unmount } = renderApp();
+    await tick();
+    await submit(stdin, '/queue');
+    await tick(40);
+    expect(stripAnsi(lastFrame() ?? '')).toContain('Nothing waiting');
+    unmount();
+  });
+
+  it('lists a queued request under /queue and drops it before it runs', async () => {
+    const { stdin, lastFrame, agentSpy, release, unmount } = heldTurn();
+    await tick();
+    await submit(stdin, 'the first question');
+    await submit(stdin, '+ text Sarah the summary');
+    await submit(stdin, '/queue');
+    await tick(60);
+    const listing = stripAnsi(lastFrame() ?? '');
+    expect(listing).toContain('text Sarah the summary');
+    // The age, not the epoch: `formatRelative` takes a DURATION, and handed a
+    // timestamp it formats fifty years without erroring.
+    expect(listing).toMatch(/queued \ds ago/);
+
+    // Row 1 → its action menu → "Drop it".
+    stdin.write(ENTER);
+    await tick(60);
+    stdin.write(ENTER);
+    await tick(60);
+    expect(stripAnsi(lastFrame() ?? '')).toContain('Nothing waiting');
+
+    release();
+    await tick(200);
+    // Dropped before it ran, so the queued turn never reaches the agent.
+    expect(agentSpy.processInput).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+
+  it('lets a watcher wake again after its queued turn is dropped from /queue', async () => {
+    // `releaseWake` has two callers — the drain's `finally` and the `/queue`
+    // removal — and two callers is a convention, not a property. The removal
+    // is the one that has to be pinned: without it the watcher stays marked
+    // outstanding in `outstandingWakesRef` for the life of the SESSION, every
+    // later fire is refused silently, and the watcher simply stops waking.
+    //
+    // The sibling drop test above cannot stand in for this, and that is worth
+    // saying rather than assuming: it queues a `{kind:'user'}` turn, and
+    // `releaseWake` early-returns for anything that is not a watcher — so the
+    // one case it covers is exactly the one where the call does not matter.
+    // Only a REPEATING watcher can show it either, since a one-shot marks
+    // itself terminal on the first fire and would never have woken again.
+    const { WatcherStore } = await import('../../watchers/store.js');
+    const { getSessionId } = await import('../../logger.js');
+    const { digestOf } = await import('../../watchers/evaluate.js');
+    const store = new WatcherStore();
+    for (const w of store.list()) store.remove(w.id);
+
+    const watched = path.join(TMP_HOME, 'queue-drop.txt');
+    fs.writeFileSync(watched, 'first');
+    const w = store.create({
+      name: 'the thread',
+      target: { kind: 'file', path: watched },
+      predicate: { kind: 'changed' },
+      instructions: 'reply to the newest message',
+      ownerSessionId: getSessionId(),
+      repeating: true,
+      snapshot: digestOf({ exists: true, mtimeMs: fs.statSync(watched).mtimeMs, size: 5 }),
+    });
+    // Below the 15 s floor `create` enforces — this exercises the drop, not
+    // the floor.
+    store.update(w.id, { intervalMs: 40 });
+    process.env.BERNARD_WATCHER_TICK_MS = '20';
+
+    const { stdin, lastFrame, agentSpy, release, unmount } = heldTurn();
+    try {
+      await tick();
+      await submit(stdin, 'the first question');
+      // Fires while that turn is held, so it queues rather than running.
+      fs.writeFileSync(watched, 'second message');
+      await tick(400);
+      expect(agentSpy.processInput).toHaveBeenCalledTimes(1);
+
+      await submit(stdin, '/queue');
+      await tick(60);
+      expect(stripAnsi(lastFrame() ?? '')).toContain('reply to the newest message');
+      // Row 1 → its action menu → "Drop it". The list menu then re-reads, finds
+      // the queue empty and closes itself.
+      stdin.write(ENTER);
+      await tick(60);
+      stdin.write(ENTER);
+      await tick(60);
+      expect(stripAnsi(lastFrame() ?? '')).toContain('Nothing waiting');
+
+      // The whole question: a later change must still wake it.
+      fs.writeFileSync(watched, 'third message arrives after the drop');
+      await tick(400);
+      release();
+      await tick(400);
+      const seen = agentSpy.processInput.mock.calls.map(([t]) => String(t));
+      expect(seen.some((t) => t.includes('reply to the newest message'))).toBe(true);
+    } finally {
+      delete process.env.BERNARD_WATCHER_TICK_MS;
+      unmount();
+    }
+  });
 });
 
 describe('<App> interrupted turn leaves a durable record (#403)', () => {

@@ -57,6 +57,27 @@ interface PromptProps {
    */
   onEmptySubmit?: () => void;
   /**
+   * Whether Esc would be CLAIMED here — a slash picker is open, or a history
+   * line is on the rail (#202).
+   *
+   * The Prompt is live during a turn now, so its Esc (dismiss what is open) and
+   * App's Esc (abort the turn) both fire on the same keystroke and **Ink has no
+   * stop-propagation** — neither can consume it. So the arbitration is App
+   * declining rather than this component consuming, and this is the one fact it
+   * needs to decline on: first Esc dismisses, second interrupts.
+   *
+   * ONE boolean, and it *is* the guard the Esc branch below tests, rather than
+   * two flags the parent recombines — a second expression for one condition is
+   * how the two come to disagree about what is on screen.
+   *
+   * Reported from an effect, so the parent reads the PRE-Esc value: both
+   * handlers run synchronously in one stdin tick and the re-render that would
+   * update this comes after. That is correct rather than a race to work around
+   * — the value describing what was on screen when the key was pressed is the
+   * one that should decide what the key meant.
+   */
+  onEscapeGuardChange?: (guarded: boolean) => void;
+  /**
    * Session input history (oldest → newest) for ↑/↓ recall. Owned by the
    * parent so it survives this component unmounting (e.g. a Shift-Tab viewer).
    * Mutated in place by `onRecordInput`; read live on each keystroke.
@@ -107,6 +128,7 @@ export function Prompt({
   onSlashActiveChange,
   onEmptyChange,
   onEmptySubmit,
+  onEscapeGuardChange,
   history = [],
   onRecordInput,
   dynamicCommands,
@@ -195,6 +217,13 @@ export function Prompt({
     onEmptyChange?.(bufferEmpty);
   }, [bufferEmpty, onEmptyChange]);
 
+  // The Esc guard, declared once and both reported and acted on below — see
+  // `onEscapeGuardChange` for why the parent must not recombine it from parts.
+  const escapeGuarded = matches.length > 0 || historyCursor !== null;
+  useEffect(() => {
+    onEscapeGuardChange?.(escapeGuarded);
+  }, [escapeGuarded, onEscapeGuardChange]);
+
   useInput(
     (input, key) => {
       // Newline intent — Shift+Enter where the terminal transmits it
@@ -211,11 +240,15 @@ export function Prompt({
         return;
       }
       // Esc dismisses the slash-command picker or a recalled history line —
-      // clearing the buffer so the hint strip goes away. (While a turn is busy
-      // the Prompt is disabled and App owns Esc for interrupt, so this only
-      // fires when the user is actively editing.)
+      // clearing the buffer so the hint strip goes away.
+      //
+      // This fires during a turn too (#202): the Prompt is no longer disabled
+      // while Bernard works, so App's interrupt handler sees the same key. It
+      // is App that stands down, on the boolean reported by
+      // `onEscapeGuardChange` — which is exactly the condition tested here, so
+      // "Esc was handled" and "Esc will be handled" cannot answer differently.
       if (key.escape) {
-        if (matches.length > 0 || historyCursor !== null) {
+        if (escapeGuarded) {
           editor.clear();
           setSelectedIndex(0);
           setHistoryCursor(null);

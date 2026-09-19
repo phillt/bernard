@@ -78,7 +78,16 @@ export interface StaticItem {
 
 /** What a `WakePanel` shows. */
 export interface WakeData {
-  /** Where the turn came from, already phrased — see `describeSource`. */
+  /**
+   * The panel's title, already phrased — see `announcementFor`.
+   *
+   * Carried on the item rather than derived in the panel because a
+   * `StaticItem` lives in an append-only array for the whole session and is
+   * re-rendered from it: it has to be self-contained, which is the same reason
+   * {@link WakeData.source} is a phrased string rather than a source object.
+   */
+  title: string;
+  /** Where the turn came from, already phrased — see `announcementFor`. */
   source: string;
   /** The instruction that is about to run. Never anything observed. */
   instruction: string;
