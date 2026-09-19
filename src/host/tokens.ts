@@ -345,8 +345,9 @@ a:hover { text-decoration-color: var(--accent); }
 .hidden { display: none !important; }
 
 /* Label plus its control, as one unit that can sit in a \`.row\`. \`label\` is
-   already \`display: block\`, so this is the grouping it was missing. */
-/* \`max-width\` is what keeps widening the page from widening every control.
+   already \`display: block\`, so this is the grouping it was missing.
+
+   \`max-width\` is what keeps widening the page from widening every control.
    Inside a \`.row\` the flex basis already did that; a field on its own line
    had nothing bounding it, so at 72rem a name input would be 1152px of empty
    box. Bounded here rather than on \`input\` so a \`textarea\` in a \`.field\`
@@ -372,12 +373,19 @@ a:hover { text-decoration-color: var(--accent); }
    with the most width to spend, and \`flex-direction: column\` spent none of
    it. \`auto-fill\` + \`minmax\` needs no breakpoint — it is one column in a
    narrow window and as many as fit in a wide one, which is also why this does
-   not reintroduce a mobile/desktop fork the floor would have to maintain. */
+   not reintroduce a mobile/desktop fork the floor would have to maintain.
+
+   The \`min()\` is load-bearing, not decoration: a \`minmax\` MINIMUM cannot
+   shrink, so a bare \`18rem\` track overflows its own container the moment the
+   container is narrower than that — a half-screen window, or an ordinary one
+   under a large root font size, which is an accessibility setting rather than
+   an exotic case. \`min(18rem, 100%)\` yields to the container instead, which
+   is what makes "collapses on its own" true at the narrow end too. */
 .cards {
   list-style: none;
   padding-left: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(18rem, 100%), 1fr));
   gap: var(--space-3);
 }
 

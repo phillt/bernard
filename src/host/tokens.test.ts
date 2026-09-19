@@ -285,3 +285,67 @@ describe('the scale record (#465 follow-up)', () => {
     }
   });
 });
+
+/**
+ * The floor targets a desktop browser, and the sheet says so (#608).
+ *
+ * This describe exists for the reason the contrast table above does. Layout is
+ * mostly not decidable without a render — but these four facts are arithmetic
+ * over the served string, and all four were, before this, asserted only in
+ * `applet-ux-planner`'s prompt and in a comment. The `.field` bound especially:
+ * the change's own claim is that it is the load-bearing half, and deleting it
+ * failed nothing.
+ *
+ * It also pins the sheet side of a claim the planner prompt makes to a model —
+ * that the floor carries no width breakpoint — so the prompt cannot quietly
+ * become a description of a sheet that grew one.
+ */
+describe('the floor targets a desktop browser (#608)', () => {
+  const sheet = tokensStylesheet();
+
+  /** The declarations of the first rule whose head is exactly `selector`. */
+  function ruleBody(selector: string): string {
+    const head = sheet.indexOf(`\n${selector} {`);
+    expect(head, `no rule for \`${selector}\``).toBeGreaterThan(-1);
+    return sheet.slice(head, sheet.indexOf('}', head));
+  }
+
+  it('gives the page a desktop width rather than a prose column', () => {
+    // 42rem was a reading measure, and it made every applet a phone screen
+    // centred in a desktop window. The floor is bounded here rather than
+    // unbounded so an ultrawide does not stretch a line of text across 3440px.
+    const cap = /max-width:\s*(\d+(?:\.\d+)?)rem/.exec(ruleBody('main, .app'));
+    expect(cap, 'the page cap stopped being expressed in rem').not.toBeNull();
+    const rem = Number(cap![1]);
+    expect(rem).toBeGreaterThanOrEqual(64);
+    expect(rem).toBeLessThanOrEqual(96);
+  });
+
+  it('bounds the control, so a wider page is not a wider input', () => {
+    // The half that is easy to lose. Inside a `.row` the flex basis already
+    // bounded a field; one on its own line had nothing, so widening the page
+    // widened every text input with it.
+    expect(ruleBody('.field')).toMatch(/max-width:/);
+  });
+
+  it('collapses its card grid with no breakpoint, at both ends', () => {
+    const cards = ruleBody('.cards');
+    // `auto-fill` is what removes the need for a breakpoint at the wide end:
+    // one column in a narrow window, as many as fit in a wide one.
+    expect(cards).toContain('auto-fill');
+    // And `min()` is what makes that true at the NARROW end. A `minmax`
+    // minimum cannot shrink, so a bare track wider than its container
+    // overflows it — reachable on a half-screen window, and on an ordinary
+    // one under a large root font size.
+    expect(cards).toMatch(/minmax\(\s*min\(/);
+  });
+
+  it('carries no width breakpoint, so there is one layout and not two', () => {
+    // `prefers-reduced-motion` is a preference query and stays. A width query
+    // is the mobile/desktop fork this change exists to avoid, and the planner
+    // prompt tells a model the floor has none.
+    const atRules = [...sheet.matchAll(/@media([^{]*)\{/g)].map((m) => m[1].trim());
+    expect(atRules.length, 'no @media rules found — the scan matched nothing').toBeGreaterThan(0);
+    expect(atRules.filter((q) => /width/.test(q))).toEqual([]);
+  });
+});
