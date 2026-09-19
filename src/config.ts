@@ -430,15 +430,6 @@ export function isToolMode(v: unknown): v is 'read-only' | 'write' {
   return v === 'read-only' || v === 'write';
 }
 
-/**
- * Type guard for runtime `modelMode` string values. Accepts only the three
- * post-#170-redesign values; legacy `'off'` is migrated via
- * {@link normalizeStoredModelMode} at the read boundary, not here.
- */
-export function isModelMode(v: unknown): v is ModelMode {
-  return v === 'optimize-tokens' || v === 'balanced' || v === 'optimize-performance';
-}
-
 /** Type guard for `responseStyle` string values (#133). */
 export function isResponseStyle(v: unknown): v is ResponseStyle {
   return typeof v === 'string' && (RESPONSE_STYLE_IDS as ReadonlyArray<string>).includes(v);

@@ -3,6 +3,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OPTIONS_REGISTRY } from './config.js';
+import { MODEL_MODES } from './model-modes.js';
+import { normalizeStoredModelMode } from './model-policy.js';
 import { WIZARD_FIELDS } from './profiles-wizard-data.js';
 import type { ProfileSettings } from './profiles.js';
 
@@ -260,6 +262,83 @@ describe('first-use hints', () => {
       if (!f.hint) continue;
       expect(f.hint.surface, f.key).toMatch(/^[/`]|^bernard /);
     }
+  });
+});
+
+/**
+ * A row the runtime cannot accept is not a setting, it is a trap (#606).
+ *
+ * `modelMode` offered four rows against a three-member union. `Off` was the
+ * stale one — `ModelMode` lost it when #225 moved tiering onto lineups — and it
+ * failed in the worst available direction, which is why "rejected" is not the
+ * assertion: the value was not refused at all. `normalizeStoredModelMode`
+ * MIGRATED it to `optimize-performance`, so a reader who picked the row that
+ * reads as opting out was silently handed the premium slot at every call site.
+ * #582 then made that field one of the three questions a first run asks.
+ *
+ * So a row is pinned by ROUND TRIP through the function that decides what a
+ * stored or environment value becomes: `normalizeStoredModelMode(v) === v` is
+ * "the runtime takes this as written". It catches both failures a predicate
+ * catches only one of — rejected outright, and quietly turned into something
+ * else. That second is the one that shipped.
+ *
+ * The other direction needs an enumeration a function cannot give, so the union
+ * members are read out of the source — the `declaredTriggers` move. A mode the
+ * runtime has and no surface offers is how a setting quietly becomes env-only,
+ * which is the cost `tool-modes.ts` records paying by accident.
+ *
+ * `MODEL_MODES` rather than `WIZARD_FIELDS` is the subject, because it is the
+ * table BOTH surfaces read: pinning the registry alone would leave
+ * `/agent-options` free to drift back, which is precisely how the two came
+ * apart.
+ */
+describe('model mode rows', () => {
+  const SRC = path.join(path.dirname(fileURLToPath(import.meta.url)), 'model-policy.ts');
+
+  /** The members of `export type ModelMode = 'a' | 'b';`, as declared. */
+  function declaredModes(): string[] {
+    const source = fs.readFileSync(SRC, 'utf-8');
+    const at = source.indexOf('export type ModelMode =');
+    expect(at).toBeGreaterThan(-1);
+    const body = source.slice(at, source.indexOf(';', at));
+    return [...body.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  }
+
+  it('reads the union it is checking', () => {
+    // Guard the guard: a regex that matched nothing makes both cases below
+    // vacuously true.
+    expect(declaredModes()).toContain('balanced');
+    expect(declaredModes().length).toBeGreaterThan(2);
+  });
+
+  it('offers nothing the runtime rejects or rewrites', () => {
+    for (const row of MODEL_MODES) {
+      expect(normalizeStoredModelMode(row.value), row.label).toBe(row.value);
+    }
+  });
+
+  it('would have failed on the row that shipped', () => {
+    // Guard the guard: the case above is a round trip, and a round trip that
+    // could not fail is the shape this whole file is written against. `'off'`
+    // is the value that was on screen — it normalizes to something else, which
+    // is exactly what nothing checked.
+    expect(normalizeStoredModelMode('off')).not.toBe('off');
+    expect(normalizeStoredModelMode('off')).toBe('optimize-performance');
+  });
+
+  it('offers every mode the runtime has', () => {
+    const offered = MODEL_MODES.map((m) => m.value as string);
+    expect([...offered].sort()).toEqual([...declaredModes()].sort());
+  });
+
+  it('is the table the wizard asks from', () => {
+    // The registry reads `MODEL_MODES` today. Asserted because the assertions
+    // above are about that table, and a wizard that went back to a literal
+    // would take its own rows out from under them without failing anything.
+    const field = WIZARD_FIELDS.find((f) => f.key === 'modelMode')!;
+    expect(field.field.kind).toBe('list');
+    if (field.field.kind !== 'list') return;
+    expect(field.field.options.map((o) => o.value)).toEqual(MODEL_MODES.map((m) => m.value));
   });
 });
 

@@ -38,10 +38,17 @@ export type ModelSite =
   | 'memory-contradiction';
 
 /**
- * Three-value runtime mode (#170, redesigned). The legacy `'off'` value is
- * gone — every active call site now flows through the active lineup. Stored
+ * Three-value runtime mode (#170, redesigned by #225). The legacy `'off'` value
+ * is gone — every active call site now flows through the active lineup. Stored
  * `'off'` is migrated to `'optimize-performance'` on first load (see
  * {@link normalizeStoredModelMode}).
+ *
+ * What `'off'` named — one model for every site — is still reachable, as a
+ * lineup whose slots all name the same model. That is what makes removing it
+ * from the settings rows a removal rather than a capability loss, so it is
+ * pinned by a test rather than left as a claim (`model-policy.test.ts` → "a
+ * lineup with one model in every slot"). `MODEL_MODES` (`src/model-modes.ts`)
+ * is the row table every surface asks the question from.
  */
 export type ModelMode = 'optimize-tokens' | 'balanced' | 'optimize-performance';
 
@@ -72,9 +79,24 @@ function isKnownMode(mode: unknown): mode is ModelMode {
  * canonical runtime mode, or `undefined` for inputs that don't match. Migrates
  * legacy `'off'` → `'optimize-performance'` so existing users keep their
  * previously chosen model in the premium tier of the seeded lineup.
+ *
+ * **The migration stays even though the row is gone (#606), and the two are not
+ * the same decision.** `'off'` is still on disk for anyone who chose it before
+ * #225, and in `BERNARD_MODEL_MODE` for anyone who set it there; a
+ * `normalizeStoredModelMode` that stopped recognising it would resolve
+ * `undefined` and hand those users `DEFAULT_MODEL_MODE` instead — re-tiering
+ * them silently, which is the one outcome worse than the row that was removed.
+ *
+ * It is also a best-effort READ of an old preference rather than a faithful
+ * one, and that asymmetry is the whole argument. `'off'` meant `config.model`
+ * for every site; this maps to the active lineup's premium slot, which is the
+ * same model only when the lineup is the seeded one for that provider. Best
+ * effort is the right posture for a value already written, and the wrong one
+ * for a row somebody is picking right now with the label in front of them —
+ * which is exactly what the wizard was doing with it.
  */
 export function normalizeStoredModelMode(v: unknown): ModelMode | undefined {
-  if (v === 'optimize-tokens' || v === 'balanced' || v === 'optimize-performance') return v;
+  if (isKnownMode(v)) return v;
   if (v === 'off') return 'optimize-performance';
   return undefined;
 }
@@ -103,10 +125,19 @@ export interface SiteModel {
   /**
    * Where the (provider, model) ultimately came from. `'override'` =
    * invocation-level args; `'specialist'` = persisted specialist record;
-   * `'policy'` = tier-table lookup; `'config'` = session global; `'fallback'`
-   * = tier lookup attempted but bailed (custom provider, unknown tier, etc.).
+   * `'policy'` = lineup slot for this (role, tier); `'fallback'` = that slot
+   * was resolved and its provider has no key, so `config.provider`/
+   * `config.model` stood in.
+   *
+   * There was a fifth arm, `'config'`, meaning "the session global, because
+   * `modelMode` was `'off'`". It outlived its producer: #225 moved tiering onto
+   * lineups and the mode went with it, leaving a member of this union that
+   * nothing in the tree could ever mint and every reader had to allow for
+   * (#606). `'fallback'` is what reaching `config.provider`/`config.model`
+   * means now, and it says why — which the removed arm could not, since it
+   * named a mode rather than a reason.
    */
-  source: 'override' | 'specialist' | 'policy' | 'config' | 'fallback';
+  source: 'override' | 'specialist' | 'policy' | 'fallback';
   tier?: ModelTier;
 }
 

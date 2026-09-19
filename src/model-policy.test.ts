@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { BernardConfig } from './config.js';
 import type { Specialist } from './specialists.js';
+import type { ModelSite } from './model-policy.js';
 import { fullRoles } from './__tests__/lineup-fixtures.js';
 
 vi.mock('./logger.js', () => ({
@@ -63,6 +64,9 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
 let tmpDir: string;
 let origHome: string | undefined;
 
+/** The one model the `uniform` lineup below binds to every (role, tier) cell. */
+const UNIFORM_MODEL = 'claude-sonnet-4-5-20250929';
+
 /**
  * Pins the built-in provider lineups so these tests stay deterministic. The
  * resolver normally seeds from the dynamic model catalog (Vercel AI Gateway),
@@ -106,6 +110,20 @@ function seedTestLineups(dir: string): void {
               premium: { provider: 'xai', model: 'grok-4-1-fast-reasoning' },
               mid: { provider: 'xai', model: 'grok-4-fast-non-reasoning' },
               cheap: { provider: 'xai', model: 'grok-3-mini' },
+            }),
+            createdAt: now,
+            updatedAt: now,
+          },
+          // Every slot the same model — the shape that reproduces what the
+          // removed `'off'` mode named (#606). Selected only by an explicit
+          // `activeLineupId`, so it is inert for every other test here.
+          uniform: {
+            id: 'uniform',
+            name: 'One model',
+            roles: fullRoles({
+              premium: { provider: 'anthropic', model: UNIFORM_MODEL },
+              mid: { provider: 'anthropic', model: UNIFORM_MODEL },
+              cheap: { provider: 'anthropic', model: UNIFORM_MODEL },
             }),
             createdAt: now,
             updatedAt: now,
@@ -454,6 +472,56 @@ describe('resolveSiteModel — fallbacks', () => {
     const r = resolveSiteModel(config, 'rewriter');
     expect(r.modelName).toBe('claude-sonnet-4-5-20250929');
     expect(r.source).toBe('fallback');
+  });
+});
+
+describe('a lineup with one model in every slot (#606)', () => {
+  // The justification for DELETING the `'off'` row rather than reimplementing
+  // it. `'off'` meant "every site on `config.provider`/`config.model`", and the
+  // claim that a uniform lineup reproduces it is the whole removal argument —
+  // so it is measured against the resolver rather than asserted in a comment.
+  //
+  // Every site, not a sample, and every mode: `modelMode` moves a role up and
+  // down the tier ladder, so the property is precisely that the ladder has
+  // nowhere different to go. `ALL_MODEL_SITES` is not exported, so the sites are
+  // read off `SITE_ROLE`, which is `Record<ModelSite, RoleId>` and therefore
+  // exhaustive — a new site is covered the day it is declared.
+  it('sends every site to that model under every mode', async () => {
+    const { resolveSiteModel } = await loadModule();
+    const { SITE_ROLE } = await import('./model-roles.js');
+    const sites = Object.keys(SITE_ROLE) as ModelSite[];
+    expect(sites.length).toBeGreaterThan(10);
+    for (const modelMode of ['optimize-tokens', 'balanced', 'optimize-performance'] as const) {
+      const config = makeConfig({
+        modelMode,
+        activeLineupId: 'uniform',
+        // Deliberately NOT the uniform model: a resolve that fell through to
+        // the session global would otherwise pass for the wrong reason.
+        model: 'a-model-nobody-chose',
+      });
+      for (const site of sites) {
+        const r = resolveSiteModel(config, site);
+        expect([modelMode, site, r.provider, r.modelName, r.source]).toEqual([
+          modelMode,
+          site,
+          'anthropic',
+          UNIFORM_MODEL,
+          'policy',
+        ]);
+      }
+    }
+  });
+
+  // And the legacy value lands there too, which is what makes keeping the
+  // migration compatible with dropping the row: a user who chose `'off'` before
+  // #225 still gets one model for everything, so long as their lineup says so.
+  it('takes a stored legacy "off" there as well', async () => {
+    const { resolveSiteModel, normalizeStoredModelMode } = await loadModule();
+    const modelMode = normalizeStoredModelMode('off');
+    expect(modelMode).toBe('optimize-performance');
+    const config = makeConfig({ modelMode, activeLineupId: 'uniform' });
+    expect(resolveSiteModel(config, 'main').modelName).toBe(UNIFORM_MODEL);
+    expect(resolveSiteModel(config, 'rewriter').modelName).toBe(UNIFORM_MODEL);
   });
 });
 
