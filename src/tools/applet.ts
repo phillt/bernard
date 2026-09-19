@@ -33,6 +33,8 @@ import {
   AgentDispatchFields,
   ArgSpecFields,
   ToolDispatchFields,
+  requiredSchemaVersion,
+  type AppSchemaVersion,
   type RawAppAction,
   type AppManifest,
   type AppPermissions,
@@ -701,11 +703,19 @@ function buildManifest(
   // withdrawal of a request the user may not have answered yet.
   const permissions = (args.permissions as AppPermissions | undefined) ?? existing?.permissions;
   return {
-    // Bumped ONLY when something is declared. The version union means an
-    // older binary rejects the whole app rather than the field it does not
-    // know, so stamping v3 on every applet would cost every existing one its
-    // readability to pay for a field it does not use.
-    schemaVersion: permissions ? 3 : 2,
+    // Bumped ONLY as far as what this manifest actually declares. The version
+    // union means an older binary rejects the whole app rather than the field
+    // it does not know, so stamping the newest revision on every applet would
+    // cost every existing one its readability to pay for a field it does not
+    // use.
+    //
+    // `requiredSchemaVersion` rather than a ternary per feature (#588): the
+    // rule has a reader — the manifest refinement, which REFUSES a manifest
+    // stamped too low — and a writer, which is this, and written twice they
+    // drift silently. Too low and every write is refused; too high and every
+    // applet pays the readability. One function answers both, and
+    // `manifest.version.test.ts` pins them against each other.
+    schemaVersion: requiredSchemaVersion({ permissions, actions: merged }) as AppSchemaVersion,
     id,
     name: args.name ?? existing?.name ?? id,
     ...((args.description ?? existing?.description)

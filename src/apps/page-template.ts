@@ -2,6 +2,7 @@ import { MANIFEST_PATH } from '../host/webmanifest.js';
 import { SDK_PATH } from '../host/sdk.js';
 import { TOKENS_PATH } from '../host/tokens.js';
 import { escapeXml } from '../text.js';
+import { argTypeHandler, type ArgControl, type ArgSpec } from './arg-types.js';
 import type { RawAppAction } from './manifest.js';
 
 /**
@@ -49,7 +50,17 @@ ${description ? `  <p>${esc(description)}</p>\n` : ''}${entries.map(section).joi
     const args = {};
     for (const name of inputs) {
       const el = document.getElementById('arg-' + action + '-' + name);
-      if (el && el.value !== '') args[name] = el.value;
+      if (!el) continue;
+      // One generic rule, keyed on what the control declared. \`el.value\` is
+      // always a string, so before this every non-string argument was sent as
+      // one — \`"5"\` for a number, \`"true"\` for a boolean — and rejected by
+      // the action's own schema.
+      const how = el.getAttribute('data-decode');
+      if (how === 'checkbox') { args[name] = el.checked; continue; }
+      if (el.value === '') continue;
+      if (how === 'number') args[name] = Number(el.value);
+      else if (how === 'json') args[name] = JSON.parse(el.value);
+      else args[name] = el.value;
     }
     try {
       const result = await bernard.invoke(action, args);
@@ -64,15 +75,38 @@ ${entries.map(wire).join('\n')}
 `;
 }
 
+/**
+ * The control for one declared argument, built from its type's own entry.
+ *
+ * The handler supplies DATA — a tag, attributes, options — and this function
+ * is the only place that turns any of it into markup, so escaping stays in one
+ * audited place. The manifest reaching here is user-editable, so every value
+ * that lands in an attribute or in text goes through {@link esc}.
+ *
+ * A type with no entry falls back to a plain text input rather than rendering
+ * nothing: a missing field is a button that cannot work, and `validateActionArgs`
+ * will refuse the value with a message that says what was wrong.
+ */
+function control(action: string, name: string, spec: ArgSpec): string {
+  const c: ArgControl = argTypeHandler(spec.type)?.control ?? { decode: 'text', tag: 'input' };
+  const attrs = Object.entries({ ...c.attrs, 'data-decode': c.decode })
+    .map(([k, v]) => ` ${esc(k)}="${esc(v)}"`)
+    .join('');
+  const id = ` id="arg-${esc(action)}-${esc(name)}"`;
+  if (c.tag === 'select') {
+    const options = (c.options?.(spec) ?? []).map((v) => `<option>${esc(v)}</option>`).join('');
+    return `<select${id}${attrs}>${options}</select>`;
+  }
+  if (c.tag === 'textarea') {
+    return `<textarea${id}${attrs}>${esc(c.initial?.(spec) ?? '')}</textarea>`;
+  }
+  return `<input${id}${attrs} />`;
+}
+
 function section([action, spec]: [string, RawAppAction]): string {
   const args = Object.entries(spec.args ?? {});
   const fields = args
-    .map(
-      ([name, arg]) =>
-        `    <label>${esc(name)} <input id="arg-${esc(action)}-${esc(name)}"${
-          arg.type === 'number' ? ' type="number"' : ''
-        } /></label>`,
-    )
+    .map(([name, arg]) => `    <label>${esc(name)} ${control(action, name, arg)}</label>`)
     .join('\n');
   return `  <section>
     <h2>${esc(action)}</h2>

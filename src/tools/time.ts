@@ -95,6 +95,13 @@ export function createTimeTools() {
       {
         name: 'time_range_total',
         kind: 'read',
+        // A list of `{start, end}` numbers (#588) — structurally uninjectable,
+        // since nothing in the shape can carry prose, and the reason it was
+        // excluded was never safety but that a manifest could not name it.
+        // Its sibling `time_range` stays unmarked although its two scalars were
+        // always expressible: the flag is an allowlist and nobody has asked for
+        // that one, and closing a named gap is not a licence to widen the tier.
+        directInvocable: true,
         deterministic: true,
         sideEffect: 'none',
         cacheable: true,

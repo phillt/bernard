@@ -1,5 +1,14 @@
 import { z } from 'zod';
 import { isGrantableSource, MAX_SOURCES_PER_DIRECTIVE } from '../host/csp-grant.js';
+import {
+  ARG_NAME_RE,
+  ArgSpecFields,
+  argSpecsSince,
+  buildArgField,
+  checkArgSpec,
+  type ArgSpec,
+  type ArgValue,
+} from './arg-types.js';
 
 /**
  * The app manifest: a closed, typed registry of the actions an external
@@ -22,58 +31,28 @@ import { isGrantableSource, MAX_SOURCES_PER_DIRECTIVE } from '../host/csp-grant.
  */
 
 /**
- * The argument types an action may declare.
+ * The argument types an action may declare live in `./arg-types.ts`, as a
+ * table rather than as four hand-written cases (#588).
  *
- * Deliberately tiny and closed rather than general JSON Schema. An open schema
- * language re-opens exactly what the named action closed — and the three
- * non-string types are the interesting ones: `number`, `boolean` and `enum`
- * admit no prose at all, so an action built only from them is structurally
+ * Re-exported here because this is the module every consumer already imports,
+ * and because the vocabulary IS part of the manifest contract. What moved is
+ * the shape, not the rule: the set is still tiny and closed rather than general
+ * JSON Schema, for the reason above — an open schema language re-opens exactly
+ * what the named action closed — and `number`, `boolean` and `enum` still admit
+ * no prose at all, so an action built only from them is structurally
  * uninjectable. Prefer them wherever the domain allows.
  */
+export { ArgSpecFields, ARG_TYPES, ARG_TYPE_IDS, MAX_ARG_DEPTH } from './arg-types.js';
+export type { ArgSpec, ArgValue, ArgTypeHandler, ArgTypeId } from './arg-types.js';
+
 /**
- * The arg-spec FIELDS, without the cross-field refinement.
- *
- * Exported because `src/tools/applet.ts` advertises this shape to a model and
- * needs the object (a refinement makes it a `ZodEffects`, which changes what
- * `zod-to-json-schema` emits for a tool parameter — the hazard `#341` records
- * for `.transform`). Sharing the object rather than re-typing it is what stops
- * a field added here from being silently unauthorable there.
+ * The spec schema everything parses with: the fields, plus the cross-field
+ * rules applied to this spec and every spec nested beneath it.
  */
-export const ArgSpecFields = z
-  .object({
-    type: z.enum(['string', 'number', 'boolean', 'enum']),
-    required: z.boolean().default(false),
-    /** Required for, and only valid on, `type: 'enum'`. */
-    values: z.array(z.string()).min(1).optional(),
-    /** Only meaningful for `type: 'string'`. Bounds what reaches the model. */
-    maxLength: z.number().int().positive().max(32_000).optional(),
-    description: z.string().max(200).optional(),
-  })
-  .strict();
-
-export const ArgSpecSchema = ArgSpecFields.superRefine((spec, ctx) => {
-  if (spec.type === 'enum' && !spec.values) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "type 'enum' requires `values`" });
-  }
-  if (spec.type !== 'enum' && spec.values) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "`values` is only valid on type 'enum'",
-    });
-  }
-  if (spec.type !== 'string' && spec.maxLength !== undefined) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "`maxLength` is only valid on type 'string'",
-    });
-  }
-});
-
-export type ArgSpec = z.infer<typeof ArgSpecSchema>;
+export const ArgSpecSchema = ArgSpecFields.superRefine((spec, ctx) => checkArgSpec(spec, ctx));
 
 export const ACTION_NAME_RE = /^[a-z][a-z0-9_-]{0,63}$/;
 export const APP_ID_RE = /^[a-z][a-z0-9-]{1,63}$/;
-const ARG_NAME_RE = /^[a-z][a-z0-9_]{0,31}$/;
 
 /**
  * The manifest revisions this binary understands.
@@ -89,9 +68,21 @@ const ARG_NAME_RE = /^[a-z][a-z0-9_]{0,31}$/;
  * {@link AppManifestSchema}'s refinement, so a manifest cannot half-declare
  * itself: the version it states is the version it is read as.
  * v3 (#467) — the applet may DECLARE the external origins it needs and why.
+ * v4 (#588) — an argument may be a `list` or an `object`, so an action can
+ * name a nested tool parameter. Demanded by {@link schemaVersionDemands} off
+ * `ArgTypeHandler.since`, not by a case here, so a type added later carries
+ * its own version.
  */
-export const AppSchemaVersionSchema = z.union([z.literal(1), z.literal(2), z.literal(3)]);
+export const AppSchemaVersionSchema = z.union([
+  z.literal(1),
+  z.literal(2),
+  z.literal(3),
+  z.literal(4),
+]);
 export type AppSchemaVersion = z.infer<typeof AppSchemaVersionSchema>;
+
+/** The newest revision this binary can write. */
+export const LATEST_APP_SCHEMA_VERSION = 4 satisfies AppSchemaVersion;
 
 /**
  * How one tool parameter gets its value (#445).
@@ -380,6 +371,66 @@ export const AppPermissionsSchema = z
 
 export type AppPermissions = z.infer<typeof AppPermissionsSchema>;
 
+/** One feature a manifest uses, and the revision that can express it. */
+export interface SchemaVersionDemand {
+  readonly version: AppSchemaVersion;
+  readonly path: (string | number)[];
+  /** Named the way the refusal reads: "`permissions` requires schemaVersion 3". */
+  readonly feature: string;
+}
+
+/**
+ * Every revision this manifest's contents demand, and why.
+ *
+ * **One function, two consumers, and that is the point.** The rule is that a
+ * manifest is read as the version it STATES, so a v3-only field on a v1
+ * manifest would make it half-v3 — readable here and rejected wholesale by an
+ * older binary, which is the failure the version union exists to avoid rather
+ * than to hide. That rule needs a reader (the refinement below, which refuses)
+ * and a writer (`src/tools/applet.ts`, which stamps). Written twice they
+ * drift, and the drift is invisible: the writer stamps too low and every write
+ * is refused, or too high and every applet costs its readability to an older
+ * binary for a field it does not use. `manifest.version.test.ts` pins them
+ * against each other in both directions.
+ *
+ * Takes a structural shape rather than a parsed manifest, because the writer
+ * calls it on a manifest whose `schemaVersion` is the thing it is deciding.
+ */
+export function schemaVersionDemands(m: {
+  permissions?: unknown;
+  actions: Record<string, { dispatch?: unknown; args?: Record<string, ArgSpec> }>;
+}): SchemaVersionDemand[] {
+  const demands: SchemaVersionDemand[] = [];
+  if (m.permissions) {
+    demands.push({ version: 3, path: ['permissions'], feature: '`permissions`' });
+  }
+  for (const [name, action] of Object.entries(m.actions)) {
+    if (action.dispatch) {
+      demands.push({
+        version: 2,
+        path: ['actions', name, 'dispatch'],
+        feature: '`dispatch`',
+      });
+    }
+    // Read off the type table rather than tested for by name, so a type added
+    // later demands its own revision with no case here to remember.
+    const { version, because } = argSpecsSince(Object.values(action.args ?? {}));
+    if (version > 1 && because) {
+      demands.push({
+        version: version as AppSchemaVersion,
+        path: ['actions', name, 'args'],
+        feature: `the \`${because}\` argument type`,
+      });
+    }
+  }
+  return demands;
+}
+
+/** The lowest revision that can express this manifest. What a writer stamps. */
+export function requiredSchemaVersion(m: Parameters<typeof schemaVersionDemands>[0]): number {
+  return schemaVersionDemands(m).reduce((v, d) => Math.max(v, d.version), 1);
+}
+
 /**
  * A manifest exactly as it sits on disk, validated but **not lifted**.
  *
@@ -405,31 +456,16 @@ export const RawAppManifestSchema = z
     if (Object.keys(m.actions).length === 0) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'manifest declares no actions' });
     }
-    // Same rule as `dispatch` below, one level up: a manifest is read as the
-    // version it states, so a v3-only field on a v1 or v2 manifest would make
-    // it half-v3 — readable here and rejected wholesale by an older binary.
-    if (m.permissions && m.schemaVersion < 3) {
+    for (const demand of schemaVersionDemands(m)) {
+      if (m.schemaVersion >= demand.version) continue;
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ['permissions'],
-        message: '`permissions` requires schemaVersion 3',
+        path: demand.path,
+        message: `${demand.feature} requires schemaVersion ${demand.version}`,
       });
     }
     for (const [name, action] of Object.entries(m.actions)) {
       intraActionRules(action, ctx, ['actions', name]);
-      // The one rule that needs manifest context, and the reason the record
-      // above holds the RAW action schema: a manifest is read as the version it
-      // states, and `dispatch` on a v1 manifest would make it half-v2 —
-      // readable here and rejected wholesale by an older binary, which is the
-      // failure the version union exists to avoid rather than to hide. After
-      // the lift every action has a `dispatch`, so the question is unanswerable.
-      if (action.dispatch && m.schemaVersion < 2) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['actions', name, 'dispatch'],
-          message: '`dispatch` requires schemaVersion 2',
-        });
-      }
     }
   });
 
@@ -478,9 +514,6 @@ export function parseAppManifest(raw: unknown): ParseResult<AppManifest> {
   return { ok: true, value: parsed.data };
 }
 
-/** A validated argument value. Never an object or array — see {@link ArgSpecSchema}. */
-export type ArgValue = string | number | boolean;
-
 /**
  * Builds the Zod schema for one action's arguments and validates a call
  * against it.
@@ -488,6 +521,13 @@ export type ArgValue = string | number | boolean;
  * Validated at read time as well as at write time (complete mediation): the
  * manifest file is user-editable between runs, so validating only on save is a
  * time-of-check/time-of-use gap.
+ *
+ * Since #588 a value may be nested, and the property that makes that safe is
+ * the same one the scalar case rested on: **what reaches a tool is a zod
+ * reconstruction of what the manifest declared, not the caller's object.**
+ * `z.object().strict()` at every level rebuilds only the declared keys and
+ * rejects the rest, so "the caller's object never reaches a tool wholesale" is
+ * as true of an element of `edits` as it is of a `path` string.
  */
 export function validateActionArgs(
   action: AppAction,
@@ -495,26 +535,7 @@ export function validateActionArgs(
 ): ParseResult<Record<string, ArgValue>> {
   const shape: Record<string, z.ZodTypeAny> = {};
   for (const [name, spec] of Object.entries(action.args)) {
-    let field: z.ZodTypeAny;
-    switch (spec.type) {
-      case 'string': {
-        let s = z.string();
-        if (spec.maxLength !== undefined) s = s.max(spec.maxLength);
-        field = s;
-        break;
-      }
-      case 'number':
-        field = z.number().finite();
-        break;
-      case 'boolean':
-        field = z.boolean();
-        break;
-      case 'enum':
-        // `values` is guaranteed non-empty by ArgSpecSchema's refinement.
-        field = z.enum(spec.values as [string, ...string[]]);
-        break;
-    }
-    shape[name] = spec.required ? field : field.optional();
+    shape[name] = buildArgField(spec);
   }
 
   // `.strict()`: an undeclared key is rejected rather than ignored, so a caller

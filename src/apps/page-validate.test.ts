@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 import { validateAppletPage, refusalFor, warningsFor } from './page-validate.js';
 import { defaultAppletPage } from './page-template.js';
+import { ARG_TYPES } from './arg-types.js';
 import type { RawAppAction } from './manifest.js';
 
 const OK = [
@@ -128,6 +129,75 @@ describe('defaultAppletPage', () => {
     const html = defaultAppletPage('<img src=x onerror=alert(1)>', undefined, {});
     expect(html).not.toContain('<img');
     expect(html).toContain('&lt;img');
+  });
+
+  /**
+   * Each type's control comes from its own entry in `ARG_TYPES` (#588), and
+   * the page script decodes on one generic rule keyed to what the entry
+   * declared.
+   *
+   * This also fixes a defect that predates nesting: `el.value` is always a
+   * string, so a `number` argument was sent as `"5"` and a `boolean` as
+   * whatever the user typed — both refused by the action's own schema, with a
+   * scaffold that looked complete and a button that could not work.
+   */
+  it('renders a control the page can actually decode, per argument type', () => {
+    const typed: Record<string, RawAppAction> = {
+      go: {
+        args: {
+          text: { type: 'string' },
+          n: { type: 'number' },
+          flag: { type: 'boolean' },
+          mode: { type: 'enum', values: ['a', 'b'] },
+          rows: { type: 'list', of: { type: 'number' } },
+        },
+        dispatch: { kind: 'agent', specialistId: 'x', instructions: 'y' },
+        toolAllowlist: [],
+        toolMode: 'read-only',
+        confirmMode: 'auto',
+      } as unknown as RawAppAction,
+    };
+    const html = defaultAppletPage('T', undefined, typed);
+    expect(html).toContain('<input id="arg-go-text" data-decode="text" />');
+    expect(html).toContain('<input id="arg-go-n" type="number" data-decode="number" />');
+    expect(html).toContain('<input id="arg-go-flag" type="checkbox" data-decode="checkbox" />');
+    // An enum gets a real picker, so the control cannot produce a value the
+    // action would reject.
+    expect(html).toContain('<select id="arg-go-mode" data-decode="text">');
+    expect(html).toContain('<option>a</option><option>b</option>');
+    // A list has no single input, so it gets a JSON textarea that starts valid.
+    expect(html).toContain('<textarea id="arg-go-rows" rows="3" data-decode="json">[]</textarea>');
+
+    // Every decoder the TABLE declares has an arm in the generated script —
+    // derived, not a hand-listed three, so a type added with a new decoder
+    // fails here rather than rendering a control the page silently sends as a
+    // string. `text` is the fall-through and has no arm by construction.
+    for (const { control } of ARG_TYPES) {
+      if (control.decode === 'text') continue;
+      expect(html, `the page script has no arm for ${control.decode}`).toContain(
+        `=== '${control.decode}'`,
+      );
+    }
+    // And the scaffold still satisfies the validator with all five in it.
+    expect(validateAppletPage(html, ['go'])).toEqual([]);
+  });
+
+  it('falls back to a text input for a type it does not recognise', () => {
+    // A manifest is user-editable, and this renders before anything validates
+    // it. A missing field is a button that cannot work; a text input at least
+    // reaches `validateActionArgs`, which says what was wrong.
+    const odd: Record<string, RawAppAction> = {
+      go: {
+        args: { x: { type: 'quaternion' } },
+        dispatch: { kind: 'agent', specialistId: 'x', instructions: 'y' },
+        toolAllowlist: [],
+        toolMode: 'read-only',
+        confirmMode: 'auto',
+      } as unknown as RawAppAction,
+    };
+    expect(defaultAppletPage('T', undefined, odd)).toContain(
+      '<input id="arg-go-x" data-decode="text" />',
+    );
   });
 });
 
