@@ -72,8 +72,14 @@ import {
   cronBounce,
 } from './cron/cli.js';
 import type { ScriptCliOptions } from './script/run.js';
-import { listMCPServers, removeMCPServer, MCPManager, setActiveMCPManager } from './mcp.js';
-import { ToolProfileStore } from './tool-profiles.js';
+import { listMCPServers, MCPManager, setActiveMCPManager } from './mcp.js';
+import {
+  removeMCPServerEverywhere,
+  describeMCPRemoval,
+  sweptNothing,
+  orphanedMCPServers,
+} from './mcp-lifecycle.js';
+import { ToolProfileStore, type ToolProfile } from './tool-profiles.js';
 import { runSetupHost } from './ui/SetupHost.js';
 import { describeOutcome } from './setup-flow.js';
 import {
@@ -1217,11 +1223,25 @@ program
 
 program
   .command('remove-mcp <key>')
-  .description('Remove a configured MCP server')
+  .description('Remove an MCP server and everything learned about its tools')
   .action((key: string) => {
     try {
-      removeMCPServer(key);
-      printInfo(`MCP server "${key}" removed.`);
+      // The sweep, not a bare config edit (#377) — and it runs even when the
+      // row is already gone, which is what makes this the command that clears
+      // debris left by a server removed before the cascade existed.
+      const result = removeMCPServerEverywhere(key);
+      const lines = describeMCPRemoval(key, result);
+      // `removeMCPServer` used to throw for an unknown key, and that throw was
+      // worth keeping: it catches a typo. Only the case where there was
+      // genuinely nothing to do keeps it — a run that swept real debris did
+      // real work and exits 0, or the retroactive cleanup would report success
+      // and a failing status in the same breath. The words are the sweep's own,
+      // so the exit code is the only thing this decides.
+      if (!result.existed && sweptNothing(result)) {
+        printError(lines.join('\n'));
+        process.exit(1);
+      }
+      for (const line of lines) printInfo(line);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       printError(message);
@@ -1684,14 +1704,37 @@ program
     printInfo(`Auto-update ${enabled ? 'enabled' : 'disabled'}.`);
   });
 
+/**
+ * Footer naming MCP servers that still own tool profiles but are no longer in
+ * `mcp.json` (#377).
+ *
+ * The one surface that can tell a user which keys are worth sweeping. The
+ * cascade runs for an absent row precisely so `bernard remove-mcp <key>` is
+ * that command, but nobody can name a key they have already forgotten — and
+ * the key itself carries only a hash of the server name, so the stored
+ * `category` is the only place it survives in full.
+ *
+ * Says nothing when there is nothing to say: a clean install must not grow a
+ * permanent paragraph about cleanup it does not need.
+ */
+function reportOrphanedMCPServers(profiles: ToolProfile[]): void {
+  const orphaned = orphanedMCPServers(profiles);
+  if (orphaned.length === 0) return;
+  printInfo('');
+  printInfo(
+    `Profiles above belong to ${orphaned.length} server(s) no longer in mcp.json: ${orphaned.join(', ')}`,
+  );
+  printInfo('Run `bernard remove-mcp <key>` on each to sweep them.');
+}
+
 program
   .command('tool-profiles')
   .description('Show learned tool reliability: successes, learned errors, and dismissed failures')
   .action(() => {
     try {
       const store = new ToolProfileStore({ seed: false });
-      const rows = store
-        .list()
+      const live = store.list();
+      const rows = live
         .map((p) => {
           const dismissed = Object.values(p.dismissed ?? {}).reduce((a, b) => a + b, 0);
           const byCategory = Object.entries(p.dismissed ?? {})
@@ -1706,6 +1749,7 @@ program
 
       if (rows.length === 0) {
         printInfo('No tool profiles recorded yet.');
+        reportOrphanedMCPServers(live);
         return;
       }
       const pad = Math.max(...rows.map((r) => r.name.length));
@@ -1723,6 +1767,7 @@ program
       printInfo('learned   = failures that were call-shape mistakes, recorded as bad examples');
       printInfo('dismissed = failures the model cannot fix (environmental) — a high count with no');
       printInfo('            learned errors means the tool is unreliable, not misused');
+      reportOrphanedMCPServers(live);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       printError(message);

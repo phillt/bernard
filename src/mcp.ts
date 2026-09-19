@@ -9,6 +9,7 @@ import { debugLog, openSessionSidecarFd } from './logger.js';
 import {
   flattenServerTools,
   makeAliasResolver,
+  mcpToolCategory,
   mcpServerSegment,
   mcpToolName,
 } from './mcp-names.js';
@@ -798,7 +799,7 @@ export class MCPManager {
           // manager, forcing every consumer into a lossy re-parse of the key.
           rawName: raw,
           kind: isRead ? 'read' : 'write',
-          category: `mcp.${serverName}`,
+          category: mcpToolCategory(serverName),
           deterministic: false,
           sideEffect: isRead ? 'network' : 'local',
           nonIdempotent,

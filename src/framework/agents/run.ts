@@ -310,7 +310,7 @@ export async function runDefinition<TInput, TFormatted>(
     toolMode: ctx.policyDecision?.toolMode?.mode,
     // Grants persisted before MCP tools were namespaced (#413) name a bare
     // tool. Built from the whole live MCP surface, never from `rawTools` —
-    // see `mcpAliasResolverFor`.
+    // see `makeAliasResolver`, built once by `MCPManager.snapshot()`.
     resolveToolAlias: ctx.mcp.resolveAlias,
     cacheEnabled: config.cacheEnabled,
     // Evidence-pointer registration (#141). Shared by reference into
