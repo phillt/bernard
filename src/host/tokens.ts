@@ -216,7 +216,15 @@ body {
   font: var(--text-base)/var(--leading-body) var(--sans);
 }
 
-main, .app { max-width: 42rem; margin: 0 auto; }
+/* Applets run in a desktop browser — that is what \`bernard app open\` starts
+   and the only place the host is reachable. 42rem (672px) is a PROSE column,
+   and it made every applet read as a phone screen centred in a desktop window:
+   a form field spanning 672px, a list of cards in a single file, and two
+   thirds of the viewport empty. 72rem is wide enough for a two-up card grid
+   and a row of fields, and still bounded so an ultrawide does not stretch a
+   text input to 3440px. Individual controls are bounded separately below —
+   a wider page must not mean a wider input. */
+main, .app { max-width: 72rem; margin: 0 auto; }
 
 h1, h2, h3 { line-height: var(--leading-tight); margin: 0 0 var(--space-2); }
 /* Explicit sizes: these inherited UA defaults, which is much of why two
@@ -338,12 +346,18 @@ a:hover { text-decoration-color: var(--accent); }
 
 /* Label plus its control, as one unit that can sit in a \`.row\`. \`label\` is
    already \`display: block\`, so this is the grouping it was missing. */
+/* \`max-width\` is what keeps widening the page from widening every control.
+   Inside a \`.row\` the flex basis already did that; a field on its own line
+   had nothing bounding it, so at 72rem a name input would be 1152px of empty
+   box. Bounded here rather than on \`input\` so a \`textarea\` in a \`.field\`
+   is bounded too, and a deliberately wide one outside a field still can be. */
 .field {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
   flex: 1 1 12rem;
   min-width: 0;
+  max-width: 34rem;
 }
 
 /* A raised item. \`li.story\` and \`.entry\` are this, twice. Applied to \`li\`
@@ -354,11 +368,16 @@ a:hover { text-decoration-color: var(--accent); }
   border-radius: var(--radius);
   padding: var(--space-4);
 }
+/* A grid rather than a column: on a desktop a list of cards is the surface
+   with the most width to spend, and \`flex-direction: column\` spent none of
+   it. \`auto-fill\` + \`minmax\` needs no breakpoint — it is one column in a
+   narrow window and as many as fit in a wide one, which is also why this does
+   not reintroduce a mobile/desktop fork the floor would have to maintain. */
 .cards {
   list-style: none;
   padding-left: 0;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
   gap: var(--space-3);
 }
 
