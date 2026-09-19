@@ -19,7 +19,7 @@ import {
   providerStallInfo,
   type ProviderStallInfo,
 } from '../error-taxonomy.js';
-import { withStallBudget } from '../providers/stall-guard.js';
+import { withStallBudget, DEFAULT_STALL_TIMEOUT_MS } from '../providers/stall-guard.js';
 import { inFlightForDispatch } from '../tools/in-flight.js';
 
 const WATCHDOG_INTERVAL_MS = 30_000;
@@ -39,6 +39,28 @@ const WATCHDOG_INTERVAL_MS = 30_000;
 const STREAM_STALL_TIMEOUT_MS = 120_000;
 
 /**
+ * How late a watchdog tick may be before it is read as the whole process having
+ * been frozen rather than as this dispatch having been silent (#607).
+ *
+ * One second, absolute. Ordinary timer jitter is milliseconds, so anything at
+ * this scale is a blocking `spawnSync` in a sibling dispatch, a long GC pause,
+ * a suspended machine, or an NTP step — none of which say anything about the
+ * dispatch this timer belongs to.
+ */
+const FROZEN_LOOP_TOLERANCE_MS = 1_000;
+
+/**
+ * How many provider round trips one non-streaming step can contain (#607).
+ *
+ * The model call, plus at most one `makeRepairHook` retry — that hook re-prompts
+ * exactly once on an `InvalidToolArgumentsError` / `NoSuchToolError`, and its
+ * retry is a second full `generateText` inside the same step, invisible to every
+ * budget below this one. The number is what relates this branch's liveness
+ * budget to the transport's first-byte ceiling, at the default AND on a retry.
+ */
+const STEP_ROUND_TRIPS = 2;
+
+/**
  * Default liveness budget on the NON-streaming branch (#607).
  *
  * Its sibling above measures inter-TOKEN silence, so any byte resets it and it
@@ -48,12 +70,15 @@ const STREAM_STALL_TIMEOUT_MS = 120_000;
  * round trip — the step's completion plus, at most, `makeRepairHook`'s single
  * retry, which is a second full round trip inside the same step.
  *
- * 180 s is that sum derived rather than guessed: twice the 90 s first-byte
- * budget, so one step's model call plus one repair can each run to the very edge
- * of a guard that already ships and still not trip this one. The retries the AI
- * SDK *does* make cost almost nothing here — a 429 or a 5xx answers immediately,
- * and the slow failures are our own guards, which throw a plain `Error` the SDK
- * does not retry.
+ * So the budget is derived rather than guessed: {@link STEP_ROUND_TRIPS} times
+ * the transport's own first-byte ceiling, so a step's model call and its repair
+ * can each run to the very edge of a guard that already ships without tripping
+ * this one. Expressed as a multiple rather than as a literal 180 000 because the
+ * relationship is the thing that has to hold — see `stallCeilingFor`, where a
+ * retry's shortened transport ceiling has to carry the same factor or the two
+ * silently stop being related. The retries the AI SDK *does* make cost almost
+ * nothing here — a 429 or a 5xx answers immediately, and the slow failures are
+ * our own guards, which throw a plain `Error` the SDK does not retry.
  *
  * Measured against the same quantity: 1,605 telemetry records from the seven
  * sites that build no tool registry at all (`rewriter`, `recall-filter`,
@@ -65,13 +90,13 @@ const STREAM_STALL_TIMEOUT_MS = 120_000;
  * `pac-critic` both declare `tools()`, so their `latencyMs` can carry tool time
  * and would flatter the ceiling.
  *
- * The residual, stated rather than padded away: a step that spends ~90 s on the
- * model call AND ~90 s on a repair sums to exactly this budget. Two consecutive
- * round trips within a second of a guard that has never been within 48 s of
- * firing is not a case worth widening a default for, and `0` is the off switch
- * for anyone who meets it.
+ * The residual, stated rather than padded away: a step that spends a full
+ * first-byte budget on the model call AND another on a repair sums to exactly
+ * this. Two consecutive round trips within a second of a guard that has never
+ * been within 48 s of firing is not a case worth widening a default for, and `0`
+ * is the off switch for anyone who meets it.
  */
-const DISPATCH_STALL_TIMEOUT_MS = 180_000;
+const DISPATCH_STALL_TIMEOUT_MS = STEP_ROUND_TRIPS * DEFAULT_STALL_TIMEOUT_MS;
 
 /**
  * Builds a promise that rejects with the canonical AbortError when the signal
@@ -150,6 +175,38 @@ function stallBudgetFor(useStreaming: boolean | undefined): number | null {
 }
 
 /**
+ * A retry's ceiling, in THIS branch's units.
+ *
+ * `AgentSpec.stallTimeoutMs` is a transport-scale number: one producer,
+ * `STALL_RETRY_BUDGET_MS`, sized explicitly against time to first byte ("above
+ * the 27.4 s worst legitimate TTFB measured across 1,230 instrumented
+ * requests"). The streaming budget is on that scale — a gap between two bytes —
+ * so it takes the number as given. The non-streaming one is not: it is
+ * {@link STEP_ROUND_TRIPS} times the transport ceiling by construction, and
+ * applying an unscaled retry ceiling collapses the factor.
+ *
+ * That collapse is not theoretical. At 30 ms-scale-30 000, a retry would budget
+ * a whole step at 30 s against a MEASURED maximum of 41.7 s for a single round
+ * trip with no repair at all — so attempts 2 and 3 would abort work that is
+ * fine, brand it `phase: 'dispatch'`, and burn straight through to
+ * `stall:recovery:exhausted`. A ceiling the measured maximum already exceeds is
+ * not a ceiling. New with #607: before it, `configuredStallMs` was `null` off
+ * the streaming branch, so the override reached the transport guards and never a
+ * dispatch watchdog.
+ *
+ * Scaling here rather than having `stall-recovery.ts` hand down two numbers: the
+ * retry loop knows how hard it wants to squeeze, and only the runner knows what
+ * a step is made of.
+ */
+function stallCeilingFor(
+  useStreaming: boolean | undefined,
+  stallTimeoutMs: number | undefined,
+): number | undefined {
+  if (stallTimeoutMs === undefined) return undefined;
+  return useStreaming ? stallTimeoutMs : stallTimeoutMs * STEP_ROUND_TRIPS;
+}
+
+/**
  * Liveness callback handed to the streaming branch (#325). Internal to this
  * module — deliberately NOT part of {@link AgentSpec}, because it is not a
  * caller-supplied hook: `runAgentInner` owns both the clock and the watchdog
@@ -182,8 +239,17 @@ export interface AgentSpec {
   messages: CoreMessage[];
   abortSignal?: AbortSignal;
   /**
-   * Ceiling on every liveness budget for this dispatch, in ms — the transport's
-   * header and body-inactivity guards and the mid-stream watchdog alike.
+   * Ceiling on every liveness budget for this dispatch, in ms, **on the
+   * transport's scale** — one time-to-first-byte.
+   *
+   * The scale is part of the contract rather than a detail (#607). Three of the
+   * four consumers measure that quantity directly and take the number as given:
+   * the header guard, the body-inactivity guard, and the mid-stream watchdog,
+   * whose budget is a gap between two bytes. The non-streaming watchdog does
+   * not — its budget is {@link STEP_ROUND_TRIPS} times a transport ceiling by
+   * construction — so it scales the number rather than applying it, in
+   * `stallCeilingFor`. A caller passes one number on one scale; the runner
+   * converts.
    *
    * Set only by the stall-recovery loop in `agents/run.ts`, and only on RETRY
    * attempts. It can only SHORTEN: each budget takes `min(configured, this)`, so
@@ -475,12 +541,28 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
   // to the `ask_user` case, and it catches the same population at three minutes
   // rather than twenty-six.
   //
-  // The argument that it is COMPLETE is recursive, and each rung is the pause:
-  // a dispatch that never returns is either stuck inside one of its own tools —
-  // where the MCP deadline, `shellTimeout`, or, if the tool is another dispatch,
-  // that child's own copy of this guard is what fires — or stuck outside them,
-  // where this fires. `ask_user` is the deliberate third case: paused forever, on
-  // purpose, because a person is thinking.
+  // A dispatch that never returns is either stuck inside one of its own tools,
+  // or stuck outside them — and only the second is this guard's to catch. The
+  // first is covered rung by rung: the MCP deadline for a `tools/call`,
+  // `shellTimeout` for `shell`, a nested dispatch's own copy of this guard for
+  // `subagent` / `task` / `specialist_run` / `delegate_<server>`, and each
+  // remaining built-in by whatever bound it carries itself (`web_read` and
+  // `web_search` by `FETCH_TIMEOUT_MS`, `wait` by `MAX_WAIT_SECONDS`).
+  // `ask_user` is the deliberate exception: paused forever, on purpose, because
+  // a person is thinking.
+  //
+  // **That enumeration is not exhaustive, and saying so is the point.** A
+  // built-in bounded by neither this guard nor a budget of its own is a fourth
+  // case, and at least one exists: `knowledge` and the RAG tools reach
+  // `getEmbeddingProvider()`, whose first call loads `@xenova/transformers` and
+  // on a cold cache downloads the model — `embeddings.ts` says so in as many
+  // words — with nothing timing it out. This guard pauses for it like any other
+  // tool, so acceptance criterion 1 is NOT met on that path. It fails open
+  // exactly as it did before #607, so nothing regresses; what is wrong is only a
+  // completeness claim, and the honest version is that the recursion covers
+  // every way a dispatch can sit inside a tool that has a bound at all. Bounding
+  // a model download is its own change — cutting it mid-transfer leaves a
+  // partial cache — and is deliberately not guessed at here.
   //
   // The two branches read their busy signal from different places, and the
   // streaming one is deliberately NOT moved onto the tool registry even though
@@ -509,9 +591,10 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
   const configuredStallMs = stallBudgetFor(spec.useStreaming);
   // `min`, never the override alone: a disabled guard must stay disabled, and a
   // retry may only tighten a liveness budget (see `AgentSpec.stallTimeoutMs`).
+  const ceilingMs = stallCeilingFor(spec.useStreaming, spec.stallTimeoutMs);
   const stallMs =
-    configuredStallMs !== null && spec.stallTimeoutMs !== undefined
-      ? Math.min(configuredStallMs, spec.stallTimeoutMs)
+    configuredStallMs !== null && ceilingMs !== undefined
+      ? Math.min(configuredStallMs, ceilingMs)
       : configuredStallMs;
 
   // Optional per-dispatch timeout. Chains a fresh AbortController off the
@@ -583,10 +666,53 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
   // `stallMs === null`, which was the opposite of where an unattended hang hurts
   // most. What differs between the branches now is only the two inputs below:
   // what counts as progress, and what counts as busy.
+  //
+  // The tick is SELF-CHECKING, because this clock measures one process's
+  // silence and can be frozen by work that is not this dispatch's (#607).
+  // `shell` is `spawnSync` (`tools/shell.ts`), which blocks the whole process
+  // and is raisable to `MAX_SHELL_TIMEOUT_MS` (10 min) through the timeout
+  // offer — a hazard `timeout-offer.ts` already names. Four dispatches run
+  // concurrently by default, so while dispatch A sits in a synchronous spawn,
+  // sibling B cannot stamp `lastProgressAt`; and when the loop resumes the
+  // TIMERS phase runs before the POLL phase, so this interval fires with a
+  // `sinceProgress` covering the freeze and kills B before B's already-arrived
+  // response is delivered. Measured: with a 300 ms budget and a 900 ms
+  // synchronous freeze, a dispatch whose `readFile` completion was queued and
+  // waiting was rejected at 930 ms. A wall-clock jump does the same thing for
+  // free — a laptop lid closed for an hour makes every non-streaming dispatch
+  // in the process look stalled at the first tick after resume.
+  //
+  // So the clock is RESTARTED rather than the tick being skipped. Skipping is
+  // not enough — `lastProgressAt` is stale by the frozen duration, so the next
+  // tick sees the same stale value. And crediting only the measured overrun is
+  // not enough either: the watchdog knows the EXCESS over its period was frozen
+  // and cannot know how much of the period before it was, so a credit of the
+  // excess alone still charges the dispatch one whole period of somebody else's
+  // spawn — which, for any budget at or below the 30 s tick, is the entire
+  // budget. Measured: a 1.5 s freeze on a 300 ms budget still fired, at exactly
+  // 300 ms, with the credit in place.
+  //
+  // Restarting is the fail-open direction this guard already chose (#325:
+  // "losing the guard costs us a slow failure, a false abort costs the user
+  // completed work"), and the cost is bounded — the only blocking call in the
+  // product is `spawnSync`, itself bounded by `shellTimeout`.
+  const tickMs = watchdogIntervalMs(stallMs);
+  let lastTickAt = Date.now();
   const watchdog =
     debug || stallMs !== null
       ? setInterval(() => {
           const now = Date.now();
+          // Ordinary timer jitter is milliseconds; a second of drift is the
+          // process having been somewhere else. Deliberately absolute rather
+          // than a multiple of the period, so a user-configured small budget
+          // (and therefore a small period) does not make every ordinary tick
+          // look like a freeze.
+          const drift = now - lastTickAt - tickMs;
+          lastTickAt = now;
+          if (drift > FROZEN_LOOP_TOLERANCE_MS) {
+            debugLog('agent:dispatch:clock-drift', { dispatchId, driftMs: drift });
+            lastProgressAt = now;
+          }
           const sinceProgress = now - lastProgressAt;
           // Streaming counts parts, which is the finer signal and the one this
           // branch has; non-streaming asks the tool registry, which is the only
@@ -613,6 +739,13 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
               dispatchId,
               model: modelId,
               sinceLastProgressMs: sinceProgress,
+              // What it was waiting FOR, not only how long it waited. The line
+              // carried the elapsed time alone, which cannot distinguish the two
+              // branches' budgets from each other, nor either of them from a
+              // retry's shortened ceiling — the three numbers a triage most
+              // needs to tell apart, and the three `stallCeilingFor` exists to
+              // keep on their own scales.
+              budgetMs: stallMs,
               stepsCompleted,
             });
             selfAbortMessage ??= spec.useStreaming
@@ -630,7 +763,7 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
             };
             abortChained?.();
           }
-        }, watchdogIntervalMs(stallMs))
+        }, tickMs)
       : null;
   watchdog?.unref?.();
 

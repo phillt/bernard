@@ -20,7 +20,7 @@ import { breadthOptionsFor, type BreadthOption } from '../permissions/breadth.js
 import { WRITE_PATH_TOOLS } from '../permissions/matchers.js';
 import { checkWritePath } from '../permissions/write-scope.js';
 import { runOrdered } from './write-barrier.js';
-import { displayToolName, runTracked } from './in-flight.js';
+import { displayToolName, enterToolWrapper, exitToolWrapper, runTracked } from './in-flight.js';
 import { duplicateKeyFor, duplicateRefusal, recordSucceededCall } from './duplicate-guard.js';
 
 /**
@@ -1235,6 +1235,42 @@ export function augmentTools(
           });
 
           return result;
+        },
+      },
+      toolDef,
+    );
+  }
+
+  // One outermost bracket per tool, applied AFTER both branches have built their
+  // wrapper, so neither can be the one that forgets it (#607).
+  //
+  // The liveness guard in `framework/runner.ts` pauses while a dispatch has a
+  // tool of its own in flight, and "in flight" has to mean the whole wrapper,
+  // not just `execute`. Both branches above await a human in `runBlockGate` and
+  // `runGate` BEFORE they reach `runTracked`, so with the narrow bracket alone a
+  // dispatch parked on a confirm prompt had no finished step and a zero count —
+  // measured, the guard killed it at the budget with `confirmAction` still
+  // pending and `execute` never entered. `runTracked` deliberately stays inside
+  // `runOrdered`, where `pendingCallNotice` needs it; see `in-flight.ts` for why
+  // these are two registries rather than one.
+  //
+  // A post-pass rather than an edit inside each `execute` body: those two bodies
+  // are the hottest path in the product and wrapping them in place would
+  // re-indent ~150 lines each for a two-line concern. This also covers a THIRD
+  // branch if one is ever added, which an in-body `try` would not.
+  for (const [toolName, toolDef] of Object.entries(augmented)) {
+    if (!toolDef || typeof toolDef.execute !== 'function') continue;
+    const inner = toolDef.execute.bind(toolDef) as (a: unknown, o: unknown) => Promise<unknown>;
+    augmented[toolName] = preserveMeta(
+      {
+        ...toolDef,
+        execute: async (args: unknown, execOptions: unknown) => {
+          const dispatchId = enterToolWrapper();
+          try {
+            return await inner(args, execOptions);
+          } finally {
+            exitToolWrapper(dispatchId);
+          }
         },
       },
       toolDef,

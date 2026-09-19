@@ -19,9 +19,13 @@ vi.mock('../../logger.js', async () => {
 
 import { runAgent, type AgentSpec } from '../runner.js';
 import { providerStallInfo, DISPATCH_ABORT_NAME } from '../../error-taxonomy.js';
-import { beginToolCall, __resetInFlightCalls } from '../../tools/in-flight.js';
+import { enterToolWrapper, __resetInFlightCalls } from '../../tools/in-flight.js';
+import { runWithDispatchId } from '../dispatch-context.js';
 import type { AgentHook } from '../hooks/types.js';
 import { generateText, streamText } from 'ai';
+import { readFileSync } from 'node:fs';
+import { augmentTools } from '../../tools/augment.js';
+import { attachMeta } from '../tools/adapter.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -563,7 +567,7 @@ describe('runAgent — dispatch liveness guard (non-streaming)', () => {
     // stay at three minutes instead of having to exceed the longest sub-agent —
     // #302's acceptance criteria written the right way round.
     (generateText as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-      stalledGenerate(() => void beginToolCall('ask_user')),
+      stalledGenerate(() => void enterToolWrapper()),
     );
     await withDispatchBudget('120', async () => {
       const race = await Promise.race([
@@ -582,7 +586,7 @@ describe('runAgent — dispatch liveness guard (non-streaming)', () => {
     // tool anywhere in the process would silence every other dispatch's guard
     // for as long as it ran — four dispatches run concurrently by default, and
     // the pool exempts nested acquires entirely.
-    beginToolCall('somebody-elses-web_read');
+    runWithDispatchId('somebody-else', () => enterToolWrapper());
     (generateText as unknown as ReturnType<typeof vi.fn>).mockImplementation(stalledGenerate());
     await withDispatchBudget('120', async () => {
       await expect(runAgent(makeSpec())).rejects.toThrow(/Dispatch timed out/);
@@ -707,6 +711,250 @@ describe('runAgent — dispatch liveness guard (non-streaming)', () => {
     // listening; the second's was released too, which is what this observes.
     expect(chained?.aborted).toBe(false);
   });
+});
+
+/**
+ * The three review findings on #607, each pinned at the seam it was measured
+ * at. Findings 1 and 3 abort work that is fine, which is the class #302's
+ * acceptance criteria forbid; finding 2 does the same one retry later.
+ */
+describe('runAgent — dispatch liveness guard, false positives (#607 review)', () => {
+  beforeEach(() => __resetInFlightCalls());
+
+  async function withDispatchBudget<T>(ms: string, fn: () => Promise<T>): Promise<T> {
+    const prev = process.env.BERNARD_DISPATCH_STALL_TIMEOUT_MS;
+    process.env.BERNARD_DISPATCH_STALL_TIMEOUT_MS = ms;
+    try {
+      return await fn();
+    } finally {
+      if (prev === undefined) delete process.env.BERNARD_DISPATCH_STALL_TIMEOUT_MS;
+      else process.env.BERNARD_DISPATCH_STALL_TIMEOUT_MS = prev;
+    }
+  }
+
+  const neverSettles = () => () => new Promise<never>(() => {});
+
+  it('does not fire while a permission gate is awaiting a person', async () => {
+    // Finding 1, driven through the REAL `augmentTools` rather than a hand-made
+    // registration — the defect was precisely that `runTracked` sits after both
+    // gates, so a test that registers by hand asserts the fix it is testing for.
+    // Measured before the fix: `confirmAction` pending, `execute` never entered,
+    // `inFlightForDispatch` 0, dispatch killed at the budget.
+    let executed = false;
+    let asked = false;
+    const tools = augmentTools(
+      {
+        boom: attachMeta(
+          {
+            description: 'dangerous thing',
+            parameters: {} as never,
+            execute: async () => {
+              executed = true;
+              return 'done';
+            },
+          } as never,
+          { kind: 'dangerous', sideEffect: 'external-api', name: 'boom' },
+        ),
+      } as never,
+      {
+        confirmThreshold: 'high',
+        confirmAction: async () => {
+          asked = true;
+          return new Promise<boolean>(() => {}); // a person who never answers
+        },
+      } as never,
+    ) as unknown as Record<string, { execute: (a: unknown, o: unknown) => Promise<unknown> }>;
+
+    (generateText as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      void tools.boom.execute({}, { toolCallId: 'c1', messages: [] });
+      return new Promise<never>(() => {});
+    });
+
+    await withDispatchBudget('150', async () => {
+      const race = await Promise.race([
+        runAgent(makeSpec()).then(
+          () => 'settled',
+          () => 'settled',
+        ),
+        new Promise<string>((r) => setTimeout(() => r('still-running'), 600)),
+      ]);
+      expect(race).toBe('still-running');
+    });
+    expect(asked).toBe(true);
+    expect(executed).toBe(false);
+  });
+
+  it('credits a frozen event loop back instead of blaming the dispatch for it', async () => {
+    // Finding 3. `shell` is `spawnSync`, raisable to 10 minutes, and four
+    // dispatches run concurrently — so a sibling can freeze the whole process
+    // while this dispatch's response is already sitting in the poll phase. The
+    // timers phase runs first, so without the credit the watchdog fires with a
+    // `sinceProgress` covering somebody else's spawn. Measured before the fix:
+    // rejected at 930 ms on a 300 ms budget, with the step's `readFile`
+    // completion queued and waiting.
+    //
+    // **The step completes from a TIMER due after the watchdog's, not from the
+    // poll-phase I/O the reproduction used.** Real I/O is what the defect is
+    // about — the timers phase runs before the poll phase — but as a test it is
+    // a race: under a loaded suite the callback sometimes lands first, and then
+    // the case passes whether or not the fix is present. Two timers cannot race:
+    // Node runs due timers in due order, so the watchdog's overdue tick is
+    // guaranteed to run while this dispatch is still alive, which is the only
+    // thing the assertion needs.
+    (generateText as unknown as ReturnType<typeof vi.fn>).mockImplementation((args: any) => {
+      return new Promise((resolve) => {
+        setTimeout(() => {
+          void args.onStepFinish?.({ text: '', toolCalls: [], toolResults: [] });
+          resolve({ text: 'ok', steps: [] });
+        }, 2_200);
+        // Spun SYNCHRONOUSLY here rather than from a timer of its own: a timer
+        // leaves a window in which the watchdog can tick before the freeze
+        // begins, and under load that window is where the test lands. From here
+        // there is none — the watchdog was armed microseconds ago and nothing
+        // can run until this returns. Longer than `FROZEN_LOOP_TOLERANCE_MS`,
+        // which is what tells a frozen process from ordinary timer jitter; a
+        // real freeze is minutes.
+        const until = Date.now() + 2_000;
+        while (Date.now() < until) {
+          /* nothing else in the process can run */
+        }
+      });
+    });
+    // 400 ms budget against a 2 s freeze: the drift (2 s minus one 400 ms
+    // period) clears `FROZEN_LOOP_TOLERANCE_MS`, and the step lands at 2.2 s —
+    // after the overdue tick, before the next one. Crediting the overrun rather
+    // than restarting leaves that tick at exactly one period of silence and it
+    // fires; restarting leaves it at zero.
+    await withDispatchBudget('400', async () => {
+      const result = await runAgent(makeSpec());
+      expect(result.text).toBe('ok');
+    });
+  });
+
+  it("scales a retry's transport-scale ceiling into this branch's units", async () => {
+    // Finding 2. `STALL_RETRY_BUDGET_MS` is sized against time to first byte;
+    // applied unscaled it would budget a whole step at 30 s against a measured
+    // 41.7 s maximum for one round trip with no repair.
+    //
+    // **Asserted on the RESOLVED BUDGET, not on when the guard fired**, and the
+    // first two attempts at this test were both unusable for that reason. One
+    // raced a fixed window under the 100 ms tick floor, where a scaled and an
+    // unscaled budget fire at the same tick and nothing can tell them apart.
+    // The second timed the abort — which measures the machine: under a loaded
+    // suite the first tick landed 800 ms late and an 800 ms budget reported
+    // 1601 ms, straddling the very factor of two being tested. The budget is a
+    // number the guard already computed; `agent:dispatch:stalled` now says it.
+    const CEILING = 60;
+    // Selected by dispatch id, not by "the first stalled row": several cases in
+    // this file deliberately leave a dispatch running to assert it is NOT
+    // aborted, and those watchdogs go on ticking into later tests' logs.
+    const budgetOf = (id: string): number | undefined =>
+      logCalls.find((c) => c.label === 'agent:dispatch:stalled' && c.data.dispatchId === id)?.data
+        .budgetMs;
+
+    (generateText as unknown as ReturnType<typeof vi.fn>).mockImplementation(neverSettles());
+    await withDispatchBudget('100000', async () => {
+      await expect(
+        runAgent(makeSpec({ stallTimeoutMs: CEILING, dispatchId: 'scale-plain' })),
+      ).rejects.toThrow(/Dispatch timed out/);
+    });
+    expect(budgetOf('scale-plain')).toBe(CEILING * 2);
+
+    // …and the streaming branch keeps taking the number as given, because its
+    // budget IS on the transport's scale. Scaling it there would be the same
+    // defect mirrored: twice as long to notice a dead socket.
+    (streamText as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      fullStream: { [Symbol.asyncIterator]: () => ({ next: () => new Promise<never>(() => {}) }) },
+      text: new Promise<never>(() => {}),
+    });
+    const prevStream = process.env.BERNARD_STREAM_STALL_TIMEOUT_MS;
+    process.env.BERNARD_STREAM_STALL_TIMEOUT_MS = '100000';
+    try {
+      await expect(
+        runAgent(
+          makeSpec({ useStreaming: true, stallTimeoutMs: CEILING, dispatchId: 'scale-stream' }),
+        ),
+      ).rejects.toThrow(/no data received/);
+    } finally {
+      if (prevStream === undefined) delete process.env.BERNARD_STREAM_STALL_TIMEOUT_MS;
+      else process.env.BERNARD_STREAM_STALL_TIMEOUT_MS = prevStream;
+    }
+    expect(budgetOf('scale-stream')).toBe(CEILING);
+  });
+
+  it('never lets a small budget turn the watchdog into a busy timer', async () => {
+    // `watchdogIntervalMs`'s floor is read by two things since #607 — the
+    // interval itself and the drift computation that decides whether the loop
+    // was frozen — and losing it would spin a timer at the budget's period on a
+    // hair-trigger setting. Pinned by elapsed time rather than by reading the
+    // constant: at a 1 ms budget the guard cannot fire before the floor.
+    (generateText as unknown as ReturnType<typeof vi.fn>).mockImplementation(neverSettles());
+    const t0 = Date.now();
+    await withDispatchBudget('1', async () => {
+      await expect(runAgent(makeSpec())).rejects.toThrow(/Dispatch timed out/);
+    });
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(90);
+  });
+
+  it('expresses the default as a multiple of the transport ceiling, not as a literal', () => {
+    // The relationship is the thing that has to hold, and a literal 180_000
+    // beside a 90_000 is two facts that can drift — `STEP_ROUND_TRIPS` could be
+    // changed for the retry path alone and the default would silently stop
+    // matching its own docstring.
+    //
+    // A source assertion, which this repo calls the weak assertion it is, and
+    // here it is the only one available: the default is 180 SECONDS, so nothing
+    // behavioural can observe it without waiting for it. What the factor MEANS
+    // is pinned behaviourally by the case above; this pins only that the two
+    // numbers are still one expression.
+    const src = readFileSync(new URL('../runner.ts', import.meta.url), 'utf8');
+    expect(src).toContain(
+      'const DISPATCH_STALL_TIMEOUT_MS = STEP_ROUND_TRIPS * DEFAULT_STALL_TIMEOUT_MS;',
+    );
+  });
+
+  it('starts measuring again once the tool wrapper returns', async () => {
+    // The bracket has to be released, or a dispatch that ever ran a tool is
+    // permanently "busy" and the guard is silently off for the rest of it — the
+    // failure mode that looks exactly like the guard working. A leaked bracket
+    // survives every other case in this file, because they all either never
+    // enter one or never leave.
+    let release: (() => void) | undefined;
+    const tools = augmentTools(
+      {
+        slow: attachMeta(
+          {
+            description: 'slow',
+            parameters: {} as never,
+            execute: () => new Promise((r) => (release = () => r('done'))),
+          } as never,
+          { kind: 'read', sideEffect: 'none', name: 'slow' },
+        ),
+      } as never,
+      {} as never,
+    ) as unknown as Record<string, { execute: (a: unknown, o: unknown) => Promise<unknown> }>;
+
+    (generateText as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      void tools.slow.execute({}, { toolCallId: 'c1', messages: [] });
+      return new Promise<never>(() => {});
+    });
+
+    await withDispatchBudget('200', async () => {
+      const p = runAgent(makeSpec()).then(
+        () => 'settled',
+        (e: unknown) => (e as Error).message,
+      );
+      // paused while the tool runs …
+      const midway = await Promise.race([
+        p,
+        new Promise<string>((r) => setTimeout(() => r('still-running'), 500)),
+      ]);
+      expect(midway).toBe('still-running');
+      // … and measuring again the moment it returns.
+      release?.();
+      await expect(p).resolves.toMatch(/Dispatch timed out/);
+    });
+  }, 15000);
 });
 
 describe('a caller-supplied dispatch id (#512)', () => {
