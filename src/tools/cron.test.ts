@@ -356,4 +356,137 @@ If anything urgent needs Phil's attention, use the notify tool to alert him.`;
       );
     });
   });
+
+  describe('create refuses a twin of an enabled job (#401)', () => {
+    const existing = {
+      id: 'old-id',
+      name: 'Nightly',
+      schedule: '0 0 * * *',
+      prompt: 'do the thing',
+      enabled: true,
+      createdAt: '2026-06-12T00:00:00.000Z',
+    };
+
+    it('refuses, and names the job and both ways forward', async () => {
+      // 42 identical jobs were created without a murmur. A warning that still
+      // writes the row is what would have happened 42 times.
+      mockStore.loadJobs.mockReturnValue([existing]);
+
+      const result = await call('create')({
+        name: 'Something else entirely',
+        schedule: '0 0 * * *',
+        prompt: 'do the thing',
+      });
+
+      expect(result).toContain('Error');
+      expect(result).toContain('old-id');
+      expect(result).toContain('"action":"update"');
+      expect(mockStore.createJob).not.toHaveBeenCalled();
+    });
+
+    it('ignores the name, because two jobs differing only in label still collide', async () => {
+      mockStore.loadJobs.mockReturnValue([{ ...existing, name: 'Totally Different' }]);
+      const result = await call('create')({
+        name: 'Nightly',
+        schedule: '0 0 * * *',
+        prompt: 'do the thing',
+      });
+      expect(result).toContain('Error');
+    });
+
+    it('creates when the prompt or the schedule differs', async () => {
+      mockStore.loadJobs.mockReturnValue([existing]);
+      mockStore.createJob.mockReturnValue({ ...existing, id: 'new-id', prompt: 'something else' });
+
+      const result = await call('create')({
+        name: 'Nightly',
+        schedule: '0 0 * * *',
+        prompt: 'something else',
+      });
+      expect(result).toContain('Cron job created');
+      expect(mockStore.createJob).toHaveBeenCalled();
+    });
+
+    it('creates but points at a disabled twin, which is probably the job that was meant', async () => {
+      mockStore.loadJobs.mockReturnValue([{ ...existing, enabled: false }]);
+      mockStore.createJob.mockReturnValue({ ...existing, id: 'new-id' });
+
+      const result = await call('create')({
+        name: 'Nightly',
+        schedule: '0 0 * * *',
+        prompt: 'do the thing',
+      });
+      expect(result).toContain('Cron job created');
+      expect(result).toContain('a disabled job has the same schedule and prompt');
+      expect(result).toContain('old-id');
+    });
+
+    it('says how many jobs there are once the pile is large enough to matter', async () => {
+      const many = Array.from({ length: 21 }, (_, i) => ({
+        ...existing,
+        id: `j${i}`,
+        prompt: `prompt ${i}`,
+      }));
+      mockStore.loadJobs.mockReturnValue(many);
+      mockStore.createJob.mockReturnValue({ ...existing, id: 'new-id' });
+
+      const result = await call('create')({
+        name: 'Nightly',
+        schedule: '0 0 * * *',
+        prompt: 'brand new prompt',
+      });
+      expect(result).toContain('21 cron jobs');
+      expect(result).toContain('cron-delete');
+    });
+  });
+
+  describe('catchUp (#400)', () => {
+    it('is carried through create and reported back', async () => {
+      mockStore.loadJobs.mockReturnValue([]);
+      mockStore.createJob.mockImplementation(
+        (name: string, schedule: string, prompt: string, options: Record<string, unknown>) => ({
+          id: 'new-id',
+          name,
+          schedule,
+          prompt,
+          enabled: true,
+          createdAt: 'now',
+          ...options,
+        }),
+      );
+
+      const result = await call('create')({
+        name: 'Monitor',
+        schedule: '0 */2 * * *',
+        prompt: 'check replies',
+        catchUp: true,
+      });
+      expect(mockStore.createJob).toHaveBeenCalledWith('Monitor', '0 */2 * * *', 'check replies', {
+        catchUp: true,
+      });
+      expect(result).toContain('Catch up missed runs: true');
+    });
+
+    it('is a field update on its own, with nothing else changed', async () => {
+      // Without this, turning catch-up on would require also re-sending the
+      // prompt or the schedule, which is how a prompt gets clobbered.
+      mockStore.updateJob.mockReturnValue({
+        id: 'test-id',
+        name: 'Monitor',
+        schedule: '0 */2 * * *',
+        enabled: true,
+        catchUp: true,
+      });
+
+      const result = await call('update')({ id: 'test-id', catchUp: true });
+      expect(mockStore.updateJob).toHaveBeenCalledWith('test-id', { catchUp: true });
+      expect(result).toContain('Catch up missed runs: true');
+    });
+
+    it('still refuses an update that changes nothing at all', async () => {
+      const result = await call('update')({ id: 'test-id' });
+      expect(result).toContain('at least one field');
+      expect(result).toContain('catchUp');
+    });
+  });
 });

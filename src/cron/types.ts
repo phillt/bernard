@@ -105,6 +105,49 @@ export interface CronJob extends ScopeSelection {
    */
   timeoutMs?: number;
   /**
+   * Run one missed fire when the clock has moved past a boundary (#400).
+   *
+   * Unset means off, preserving the behaviour every existing job was created
+   * under: a fire the daemon slept through is recorded and dropped. Whether that
+   * is right is a property of the job and nothing else can guess it — a monitor
+   * ("check the replies every two hours") wants the late run, because running
+   * late is the whole point and not running at all is the failure; a scheduled
+   * action ("send the morning summary at 8") does not, because firing at 3pm is
+   * worse than skipping.
+   *
+   * **At most one run, however many were missed.** A laptop shut over a weekend
+   * owes an hourly monitor 60 fires; replaying them would be 60 passes over the
+   * same inbox, 60 dispatches against a pool of three, and 60 lots of tokens to
+   * reach the answer the first one already gives. The state the job reports on
+   * is current state.
+   *
+   * Settable by the `cron` tool, unlike `writePaths` and `toolPermissions`. Those
+   * are authority — `cli.ts` states the rule that a model must not widen what it
+   * may do — and this is not: a caught-up run executes under exactly the posture
+   * the job already had. It changes *when*, never *what*.
+   */
+  catchUp?: boolean;
+  /**
+   * The boundary the scheduler is currently waiting for, ISO-8601 (#400).
+   *
+   * Persisted rather than held in memory so a daemon that was stopped — or a
+   * machine that was off — is a missed fire like any other on restart, instead
+   * of silently re-seeding from "now" and reporting nothing. Written by the
+   * scheduler only; a hand-edited value simply moves the next fire.
+   */
+  nextRunAt?: string;
+  /**
+   * Boundaries that passed without producing a run, since the last on-time run.
+   *
+   * Reset to zero by an on-time run rather than accumulated forever, so the
+   * number answers "how much has this job dropped lately" — which is
+   * actionable — rather than "since when?", which is not. A job on a mostly
+   * sleeping laptop keeps a standing count, and that is the signal.
+   */
+  missedRuns?: number;
+  /** ISO-8601 timestamp of when a missed fire was last noticed. */
+  lastMissedAt?: string;
+  /**
    * Extra locations this job may write to, beyond its own workspace (#340).
    *
    * Absolute paths; a directory grants its whole subtree. Every job always

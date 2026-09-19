@@ -13,6 +13,29 @@ import {
 const MAX_JOBS = 50;
 
 /**
+ * Everything about a job that may be changed after it exists.
+ *
+ * Derived from {@link CronJob} rather than restated as a hand-written union of
+ * field names. The union was a standing tax — every field added to the record
+ * since had to be remembered here as well, and one that was not simply failed to
+ * compile at whichever call site tried to write it, which reads as "that field
+ * is not persisted" rather than "the list is stale". `id` and `createdAt` are
+ * the two facts a job is allowed to be identified by, so they stay out; a fourth
+ * posture field, or a fifth scheduling one, now needs no edit here at all.
+ */
+export type JobUpdate = Partial<Omit<CronJob, 'id' | 'createdAt'>>;
+
+/**
+ * The fields a *creator* may set. Deliberately a short allowlist rather than
+ * {@link JobUpdate}: everything else on a job is the scheduler's own bookkeeping
+ * (`lastRun`, `nextRunAt`, `missedRuns`) and is meaningless at creation.
+ */
+export type NewJobOptions = Pick<
+  CronJob,
+  'confirmMode' | 'toolMode' | 'skipPermissions' | 'catchUp'
+>;
+
+/**
  * Disk-backed store for cron jobs and alerts.
  *
  * Jobs are persisted as a single `jobs.json` array; alerts are individual
@@ -81,12 +104,7 @@ export class CronStore {
    *
    * @throws {Error} If the maximum number of jobs ({@link MAX_JOBS}) has been reached.
    */
-  createJob(
-    name: string,
-    schedule: string,
-    prompt: string,
-    options?: Pick<CronJob, 'confirmMode' | 'toolMode' | 'skipPermissions'>,
-  ): CronJob {
+  createJob(name: string, schedule: string, prompt: string, options?: NewJobOptions): CronJob {
     const jobs = this.loadJobs();
     if (jobs.length >= MAX_JOBS) {
       throw new Error(`Maximum of ${MAX_JOBS} cron jobs reached.`);
@@ -103,6 +121,7 @@ export class CronStore {
       ...(options?.skipPermissions !== undefined
         ? { skipPermissions: options.skipPermissions }
         : {}),
+      ...(options?.catchUp !== undefined ? { catchUp: options.catchUp } : {}),
     };
     jobs.push(job);
     this.saveJobs(jobs);
@@ -114,31 +133,30 @@ export class CronStore {
    *
    * @returns The updated job, or `undefined` if the ID was not found.
    */
-  updateJob(
-    id: string,
-    updates: Partial<
-      Pick<
-        CronJob,
-        | 'name'
-        | 'schedule'
-        | 'prompt'
-        | 'enabled'
-        | 'lastRun'
-        | 'lastRunStatus'
-        | 'lastResult'
-        | 'lastErrorCategory'
-        | 'confirmMode'
-        | 'toolMode'
-        | 'skipPermissions'
-        | 'writePaths'
-        | 'toolPermissions'
-      >
-    >,
-  ): CronJob | undefined {
+  updateJob(id: string, updates: JobUpdate): CronJob | undefined {
     const jobs = this.loadJobs();
     const idx = jobs.findIndex((j) => j.id === id);
     if (idx === -1) return undefined;
+    const previousSchedule = jobs[idx].schedule;
     Object.assign(jobs[idx], updates);
+    // `nextRunAt` is COMPUTED from `schedule`, so changing the input has to
+    // invalidate the cached output — and here rather than at each caller,
+    // because a caller that forgets leaves a boundary belonging to an
+    // expression that no longer exists. The scheduler then trusts it: it
+    // re-seeds a held job whose schedule changed, but a job it is not holding
+    // (the daemon was down, or the job was disabled when the edit landed) comes
+    // back through the same "prefer what is on disk" path and inherits the
+    // stale boundary. Worse, if that boundary is in the past the miss report
+    // fires and names three causes — asleep, stopped, powered off — none of
+    // which happened, on the one feature whose whole point is telling the truth
+    // about dropped fires.
+    if (
+      updates.schedule !== undefined &&
+      updates.schedule !== previousSchedule &&
+      updates.nextRunAt === undefined
+    ) {
+      delete jobs[idx].nextRunAt;
+    }
     this.saveJobs(jobs);
     return jobs[idx];
   }

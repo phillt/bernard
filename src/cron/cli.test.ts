@@ -20,6 +20,10 @@ const mockClient = vi.hoisted(() => ({
 
 const mockLogStore = vi.hoisted(() => ({
   deleteJobLogs: vi.fn().mockReturnValue(true),
+  // `cronList` measures a failure streak through this (#401). It short-circuits
+  // unless a job's last run failed, so most tests never reach it — which is
+  // exactly why the double has to carry it.
+  getEntries: vi.fn().mockReturnValue([]),
 }));
 
 const mockOutput = vi.hoisted(() => ({
