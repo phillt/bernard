@@ -119,8 +119,7 @@ export const MODEL_ROLES: readonly ModelRole[] = [
   {
     id: 'classifier',
     label: 'Classifier / router',
-    description:
-      'Rewriter, reference resolver/lookup, specialist detector — cheap single-shot decisions.',
+    description: 'Rewriter, reference resolver, specialist detector — cheap single-shot decisions.',
     lookFor:
       'The cheapest model that still judges reliably. These are quick single-shot routing calls where latency and price dominate.',
     defaultTiers: {
@@ -134,7 +133,7 @@ export const MODEL_ROLES: readonly ModelRole[] = [
     label: 'Coder',
     description: 'Code generation and editing — specialists that write or modify code.',
     lookFor:
-      'A model strong at code generation and editing. No SITE resolves to this role; it is reached by a specialist that declares `role: "coder"` on its record (#423).',
+      'A model strong at code generation and editing. Nothing routes here on its own — a saved specialist reaches it by declaring `role: "coder"`.',
     defaultTiers: {
       'optimize-tokens': 'cheap',
       balanced: 'mid',

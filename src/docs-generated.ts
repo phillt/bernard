@@ -7,6 +7,11 @@ import {
 import { UI_RUNTIME_GLOBAL, UI_RUNTIME_PATH, UI_RUNTIME_RULE } from './host/ui-runtime.js';
 import { INTENT_FIELDS, INTENT_FIELD_LABELS } from './apps/brief.js';
 import { SLASH_COMMANDS } from './ui/slash-commands.js';
+import { CONFIRM_MODES, TOOL_MODES } from './tool-modes.js';
+import { COORDINATOR_MODES } from './coordinator-modes.js';
+import { ACT_KEY, REMOTE_MESSAGE_MODES } from './remote-messages.js';
+import { DEFAULT_ROLE_TIERS, MODEL_ROLES } from './model-roles.js';
+import { WIZARD_CATEGORIES_DATA } from './profiles-wizard-data.js';
 import type { DocEntry } from './docs-store.js';
 
 /**
@@ -321,7 +326,334 @@ worst failure available.`,
   };
 }
 
+/** A label/description record rendered as a two-column table. */
+function modeRows(modes: ReadonlyArray<{ label: string; description: string }>): string {
+  return modes.map((m) => `| **${m.label}** | ${m.description} |`).join('\n');
+}
+
+/**
+ * The permission tables, read from the records every settings surface reads.
+ *
+ * `tool-modes.ts`' own docstring is about exactly this failure: three surfaces
+ * spelled the same three answers three different ways and one of them was
+ * simply wrong, describing `write` as what `unrestricted` does. A manual is the
+ * fourth surface and the one a reader trusts most, so it renders the same rows
+ * the menus render rather than a fifth paraphrase of them.
+ *
+ * Coordinator mode is here because the question is the same one — how much
+ * Bernard settles on its own before involving you — and because the alternative
+ * is a hand-written copy of those three rows in an authored document, which is
+ * the drift this module exists to end. It is labelled as not a permission.
+ */
+function permissionsDoc(): DocEntry {
+  return {
+    id: 'bernard-permissions',
+    title: 'What Bernard may do on its own',
+    description:
+      'Tool mode, when Bernard stops to ask, how a grant is remembered, and where an unattended write may land. Read when the user asks how to stop Bernard doing something, or why it asked permission.',
+    body: `# What Bernard may do on its own
+
+Bernard runs commands and writes files on the machine it is installed on. Four
+settings decide how much of that happens without you, and they are independent
+— changing one does not change the others.
+
+## What it may do at all
+
+One question, and it settles the whole permission posture. It is a screen in
+\`bernard setup\` and a row in \`/agent-options\`.
+
+| answer | what it means |
+| --- | --- |
+${modeRows(TOOL_MODES)}
+
+The middle answer is the default. What counts as risky is decided by the tool
+AND the arguments, never the tool alone — \`git status\` is a read, even though
+it arrives through the same shell tool as \`rm -rf\`.
+
+The last answer is not a stronger version of the middle one. It switches off
+the block, the prompt, **and** any deny rule you saved, so a rule written to
+keep something out of Bernard's reach stops applying.
+
+## When it stops to ask
+
+Every call is scored before it runs.
+
+- **low** — reads. Reading a file, a web search, a lookup on a connected
+  service.
+- **medium** — ordinary local writes, and any connected-service tool Bernard
+  cannot classify from its name.
+- **high** — a shell command that is not a plain read, and anything whose
+  effect leaves the machine.
+
+A tool that says nothing about itself counts as **medium**, deliberately: the
+strict level stops on it and the default one does not, so an unrecognised tool
+is neither silently trusted nor bricked.
+
+\`/agent-options → Confirm mode\` moves the line:
+
+| level | stops on |
+| --- | --- |
+${modeRows(CONFIRM_MODES)}
+
+## Saying yes once, or for good
+
+Every prompt offers the same choices: **Allow once**, **Allow for session**,
+and — where Bernard can name a stable thing to allow — **Always allow … for
+this profile**. Cancel refuses.
+
+"For session" is forgotten when you quit. A profile grant is written to the
+active profile and survives restarts; \`/tool-permissions\` lists what you have
+saved and removes any of it.
+
+Shell is remembered per command rather than wholesale, so allowing \`git\` does
+not allow \`rm\`. A command line with a pipe, a redirect or a subshell has no
+stable name, so it is never offered as something to remember — it is asked
+about every time.
+
+## Writes with nobody watching
+
+A cron job, an applet button and \`bernard script\` all run tools with nobody
+there to answer a prompt. They are scoped by **where** they may write, not only
+by what: each gets its own workspace directory, may write there, and may not
+write anywhere else unless you say so. A refusal names the workspace, because
+the caller is generated code — a bare "denied" gets retried against the same
+path until the job runs out of steps.
+
+\`bernard cron-grant <id> [paths...]\` shows or adds the extra places one job
+may write, and \`--allow\` lets it run a tool it otherwise cannot, scoped as
+narrowly as a single command. \`bernard app-grant <appId> [tools...]\` does the
+tool half for an applet, with \`--deny\` for the other direction and
+\`--clear\` to remove everything.
+
+Both are commands the person types, and neither is a tool Bernard can call. An
+agent that can widen its own permissions does not have any.
+
+The shell tool is deliberately **not** path-scoped. Working out what an
+arbitrary command line will write is not reliably possible, and a containment
+check that is sometimes wrong is worse than none — it grants confidence it has
+not earned.
+
+## What another program may ask of a session
+
+\`bernard say\` puts a message in front of a running session. What happens next
+is a setting, under \`/agent-options → Messages from other processes\`:
+
+| answer | what it means |
+| --- | --- |
+${modeRows(REMOTE_MESSAGE_MODES)}
+
+Acting on a message you are looking at is always available and gated by
+nothing: pressing \`${ACT_KEY}\` runs it. That is consent to one message, which
+is stronger than any of these rows, so the setting only governs what happens
+with nobody watching.
+
+## How much it plans first
+
+Not a permission, and the fourth answer to the same question — how much Bernard
+settles on its own before it starts. Under \`/agent-options → Coordinator
+mode\`.
+
+| answer | what it means |
+| --- | --- |
+${modeRows(COORDINATOR_MODES)}
+
+Planning makes a job of several steps considerably more reliable, and costs
+turns and time on a job that was only ever one step.`,
+  };
+}
+
+/**
+ * The model roles and the tier grid, from {@link MODEL_ROLES}.
+ *
+ * `model-roles.ts` calls itself the single source of truth for roles and
+ * derives the lineup slots, the tier table, the editor menu and the snapshot
+ * logging from one list. A manual restating six labels and eighteen tier cells
+ * by hand is the one copy that cannot be checked by running Bernard.
+ *
+ * `lineups.ts`' `DEFAULT_TIERS` — the provider-to-model grid — is deliberately
+ * NOT rendered. Those ids churn, catalogue membership settles nothing about
+ * whether a model can actually be called (that file says so at length), and a
+ * manual naming a retired model is the failure this corpus exists to prevent.
+ * `/lineup` shows the live binding and `bernard validate-lineup` probes it.
+ */
+function modelsDoc(): DocEntry {
+  const roles = MODEL_ROLES.map((r) => `| **${r.label}** | ${r.description} | ${r.lookFor} |`).join(
+    '\n',
+  );
+  const modes = ['optimize-tokens', 'balanced', 'optimize-performance'] as const;
+  const tiers = MODEL_ROLES.map(
+    (r) => `| **${r.label}** | ${modes.map((m) => DEFAULT_ROLE_TIERS[m][r.id]).join(' | ')} |`,
+  ).join('\n');
+
+  return {
+    id: 'bernard-models',
+    title: 'Which model answers, and what it costs',
+    description:
+      'Providers and keys, custom endpoints, and how one turn spreads its work across models of different cost. Read when the user asks which model is answering, why a turn cost what it did, or how to use another endpoint.',
+    body: `# Models
+
+## Which company answers you
+
+Bernard talks to Anthropic, OpenAI and xAI directly, and to anything else that
+speaks one of those three APIs — a local Ollama, an OpenRouter account, a
+gateway at work.
+
+\`bernard add-key <provider> <key>\` stores a key; \`bernard providers\` lists
+what is installed and which of them have one. Keys are shared by every profile,
+so adding one is done once.
+
+For anything else:
+
+\`\`\`
+bernard add-provider ollama --sdk openai \\
+  --base-url http://localhost:11434/v1 --model llama3.2
+\`\`\`
+
+\`--sdk\` says which of the three wire formats the endpoint speaks, not who made
+the model behind it. A custom provider then behaves like a built-in one
+everywhere: \`/provider\` switches to it, \`/model\` picks a model on it.
+
+## One turn is not one model
+
+A turn is not one call. Bernard rewrites the message for the model family it is
+about to ask, decides which remembered facts are worth including, hands pieces
+of the work to sub-agents, and compresses the conversation when it gets long.
+Each of those is its own call, and none of them needs the model that writes the
+answer.
+
+So every call site is labelled with the **kind of work** it does, and the
+profile decides which model each kind gets.
+
+| role | what runs there | what to look for |
+| --- | --- | --- |
+${roles}
+
+## The ladder
+
+A **lineup** binds three models for one provider — a strong one, a middling
+one and a cheap one. **Model mode** then says how far up that ladder each role
+reaches:
+
+| role | optimize-tokens | balanced | optimize-performance |
+| --- | --- | --- | --- |
+${tiers}
+
+\`balanced\` is the default, and it is worth reading the orchestrator row: that
+is every turn you have, and it resolves to the **premium** slot — the most
+expensive model the provider sells, on every message, with the bill arriving at
+the provider rather than in the terminal.
+
+\`/lineup\` edits the active lineup and \`/lineups\` switches between them.
+\`bernard set-model-mode <mode>\`, or \`/agent-options → Model mode\`, moves the
+ladder.
+
+## Asking for a kind of model, not a named one
+
+A saved specialist may say which model it wants, in one of two ways, and they
+are not interchangeable. A **role** is an intent — "this writes code" — and the
+active profile keeps choosing correctly when the lineup changes. A
+**provider/model pin** freezes one specific model, and goes stale the moment
+the lineup moves; Bernard drops a pin that no longer belongs to the active
+lineup rather than calling a model nobody chose. Declaring both is refused.
+
+## Where the model list comes from
+
+Context windows and prices come from a catalogue fetched about once a day and
+cached. A model missing from it still runs — Bernard assumes a 128k window and
+reports its cost as \`n/a\`. \`/refresh-models\` refetches it.
+
+Being in the catalogue is not the same as being callable, in either direction.
+\`bernard validate-lineup\` probes every model in a lineup for real, and is the
+only thing that answers "can this actually be called".
+
+## Repeated input is discounted, where the provider allows it
+
+The instructions, the tool definitions and the settled part of a conversation
+are identical from one step to the next, so Bernard marks them as reusable and
+the provider bills them at a fraction of the price. Anthropic and OpenAI both
+do this; a custom endpoint may not, in which case the same text is billed in
+full on every step, and Bernard says so once when a session's prefix gets large
+enough for it to matter.
+
+\`bernard usage\` breaks a session down by call site and by model, which is the
+place to look when a session cost more than expected.`,
+  };
+}
+
+/**
+ * Every setting a person is meant to change, from the registry the wizard uses.
+ *
+ * FIRST SENTENCES only, and that is a budget rather than a style choice: the
+ * full descriptions render at 10,089 characters, which is over the per-document
+ * cap, and the first sentences at 4,568, which is not. The whole text is one
+ * keystroke away in \`/agent-options\`, and the document says so.
+ *
+ * `OPTIONS_REGISTRY` is deliberately not imported. It lives in `config.ts`,
+ * measured at **+85 ms** of module graph against **+27 ms** for this registry
+ * and its three mode tables — above the 65 ms edge `docs-store.ts` already
+ * declines to take for one number. Every variable it would contribute is
+ * already here as `WizardFieldData.envVar`.
+ */
+function settingsDoc(): DocEntry {
+  const groups = WIZARD_CATEGORIES_DATA.map((c) => {
+    const rows = c.fields
+      .map((f) => {
+        // The first sentence, split on a full stop followed by whitespace.
+        // Whitespace is then collapsed and any `|` escaped, because the cell
+        // lands in a markdown table and a description is free prose written for
+        // a wizard screen — today none of them wraps inside its first sentence
+        // or contains a pipe, which is an accident of the current copy rather
+        // than a rule anyone is keeping.
+        const first = f.description
+          .split(/(?<=[.!?])\s/)[0]
+          .replace(/\s+/g, ' ')
+          .replace(/\|/g, '\\|');
+        return `| ${f.label} | ${f.envVar ? `\`${f.envVar}\`` : '—'} | ${first} |`;
+      })
+      .join('\n');
+    return `## ${c.title}\n\n${c.description}\n\n| setting | variable | what it does |\n| --- | --- | --- |\n${rows}`;
+  }).join('\n\n');
+
+  return {
+    id: 'bernard-settings',
+    title: 'Every setting, and the variable behind it',
+    description:
+      'Every setting a person is meant to change, grouped as the setup wizard groups them, with the variable each one reads. Read when the user asks what they can configure, or what a variable is called.',
+    body: `# Settings
+
+This is the complete set of settings **meant for you**. Other \`BERNARD_*\`
+variables exist and are internal — tuning knobs, test seams, and escape hatches
+that are not part of what Bernard offers.
+
+Three ways to change any of them, and they are the same settings:
+
+- \`bernard setup\` walks them, opening each one on the value in force. A quick
+  run asks three questions; \`bernard setup --expert\` asks all of them.
+- \`/agent-options\` in a running session, which is also where the full
+  explanation of each setting lives — the sentences below are the first line of
+  it.
+- The environment variable, which is only read when the profile leaves the
+  setting unset.
+
+Settings belong to a **profile**, so a profile is a named set of all of this
+that you switch between in one step. \`/profiles\` lists and switches; keys and
+connected services stay shared across all of them. A value saved into a profile
+shadows the matching variable from then on, which is why \`bernard setup\`
+saves only what you actually changed.
+
+${groups}`,
+  };
+}
+
 /** The derived documents, built fresh — they are cached one level up. */
 export function generatedDocs(): DocEntry[] {
-  return [stylingDoc(), briefDoc(), commandsDoc(), uiRuntimeDoc()];
+  return [
+    stylingDoc(),
+    briefDoc(),
+    commandsDoc(),
+    uiRuntimeDoc(),
+    permissionsDoc(),
+    modelsDoc(),
+    settingsDoc(),
+  ];
 }

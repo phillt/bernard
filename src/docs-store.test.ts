@@ -24,6 +24,11 @@ import { MANIFEST_PATH, ICON_PATH } from './host/webmanifest.js';
 import { UI_RUNTIME_PATH } from './host/ui-runtime.js';
 import { INTENT_FIELDS, INTENT_FIELD_LABELS } from './apps/brief.js';
 import { SLASH_COMMANDS } from './ui/slash-commands.js';
+import { CONFIRM_MODES, TOOL_MODES } from './tool-modes.js';
+import { COORDINATOR_MODES } from './coordinator-modes.js';
+import { REMOTE_MESSAGE_MODES } from './remote-messages.js';
+import { DEFAULT_ROLE_TIERS, MODEL_ROLES } from './model-roles.js';
+import { WIZARD_CATEGORIES_DATA } from './profiles-wizard-data.js';
 
 /**
  * The whole index, which is what `docs list` returns.
@@ -54,6 +59,21 @@ const cliSource = fs.readFileSync(path.join('src', 'index.ts'), 'utf-8');
 
 /** Every `.command('<name> …')` Commander is given, in declaration order. */
 const cliCommands = [...cliSource.matchAll(/\.command\('([a-z][a-z0-9-]*)/g)].map((m) => m[1]);
+
+/**
+ * Every `--flag` spelling that appears in `src/index.ts`, as whole tokens.
+ *
+ * Deliberately every occurrence rather than only the first argument of an
+ * `.option()` call: a flag named in a description or a comment there is still a
+ * flag this CLI knows about, and parsing Commander's option grammar to be
+ * stricter would fail on `-b, --bundled` and `--allow <specifier...>` long
+ * before it caught anything.
+ *
+ * Whole tokens matter, though. A substring test passes `--voice-normalize`,
+ * which does not exist — the real flag is `--no-voice-normalize`, and the
+ * option Commander derives from it is not something a reader can type.
+ */
+const cliFlags = new Set(cliSource.match(/--[a-z][a-z0-9-]*/g) ?? []);
 
 /**
  * Commander's own flags, which are real and appear in no `.option()` call.
@@ -173,6 +193,14 @@ describe('the shipped corpus', () => {
     for (const doc of docs) {
       for (const m of doc.body.match(/`(--[a-z][a-z0-9-]*)`/g) ?? []) {
         const name = m.slice(1, -1);
+        // A CLI flag shares the `--name` spelling, and the manual backticks
+        // `--sdk` and `--allow` exactly as it backticks `--accent`. Those are
+        // checked against `src/index.ts` by the flag guard below, so the two
+        // guards together still say that EVERY backticked `--name` is either a
+        // token the stylesheet serves or a flag the CLI accepts — which is
+        // strictly stronger than either alone, and is why this is an exemption
+        // rather than a narrower regex.
+        if (cliFlags.has(name)) continue;
         expect(served, `${doc.id} names ${name}`).toHaveProperty(name);
       }
     }
@@ -225,7 +253,7 @@ describe('the shipped corpus', () => {
     for (const doc of docs) {
       for (const m of doc.body.match(/(?<![\w-])--[a-z][a-z0-9-]*/g) ?? []) {
         if (cssTokens.has(m) || BUILTIN_FLAGS.has(m)) continue;
-        expect(cliSource, `${doc.id} names ${m}`).toContain(m);
+        expect([...cliFlags], `${doc.id} names ${m}`).toContain(m);
       }
     }
   });
@@ -265,6 +293,72 @@ describe('the shipped corpus', () => {
     for (const cmd of SLASH_COMMANDS) {
       expect(body).toContain(cmd.name);
       expect(body).toContain(cmd.description);
+    }
+  });
+
+  it('derives the permission document from the mode tables', () => {
+    // `tool-modes.ts` exists because three surfaces spelled the same three
+    // answers three different ways and one of them was wrong. A manual is the
+    // fourth surface and the one a reader trusts most, so both halves of every
+    // row are asserted: a label alone would let the explanation drift, which is
+    // precisely the half that was wrong last time.
+    const body = findDoc('bernard-permissions')!.body;
+    for (const table of [TOOL_MODES, CONFIRM_MODES, COORDINATOR_MODES, REMOTE_MESSAGE_MODES]) {
+      for (const row of table) {
+        expect(body).toContain(row.label);
+        expect(body).toContain(row.description);
+      }
+    }
+  });
+
+  it('derives the model document from the role record', () => {
+    // `model-roles.ts` calls itself the single source of truth and derives the
+    // lineup slots, the tier table and the editor menu from one list. Six
+    // labels and eighteen tier cells restated by hand are the one copy running
+    // Bernard cannot check.
+    const body = findDoc('bernard-models')!.body;
+    for (const role of MODEL_ROLES) {
+      expect(body).toContain(role.label);
+      expect(body).toContain(role.description);
+      expect(body).toContain(role.lookFor);
+    }
+    // The grid, whole rows rather than cells. Asserting that the tier NAMES
+    // appear somewhere would pass on a table with every row wrong, and the
+    // reader's question — "what does balanced cost me?" — is answered by a row.
+    for (const role of MODEL_ROLES) {
+      const tiers = (['optimize-tokens', 'balanced', 'optimize-performance'] as const)
+        .map((mode) => DEFAULT_ROLE_TIERS[mode][role.id])
+        .join(' | ');
+      expect(body, `tier row for ${role.id}`).toContain(`| **${role.label}** | ${tiers} |`);
+    }
+  });
+
+  it('derives the settings document from the wizard registry', () => {
+    // `settings-coverage.test.ts` already binds that registry to
+    // `ProfileSettings`, so binding the document to the registry makes the
+    // manual complete by transitivity — a setting added to Bernard fails that
+    // test until it is declared, and fails this one until it is documented.
+    const body = findDoc('bernard-settings')!.body;
+    for (const category of WIZARD_CATEGORIES_DATA) {
+      expect(body).toContain(category.title);
+      for (const field of category.fields) {
+        expect(body, `${field.key} label`).toContain(field.label);
+        // The variable is the half a reader copies into a shell, and the half
+        // the 0.9 manual got wrong by naming one that had been deleted.
+        if (field.envVar) expect(body, `${field.key} variable`).toContain(field.envVar);
+      }
+    }
+  });
+
+  it('keeps every settings cell on one row', () => {
+    // The document renders a first sentence into a markdown table. Nothing
+    // stops a wizard description wrapping inside its first sentence or
+    // containing a pipe — it is prose written for a full-screen step — and
+    // either one silently breaks the table for every row after it.
+    const body = findDoc('bernard-settings')!.body;
+    for (const line of body.split('\n')) {
+      if (!line.startsWith('| ')) continue;
+      expect(line.split(/(?<!\\)\|/).length, `row: ${line}`).toBeLessThanOrEqual(5);
     }
   });
 
