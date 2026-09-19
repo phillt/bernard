@@ -1,4 +1,5 @@
 import type { FormatMeta } from '../framework/agents/types.js';
+import { classifyError, failureMarker } from '../error-taxonomy.js';
 
 const ARG_PREVIEW = 200;
 const RESULT_PREVIEW = 400;
@@ -87,10 +88,60 @@ export function appendActivitySummary(
 ): string {
   const summary = buildActivitySummary(steps, budgets);
   if (!text.trim()) {
-    const preamble = meta?.stepLimitHit
-      ? `(${agentLabel} ran out of steps (${meta.steps}) before producing a text summary; activity reconstructed from tool-call log)`
-      : `(${agentLabel} produced no text summary; activity reconstructed from tool-call log)`;
-    return [preamble, '', summary].join('\n');
+    if (meta?.stepLimitHit) {
+      return [
+        stepLimitHint(),
+        `(${agentLabel} ran out of steps (${meta.steps}) before producing a text summary; activity reconstructed from tool-call log)`,
+        '',
+        summary,
+      ].join('\n');
+    }
+    return [
+      `(${agentLabel} produced no text summary; activity reconstructed from tool-call log)`,
+      '',
+      summary,
+    ].join('\n');
   }
   return `${text.trimEnd()}\n\n${summary}`;
+}
+
+/**
+ * The machine half of a step-limited verdict (#406).
+ *
+ * A dispatch cut off at its budget used to report itself in two incompatible
+ * shapes: `task` and `tool-wrapper` mint a `status: 'error'` envelope that
+ * `detectResultFailure` reads as a failure, while the four prose formatters —
+ * `sub`, `specialist`, `pac-actor`, `mcp-delegate` — returned a sentence, and a
+ * sentence reads as SUCCESS. So the same event bumped `successCount`, registered
+ * its truncated output as citable evidence and logged `status: 'ok'` at four of
+ * six formatters. That is precisely the accounting #395 closed for *empty*
+ * delegate returns, reproduced for truncated ones: saying something is what made
+ * them look successful.
+ *
+ * The fix is one line here because `appendActivitySummary` is the single
+ * function all four share.
+ *
+ * **The marker rather than an `Error:` prefix**, which is the fork #406 posed and
+ * left open. `[failure: step_limit]` already exists, `step_limit` is already a
+ * `ToolErrorType`, and its row already says exactly what "incomplete" needs:
+ * `severity: 'low'`, `retryable: true`, `correctable: false`. So every consumer
+ * lands correctly with no third state invented — `successCount` does not bump,
+ * the failure goes to `ToolProfile.dismissed` rather than to bad examples,
+ * evidence registration stops, and `ToolFailureHint` renders it in the low
+ * severity colour rather than as an alarming red error. An `Error:` prefix would
+ * have got the detection and framed partial-but-useful work as a failure.
+ *
+ * **The marker's own line, and the playbook rides on it** — the format
+ * `wrap-with-specialist.ts` already mints and `stripFailureMarker` already knows
+ * how to remove. That keeps the human preamble intact on the line below, and it
+ * is what the parent model reads: the recovery advice comes from the taxonomy
+ * playbook rather than being written a second time here, so every surface
+ * rendering `step_limit` still agrees.
+ *
+ * Only the EMPTY case, mirroring `relabelStepLimit`: a run that hit the limit and
+ * still returned real content may simply have wrapped up on its last step, and
+ * calling that a failure throws away work that did happen.
+ */
+function stepLimitHint(): string {
+  return `${failureMarker('step_limit')} ${classifyError({ message: 'step_limit' }).playbook.model}`;
 }

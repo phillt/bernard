@@ -113,111 +113,108 @@ describe('MCPManager reconnection', () => {
     return client;
   }
 
-  describe('outbound argument folding (#mojibake)', () => {
+  describe('outbound argument folding, narrowed to prose (#442)', () => {
     /**
-     * The asymmetry this closes, and why it is **opt-in**. The wrapper normalized
-     * the RESULT and handed the ARGS straight through — one parameter position
-     * apart — which is how a plain em dash reached a Gmail MCP server that writes
-     * raw UTF-8 into a `Subject:` header and came back as `Ã¢Â€Â”`.
+     * The asymmetry this closes: the wrapper normalized the RESULT and handed
+     * the ARGS straight through — one parameter position apart — which is how a
+     * plain em dash reached a Gmail MCP server that writes raw UTF-8 into a
+     * `Subject:` header and came back as `Ã¢Â€Â”`.
      *
-     * It shipped default-on and the default was reversed: `mcp.ts` has no notion
-     * of argument kind (the schema belongs to the server), and folding a JSON
-     * document, a URL, a path, an XPath, a regex or a selector corrupts it. The
-     * off-by-default case is therefore the one asserted FIRST here, because it is
-     * the behaviour almost every user gets.
+     * It shipped folding EVERY argument, and that default was reversed because
+     * `mcp.ts` has no notion of argument kind: folding a JSON document, a URL, a
+     * path, an XPath, a regex or a selector corrupts it. `mcp-prose-args.ts` is
+     * the narrowing that lets it be default-on again, and the cases below are
+     * the two halves of that bargain — the em dash in a subject goes, and every
+     * shape the blanket fold broke survives.
+     *
+     * The narrowing's own table and value guards are tested in
+     * `mcp-prose-args.test.ts`; these assert it is actually WIRED, on the args
+     * the server really receives, including on the retry path.
      */
     const original = process.env.BERNARD_ASCII_OUTBOUND;
-    beforeEach(() => {
-      process.env.BERNARD_ASCII_OUTBOUND = 'true';
-    });
     afterEach(() => {
       if (original === undefined) delete process.env.BERNARD_ASCII_OUTBOUND;
       else process.env.BERNARD_ASCII_OUTBOUND = original;
     });
 
-    it('is off unless asked for, so an unflagged argument crosses untouched', async () => {
-      delete process.env.BERNARD_ASCII_OUTBOUND;
+    it('folds a declared prose argument in the args the server actually receives', async () => {
       const executeFn = vi.fn().mockResolvedValue('sent');
-      await setupWithServer('test-server', { send: makeDynamicTool(executeFn) });
-
-      // A selector and a JSON document: the two shapes the fold breaks worst.
-      const args = {
-        selector: 'text=Sign in — it’s free',
-        body: '{"note":"a — b","q":"“x”"}',
-      };
-      await manager.getTools()[mcpToolName('test-server', 'send')].execute(args);
-
-      expect(executeFn).toHaveBeenCalledWith(args);
-    });
-
-    it('corrupts non-prose arguments when it IS enabled, which is why it is opt-in', async () => {
-      // Pinned deliberately. This is not a bug report against the fold — it is
-      // what folding means, and it is the evidence for the default. If someone
-      // narrows the fold to prose-shaped arguments later, this is the test that
-      // should start failing.
-      const executeFn = vi.fn().mockResolvedValue('sent');
-      await setupWithServer('test-server', { send: makeDynamicTool(executeFn) });
-
-      await manager.getTools()[mcpToolName('test-server', 'send')].execute({
-        body: '{"q":"“x”"}',
-      });
-
-      const sent = (executeFn.mock.calls[0][0] as { body: string }).body;
-      expect(sent).toBe('{"q":""x""}');
-      expect(() => JSON.parse(sent)).toThrow();
-    });
-
-    it('folds typography in the args the server actually receives', async () => {
-      const executeFn = vi.fn().mockResolvedValue('sent');
-      await setupWithServer('test-server', { send: makeDynamicTool(executeFn) });
+      await setupWithServer('test-server', { send_email: makeDynamicTool(executeFn) });
 
       await manager
         .getTools()
-        [mcpToolName('test-server', 'send')].execute({ subject: 'Daily Blaze — Wed 9/9' });
+        [mcpToolName('test-server', 'send_email')].execute({ subject: 'Daily Blaze — Wed 9/9' });
 
-      expect(executeFn).toHaveBeenCalledWith({ subject: 'Daily Blaze - Wed 9/9' });
+      expect(executeFn.mock.calls[0][0]).toEqual({ subject: 'Daily Blaze - Wed 9/9' });
+    });
+
+    it('leaves every shape the blanket fold corrupted alone', async () => {
+      // The measured corruption list from `asciiOutboundEnabled`'s docstring,
+      // sent as arguments of a tool that DOES emit — so the only thing standing
+      // between them and the fold is the argument-name table. A JSON document in
+      // a `body` is there deliberately: `body` IS declared prose, so that one is
+      // refused by the value guard rather than by the name.
+      const executeFn = vi.fn().mockResolvedValue('sent');
+      await setupWithServer('test-server', { send_email: makeDynamicTool(executeFn) });
+
+      const args = {
+        selector: 'text=Sign in — it’s free',
+        url: 'https://ex.com/a–b?q=x',
+        path: '/home/u/Don’t Panic – notes.md',
+        pattern: 'loading…$',
+        content: 'see ‹note› below',
+        body: '{"note":"a — b","q":"“x”"}',
+      };
+      await manager.getTools()[mcpToolName('test-server', 'send_email')].execute(args);
+
+      expect(executeFn.mock.calls[0][0]).toEqual(args);
+      // The JSON body still parses, which is the whole point of the guard.
+      expect(() => JSON.parse((executeFn.mock.calls[0][0] as typeof args).body)).not.toThrow();
     });
 
     it('leaves meaning-bearing characters alone', async () => {
       // The boundary: these break in a naive consumer exactly the same way an em
       // dash does, but folding them destroys content rather than normalizing it.
       const executeFn = vi.fn().mockResolvedValue('sent');
-      await setupWithServer('test-server', { send: makeDynamicTool(executeFn) });
+      await setupWithServer('test-server', { send_email: makeDynamicTool(executeFn) });
 
       const args = { to: 'José', body: '日本語 🎉 €5' };
-      await manager.getTools()[mcpToolName('test-server', 'send')].execute(args);
+      await manager.getTools()[mcpToolName('test-server', 'send_email')].execute(args);
 
-      expect(executeFn).toHaveBeenCalledWith(args);
+      expect(executeFn.mock.calls[0][0]).toEqual(args);
     });
 
-    it('stays off when explicitly disabled', async () => {
+    it('stays off entirely when explicitly disabled', async () => {
       process.env.BERNARD_ASCII_OUTBOUND = 'false';
       const executeFn = vi.fn().mockResolvedValue('sent');
-      await setupWithServer('test-server', { send: makeDynamicTool(executeFn) });
+      await setupWithServer('test-server', { send_email: makeDynamicTool(executeFn) });
 
-      await manager.getTools()[mcpToolName('test-server', 'send')].execute({ s: 'a — b' });
+      await manager
+        .getTools()
+        [mcpToolName('test-server', 'send_email')].execute({ subject: 'a — b' });
 
-      expect(executeFn).toHaveBeenCalledWith({ s: 'a — b' });
+      expect(executeFn.mock.calls[0][0]).toEqual({ subject: 'a — b' });
     });
 
-    it('sends the FOLDED args on the reconnect retry too', async () => {
-      // The retry is a second call site three lines from the first. Passing the
-      // original args there would make the fold depend on whether the server
-      // happened to fail once — the quietest possible way for this to half-work.
-      const failExecute = vi.fn().mockRejectedValue(new Error('SSE stream disconnected'));
-      await setupWithServer('test-server', { send: makeDynamicTool(failExecute) });
-      const tools = manager.getTools();
-
-      const retryExecute = vi.fn().mockResolvedValue('sent');
-      mockCreateMCPClient.mockResolvedValue(
-        makeMockClient({ send: makeDynamicTool(retryExecute) }),
-      );
-
-      await tools[mcpToolName('test-server', 'send')].execute({ subject: 'a — b' });
-
-      expect(failExecute).toHaveBeenCalledWith({ subject: 'a - b' });
-      expect(retryExecute).toHaveBeenCalledWith({ subject: 'a - b' });
-    });
+    /**
+     * The predecessor of this block asserted "sends the FOLDED args on the
+     * reconnect retry too", and that test is now UNREACHABLE rather than merely
+     * deleted — which is worth writing down, because the obvious reading of its
+     * absence is that somebody dropped coverage.
+     *
+     * `emitsProse` and `ToolMeta.nonIdempotent` are the same predicate
+     * (`!isRead && hasEmitVerb`), because they are the same question asked twice:
+     * does this tool put an artefact in front of a person. So every tool whose
+     * arguments the fold touches is also a tool #594 refuses to retry, and every
+     * tool that reaches the retry gets `args` back by identity from
+     * `foldProseArgs`. The fold on the retry path is provably a no-op.
+     *
+     * The retry still passes `outbound` rather than `args`, and that is
+     * deliberate: it costs nothing, and it is what keeps the two call sites
+     * honest should the predicates ever diverge. The coincidence is pinned by
+     * `mcp-prose-args.test.ts`'s "a foldable tool is never retried", so a
+     * divergence fails a test instead of silently resurrecting this gap.
+     */
   });
 
   it('tool call succeeds normally without reconnection', async () => {
@@ -228,7 +225,10 @@ describe('MCPManager reconnection', () => {
     const result = await tools[mcpToolName('test-server', 'myTool')].execute({ query: 'hello' });
 
     expect(result).toBe('success');
-    expect(executeFn).toHaveBeenCalledWith({ query: 'hello' });
+    // `mock.calls[0][0]`, not `toHaveBeenCalledWith`: the wrapper forwards the
+    // AI SDK's `ToolExecutionOptions` now (#594), so every call carries a second
+    // argument. What this asserts is the args, not the arity.
+    expect(executeFn.mock.calls[0][0]).toEqual({ query: 'hello' });
     expect(mockPrintInfo).not.toHaveBeenCalledWith(expect.stringContaining('reconnecting'));
   });
 

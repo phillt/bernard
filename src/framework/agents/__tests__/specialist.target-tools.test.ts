@@ -399,15 +399,22 @@ describe('a step-limited persona is a failure, not a quiet success', () => {
       { stepLimitHit, steps: 12 } as never,
     ) as string;
 
-  it('marks an empty step-limited run as an error', async () => {
+  it('marks an empty step-limited run as a failure, categorised', async () => {
     // It reached the parent as an ordinary string, so `detectResultFailure` saw
     // a success: the run registered as citable evidence, bumped this tool's
     // success count, and minted no `step_limit` — leaving that category's three
     // consumers silent.
+    //
+    // Asserted on the PROPERTY rather than on an `Error:` prefix, which is what
+    // this definition used to mint for itself. Since #406 the verdict is stamped
+    // once, in `appendActivitySummary`, so all four prose formatters agree — and
+    // it carries a category rather than only a polarity, so "cut off" is not
+    // rendered as an alarming red failure.
     const out = fmt('', true);
-    expect(out).toMatch(/^Error:/);
     const { detectResultFailure } = await import('../../../tool-result-shape.js');
+    const { parseFailureMarker } = await import('../../../error-taxonomy.js');
     expect(detectResultFailure(out)).toBeTruthy();
+    expect(parseFailureMarker(out)).toBe('step_limit');
   });
 
   it('leaves a step-limited run that produced real content alone', async () => {
@@ -415,15 +422,15 @@ describe('a step-limited persona is a failure, not a quiet success', () => {
     // have wrapped up on its last step, and calling that a failure throws the
     // work away.
     const out = fmt('Here is the refactor.', true);
-    expect(out).not.toMatch(/^Error:/);
     expect(out).toContain('Here is the refactor.');
     const { detectResultFailure } = await import('../../../tool-result-shape.js');
     expect(detectResultFailure(out)).toBeFalsy();
   });
 
   it('leaves an ordinary empty run alone', async () => {
-    // Guards the guard: an unconditional error would fail every run that simply
-    // returned no text, which is not the same fact at all.
-    expect(fmt('', false)).not.toMatch(/^Error:/);
+    // Guards the guard: an unconditional failure would mark every run that
+    // simply returned no text, which is not the same fact at all.
+    const { detectResultFailure } = await import('../../../tool-result-shape.js');
+    expect(detectResultFailure(fmt('', false))).toBeFalsy();
   });
 });

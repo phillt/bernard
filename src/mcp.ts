@@ -15,7 +15,8 @@ import {
 import { attachMeta } from './framework/tools/adapter.js';
 import { hasEmitVerb, isReadOnlyMCPToolName } from './risk.js';
 import type { ToolMeta } from './framework/tools/types.js';
-import { normalizeToolResult, foldTypographyDeep } from './text.js';
+import { normalizeToolResult } from './text.js';
+import { foldProseArgs } from './mcp-prose-args.js';
 import { shapeMCPResult, type MCPResultShapingConfig } from './mcp-result-shaper.js';
 import type { AgentContextMCP } from './framework/context.js';
 
@@ -36,9 +37,10 @@ interface MCPUrlConfig {
 /**
  * Whether outbound MCP arguments have their typography folded to ASCII (#mojibake).
  *
- * **Default OFF, and that is a reversal.** It shipped default-on, and the review
- * that followed demonstrated it corrupts every argument kind that is not prose.
- * Measured against the real `foldTypographyDeep`:
+ * **Default ON again, and it is a NARROWER fold than the one that was reversed
+ * (#442).** The original applied `foldTypographyDeep` to every argument of every
+ * tool, and the review that followed measured it corrupting every argument kind
+ * that is not prose:
  *
  * ```
  * {"body":"{\"note\":\"a — b\",\"q\":\"“x”\"}"}
@@ -55,20 +57,21 @@ interface MCPUrlConfig {
  * Bernard's surface, and real page copy uses curly apostrophes, so a folded
  * selector stops matching the page it was written against.
  *
- * The deciding argument is the fold's own stated exclusion principle, turned on
- * itself. `foldTypography`'s doc excludes `file_write` because "folding an em dash
- * out of a document the user asked for is corruption, not normalization" — and a
- * filesystem MCP server's `write_file`, or Notion, or a Gmail body, is that same
- * operation reached through a different door. The boundary was drawn around the
- * implementation rather than around the operation. `mcp.ts` cannot draw the right
- * one either: the schema belongs to the server, so there is no notion of argument
- * kind here to branch on.
+ * Default-off then made the right call about the blanket fold and the wrong one
+ * about the problem: #442 is a live, recurring defect, and a mitigation nobody
+ * enables mitigates nothing. So the fold is narrowed to what it was always
+ * about — {@link foldProseArgs} folds only an argument DECLARED prose, on a tool
+ * that emits — and every line of the table above stays untouched, because none
+ * of those argument names is declared and none of those tools emits. That
+ * narrowing is exactly what CLAUDE.md's own entry named as the way back to
+ * default-on.
  *
- * What is left is a mitigation for a sender that is already fixed at the sender
- * (the Gmail server now RFC 2047-encodes its headers) and a reader that is fixed
- * at the reader (the CP1252 repair). Those two are the legs that carry this; the
- * fold was the speculative third. It stays available for someone shipping into a
- * sink they know mangles typography, and it is now their explicit decision.
+ * The blanket mode is gone rather than kept as a second setting. Two modes means
+ * reasoning about two, one of them documented as corrupting; and the only thing
+ * it did that the narrowed fold does not is rewrite data nobody asked it to.
+ *
+ * `false` / `0` still turns the whole thing off, which is the escape hatch for a
+ * server whose "prose" field is not prose.
  *
  * Read per call rather than at module load so it can be flipped without a
  * restart, and because a `readonly` snapshot of an env var is the shape that made
@@ -78,7 +81,7 @@ interface MCPUrlConfig {
  */
 function asciiOutboundEnabled(): boolean {
   const v = process.env.BERNARD_ASCII_OUTBOUND;
-  return v === 'true' || v === '1';
+  return v !== 'false' && v !== '0';
 }
 
 /** Discriminated union of stdio and URL-based MCP server configurations. */
@@ -112,6 +115,128 @@ function mcpConnectTimeoutMs(): number {
 
 /** Sentinel rejection used to distinguish a connect/listing timeout from a real error. */
 class MCPHandshakeTimeout extends Error {}
+
+const DEFAULT_MCP_CALL_TIMEOUT_MS = 60_000;
+
+/**
+ * Per-`tools/call` budget (#594).
+ *
+ * The handshake has had a clock since #254 and the provider path since
+ * #302/#325; the tool call itself was a bare `await` with nothing behind it, and
+ * that is how one `send_message` held a turn for 35 minutes and finally errored
+ * 63 minutes after it started — 28 minutes *after* the turn had already ended on
+ * Esc.
+ *
+ * **It has to live here rather than being delegated to the SDK, because the
+ * SDK's own cancellation does not cover the case.** `MCPClient.request`
+ * registers no `abort` listener: it calls `signal.throwIfAborted()` once at
+ * entry and then checks `signal.aborted` only when a response *arrives*. For the
+ * failure this exists for — a proxy that logs `ECONNREFUSED` to stderr and never
+ * writes a JSON-RPC error back down stdio — no response ever arrives, so the
+ * promise the SDK returns stays pending forever however the signal is set.
+ * Forwarding the signal is still correct, and is done below; it is simply not
+ * sufficient on its own, which is the part the issue's suggested shape missed.
+ *
+ * 60 s matches the MCP SDK's own default request timeout, so a server that
+ * honours the protocol's own timeouts is never cut off earlier than it expects.
+ *
+ * Read at call time and validated exactly as {@link mcpConnectTimeoutMs} is,
+ * with one addition: `0` DISABLES the budget rather than falling back, because
+ * a user with a legitimately minutes-long tool needs an off switch and "fall
+ * back to 60 s" is not one. A negative or non-numeric value is a typo and still
+ * falls back.
+ */
+function mcpCallTimeoutMs(): number | null {
+  const raw = process.env.BERNARD_MCP_CALL_TIMEOUT_MS;
+  if (raw === undefined || raw.trim() === '') return DEFAULT_MCP_CALL_TIMEOUT_MS;
+  const parsed = parseInt(raw, 10);
+  if (parsed === 0) return null;
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_MCP_CALL_TIMEOUT_MS;
+}
+
+/**
+ * Thrown when a tool call outlives its budget, or the caller abandons it.
+ *
+ * A distinct class rather than a message match, because the retry gate below has
+ * to tell "the connection died, reconnecting might help" from "we gave up
+ * waiting" and from "the user pressed Esc" — and re-issuing the call is wrong
+ * for both of the latter. The message still contains "timed out" / "cancelled"
+ * so `error-taxonomy.ts` categorises it with no new vocabulary, the same trick
+ * `runner.ts` uses for its own self-aborts.
+ */
+class MCPCallAbandoned extends Error {
+  constructor(
+    message: string,
+    /** Whether the caller's signal fired, as opposed to our own deadline. */
+    readonly cancelled: boolean,
+  ) {
+    super(message);
+    this.name = 'MCPCallAbandoned';
+  }
+}
+
+/**
+ * Runs one `tools/call`, bounded by the deadline and by the caller's signal.
+ *
+ * Both are races rather than cancellations, and they cannot be anything else:
+ * nothing in `@ai-sdk/mcp` can withdraw an in-flight JSON-RPC request, so
+ * abandoning it is the whole of what is available. The request id stays
+ * registered in the client's `responseHandlers` map for the life of the
+ * connection — a leak of one entry per abandoned call, inside the SDK, stated
+ * here rather than papered over because it is the residue of the vendor bug this
+ * works around.
+ *
+ * What the race buys is that Bernard's await ends: the agent loop moves on, the
+ * turn can finish, and Esc ends the *call* rather than only the turn.
+ */
+async function callWithDeadline(
+  run: () => Promise<unknown>,
+  budgetMs: number | null,
+  signal: AbortSignal | undefined,
+  describe: () => string,
+): Promise<unknown> {
+  if (budgetMs === null && signal === undefined) return run();
+  if (signal?.aborted) throw new MCPCallAbandoned(`${describe()} was cancelled.`, true);
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  try {
+    const guards: Promise<never>[] = [];
+    if (budgetMs !== null) {
+      guards.push(
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new MCPCallAbandoned(
+                  `${describe()} timed out after ${budgetMs}ms with no response ` +
+                    `(BERNARD_MCP_CALL_TIMEOUT_MS). The server may have died mid-session; the ` +
+                    `call was abandoned and may or may not have taken effect.`,
+                  false,
+                ),
+              ),
+            budgetMs,
+          );
+          // Never a reason the process cannot exit: the dispatch that owns this
+          // call is already holding the loop open for as long as it matters.
+          timer.unref?.();
+        }),
+      );
+    }
+    if (signal) {
+      guards.push(
+        new Promise<never>((_, reject) => {
+          onAbort = () => reject(new MCPCallAbandoned(`${describe()} was cancelled.`, true));
+          signal.addEventListener('abort', onAbort, { once: true });
+        }),
+      );
+    }
+    return await Promise.race([run(), ...guards]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (onAbort) signal?.removeEventListener('abort', onAbort);
+  }
+}
 
 /**
  * Where a spawned MCP server's stderr goes. Never `'inherit'`, which is what
@@ -527,12 +652,39 @@ export class MCPManager {
         const baseTool = this.convertTool(name, tool);
         const originalExecute = baseTool.execute;
 
+        // Classified on the RAW name, which is what makes this correct for an
+        // R2-truncated key: that key's trailing characters are the tool's tail,
+        // not its verb, so the namespace strip inside the classifier is not
+        // enough on its own.
+        const isRead = isReadOnlyMCPToolName(raw);
+        // Whether repeating this with identical arguments emits a second time
+        // (#575). Computed HERE, above the wrapper, because two things need it
+        // and they were 43 lines apart: `meta.nonIdempotent` below, and the
+        // retry gate inside the closure. The retry could not see it at all, so
+        // the reconnect-and-retry wrapper re-issued a `send_message` whose
+        // outcome was unknown (#594).
+        //
+        // ANDed with the read test rather than replacing it, so `list_drafts`
+        // stays a lookup. Deliberately NOT `!isRead` on its own: `focus_app`
+        // carries neither verb and so classifies as a write, and the dispatch
+        // that double-sent called it twice with identical args — once before
+        // each send — so a write-keyed rule refuses the wrong call.
+        const nonIdempotent = !isRead && hasEmitVerb(raw);
+
         const wrapped = {
           ...baseTool,
-          // Retry wrapper: on failure, reconnect the server and retry once.
-          // If the retry also fails, the *retry* error is thrown (not the original)
-          // so the caller sees the most recent failure reason.
-          execute: async (args: unknown) => {
+          // Retry wrapper: on a failure the gate below admits, reconnect the
+          // server and retry once. If the retry also fails, the *retry* error is
+          // thrown (not the original) so the caller sees the most recent reason.
+          //
+          // `options` is the AI SDK's `ToolExecutionOptions`, and dropping it is
+          // what left Esc cancelling the turn and not the call (#594):
+          // `augment.ts` has always passed it in, and this signature took one
+          // parameter. Forwarded to the SDK — which honours `abortSignal` at
+          // entry and at response time — AND raced by `callWithDeadline`, which
+          // is the half that actually ends the wait. See that function for why
+          // forwarding alone does nothing for a server that never answers.
+          execute: async (args: unknown, options?: { abortSignal?: AbortSignal }) => {
             // **Outbound**, which this wrapper did not do — it normalized the
             // RESULT and handed the ARGS straight through, one parameter position
             // away from the fix. That asymmetry is how a plain em dash reached a
@@ -540,19 +692,61 @@ export class MCPManager {
             // came back as `Ã¢Â€Â”`. That server was fixed; the next one cannot be,
             // so Bernard hands it nothing that can break.
             //
-            // MCP args ONLY, and OFF unless asked for — see
-            // `asciiOutboundEnabled` for why the default reversed. `file_write`,
-            // applet HTML and the `shell` command string are excluded for the
-            // same reason that makes this opt-in: nothing here knows whether an
-            // argument is prose or a selector, a path, a regex or a JSON
-            // document. `augmentTools` is the tempting single chokepoint and is
-            // the wrong one precisely because it cannot tell those cases apart
-            // either.
-            const outbound = asciiOutboundEnabled() ? foldTypographyDeep(args) : args;
+            // NARROWED, and default-ON again because of the narrowing (#442):
+            // `foldProseArgs` folds only an argument the table in
+            // `mcp-prose-args.ts` declares prose, on a tool that emits. The
+            // blanket fold this replaces was measured to corrupt a JSON body, a
+            // URL, a path, a selector and a regex, which is why it had been
+            // reversed to default-off — and default-off meant the mojibake
+            // #442 reports kept shipping.
+            const outbound = asciiOutboundEnabled() ? foldProseArgs(args, raw) : args;
+            const budgetMs = mcpCallTimeoutMs();
+            const describe = () => `MCP tool "${raw}" on server "${serverName}"`;
             try {
-              const result = await originalExecute(outbound);
+              const result = await callWithDeadline(
+                () => originalExecute(outbound, options),
+                budgetMs,
+                options?.abortSignal,
+                describe,
+              );
               return shape(normalizeToolResult(result), serverName, raw);
             } catch (error) {
+              // Three reasons never to reconnect-and-retry, all of which the
+              // retry used to ignore:
+              //
+              // 1. The caller cancelled. Re-issuing a call the user just
+              //    stopped — and reconnecting the server to do it — is the
+              //    opposite of what Esc means.
+              // 2. We abandoned the call at its deadline. Waiting again is not
+              //    a remedy for having waited too long, and it doubles the
+              //    ceiling the budget exists to impose.
+              // 3. The tool emits. The failure's outcome is UNKNOWN — a send
+              //    that timed out may well have landed — so a retry is a second
+              //    message, not a second attempt. `duplicate-guard.ts` cannot
+              //    catch it either: that gate records SUCCEEDED calls, and the
+              //    first attempt here never succeeded.
+              //
+              // (3) refuses every failure cause rather than only the
+              // unknown-outcome ones, because at this layer almost none of them
+              // are knowable: a throw out of `callTool` is a closed client, a
+              // transport send failure, a parse failure or an abort, and only
+              // the last is certain not to have taken effect. The asymmetry
+              // decides it — a wrong retry duplicates a message somebody
+              // receives, a wrong refusal costs the model one turn, which it is
+              // built to handle.
+              if (error instanceof MCPCallAbandoned || nonIdempotent) {
+                debugLog('mcp:tool-retry-refused', {
+                  tool: raw,
+                  server: serverName,
+                  cause:
+                    error instanceof MCPCallAbandoned
+                      ? error.cancelled
+                        ? 'cancelled'
+                        : 'timeout'
+                      : 'non-idempotent',
+                });
+                throw error;
+              }
               // `debugLog`, NOT `printInfo`. This runs while Ink owns the
               // screen — in full-screen mode it owns the alternate buffer
               // outright — and a raw stdout write lands at the cursor, corrupts
@@ -570,7 +764,15 @@ export class MCPManager {
               const fresh = this.serverTools.get(serverName)?.[name];
               if (reconnected && fresh) {
                 const freshTool = this.convertTool(name, fresh.tool);
-                const retryResult = await freshTool.execute(outbound);
+                // The retry is bounded and cancellable too. It dropped both,
+                // which is how the reconnect path could hang exactly as the
+                // first attempt had.
+                const retryResult = await callWithDeadline(
+                  () => freshTool.execute(outbound, options),
+                  budgetMs,
+                  options?.abortSignal,
+                  describe,
+                );
                 return shape(normalizeToolResult(retryResult), serverName, raw);
               }
               throw error;
@@ -584,12 +786,8 @@ export class MCPManager {
         // `kind: 'read'` (low risk, never prompts). Everything else →
         // `kind: 'write'` with `sideEffect: 'local'` (medium risk, prompts only
         // in `strict` mode). Users can promote a tool to high via a future
-        // `mcp.json` override (out of scope).
-        // Classified on the RAW name, which is what makes this correct for an
-        // R2-truncated key: that key's trailing characters are the tool's tail,
-        // not its verb, so the namespace strip inside the classifier is not
-        // enough on its own.
-        const isRead = isReadOnlyMCPToolName(raw);
+        // `mcp.json` override (out of scope). `isRead` / `nonIdempotent` are
+        // computed above the wrapper, because the retry gate needs them too.
         const meta: ToolMeta = {
           // Kept in lockstep with the registry key: the permission and block
           // gates key on the registry key while `result-cache.ts` keys on
@@ -603,13 +801,7 @@ export class MCPManager {
           category: `mcp.${serverName}`,
           deterministic: false,
           sideEffect: isRead ? 'network' : 'local',
-          // Whether repeating it emits a second time (#575). ANDed with the
-          // read test rather than replacing it, so `list_drafts` stays a
-          // lookup. Deliberately NOT `!isRead` on its own: `focus_app` carries
-          // neither verb and so classifies as a write, and the dispatch that
-          // double-sent called it twice with identical args — once before each
-          // send — so a write-keyed rule refuses the wrong call.
-          nonIdempotent: !isRead && hasEmitVerb(raw),
+          nonIdempotent,
         };
         converted[serverName][name] = attachMeta(wrapped, meta);
       }

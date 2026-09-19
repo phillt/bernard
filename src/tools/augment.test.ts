@@ -10,6 +10,7 @@ import { ProvenanceStore } from '../provenance.js';
 import { runWithDispatchId } from '../framework/dispatch-context.js';
 import { hasEmitVerb, isReadOnlyMCPToolName } from '../risk.js';
 import { clearDuplicateGuard } from './duplicate-guard.js';
+import { __resetInFlightCalls, pendingCallNotice } from './in-flight.js';
 
 vi.mock('../tool-profiles.js', () => ({
   classifyShellCommand: vi.fn((cmd: string) => {
@@ -2189,6 +2190,10 @@ function mcpTool(name: string, execute: (args: unknown) => Promise<unknown>) {
     {
       name,
       rawName: raw,
+      // `mcp.<server>`, exactly as `mcp.ts` builds it. `displayToolName` reads
+      // this to rebuild a readable name for the spinner (#594), so a fixture
+      // omitting it silently tests the fallback rather than the path.
+      category: 'mcp.beeper',
       kind: isRead ? 'read' : 'write',
       // Derived, never hand-set, for the reason the docstring above gives about
       // `kind` — and it matters more here: hand-setting it would let a fixture
@@ -2583,5 +2588,109 @@ describe('an unattended denial does not claim a user cancelled it', () => {
     );
     expect(out, 'and nothing else is widened').toMatch(/no one is present/i);
     expect(execute).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * A long-running tool call is nameable while it is still running (#594).
+ *
+ * The information existed: the runner's watchdog computed `inFlightTools` every
+ * 30 seconds for 35 minutes and logged it to `debugLog`, which is a no-op unless
+ * somebody had already suspected a problem and restarted with `BERNARD_DEBUG=1`.
+ * On screen for all 35 minutes: `thinking…`.
+ *
+ * Asserted at `augmentTools` rather than in `in-flight.ts` because the registry
+ * is worthless unwired, and `augment.ts` has TWO execute wrappers — MCP takes
+ * the legacy one, so a test covering only the envelope branch leaves the path
+ * the incident came through untested.
+ */
+describe('augmentTools registers a call while it runs (#594)', () => {
+  beforeEach(() => {
+    __resetInFlightCalls();
+    // The duplicate gate (#575) is process-global and turn-scoped, and `SEND` is
+    // `nonIdempotent`: without this the second test in this block calls it with
+    // identical args, gets refused, and never reaches `execute` at all.
+    clearDuplicateGuard();
+  });
+  afterEach(() => __resetInFlightCalls());
+
+  const seen = () => pendingCallNotice(Date.now() + 60_000, 0)?.label ?? null;
+
+  it('names an in-flight MCP call by server and raw tool, on the legacy branch', async () => {
+    let observed: string | null = null;
+    const tools = augmentTools(
+      {
+        [SEND]: mcpTool(SEND, async () => {
+          observed = seen();
+          return { content: [], isError: false };
+        }),
+      } as never,
+      createMockStore() as never,
+      MCP_OPTS as never,
+    );
+    await tools[SEND].execute!({}, {} as never);
+
+    // The registry KEY is namespaced and, at the truncation ladder's last rung,
+    // not invertible — so the readable form is rebuilt from the metadata rather
+    // than parsed back out of it.
+    expect(observed).toBe('beeper.send_message');
+    expect(seen(), 'and is deregistered when the call returns').toBeNull();
+  });
+
+  it('registers on the envelope branch too', async () => {
+    let observed: string | null = null;
+    const tools = augmentTools(
+      {
+        probe: toolToAISDK({
+          meta: { name: 'probe', kind: 'read' },
+          description: 'probe',
+          parameters: z.object({}),
+          execute: async () => {
+            observed = seen();
+            return ok('done');
+          },
+          serializeForModel: () => 'done',
+        } as never),
+      } as never,
+      createMockStore() as never,
+      MCP_OPTS as never,
+    );
+    await tools.probe.execute!({}, {} as never);
+
+    expect(observed).toBe('probe');
+    expect(seen()).toBeNull();
+  });
+
+  it('shows the WRITE a read is parked behind, not the read', async () => {
+    // `runTracked` goes inside `runOrdered` for exactly this: a read waiting on
+    // the write barrier has not started, and registering it there would make it
+    // beat the write it is waiting for to the "most recently started" slot —
+    // naming the blocked call instead of the blocking one.
+    let observedByWrite: string | null = null;
+    let release!: () => void;
+    const landed = new Promise<void>((r) => (release = r));
+
+    const tools = augmentTools(
+      {
+        [SEND]: mcpTool(SEND, async () => {
+          await landed;
+          observedByWrite = seen();
+          return { content: [], isError: false };
+        }),
+        [LIST]: mcpTool(LIST, async () => ({ ok: true })),
+      } as never,
+      createMockStore() as never,
+      MCP_OPTS as never,
+    );
+
+    await runWithDispatchId('inflight-1', async () => {
+      const write = tools[SEND].execute!({}, {} as never);
+      const read = tools[LIST].execute!({}, {} as never);
+      await new Promise((r) => setTimeout(r, 0));
+      release();
+      await Promise.all([write, read]);
+    });
+
+    expect(observedByWrite).toBe('beeper.send_message');
   });
 });

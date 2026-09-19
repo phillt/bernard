@@ -34,6 +34,8 @@
  * every tool.
  */
 
+import { parseFailureMarker } from './error-taxonomy.js';
+
 /** Max length of a returned error snippet, matching the historical cap. */
 export const ERROR_SNIPPET_MAX = 200;
 
@@ -128,7 +130,35 @@ export function isMCPErrorResult(result: unknown): boolean {
  */
 export function detectResultFailure(result: unknown): string | undefined {
   if (typeof result === 'string') {
-    return result.startsWith('Error') ? result.slice(0, ERROR_SNIPPET_MAX) : undefined;
+    // `Error` is the historical convention and stays first because it is the
+    // cheap test. The marker beside it is #406: a dispatch cut off at its step
+    // budget returns PROSE — the reconstructed activity log — from four of the
+    // six formatters, and prose that is not an error reads as a SUCCESS. So a
+    // step-limited run bumped `successCount` and registered truncated output as
+    // citable evidence, which is #395's defect reproduced for truncated returns
+    // rather than empty ones.
+    //
+    // The marker rather than an `Error:` prefix because "cut off" is not the
+    // same as "failed": `[failure: step_limit]` carries a category whose row
+    // already says low severity, retryable and not correctable, so every
+    // consumer lands correctly and partial-but-useful work is not painted red.
+    //
+    // `parseFailureMarker` is imported rather than the regex re-spelled here.
+    // `stripFailureMarker`'s docstring is explicit that the format has exactly
+    // one owner, and a second copy is how a stripper silently stops matching.
+    // The edge is affordable: `error-taxonomy.ts` imports one type and nothing
+    // else, so this module stays free of the `node:fs` graph it was carved out
+    // of `tool-profiles.ts` to avoid.
+    if (result.startsWith('Error')) return result.slice(0, ERROR_SNIPPET_MAX);
+    // The marker is matched against the SNIPPET, not the whole string. A tool
+    // result can be megabytes (`shell` runs at a 10 MB `maxBuffer`) and this
+    // runs on every call, so an unanchored regex over the whole value would be
+    // the cost `mcpFailureText` already refuses one branch over. Both producers
+    // put the marker at the front: `appendActivitySummary` on line 1, and
+    // `formatWrappedResult`'s `Error (<marker> …)` never reaches here because
+    // the prefix test above catches it first.
+    const snippet = result.slice(0, ERROR_SNIPPET_MAX);
+    return parseFailureMarker(snippet) !== null ? snippet : undefined;
   }
 
   // Covers null/undefined and class instances too, so no separate nullish guard.
