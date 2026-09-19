@@ -348,9 +348,17 @@ a:hover { text-decoration-color: var(--accent); }
    already \`display: block\`, so this is the grouping it was missing.
 
    \`max-width\` is what keeps widening the page from widening every control.
-   Inside a \`.row\` the flex basis already did that; a field on its own line
-   had nothing bounding it, so at 72rem a name input would be 1152px of empty
-   box. Bounded here rather than on \`input\` so a \`textarea\` in a \`.field\`
+   Nothing bounded a field before it, ANYWHERE — and the plausible-sounding
+   version of this comment said otherwise for one commit, so it is worth being
+   exact. The flex shorthand is \`1 1 12rem\`: the 12rem is a BASIS, and grow
+   is 1, so a field expands to fill its container whether that container is a
+   \`.row\` or the page itself. Measured against a 1440px window, the bound
+   takes a solo field and a field inside a \`.row\` from 672px to 544px — the
+   same 128px, because they were never bounded differently. What a \`.row\`
+   changes is SHARING: two fields in one split it between them and are already
+   narrow, which is why this reads as only affecting a field on its own line.
+
+   Bounded here rather than on \`input\` so a \`textarea\` in a \`.field\`
    is bounded too, and a deliberately wide one outside a field still can be. */
 .field {
   display: flex;
@@ -371,21 +379,45 @@ a:hover { text-decoration-color: var(--accent); }
 }
 /* A grid rather than a column: on a desktop a list of cards is the surface
    with the most width to spend, and \`flex-direction: column\` spent none of
-   it. \`auto-fill\` + \`minmax\` needs no breakpoint — it is one column in a
+   it. \`auto-fit\` + \`minmax\` needs no breakpoint — it is one column in a
    narrow window and as many as fit in a wide one, which is also why this does
    not reintroduce a mobile/desktop fork the floor would have to maintain.
+
+   \`auto-fit\` and NOT \`auto-fill\`, which is the same distinction this
+   whole change is about. Both lay out the same number of tracks; \`auto-fill\`
+   keeps the empty ones at full width, so two cards in a 1440px window render
+   as three 376px tracks with the last one blank — a third of the row empty,
+   which is the complaint that opened this change, reproduced one level down.
+   \`auto-fit\` collapses the empty tracks and the two cards share the row.
+   The cost, stated rather than discovered: a two-item list gets two wide cards
+   rather than two card-shaped ones. That is the right trade for a floor, where
+   a hole in the layout reads as a bug and a wide card reads as a choice.
+
+   Also worth knowing before someone "fixes" it back: a grid EQUALISES row
+   heights. Two cards of natural height 104px and 204px render at 246px each,
+   where the flex column left them at their own heights. Usually what a card
+   list wants, and a visible change to every multi-card applet that already
+   exists.
 
    The \`min()\` is load-bearing, not decoration: a \`minmax\` MINIMUM cannot
    shrink, so a bare \`18rem\` track overflows its own container the moment the
    container is narrower than that — a half-screen window, or an ordinary one
    under a large root font size, which is an accessibility setting rather than
    an exotic case. \`min(18rem, 100%)\` yields to the container instead, which
-   is what makes "collapses on its own" true at the narrow end too. */
+   is what makes "collapses on its own" true at the narrow end too. Measured:
+   in a 196px box the bare form lays a 288px column and overflows, the \`min()\`
+   form lays a 196px one and does not.
+
+   One boundary, since the rule as written does not literally apply there: the
+   \`100%\` resolves against the grid container's content box, so where that
+   inline size is indefinite — a \`.cards\` placed directly inside a \`.row\`,
+   which is a flex container — the percentage degrades to \`auto\`. That is a
+   SMALLER minimum, not a larger one, so it fails safe. */
 .cards {
   list-style: none;
   padding-left: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(18rem, 100%), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(18rem, 100%), 1fr));
   gap: var(--space-3);
 }
 

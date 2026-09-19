@@ -78,6 +78,29 @@ is saved. A button row is
 button variants. \`.hidden\` hides an element; toggle it with
 \`el.classList.toggle('hidden')\` rather than writing display rules.
 
+## The layout the floor already does, and must keep doing
+
+The sheet targets a DESKTOP browser — that is the only place an applet runs —
+and three rules carry that. They are the ones an applet's own \`.css\` is most
+likely to undo by accident, so they are stated rather than left to be
+rediscovered:
+
+- \`main\` / \`.app\` is capped at a desktop width, not a reading column, and
+  centred. Do not narrow it and do not remove the cap.
+- \`.cards\` is a GRID, not a flex column: it lays out as many columns as fit
+  and collapses to one in a narrow window, with no breakpoint. Writing
+  \`.cards { display: flex; flex-direction: column }\` in an applet's own CSS
+  undoes this for that applet, and \`.cards > li { flex: 1 }\` is inert under
+  a grid — it silently does nothing rather than failing. Note a grid also
+  equalises row heights, so cards in one row are as tall as the tallest.
+- \`.field\` is bounded well below the page width, which is what stops a wider
+  page becoming a wider text input. Do not widen it to fill the page.
+
+The floor carries no width \`@media\` rule, by design: one layout that reflows,
+not a desktop one and a mobile one. Do not add a width breakpoint in an
+applet's CSS either — it is a second breakpoint nobody maintains, and the
+classes above already collapse on their own.
+
 ## When you do need CSS, use these variables
 
 Never a hex value. A literal colour survives no theme change and is the one
