@@ -1,6 +1,6 @@
 ---
 title: Installing Bernard and the first run
-description: Installing Bernard, what the first run asks, where it keeps your files, and how it updates itself. Read when the user is setting Bernard up or asks where something is stored.
+description: Getting set up, what the first run asks, where files are kept, and how updates arrive. Read when the user is installing Bernard or asks where something of theirs is stored.
 ---
 
 # Getting started

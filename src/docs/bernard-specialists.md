@@ -1,6 +1,6 @@
 ---
 title: Saved agents for recurring work
-description: Saved agents with their own instructions and a narrow set of tools, how one is made, and how Bernard learns from their mistakes. Read when the user asks how to make a job come out the same way each time.
+description: What one is, how it gets made, why its tool list decides how well it does, and how Bernard learns from its mistakes. Read when the user asks how to make a job come out the same way each time.
 ---
 
 # Specialists

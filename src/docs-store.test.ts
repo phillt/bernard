@@ -39,7 +39,7 @@ import { WIZARD_CATEGORIES_DATA } from './profiles-wizard-data.js';
  * SECOND file, on an assertion naming whichever document happened to be added
  * last.
  *
- * The finished manual measures **5,471 over 22 documents**, about 250 a row:
+ * The finished manual measures **5,458 over 22 documents**, about 250 a row:
  * the estimate this was set from was low, because the older corpus had shorter
  * titles and terser descriptions. So the remaining headroom is two or three
  * documents rather than a dozen, and the right response to the next one that
