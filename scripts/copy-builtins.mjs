@@ -1,4 +1,4 @@
-import { cpSync, rmSync } from 'node:fs';
+import { chmodSync, cpSync, rmSync } from 'node:fs';
 
 /**
  * Copy the bundled data directories into `dist`.
@@ -30,3 +30,20 @@ for (const dir of ['builtin-specialists', 'builtin-apps', 'data', 'docs']) {
   rmSync(`dist/${dir}`, { recursive: true, force: true });
   cpSync(`src/${dir}`, `dist/${dir}`, { recursive: true });
 }
+
+/**
+ * Restore the executable bit on the `bin` target.
+ *
+ * `package.json` points `bin.bernard` at `dist/index.js`, and npm chmods that
+ * file when it installs or links the package — once. `tsc` then rewrites it on
+ * every build as an ordinary `0644` file, so the shebang survives and the
+ * permission does not, and the globally linked `bernard` command dies with a
+ * bare `Permission denied` from the shell. Nothing in the test suite can see
+ * it: vitest resolves `src/`, and `node dist/index.js` works fine, so the code
+ * is provably correct and the command is provably broken at the same time.
+ *
+ * Local-only by nature — a published tarball is chmodded by npm at install
+ * time on the user's machine — which is exactly why it goes unnoticed: it
+ * breaks the maintainer's own `bernard`, silently, on every single build.
+ */
+chmodSync('dist/index.js', 0o755);
