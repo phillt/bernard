@@ -21,8 +21,10 @@ import { attachMeta } from '../framework/tools/adapter.js';
  *
  * ## Search is deferred, on purpose
  *
- * At this size the index IS the search: six rows, ~700 characters, cheaper to
- * hand over whole than to query. The crossover where retrieval beats
+ * At this size the index IS the search: twenty-odd rows, ~5,500 characters,
+ * cheaper to hand over whole than to query — and paid on a `list` CALL rather
+ * than carried in the cached prefix, which is what keeps that affordable.
+ * `docs-store.test.ts` bounds it. The crossover where retrieval beats
  * navigation is in the hundreds of documents. When it arrives it should be
  * LEXICAL — over headings and symbol names — not embeddings: exact-identifier
  * lookup is embeddings' documented weak spot, and Anthropic's own tool search
@@ -60,11 +62,14 @@ const PARAMETERS = z.object({
  * cost progressive disclosure exists to avoid.
  */
 const DESCRIPTION =
-  "Read Bernard's own documentation. Covers building applets (the page contract, styling " +
-  'and colour variables, actions and dispatch, the UI runtime, the design brief) and ' +
-  "Bernard's own features and slash commands. Call `list` first to see what exists, then " +
-  '`read` the one you need. Use it before writing an applet page or manifest, and when the ' +
-  'user asks what Bernard can do — it is more reliable than reconstructing an answer.';
+  "Read Bernard's own manual. Covers what Bernard can do and how a person uses it — " +
+  'memory and knowledge libraries, scheduled jobs and watchers, specialists and delegation, ' +
+  'permissions and grants, models and cost, settings and profiles, connected services, the ' +
+  'command line and the slash commands — plus building applets (the page contract, styling ' +
+  'and colour variables, actions and dispatch, the UI runtime, the design brief). Call ' +
+  '`list` first to see what exists, then `read` the one you need. Use it before writing an ' +
+  'applet page or manifest, before explaining how any Bernard feature works, and whenever ' +
+  'the user asks what Bernard can do — it is more reliable than reconstructing an answer.';
 
 export function createDocsTool() {
   const t = tool({

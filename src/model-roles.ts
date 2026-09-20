@@ -119,8 +119,14 @@ export const MODEL_ROLES: readonly ModelRole[] = [
   {
     id: 'classifier',
     label: 'Classifier / router',
-    description:
-      'Rewriter, reference resolver/lookup, specialist detector — cheap single-shot decisions.',
+    // NOT a list of sites. `SITE_ROLE` maps ELEVEN sites to this role and this
+    // string named three of them; seven of the eight it omitted were added to
+    // that table with their own comment explaining why they are classification,
+    // so the enumeration drifted while the thing it enumerates grew. It renders
+    // in the lineup editor, in `specialist`'s role guidance and — since #584 —
+    // in the `bernard-models` manual page, and a partial list of a set another
+    // constant derives exactly is the drift `docs-generated.ts` exists to end.
+    description: 'The cheap single-shot decisions Bernard makes around your turn.',
     lookFor:
       'The cheapest model that still judges reliably. These are quick single-shot routing calls where latency and price dominate.',
     defaultTiers: {
@@ -134,7 +140,7 @@ export const MODEL_ROLES: readonly ModelRole[] = [
     label: 'Coder',
     description: 'Code generation and editing — specialists that write or modify code.',
     lookFor:
-      'A model strong at code generation and editing. No SITE resolves to this role; it is reached by a specialist that declares `role: "coder"` on its record (#423).',
+      'A model strong at code generation and editing. Nothing routes here on its own — a saved specialist reaches it by declaring `role: "coder"`.',
     defaultTiers: {
       'optimize-tokens': 'cheap',
       balanced: 'mid',

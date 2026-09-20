@@ -4,7 +4,7 @@ import { TOOL_PROFILES_DIR } from './paths.js';
 import { atomicWriteFileSync, seedOnce } from './fs-utils.js';
 import type { ToolErrorType } from './framework/tools/types.js';
 import { detectResultFailure } from './tool-result-shape.js';
-import { toolNameFromProfileKey } from './mcp-names.js';
+import { serverFromCategory, toolNameFromProfileKey } from './mcp-names.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -291,7 +291,22 @@ export class ToolProfileStore {
     // again here would duplicate both the reads and the decision. `supersedes`
     // is set iff it found one.
     const seeded = this.getOrCreate(toolKey, { seedFrom, category });
-    if (seeded.supersedes || (category && category !== seeded.category)) this.save(seeded);
+    // Save whenever `seeded` carries something the next `record*` call could
+    // not reproduce: the rename link, or the owning server.
+    //
+    // The predecessor read `category && category !== seeded.category`, which is
+    // **always false** — this line is only reached when `get(toolKey)` found
+    // nothing, so `getOrCreate` has just assigned that exact category to that
+    // exact field. So a fresh MCP profile was created in memory with its server
+    // attached and written to disk without one, by `recordSuccess`'s
+    // `getOrCreate(toolKey)` a moment later, which passes no opts. Measured on a
+    // real install: of 144 live profiles only 53 carry a category, and every one
+    // of them came through the `supersedes` branch — every `delegate_*` profile
+    // had none at all. That left `filterLiveProfiles` unable to drop an orphaned
+    // MCP profile from the prompt (#413's own stated purpose) and the removal
+    // sweep's standing orphan report (#377) blind to any server that never had a
+    // pre-#413 predecessor.
+    if (seeded.supersedes || category) this.save(seeded);
   }
 
   save(profile: ToolProfile): void {
@@ -366,6 +381,28 @@ export class ToolProfileStore {
     if (last.fix === '(awaiting successful retry)') {
       bads[bads.length - 1] = { ...last, fix: `Use instead: ${workingArgs.slice(0, 200)}` };
       this.save({ ...profile, badExamples: bads });
+    }
+  }
+
+  /**
+   * Unlinks one profile. Returns whether a file was there to remove.
+   *
+   * The store had **no deletion path of any kind** until #377 — no unlink, no
+   * prune, no TTL — so a profile created on first use lived forever, and
+   * removing the MCP server that owned it left it on disk with nothing able to
+   * reach it. This is deliberately the whole API: the decision about *which*
+   * profiles a removal owns needs the naming rules and the config, neither of
+   * which is store work, and lives in `mcp-lifecycle.ts`.
+   */
+  remove(toolKey: string): boolean {
+    try {
+      fs.unlinkSync(this.filePath(toolKey));
+      return true;
+    } catch {
+      // Absent already, or unreadable. Either way there is nothing to clean up
+      // and nothing a caller could do about it — the sweep reports what it
+      // removed, not what it failed to.
+      return false;
     }
   }
 
@@ -518,7 +555,11 @@ function filterLiveProfiles(
 ): ToolProfile[] {
   if (!liveKeys) return profiles;
   return profiles.filter((p) => {
-    if (!p.category?.startsWith('mcp.')) return true;
+    // Tool categories only. A delegate profile's category names a server too,
+    // but `liveKeys` is the live TOOL surface and holds no delegate names, so
+    // widening this would drop every live delegate profile rather than the
+    // orphaned ones — see `serverFromCategory`.
+    if (serverFromCategory(p.category)?.kind !== 'tool') return true;
     const tool = toolNameFromProfileKey(p.toolName) ?? p.toolName;
     return liveKeys.has(tool);
   });
