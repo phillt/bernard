@@ -33,6 +33,7 @@
  * of them at once.
  */
 import type { ToolMeta } from '../framework/tools/types.js';
+import { serverFromCategory } from '../mcp-names.js';
 
 /** A call the product is currently inside. */
 interface InFlightCall {
@@ -128,8 +129,9 @@ export const LONG_CALL_NOTICE_MS = 10_000;
  * name, which is already what the user sees.
  */
 export function displayToolName(toolName: string, meta?: ToolMeta): string {
-  const server = meta?.category?.startsWith('mcp.') ? meta.category.slice(4) : undefined;
-  if (server && meta?.rawName) return `${server}.${meta.rawName}`;
+  // Tools only: a delegate carries the server in its own name already.
+  const owner = serverFromCategory(meta?.category);
+  if (owner?.kind === 'tool' && meta?.rawName) return `${owner.server}.${meta.rawName}`;
   return toolName;
 }
 

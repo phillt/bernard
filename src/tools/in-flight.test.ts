@@ -87,6 +87,18 @@ describe('what a call is called', () => {
     ).toBe('beeper.send_message');
   });
 
+  // A delegate's key already carries its server, so rebuilding the label from
+  // `mcp-delegate.<server>` would render `playwright.delegate_playwright_…`.
+  // The category parse reports which kind it found for exactly this reason.
+  it('leaves a delegate tool under its own name', () => {
+    expect(
+      displayToolName(
+        'delegate_playwright_7827e8',
+        meta({ category: 'mcp-delegate.playwright', rawName: 'playwright' }),
+      ),
+    ).toBe('delegate_playwright_7827e8');
+  });
+
   it('leaves a built-in tool under its own name', () => {
     expect(displayToolName('shell', meta({ category: 'shell' }))).toBe('shell');
     expect(displayToolName('subagent')).toBe('subagent');
