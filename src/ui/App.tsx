@@ -38,10 +38,13 @@ import {
 } from '../custom-providers.js';
 import {
   LINEUP_TIERS,
+  LINEUP_SLOT_COUNT,
   type Lineup,
   type LineupSlot,
   type LineupTier,
   type RoleSlots,
+  bindEverySlot,
+  uniformSlot,
   loadLineups,
   resolveActiveLineup,
   saveLineup,
@@ -2840,11 +2843,22 @@ export function App({
         config.provider,
       ).id;
       const primaryRole = MODEL_ROLES[0];
+      // One row is one line, so it can carry one role's ladder at most — which
+      // is why the fallback names WHICH role it is showing. A uniform lineup
+      // has no such caveat and says the whole truth in the same space (#618);
+      // showing role[0]'s ladder there would be six identical facts reported as
+      // one role's, the least legible reading of the most legible state.
+      const describeLineup = (l: Lineup): string => {
+        const bound = uniformSlot(l.roles);
+        return bound
+          ? `every slot — ${formatSlotLine(bound)}`
+          : `${primaryRole.id} — ${summarizeRoleSlots(l.roles[primaryRole.id])}`;
+      };
       const entries: MenuEntry[] = all.map((l) => ({
         label: l.name,
         annotation: `(${l.id})`,
         active: l.id === activeId,
-        description: `${primaryRole.id} — ${summarizeRoleSlots(l.roles[primaryRole.id])}`,
+        description: describeLineup(l),
         value: l.id,
       }));
       entries.push({ type: 'section', title: '' });
@@ -6992,19 +7006,23 @@ export async function pickGenerationParamsInk(
  * user can extend the remembered model list inline. The provider step ends
  * with "+ Add custom provider…" which round-trips through `runAddProviderInk`
  * and re-renders the step with the new provider appended.
+ *
+ * `slotLabel` is what the two titles say this pick is FOR, supplied whole by
+ * the caller rather than composed here from a `(tier, roleLabel?)` pair. It
+ * used to be the pair, which read as "… for Orchestrator / PREMIUM slot" and
+ * had no honest form for the bind-every-slot caller (#618), whose pick belongs
+ * to no single role and no single tier. The `tier` parameter fed nothing else,
+ * and the `roleLabel`-absent branch had no call site at all.
  */
 async function pickLineupSlotInk(
   config: BernardConfig,
-  tier: LineupTier,
+  slotLabel: string,
   current: LineupSlot,
   requestMenu: RequestMenu,
   requestGridMenu: RequestGridMenu,
   requestTextInput: RequestTextInput,
   flashToast: FlashToast,
-  roleLabel?: string,
 ): Promise<LineupSlot | null> {
-  const slotLabel = (t: LineupTier): string =>
-    roleLabel ? `${roleLabel} / ${t.toUpperCase()}` : `${t.toUpperCase()}`;
   const providerDisplayName = (name: string): string => {
     if (Object.hasOwn(PROVIDER_DISPLAY_NAMES, name)) {
       return PROVIDER_DISPLAY_NAMES[name as keyof typeof PROVIDER_DISPLAY_NAMES];
@@ -7067,7 +7085,7 @@ async function pickLineupSlotInk(
     entries.push({ label: '+ Add custom provider…', value: { kind: 'add-custom' } as const });
 
     const pick = await requestMenu(entries, {
-      title: `Pick provider for ${slotLabel(tier)} slot`,
+      title: `Pick provider for ${slotLabel}`,
       headerLines: [formatCatalogFooter()],
     });
     if (pick.cancelled) return null;
@@ -7109,7 +7127,7 @@ async function pickLineupSlotInk(
         : 0;
 
     const result = await requestGridMenu(items, {
-      title: `Pick ${providerDisplayName(provider)} model for ${slotLabel(tier)} slot`,
+      title: `Pick ${providerDisplayName(provider)} model for ${slotLabel}`,
       footer: formatCatalogFooter(),
       initialIndex,
       currentItem: currentModelForProvider,
@@ -7230,11 +7248,41 @@ function formatParamsSummary(params?: ModelParams): string {
   return parts.length > 0 ? parts.join(', ') : '';
 }
 
+/**
+ * How the lineup surfaces spell a bound slot in a sentence: `provider/model`,
+ * plus its params when it has any.
+ *
+ * Three callers — the `/lineups` row description, the bind-all detail card and
+ * the toast that confirms the bind — i.e. three places that would otherwise each
+ * decide whether params are worth naming, and then disagree about the same
+ * lineup on the same screen. The
+ * role detail card deliberately does NOT use this: it needs the model and the
+ * params as separate `<Text>` nodes so it can colour them differently, and
+ * `summarizeRoleSlots` deliberately omits params because it puts three slots on
+ * one line and has no room.
+ */
+function formatSlotLine(slot: LineupSlot): string {
+  const params = formatParamsSummary(slot.params);
+  return `${slot.provider}/${slot.model}${params ? ` · ${params}` : ''}`;
+}
+
+/**
+ * A lineup-editor row that is not a role.
+ *
+ * Named, and `actionDetail` below keyed on it, because the two lists have to
+ * agree and nothing said so: the record was a `Record<string, …>`, so a new
+ * kind with no entry destructured `undefined` and threw the moment the cursor
+ * landed on the row — invisible in review, loud at runtime, and on the one path
+ * where the row exists precisely because it is new. As a `Record<LineupAction,
+ * …>` the omission is a compile error.
+ */
+type LineupAction = 'bind-all' | 'rename' | 'save' | 'save-new' | 'delete' | 'cancel';
+
+type LineupMenuValue = { kind: 'role'; roleId: RoleId } | { kind: LineupAction };
+
 function renderLineupDetail(item: MenuItem, draft: Lineup): ReactNode {
   const colors = getThemeColors();
-  const value = item.value as
-    | { kind: 'role'; roleId: RoleId }
-    | { kind: 'rename' | 'save' | 'save-new' | 'delete' | 'cancel' };
+  const value = item.value as LineupMenuValue;
 
   if (value.kind === 'role') {
     const role = getRole(value.roleId);
@@ -7268,7 +7316,24 @@ function renderLineupDetail(item: MenuItem, draft: Lineup): ReactNode {
     );
   }
 
-  const actionDetail: Record<string, { explain: string; hint: string }> = {
+  // Only the bind-all card depends on the draft: it is the one row whose job is
+  // to report the state it would replace, which is the legibility half of #618
+  // ("a lineup in that state is legible as such rather than having to be read
+  // slot by slot"). Computed here rather than in a bespoke card so every action
+  // row keeps one shape, and below the role branch so a role row never pays the
+  // scan.
+  const bound = uniformSlot(draft.roles);
+
+  const actionDetail: Record<LineupAction, { explain: string; hint: string }> = {
+    'bind-all': {
+      explain:
+        `Point all ${LINEUP_SLOT_COUNT} (role, tier) cells at one model in a single pass — ` +
+        'what "just use this model for everything" means here. ' +
+        (bound
+          ? `Every slot is currently ${formatSlotLine(bound)}.`
+          : 'The roles currently carry different bindings; open one to see its ladder.'),
+      hint: '↵ pick one model for every slot',
+    },
     rename: { explain: 'Give this lineup a new display name.', hint: '↵ rename' },
     save: { explain: 'Persist your edits to this lineup.', hint: '↵ save' },
     'save-new': {
@@ -7333,13 +7398,12 @@ async function runRoleSlotsEditorInk(
     if (value.kind === 'back') return slots;
     const next = await pickLineupSlotInk(
       config,
-      value.tier,
+      `${role.label} / ${value.tier.toUpperCase()} slot`,
       slots[value.tier],
       requestMenu,
       requestGridMenu,
       requestTextInput,
       flashToast,
-      role.label,
     );
     if (next) slots = { ...slots, [value.tier]: next };
   }
@@ -7424,6 +7488,21 @@ async function runLineupEditorInk(
     const entries: MenuEntry[] = [
       ...roleRows,
       { type: 'section', title: '' },
+      // Ahead of the lifecycle rows: it edits the GRID, like the role rows
+      // above it, where rename/save/delete act on the lineup as a record. The
+      // `…` matches the convention every other row that opens a further picker
+      // uses ("+ Add custom provider…", "+ Type a new model name…") — and here
+      // it also answers "bind them to what?", which the label has no room for.
+      //
+      // Fifteen characters because the split layout's left pane is sized from
+      // its own longest label and then shrunk against the detail card, which
+      // leaves about eighteen columns INCLUDING the "7. " prefix — measured, at
+      // which "Classifier / router" and "Save as new lineup" already wrap on
+      // this screen today. "Bind every slot to one model…" fit none of that: it
+      // wrapped onto a second, unindented line AND widened the pane, taking
+      // five columns off the card that carries the sentence. So the sentence
+      // lives in the card, where there is room for it.
+      { label: 'Bind all slots…', value: { kind: 'bind-all' } },
       { label: 'Rename lineup', value: { kind: 'rename' } },
       ...(opts.isNew
         ? [{ label: 'Save as new lineup', value: { kind: 'save-new' } } as MenuEntry]
@@ -7446,9 +7525,7 @@ async function runLineupEditorInk(
       if (exit.done) return exit.result;
       continue;
     }
-    const value = pick.item.value as
-      | { kind: 'role'; roleId: RoleId }
-      | { kind: 'rename' | 'save' | 'save-new' | 'delete' | 'cancel' };
+    const value = pick.item.value as LineupMenuValue;
     if (value.kind === 'cancel') {
       const exit = await handleExit();
       if (exit.done) return exit.result;
@@ -7468,6 +7545,34 @@ async function runLineupEditorInk(
         ...draft,
         roles: { ...draft.roles, [value.roleId]: nextSlots },
       };
+      continue;
+    }
+    if (value.kind === 'bind-all') {
+      // Seed the picker from the binding already everywhere, so re-opening the
+      // row lands on the current model rather than on whatever role[0] happens
+      // to hold. The fallback is only reached when the grid is NOT uniform, and
+      // then any cell is as arbitrary as any other — role[0]'s premium is the
+      // one the rest of this module already treats as the anchor.
+      const current = uniformSlot(draft.roles) ?? draft.roles[MODEL_ROLES[0].id].premium;
+      const next = await pickLineupSlotInk(
+        config,
+        'EVERY slot in this lineup',
+        current,
+        requestMenu,
+        requestGridMenu,
+        requestTextInput,
+        flashToast,
+      );
+      if (next) {
+        draft = { ...draft, roles: bindEverySlot(next) };
+        // The issue's other half: "gets no confirmation they have covered them
+        // all". The count is what says so, and it is derived, so a 7th role
+        // moves it rather than making this sentence false.
+        flashToast(
+          `Bound all ${LINEUP_SLOT_COUNT} slots to ${formatSlotLine(next)}. Save changes to keep it.`,
+          'success',
+        );
+      }
       continue;
     }
     if (value.kind === 'rename') {

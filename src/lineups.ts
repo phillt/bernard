@@ -234,12 +234,28 @@ function isRoleSlots(v: unknown): v is RoleSlots {
   return LINEUP_TIERS.every((tier) => isLineupSlot((v as Record<string, unknown>)[tier]));
 }
 
+/**
+ * Copies one slot with no shared sub-objects.
+ *
+ * `params` is the reason this is a function rather than a spread: `{...slot}`
+ * is shallow, so every cell a replication produces would point at ONE params
+ * object. Latent rather than live — nothing in the tree mutates a slot's params
+ * in place, and `saveLineup` serialises — but {@link cloneRoleSlots} already
+ * promised "no shared slot refs" and that promise was false for this one field.
+ * {@link bindEverySlot} is what makes it reachable: it is the first replicator
+ * whose input can carry params (the editor's slot picker returns them), where
+ * `seedForProvider` never does.
+ */
+function cloneSlot(slot: LineupSlot): LineupSlot {
+  return { ...slot, ...(slot.params ? { params: { ...slot.params } } : {}) };
+}
+
 /** Deep-copies one `{premium, mid, cheap}` ladder (no shared slot refs). */
 function cloneRoleSlots(slots: RoleSlots): RoleSlots {
   return {
-    premium: { ...slots.premium },
-    mid: { ...slots.mid },
-    cheap: { ...slots.cheap },
+    premium: cloneSlot(slots.premium),
+    mid: cloneSlot(slots.mid),
+    cheap: cloneSlot(slots.cheap),
   };
 }
 
@@ -248,6 +264,83 @@ function replicateAcrossRoles(slots: RoleSlots): Record<RoleId, RoleSlots> {
   const out = {} as Record<RoleId, RoleSlots>;
   for (const role of ALL_ROLE_IDS) out[role] = cloneRoleSlots(slots);
   return out;
+}
+
+/**
+ * How many `(role, tier)` cells a lineup has — 18 today.
+ *
+ * Derived rather than written, because `model-roles.ts` advertises adding a 7th
+ * role as a one-place additive edit and three surfaces name this number in copy
+ * ("all 18 slots"). A literal would make that claim false on the day the role
+ * lands, in prose, where nothing type-checks it.
+ */
+export const LINEUP_SLOT_COUNT = ALL_ROLE_IDS.length * LINEUP_TIERS.length;
+
+/**
+ * Binds **every** `(role, tier)` cell to one slot (#618).
+ *
+ * `modelMode: 'off'` used to mean "every site uses one model"; #225 retired it
+ * and #606 removed the settings row on the argument that a lineup whose slots
+ * all name the same model reproduces it exactly. That is true of the resolver
+ * and was false of the affordance — reaching the state took 18 separate picks.
+ * This is the state expressed as one value.
+ *
+ * Composed from {@link replicateAcrossRoles} rather than written beside it: a
+ * uniform lineup IS a ladder whose three rungs are the same slot, replicated.
+ * The clone happens inside, so the 18 cells share nothing.
+ */
+export function bindEverySlot(slot: LineupSlot): Record<RoleId, RoleSlots> {
+  return replicateAcrossRoles({ premium: slot, mid: slot, cheap: slot });
+}
+
+/**
+ * Canonical identity of a slot — what makes two cells "the same binding".
+ *
+ * `params` is part of it: two cells naming `openai/gpt-5.5` at different
+ * temperatures are not one binding, and a detector that ignored the field would
+ * report "every slot is gpt-5.5" on the one surface whose whole job is to say
+ * so truthfully.
+ *
+ * Keys are sorted rather than read off `PARAM_IDS`, for two reasons. `params`
+ * is not validated by {@link isLineupSlot}, so a hand-edited `lineups.json` can
+ * carry a key that list does not have — iterating the known ids would silently
+ * call two different slots identical. And it keeps this module off a runtime
+ * edge to `providers/model-params.ts`, which today it needs only as a type.
+ */
+function slotIdentity(slot: LineupSlot): string {
+  const params = slot.params ?? {};
+  const entries = Object.keys(params)
+    .sort()
+    .map((k) => [k, (params as Record<string, unknown>)[k]]);
+  return JSON.stringify([slot.provider, slot.model, entries]);
+}
+
+/**
+ * The single binding every cell of `roles` holds, or `null` when they differ.
+ *
+ * The legibility half of #618: a uniform lineup should READ as uniform instead
+ * of having to be checked slot by slot. Deliberately returns the slot rather
+ * than a boolean, so a caller can name the model without re-deriving it — the
+ * shape {@link derivedLadderIfUnmodified} already argues for a few functions
+ * down, and for the same reason (the predecessor there recovered the models by
+ * indexing `ALL_ROLE_IDS[0]`, correct only by an unstated invariant).
+ *
+ * Phrasing is deliberately left to each caller. The `/lineups` list, the
+ * editor's detail card and `lineup_edit`'s matrix each say it in their own
+ * voice and at their own width; a shared label would be the lowest common
+ * denominator of three surfaces that legitimately differ. This module answers
+ * *whether, and to what* — not *how to put it*.
+ */
+export function uniformSlot(roles: Record<RoleId, RoleSlots>): LineupSlot | null {
+  const first = roles[ALL_ROLE_IDS[0]].premium;
+  const want = slotIdentity(first);
+  for (const role of ALL_ROLE_IDS) {
+    for (const tier of LINEUP_TIERS) {
+      if (slotIdentity(roles[role][tier]) !== want) return null;
+    }
+  }
+  // A copy, so a caller cannot reach back into the lineup through the answer.
+  return cloneSlot(first);
 }
 
 function writeFile(lineups: Record<string, Lineup>): void {

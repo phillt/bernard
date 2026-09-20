@@ -601,6 +601,96 @@ describe('lineups store', () => {
     });
   });
 
+  /**
+   * #618 — "one model everywhere" as a value, and as something readable back.
+   *
+   * `uniformSlot` is the detector three surfaces phrase in their own voice, so
+   * what it must get right is the EQUALITY: what counts as the same binding.
+   * Both halves of that are asserted against a mutation — dropping `params`
+   * from the identity, and reading the keys in insertion order.
+   */
+  describe('bindEverySlot / uniformSlot (#618)', () => {
+    const SLOT = { provider: 'openai', model: 'gpt-5.5' };
+
+    it('binds every cell, and the count in the copy is the number of cells', async () => {
+      const m = await loadModule();
+      const roles = m.bindEverySlot(SLOT);
+      // Counted, not restated: three surfaces say "all N slots" in prose, and a
+      // constant that drifted from the real cell count would make each of them
+      // quietly false. Asserting the product against itself could not fail.
+      let cells = 0;
+      for (const role of ALL_ROLE_IDS) {
+        for (const tier of m.LINEUP_TIERS) {
+          expect(roles[role][tier]).toEqual(SLOT);
+          cells++;
+        }
+      }
+      expect(cells).toBe(m.LINEUP_SLOT_COUNT);
+    });
+
+    it('shares no params object between the cells it produces', async () => {
+      const m = await loadModule();
+      const roles = m.bindEverySlot({ ...SLOT, params: { temperature: 0.5 } });
+      const a = roles.orchestrator.premium.params;
+      const b = roles.coder.cheap.params;
+      expect(a).toEqual({ temperature: 0.5 });
+      expect(b).toEqual({ temperature: 0.5 });
+      // The whole point of `cloneSlot`: a shallow spread would make these one
+      // object, so editing a single cell's params would edit all eighteen.
+      expect(a).not.toBe(b);
+    });
+
+    it('names the binding a uniform lineup holds', async () => {
+      const m = await loadModule();
+      expect(m.uniformSlot(m.bindEverySlot(SLOT))).toEqual(SLOT);
+    });
+
+    it('answers null when a single cell of a single role differs', async () => {
+      const m = await loadModule();
+      const roles = m.bindEverySlot(SLOT);
+      roles.summarizer.cheap = { provider: 'openai', model: 'gpt-5.4-nano' };
+      expect(m.uniformSlot(roles)).toBeNull();
+    });
+
+    it('answers null when two cells differ only by params', async () => {
+      const m = await loadModule();
+      const roles = m.bindEverySlot({ ...SLOT, params: { temperature: 0.5 } });
+      roles.coder.premium = { ...SLOT, params: { temperature: 0.9 } };
+      // Same provider and model; a detector reading only those two fields would
+      // report "every slot is openai/gpt-5.5" on the surface whose entire job
+      // is to say so truthfully.
+      expect(m.uniformSlot(roles)).toBeNull();
+    });
+
+    it('does not let params key order decide the answer', async () => {
+      const m = await loadModule();
+      const roles = m.bindEverySlot({ ...SLOT, params: { temperature: 0.5, topP: 0.9 } });
+      // Same two params, written the other way round. `Object.keys` is
+      // insertion-ordered, so without the sort this is a different string and
+      // a lineup nobody changed stops reading as uniform.
+      roles.executor.mid = { ...SLOT, params: { topP: 0.9, temperature: 0.5 } };
+      expect(m.uniformSlot(roles)).toEqual({ ...SLOT, params: { temperature: 0.5, topP: 0.9 } });
+    });
+
+    it('hands back a copy, not a way into the lineup', async () => {
+      const m = await loadModule();
+      const roles = m.bindEverySlot(SLOT);
+      const bound = m.uniformSlot(roles);
+      bound!.model = 'MUTATED';
+      expect(roles.orchestrator.premium.model).toBe('gpt-5.5');
+    });
+
+    it('survives a save/load round trip, params included', async () => {
+      const m = await loadModule();
+      m.saveLineup({
+        name: 'Everything',
+        roles: m.bindEverySlot({ ...SLOT, params: { temperature: 0.25 } }),
+      });
+      const reloaded = (await loadModule()).loadLineups()['everything'];
+      expect(m.uniformSlot(reloaded.roles)).toEqual({ ...SLOT, params: { temperature: 0.25 } });
+    });
+  });
+
   describe('atomic writes', () => {
     it('writes via a tmp file then rename (no partial file)', async () => {
       const m = await loadModule();

@@ -2675,6 +2675,58 @@ describe('<App> management menu chains', () => {
     store.deleteJob(job.id);
     unmount();
   });
+
+  /**
+   * #618 — one action binds all 18 `(role, tier)` cells.
+   *
+   * Driven through the real menu chain rather than by calling the editor,
+   * because the defect this guards is a WIRING one: the row, the `value.kind`
+   * the handler switches on, and `renderLineupDetail`'s `actionDetail` entry
+   * are three lists that have to agree, and the last of them throws only once
+   * the cursor lands on the row — which nothing but a real render does.
+   */
+  it('/lineup: "Bind every slot" points all 18 cells at one model', async () => {
+    const { loadLineups, uniformSlot, LINEUP_SLOT_COUNT } = await import('../../lineups.js');
+    // `anthropic` is what `resolveActiveLineup` picks for this config, and the
+    // seed binds its three tiers to three DIFFERENT models — so a pass that
+    // bound nothing, or bound one tier, cannot be mistaken for success.
+    expect(uniformSlot(loadLineups()['anthropic'].roles)).toBeNull();
+
+    const { stdin, lastFrame, unmount } = renderApp({
+      // One provider with a key, so the provider step is a single-row list.
+      config: { apiKeys: { openai: 'k' } } as never,
+    });
+    await tick();
+    await submit(stdin, '/lineup');
+    await tick(40);
+    // Asserted rather than assumed: digits are absolute over ITEMS, sections
+    // are not numbered, and the row sits after the six roles.
+    expect(stripAnsi(lastFrame() ?? '')).toContain('7. Bind all slots…');
+
+    stdin.write('7');
+    await tick(40);
+    // The title had no honest form for this caller before #618 — it was built
+    // from a (role, tier) pair, and this pick belongs to neither.
+    expect(stripAnsi(lastFrame() ?? '')).toContain('Pick provider for EVERY slot in this lineup');
+
+    stdin.write('1'); // OpenAI
+    await tick(40);
+    expect(stripAnsi(lastFrame() ?? '')).toContain('model for EVERY slot in this lineup');
+
+    stdin.write(ENTER); // first model in the grid
+    await tick(40);
+    stdin.write(ESC); // generation params: Esc commits none
+    await tick(40);
+    expect(stripAnsi(lastFrame() ?? '')).toContain(`Bound all ${LINEUP_SLOT_COUNT} slots`);
+
+    stdin.write('9'); // Save changes
+    await tick(60);
+
+    const bound = uniformSlot(loadLineups()['anthropic'].roles);
+    expect(bound).not.toBeNull();
+    expect(bound!.provider).toBe('openai');
+    unmount();
+  });
 });
 
 describe('buildResumeSeed (--resume transcript replay)', () => {
