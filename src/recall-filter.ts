@@ -1,4 +1,5 @@
-import { generateText, type CoreMessage } from 'ai';
+import { generateText } from 'ai';
+import type { CoreMessage } from './framework/sdk.js';
 import { debugLog, traceLlm } from './logger.js';
 import type { RAGStore, RAGSearchResult, RAGSearchResultWithId } from './rag.js';
 import type { BernardConfig } from './config.js';

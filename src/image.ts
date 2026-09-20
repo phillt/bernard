@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import type { CoreMessage } from 'ai';
+import type { CoreMessage } from './framework/sdk.js';
 import { findModelMetaByName, getModelMeta } from './providers/catalog.js';
 
 /** Describes a loaded image ready to be attached to a user message. */

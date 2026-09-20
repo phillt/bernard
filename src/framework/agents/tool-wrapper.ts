@@ -1,4 +1,4 @@
-import type { CoreMessage, Tool } from 'ai';
+import type { CoreMessage, Tool } from '../sdk.js';
 import { buildDispatchUserMessage } from './user-message.js';
 import type { DispatchInput } from './user-message.js';
 import { classifyError } from '../../error-taxonomy.js';

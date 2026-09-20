@@ -1,4 +1,5 @@
-import { zodSchema, type Tool } from 'ai';
+import { zodSchema } from 'ai';
+import type { Tool } from './framework/sdk.js';
 
 /**
  * Wire size of a dispatch's tool block, in characters (#253).
@@ -34,16 +35,22 @@ export function toolBlockBytes(tools: Record<string, Tool> | undefined): number 
   let total = 0;
   for (const [name, t] of Object.entries(tools)) {
     total += name.length;
-    const def = t as { description?: unknown; parameters?: unknown };
-    if (typeof def.description === 'string') total += def.description.length;
+    // Read the SDK's `Tool` fields DIRECTLY rather than through a structural
+    // cast. The predecessor was `t as {description?: unknown; parameters?:
+    // unknown}`, and the optional `parameters?` is what made this boundary
+    // blind: rename the field upstream and the cast still compiles, `p` is
+    // `undefined`, `zodSchema(undefined)` throws into the catch below, and
+    // every tool contributes its name and description only. The number then
+    // under-reports by roughly an order of magnitude — and it is
+    // `emergencyTruncate`'s budget, so the failure is the exact one (#323)
+    // built this module to fix, silently restored. Unannotated, a rename is a
+    // compile error here instead.
+    if (t.description !== undefined) total += t.description.length;
     try {
-      const p = def.parameters;
+      const p = t.parameters;
       // MCP tools arrive pre-wrapped by `jsonSchema()` and already expose
       // `.jsonSchema`; Zod schemas need converting first.
-      const resolved =
-        p && typeof p === 'object' && 'jsonSchema' in p
-          ? (p as { jsonSchema: unknown }).jsonSchema
-          : zodSchema(p as Parameters<typeof zodSchema>[0]).jsonSchema;
+      const resolved = 'jsonSchema' in p ? p.jsonSchema : zodSchema(p).jsonSchema;
       total += JSON.stringify(resolved ?? {}).length;
     } catch {
       // Unconvertible or circular schema — skip this tool's parameters rather

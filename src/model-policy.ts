@@ -1,4 +1,5 @@
-import type { LanguageModel, generateText } from 'ai';
+import type { generateText } from 'ai';
+import type { LanguageModel } from './framework/sdk.js';
 import type { BernardConfig } from './config.js';
 import type { Specialist } from './specialists.js';
 import {

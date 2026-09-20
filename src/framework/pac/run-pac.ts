@@ -1,4 +1,4 @@
-import type { Tool } from 'ai';
+import type { Tool } from '../sdk.js';
 import type { DispatchAttachment } from '../agents/user-message.js';
 import { definitions } from '../agents/registry.js';
 import { runDefinition, type RunDefinitionOpts } from '../agents/run.js';

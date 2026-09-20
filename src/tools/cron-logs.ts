@@ -1,10 +1,10 @@
-import { tool } from 'ai';
 import { z } from 'zod';
 import { CronLogStore } from '../cron/log-store.js';
 import { CronNotesStore } from '../cron/notes-store.js';
 import { debugLog } from '../logger.js';
 import { missing } from './cron.js';
 import { attachActionMeta } from '../framework/tools/adapter.js';
+import { defineTool } from '../framework/tools/define-tool.js';
 
 /** Log actions that only read. `cleanup` is the sole mutator. */
 export const CRON_LOGS_READ_ACTIONS: ReadonlySet<string> = new Set(['list', 'get', 'summary']);
@@ -171,7 +171,7 @@ export function createCronLogTool() {
 
   return {
     cron_logs: attachActionMeta(
-      tool({
+      defineTool({
         description: `Inspect and manage cron job execution logs.
 
 Actions: list · get · summary · cleanup

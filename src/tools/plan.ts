@@ -1,6 +1,6 @@
-import { tool } from 'ai';
 import { z } from 'zod';
 import type { PlanStore } from '../plan-store.js';
+import { defineTool } from '../framework/tools/define-tool.js';
 
 const STEP_FIELD_MAX = 400;
 
@@ -48,7 +48,7 @@ const stepInputSchema = z.object({
 export function createPlanTool(planStore: PlanStore, onPlanReplaced?: () => void) {
   // No terminal rendering here: the Ink `PlanPanel` subscribes to the
   // PlanStore directly, and the transcript echo lives in `src/ui/Thread.tsx`.
-  return tool({
+  return defineTool({
     description: `Track and manage a structured plan for the current turn. Required in coordinator mode; available in every mode. When a task has multiple steps worth tracking, prefer recording them here — a structured plan the user can see — over narrating the plan in prose. Skip it for trivial or single-step turns. Each step has a \`verification\` criterion (set at creation) describing how you'll prove it succeeded. Actions: 'create' seeds a plan with step objects {description, verification}; 'add' appends one such step; 'update' transitions a step's status; 'view' shows the plan. Marking 'done' requires \`signoff\` (attesting verification was performed). Marking 'cancelled' or 'error' requires \`note\` (the reason). The plan is visible to the user. Before your final response resolve every step to a terminal state (done, cancelled, or error); leaving steps pending or in_progress is an incomplete turn. Each \`description\` and \`verification\` must be a single line of plain text — no newlines (neither literal nor escaped as \\n), no code blocks, no multi-paragraph prose. Keep each entry under ${STEP_FIELD_MAX} characters; if a step needs more context, split it into multiple smaller steps.`,
     parameters: z.object({
       action: z.enum(['create', 'update', 'add', 'view']).describe('The action to perform'),

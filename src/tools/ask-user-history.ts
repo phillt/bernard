@@ -4,8 +4,9 @@
  * it easy to unit-test without wiring up the full REPL.
  */
 
-import type { CoreMessage } from 'ai';
+import type { CoreMessage } from '../framework/sdk.js';
 import type { AskUserBatchResult } from './types.js';
+import { unwrapToolResultOutput } from '../tool-result-output.js';
 
 /**
  * Formats the resolved answers from an `ask_user` tool call into a human-
@@ -150,8 +151,11 @@ export function injectAskUserHistoryMessages(
       // Skip if we already injected a user message for this call.
       if (injectedIds.has(idKey)) continue;
 
-      // Parse the result — `result` holds the JSON string returned by execute().
-      const raw = (part as { result?: unknown }).result;
+      // Parse the result — the part's value is the JSON string `execute()`
+      // returned. Read through the shared unwrapper: an optional cast on
+      // `result` is what makes a rename here silent, and the symptom is that
+      // `ask_user` answers simply stop appearing in the transcript.
+      const raw = unwrapToolResultOutput(part);
       let payload: AskUserBatchResult & { unavailable?: boolean };
       try {
         payload =

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { CoreMessage } from 'ai';
+import type { CoreMessage } from './framework/sdk.js';
 import { z } from 'zod';
 import { toolBlockBytes } from './tool-bytes.js';
 import {

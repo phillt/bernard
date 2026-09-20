@@ -1,4 +1,5 @@
-import { tool, type Tool } from 'ai';
+import { tool } from 'ai';
+import type { Tool } from '../sdk.js';
 import type { BernardTool, ToolMeta, ToolResult, ToolRisk } from './types.js';
 import { isToolResult } from './types.js';
 // Leaf module (no imports of its own), so this cannot create a cycle.
@@ -13,6 +14,13 @@ import { actionOf } from '../../tool-permissions.js';
  * Returns the AI-SDK `Tool` object **plus** a non-enumerable `meta` field so
  * the augmentation layer and the registry can read metadata without holding a
  * separate reference to the `BernardTool`.
+ *
+ * This is the only place in the tree that still calls the SDK's `tool()`
+ * directly, and deliberately so: it OWNS the translation, so routing it
+ * through `defineTool` would buy nothing (the `parameters:` field it passes
+ * is right here) and hand this module an edge it does not need. Every other
+ * caller goes through `./define-tool.js` — see that file for why the naming
+ * boundary is a sibling rather than an export from here.
  */
 export function toolToAISDK<TArgs, TData>(t: BernardTool<TArgs, TData>): Tool {
   const aisdk = tool({

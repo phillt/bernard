@@ -1,4 +1,3 @@
-import { tool } from 'ai';
 import { z } from 'zod';
 import { attachMeta } from '../framework/tools/adapter.js';
 import {
@@ -19,6 +18,7 @@ import { savePreferences, type BernardConfig } from '../config.js';
 import { BUILTIN_PROVIDERS } from '../providers/types.js';
 import { validateModelParams, PARAM_IDS } from '../providers/model-params.js';
 import { validateLineup, formatLineupValidation } from '../model-validate.js';
+import { defineTool } from '../framework/tools/define-tool.js';
 
 /**
  * Agent-facing lineup editor (feature follow-up to #264). Lets Bernard read,
@@ -154,7 +154,7 @@ function unknownProviders(
 
 export function createLineupTool(config?: BernardConfig) {
   return attachMeta(
-    tool({
+    defineTool({
       description:
         'Read, update, or create model lineups (the role × cost-tier matrix that decides which model each kind of work uses). ' +
         'Use this when the user pastes provider/model values and asks you to set up or change a lineup.\n\n' +

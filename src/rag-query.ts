@@ -1,4 +1,4 @@
-import type { CoreMessage } from 'ai';
+import type { CoreMessage } from './framework/sdk.js';
 import { extractText } from './context.js';
 import type { RAGSearchResult } from './rag.js';
 import { DEFAULT_TOP_K_PER_DOMAIN, DEFAULT_MAX_RESULTS } from './rag.js';

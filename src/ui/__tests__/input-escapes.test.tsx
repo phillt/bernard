@@ -3,7 +3,7 @@ import { render } from 'ink-testing-library';
 import { createElement } from 'react';
 import stripAnsi from 'strip-ansi';
 import { Box, Text } from 'ink';
-import type { CoreMessage } from 'ai';
+import type { CoreMessage } from '../../framework/sdk.js';
 import { Prompt } from '../Prompt.js';
 import { TextInputOverlay } from '../overlays/TextInputOverlay.js';
 import { TranscriptViewport } from '../TranscriptViewport.js';

@@ -1,4 +1,4 @@
-import type { Tool } from 'ai';
+import type { Tool } from '../sdk.js';
 import type { BernardTool, ToolMeta, ToolResult } from './types.js';
 import { isToolResult } from './types.js';
 import { isReadOnlyMCPToolName } from '../../risk.js';

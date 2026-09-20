@@ -1,4 +1,5 @@
-import { generateText, type CoreMessage } from 'ai';
+import { generateText } from 'ai';
+import type { CoreMessage } from './framework/sdk.js';
 import { debugLog, traceLlm } from './logger.js';
 import { sanitizeKey, REWRITER_HINTS_KEY, type MemoryStore } from './memory.js';
 import type { RAGStore, RAGSearchResult } from './rag.js';

@@ -20,7 +20,7 @@
  */
 import { describe, it, expect, afterAll } from 'vitest';
 import { createElement } from 'react';
-import type { CoreMessage } from 'ai';
+import type { CoreMessage } from '../../framework/sdk.js';
 // Static imports, and they must come FIRST — their env assignments run before
 // the dynamic imports below reach `supports-hyperlinks` and construct chalk.
 // Note `ink` and `strip-ansi` are dynamic for exactly that reason: importing

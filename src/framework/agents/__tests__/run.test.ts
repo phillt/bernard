@@ -32,7 +32,8 @@ vi.mock('../../../context-message.js', async () => {
   };
 });
 
-import { generateText, type CoreMessage } from 'ai';
+import { generateText } from 'ai';
+import type { CoreMessage } from '../../sdk.js';
 import { runDefinition } from '../run.js';
 import { markProviderStall } from '../../../error-taxonomy.js';
 import { makeTestContext } from '../../../__tests__/agent-context.js';

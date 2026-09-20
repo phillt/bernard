@@ -1,7 +1,7 @@
-import { tool } from 'ai';
 import { z } from 'zod';
 import { addMCPUrlServer } from '../mcp.js';
 import { attachMeta } from '../framework/tools/adapter.js';
+import { defineTool } from '../framework/tools/define-tool.js';
 
 /**
  * Creates the tool for adding URL-based (SSE/HTTP) MCP servers.
@@ -11,7 +11,7 @@ import { attachMeta } from '../framework/tools/adapter.js';
  */
 export function createMCPAddUrlTool() {
   return attachMeta(
-    tool({
+    defineTool({
       description:
         'Add a URL-based MCP server (SSE or HTTP endpoint). Use this when given an MCP server URL, or when a stdio package turns out to be an HTTP/SSE server. Changes take effect after restarting Bernard. Run `mcp_verify` afterward to confirm it connects (or let the `mcp-manager` specialist handle add + verify).',
       parameters: z.object({

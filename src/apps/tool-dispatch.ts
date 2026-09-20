@@ -1,4 +1,4 @@
-import type { Tool } from 'ai';
+import type { Tool } from '../framework/sdk.js';
 import type { z } from 'zod';
 import { debugLog } from '../logger.js';
 import { DEFAULT_SHELL_TIMEOUT, loadPreferences } from '../config.js';

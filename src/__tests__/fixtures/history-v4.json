@@ -1,0 +1,906 @@
+[
+  {
+    "role": "user",
+    "content": "<redacted>"
+  },
+  {
+    "role": "assistant",
+    "content": [
+      {
+        "type": "reasoning",
+        "text": "<redacted>"
+      },
+      {
+        "type": "text",
+        "text": "<redacted>"
+      },
+      {
+        "type": "tool-call",
+        "toolCallId": "call-<redacted>",
+        "toolName": "think",
+        "args": {
+          "thought": "<redacted>"
+        }
+      },
+      {
+        "type": "tool-call",
+        "toolCallId": "call-<redacted>",
+        "toolName": "delegate_server1_aaaaaa",
+        "args": {
+          "task": "<redacted>"
+        }
+      }
+    ],
+    "id": "msg-<redacted>"
+  },
+  {
+    "role": "tool",
+    "id": "msg-<redacted>",
+    "content": [
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "think",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "delegate_server1_aaaaaa",
+        "result": "<redacted>"
+      }
+    ]
+  },
+  {
+    "role": "assistant",
+    "content": [
+      {
+        "type": "reasoning",
+        "text": "<redacted>"
+      },
+      {
+        "type": "text",
+        "text": "<redacted>"
+      }
+    ],
+    "id": "msg-<redacted>"
+  },
+  {
+    "role": "tool",
+    "id": "msg-<redacted>",
+    "content": [
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "think",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "plan",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "memory",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "delegate_server2_aaaaaa",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "delegate_server1_aaaaaa",
+        "result": "<redacted>"
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "id": "msg-<redacted>",
+    "content": [
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "evaluate",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "plan",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "plan",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "web_search",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "web_search",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "delegate_server2_aaaaaa",
+        "result": "<redacted>"
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "id": "msg-<redacted>",
+    "content": [
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "think",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "web_search",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "web_read",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "delegate_server1_aaaaaa",
+        "result": "<redacted>"
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "id": "msg-<redacted>",
+    "content": [
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "evaluate",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "plan",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "delegate_server1_aaaaaa",
+        "result": "<redacted>"
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "id": "msg-<redacted>",
+    "content": [
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "think",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "shell",
+        "result": {
+          "share_bernard_dirs": [
+            "<redacted>",
+            "<redacted>"
+          ],
+          "mcp_paths": [
+            "<redacted>",
+            "<redacted>"
+          ],
+          "gmail_list_profile": "<redacted>"
+        }
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "delegate_server1_aaaaaa",
+        "result": "<redacted>"
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "id": "msg-<redacted>",
+    "content": [
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "file_read_lines",
+        "result": {
+          "path": "<redacted>",
+          "lines": "<redacted>",
+          "summary": "<redacted>"
+        }
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "shell",
+        "result": [
+          "<redacted>",
+          "<redacted>"
+        ]
+      }
+    ]
+  },
+  {
+    "role": "assistant",
+    "content": [
+      {
+        "type": "reasoning",
+        "text": "<redacted>"
+      },
+      {
+        "type": "tool-call",
+        "toolCallId": "call-<redacted>",
+        "toolName": "shell",
+        "args": {
+          "command": "<redacted>"
+        }
+      },
+      {
+        "type": "tool-call",
+        "toolCallId": "call-<redacted>",
+        "toolName": "file_read_lines",
+        "args": {
+          "path": "<redacted>"
+        }
+      }
+    ],
+    "id": "msg-<redacted>"
+  },
+  {
+    "role": "tool",
+    "id": "msg-<redacted>",
+    "content": [
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "shell",
+        "result": {
+          "files": [
+            "<redacted>",
+            "<redacted>"
+          ]
+        }
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "file_read_lines",
+        "result": {
+          "path": "<redacted>",
+          "content": "<redacted>"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "id": "msg-<redacted>",
+    "content": [
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "file_read_lines",
+        "result": {
+          "path": "<redacted>",
+          "lines": 0
+        }
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "file_read_lines",
+        "result": {
+          "path": "<redacted>",
+          "lines": 0
+        }
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "file_read_lines",
+        "result": {
+          "path": "<redacted>",
+          "lines": 0,
+          "summary": "<redacted>"
+        }
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "file_read_lines",
+        "result": {
+          "path": "<redacted>",
+          "lines": 0,
+          "summary": "<redacted>"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "id": "msg-<redacted>",
+    "content": [
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "file_read_lines",
+        "result": {
+          "path": "<redacted>",
+          "lines": 0,
+          "content": "<redacted>"
+        }
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "delegate_server1_aaaaaa",
+        "result": "<redacted>"
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "id": "msg-<redacted>",
+    "content": [
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "think",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "shell",
+        "result": {
+          "number": 0,
+          "title": "<redacted>",
+          "state": "<redacted>"
+        }
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "shell",
+        "result": {
+          "matches": 0,
+          "files": [
+            "<redacted>",
+            "<redacted>"
+          ]
+        }
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "file_read_lines",
+        "result": {
+          "path": "<redacted>",
+          "lines_read": "<redacted>",
+          "summary": "<redacted>"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "id": "msg-<redacted>",
+    "content": [
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "shell",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "shell",
+        "result": {
+          "issue": 0,
+          "repo": "<redacted>",
+          "body_len": 0
+        }
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "file_read_lines",
+        "result": {
+          "path": "<redacted>",
+          "offset": 0,
+          "limit": 0
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "id": "msg-<redacted>",
+    "content": [
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "shell",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "shell",
+        "result": [
+          "<redacted>",
+          "<redacted>"
+        ]
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "shell",
+        "result": "<redacted>"
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "id": "msg-<redacted>",
+    "content": [
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "shell",
+        "result": {
+          "matches": 0,
+          "files": [
+            "<redacted>",
+            "<redacted>"
+          ],
+          "sample": "<redacted>"
+        }
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "shell",
+        "result": {
+          "matches": 0,
+          "files": [
+            "<redacted>",
+            "<redacted>"
+          ],
+          "terms_found": [
+            "<redacted>"
+          ]
+        }
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "file_read_lines",
+        "result": {
+          "path": "<redacted>",
+          "offset": 0,
+          "limit": 0
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "id": "msg-<redacted>",
+    "content": [
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "file_write",
+        "result": {
+          "path": "<redacted>",
+          "bytes": 0,
+          "new_hash": "<redacted>"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "id": "msg-<redacted>",
+    "content": [
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "shell",
+        "result": "<redacted>"
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "id": "msg-<redacted>",
+    "content": [
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "think",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "plan",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "shell",
+        "result": [
+          {
+            "number": 0,
+            "title": "<redacted>",
+            "url": "<redacted>"
+          },
+          {
+            "number": 0,
+            "title": "<redacted>",
+            "url": "<redacted>"
+          }
+        ]
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "tool_wrapper_run",
+        "result": "<redacted>"
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "id": "msg-<redacted>",
+    "content": [
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "evaluate",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "plan",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "shell",
+        "result": {
+          "root": [
+            "<redacted>",
+            "<redacted>"
+          ],
+          "src_top": [
+            "<redacted>",
+            "<redacted>"
+          ],
+          "package": {
+            "name": "<redacted>",
+            "version": "<redacted>",
+            "type": "<redacted>"
+          }
+        }
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "tool_wrapper_run",
+        "result": "<redacted>"
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "id": "msg-<redacted>",
+    "content": [
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "shell",
+        "result": {
+          "file": "<redacted>",
+          "matches": 0
+        }
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "shell",
+        "result": {
+          "dirs": [
+            "<redacted>",
+            "<redacted>"
+          ],
+          "apps_ls": [
+            "<redacted>",
+            "<redacted>"
+          ]
+        }
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "shell",
+        "result": [
+          "<redacted>",
+          "<redacted>"
+        ]
+      }
+    ]
+  },
+  {
+    "role": "assistant",
+    "content": [
+      {
+        "type": "tool-call",
+        "toolCallId": "call-<redacted>",
+        "toolName": "file_read_lines",
+        "args": {
+          "path": "<redacted>",
+          "offset": 0,
+          "limit": 0
+        }
+      },
+      {
+        "type": "tool-call",
+        "toolCallId": "call-<redacted>",
+        "toolName": "file_read_lines",
+        "args": {
+          "path": "<redacted>",
+          "offset": 0,
+          "limit": 0
+        }
+      },
+      {
+        "type": "tool-call",
+        "toolCallId": "call-<redacted>",
+        "toolName": "file_read_lines",
+        "args": {
+          "path": "<redacted>",
+          "offset": 0,
+          "limit": 0
+        }
+      }
+    ],
+    "id": "msg-<redacted>"
+  },
+  {
+    "role": "assistant",
+    "content": [
+      {
+        "type": "text",
+        "text": "<redacted>"
+      },
+      {
+        "type": "tool-call",
+        "toolCallId": "call-<redacted>",
+        "toolName": "evaluate",
+        "args": {
+          "evaluation": "<redacted>"
+        }
+      },
+      {
+        "type": "tool-call",
+        "toolCallId": "call-<redacted>",
+        "toolName": "plan",
+        "args": {
+          "action": "<redacted>",
+          "id": 0,
+          "status": "<redacted>"
+        }
+      },
+      {
+        "type": "tool-call",
+        "toolCallId": "call-<redacted>",
+        "toolName": "plan",
+        "args": {
+          "action": "<redacted>",
+          "id": 0,
+          "status": "<redacted>"
+        }
+      },
+      {
+        "type": "tool-call",
+        "toolCallId": "call-<redacted>",
+        "toolName": "file_write",
+        "args": {
+          "path": "<redacted>",
+          "content": "<redacted>"
+        }
+      }
+    ],
+    "id": "msg-<redacted>"
+  },
+  {
+    "role": "assistant",
+    "content": [
+      {
+        "type": "tool-call",
+        "toolCallId": "call-<redacted>",
+        "toolName": "shell",
+        "args": {
+          "command": "<redacted>"
+        }
+      }
+    ],
+    "id": "msg-<redacted>"
+  },
+  {
+    "role": "assistant",
+    "content": [
+      {
+        "type": "text",
+        "text": "<redacted>"
+      }
+    ],
+    "id": "msg-<redacted>"
+  },
+  {
+    "role": "tool",
+    "id": "msg-<redacted>",
+    "content": [
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "plan",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "plan",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "think",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "memory",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "web_read",
+        "result": {
+          "name": "<redacted>",
+          "credentials": "<redacted>",
+          "location": "<redacted>"
+        }
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "delegate_server3_aaaaaa",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "delegate_server1_aaaaaa",
+        "result": "<redacted>"
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "id": "msg-<redacted>",
+    "content": [
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "evaluate",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "plan",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "plan",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "memory",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "web_search",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "web_search",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "web_read",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "delegate_server3_aaaaaa",
+        "result": "<redacted>"
+      },
+      {
+        "type": "tool-result",
+        "toolCallId": "call-<redacted>",
+        "toolName": "shell",
+        "result": {
+          "matches": 0,
+          "files": [
+            "<redacted>",
+            "<redacted>"
+          ],
+          "kaitlyn_entry": "<redacted>"
+        }
+      }
+    ]
+  },
+  {
+    "role": "assistant",
+    "content": "<redacted>"
+  }
+]

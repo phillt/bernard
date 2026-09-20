@@ -1,4 +1,4 @@
-import type { CoreMessage } from 'ai';
+import type { CoreMessage } from '../sdk.js';
 import type { BernardConfig } from '../../config.js';
 import type { PlanStore } from '../../plan-store.js';
 import type { AgentResult } from '../runner.js';

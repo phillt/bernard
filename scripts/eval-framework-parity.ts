@@ -8,10 +8,27 @@
  * mode, maxTokens, providerMetadata, abortSignal presence) and serializes
  * the captures to a deterministic JSON snapshot.
  *
- * The snapshot is the regression fixture. To verify parity:
+ * The snapshot is the regression fixture, and since #sdk-boundary a CAPTURED
+ * one is committed at `scripts/__fixtures__/framework-parity.json`. That is the
+ * point of committing it: it is the only before/after the SDK migration will
+ * have, and it cannot be regenerated after the bump — the "check out the other
+ * branch and re-run" recipe below needs the OLD `ai` installed, which the bump
+ * removes. Capturing it while the old SDK is still in `node_modules` is the
+ * whole of its value.
+ *
+ * To verify parity against it:
+ *   BERNARD_EVAL=1 BERNARD_EVAL_BASELINE=scripts/__fixtures__/framework-parity.json \
+ *     npx tsx scripts/eval-framework-parity.ts
+ *
+ * …which exits nonzero on any byte difference. Or, between two branches:
  *   1. Check out `master`, run the script, save output to `master.json`.
  *   2. Check out the PR branch, run the script, save output to `pr.json`.
  *   3. `diff master.json pr.json` — any byte difference is a forwarding bug.
+ *
+ * The callbacks are typed against `StepFinishPayload` and
+ * `LanguageModelV1CallOptions` rather than `any`, so the script participates in
+ * the type cascade instead of hiding from it: a renamed field on either is a
+ * compile error here, which is what `npm run typecheck:scripts` is for.
  *
  * Usage:
  *   BERNARD_EVAL=1 npx tsx scripts/eval-framework-parity.ts
@@ -29,6 +46,8 @@
  */
 
 import * as fs from 'node:fs';
+import type { LanguageModelV1CallOptions } from '@ai-sdk/provider';
+import type { StepFinishPayload } from '../src/framework/hooks/types.js';
 
 if (process.env.BERNARD_EVAL !== '1') {
   console.error('Refusing to run: set BERNARD_EVAL=1 to execute this eval.');
@@ -89,7 +108,7 @@ async function main(): Promise<void> {
 
   function makeRecordingHook(id: string, log: Array<{ hookId: string; payloadKeys: string[] }>) {
     return {
-      onStepFinish: (payload: any) => {
+      onStepFinish: (payload: StepFinishPayload) => {
         log.push({ hookId: id, payloadKeys: Object.keys(payload).sort() });
       },
     };
@@ -105,7 +124,7 @@ async function main(): Promise<void> {
         const fires: Array<{ hookId: string; payloadKeys: string[] }> = [];
         const recorder = cronStepRecorderHook([]);
         const wrapped = {
-          onStepFinish: (payload: any) => {
+          onStepFinish: (payload: StepFinishPayload) => {
             fires.push({ hookId: 'cron-step-recorder', payloadKeys: Object.keys(payload).sort() });
             return recorder.onStepFinish?.(payload);
           },
@@ -135,7 +154,7 @@ async function main(): Promise<void> {
         const fires: Array<{ hookId: string; payloadKeys: string[] }> = [];
         const print = outputHook('task:1');
         const wrapped = {
-          onStepFinish: (payload: any) => {
+          onStepFinish: (payload: StepFinishPayload) => {
             fires.push({ hookId: 'output(task:1)', payloadKeys: Object.keys(payload).sort() });
             return print.onStepFinish?.(payload);
           },
@@ -239,13 +258,13 @@ async function main(): Promise<void> {
         });
         const print = outputHook();
         const wrappedTokens = {
-          onStepFinish: (payload: any) => {
+          onStepFinish: (payload: StepFinishPayload) => {
             fires.push({ hookId: 'token-stats', payloadKeys: Object.keys(payload).sort() });
             return tokens.onStepFinish?.(payload);
           },
         };
         const wrappedPrint = {
-          onStepFinish: (payload: any) => {
+          onStepFinish: (payload: StepFinishPayload) => {
             fires.push({ hookId: 'output()', payloadKeys: Object.keys(payload).sort() });
             return print.onStepFinish?.(payload);
           },
@@ -293,7 +312,7 @@ async function main(): Promise<void> {
     const model = new MockLanguageModelV1({
       provider: 'parity-recorder',
       modelId: 'parity-mock-v1',
-      doGenerate: async (options: any) => {
+      doGenerate: async (options: LanguageModelV1CallOptions) => {
         calls.push({
           callIndex: calls.length,
           inputFormat: options.inputFormat,

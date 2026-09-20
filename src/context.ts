@@ -1,4 +1,6 @@
-import { generateText, type CoreMessage } from 'ai';
+import { generateText } from 'ai';
+import type { CoreMessage } from './framework/sdk.js';
+import { replaceToolResultOutput, unwrapToolResultOutput } from './tool-result-output.js';
 import { debugLog, isDebugEnabled } from './logger.js';
 import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
@@ -91,9 +93,13 @@ export function serializeMessages(messages: CoreMessage[]): string {
             'type' in part &&
             part.type === 'tool-result'
           ) {
-            const tr = part as { toolName?: string; result: unknown };
+            const tr = part as { toolName?: string };
             const name = tr.toolName ?? 'tool';
-            const resultStr = typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result);
+            // Through the shared reader, not `part.result`: a `role:'tool'`
+            // part carries an ENVELOPE from the next SDK major onward, and a
+            // mechanical rename here would be wrong in a way nothing reports.
+            const value = unwrapToolResultOutput(part);
+            const resultStr = typeof value === 'string' ? value : JSON.stringify(value);
             const truncated = resultStr.length > 500 ? resultStr.slice(0, 500) + '...' : resultStr;
             lines.push(`Tool [${name}]: ${truncated}`);
           }
@@ -414,23 +420,28 @@ export function truncateToolResults(
     if (msg.role !== 'tool' || !Array.isArray(msg.content)) return msg;
 
     let changed = false;
-    const newContent = msg.content.map((part: any) => {
+    const newContent = msg.content.map((part) => {
       if (
         typeof part === 'object' &&
         part !== null &&
         'type' in part &&
         part.type === 'tool-result'
       ) {
-        const resultStr =
-          typeof part.result === 'string' ? part.result : JSON.stringify(part.result);
+        // Read and write through the shared pair rather than touching
+        // `part.result` directly. This is the one site that does BOTH, and so
+        // the one an SDK rename could half-fix: reading the new field while
+        // writing the old would truncate into a slot the provider ignores, and
+        // every oversized result would go back out in full with the counter
+        // still saying it was bounded.
+        const value = unwrapToolResultOutput(part);
+        const resultStr = typeof value === 'string' ? value : JSON.stringify(value);
         if (resultStr.length > maxChars) {
           changed = true;
-          return {
-            ...part,
-            result:
-              resultStr.slice(0, maxChars) +
+          return replaceToolResultOutput(
+            part,
+            resultStr.slice(0, maxChars) +
               `\n...[truncated from ${resultStr.length} to ${maxChars} chars]`,
-          };
+          );
         }
       }
       return part;

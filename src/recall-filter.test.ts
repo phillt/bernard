@@ -36,7 +36,7 @@ import type { RAGStore, RAGSearchResultWithId } from './rag.js';
 import type { BernardConfig } from './config.js';
 import { clearLLMCache } from './llm-cache.js';
 import { MAX_PERSISTENT_MEMORY_CHARS } from './context-message.js';
-import type { CoreMessage } from 'ai';
+import type { CoreMessage } from './framework/sdk.js';
 
 function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
   return {

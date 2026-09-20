@@ -1,4 +1,4 @@
-import type { Tool } from 'ai';
+import type { Tool } from '../framework/sdk.js';
 import type { AgentContext } from '../framework/context.js';
 import { runDefinition } from '../framework/agents/run.js';
 import { runPAC } from '../framework/pac/run-pac.js';

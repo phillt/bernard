@@ -1,4 +1,4 @@
-import type { CoreMessage, Tool } from 'ai';
+import type { CoreMessage, Tool } from '../sdk.js';
 import { buildBriefUserMessage } from './user-message.js';
 import type { WithAttachments } from './user-message.js';
 import { appendActivitySummary } from '../../tools/activity-summary.js';

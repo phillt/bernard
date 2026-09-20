@@ -1,8 +1,8 @@
-import { tool } from 'ai';
 import { z } from 'zod';
 import { printEvaluation } from '../output.js';
 import { verdictOf, type Check } from '../rubric.js';
 import type { VerificationStore } from '../agent-status.js';
+import { defineTool } from '../framework/tools/define-tool.js';
 
 /**
  * Creates the `evaluate` tool for coordinator (ReAct) mode.
@@ -24,7 +24,7 @@ const CheckSchema = z.object({
 });
 
 export function createEvaluateTool(verification?: VerificationStore) {
-  return tool({
+  return defineTool({
     description:
       "Self-evaluate after a tool call or batch of parallel calls. Required in coordinator mode between each act and the next think/act. State in 1-3 sentences: (1) did the result match what you expected, (2) did it reveal any surprises, errors, or risks, (3) should you continue on the current path or course-correct? Be willing to catch yourself — phrases like 'Actually, that's not right because...' or 'Wait — this might make things worse, let me take a different approach' are exactly what this is for. You may optionally attach a `checks` array of structured judgments (pass/warn/fail/skip) — these contribute to the turn's machine-checkable rubric (issue #145).",
     parameters: z.object({

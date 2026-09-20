@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { render } from 'ink-testing-library';
 import { createElement } from 'react';
 import stripAnsi from 'strip-ansi';
-import type { CoreMessage } from 'ai';
+import type { CoreMessage } from '../../framework/sdk.js';
 import { Thread, type StaticItem } from '../Thread.js';
 import { TranscriptViewport } from '../TranscriptViewport.js';
 import { MessageStore } from '../message-store.js';

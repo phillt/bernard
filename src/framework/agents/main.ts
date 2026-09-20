@@ -1,4 +1,4 @@
-import type { CoreMessage, Tool } from 'ai';
+import type { CoreMessage, Tool } from '../sdk.js';
 import { buildStrategy } from '../strategies/index.js';
 import type { TokenStatsTarget } from '../hooks/token-stats.js';
 import { outputHook } from '../hooks/output.js';

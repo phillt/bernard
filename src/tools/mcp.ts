@@ -1,8 +1,8 @@
-import { tool } from 'ai';
 import { z } from 'zod';
 import { listMCPServers, addMCPServer, getMCPServer } from '../mcp.js';
 import { removeMCPServerEverywhere, describeMCPRemoval } from '../mcp-lifecycle.js';
 import { attachMeta } from '../framework/tools/adapter.js';
+import { defineTool } from '../framework/tools/define-tool.js';
 
 /**
  * Creates the MCP server configuration tool for managing stdio-based MCP servers.
@@ -12,7 +12,7 @@ import { attachMeta } from '../framework/tools/adapter.js';
  */
 export function createMCPConfigTool() {
   return attachMeta(
-    tool({
+    defineTool({
       description:
         "Manage MCP server configuration. Add, remove, list, or inspect MCP servers. Changes take effect after restarting Bernard. For ADDING or FIXING a server, prefer the `mcp-manager` specialist (via tool_wrapper_run) — it auto-detects transport (stdio vs HTTP/SSE), the correct flags (e.g. --stdio) and credential env vars, and verifies the connection. If you add/edit directly here, ALWAYS run `mcp_verify` afterward to confirm it actually connects (an unverified stdio config can hang the next startup). REMOVE also deletes that server's learned tool profiles and permission grants, and reports any specialist left short of tools — it never edits or deletes a specialist, so act on that report yourself.",
       parameters: z.object({

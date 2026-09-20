@@ -1,4 +1,4 @@
-import type { CoreMessage } from 'ai';
+import type { CoreMessage } from '../sdk.js';
 import {
   REACT_AUTO_CANCEL_NOTE,
   REACT_ENFORCEMENT_MAX_RETRIES,

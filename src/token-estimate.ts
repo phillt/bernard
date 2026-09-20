@@ -1,4 +1,4 @@
-import type { CoreMessage } from 'ai';
+import type { CoreMessage } from './framework/sdk.js';
 import { estimateContentPartTokens } from './image.js';
 import { findModelMetaByName, normalizeModelId } from './providers/catalog.js';
 

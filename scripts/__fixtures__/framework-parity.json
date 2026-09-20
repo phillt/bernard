@@ -1,0 +1,465 @@
+{
+  "harnessVersion": 1,
+  "scenarios": [
+    {
+      "id": "cron-initial",
+      "description": "src/cron/runner.ts — repair + cronStepRecorderHook.",
+      "spec": {
+        "model": "<RecordingMockLanguageModelV1>",
+        "providerOptions": null,
+        "tools": [],
+        "maxSteps": 25,
+        "maxTokens": 4096,
+        "system": "cron system prompt",
+        "messages": [
+          {
+            "role": "user",
+            "content": "parity-probe"
+          }
+        ],
+        "abortSignalPresent": false,
+        "prepareStepPresent": false,
+        "repairPresent": true,
+        "hookCount": 1
+      },
+      "calls": [
+        {
+          "callIndex": 0,
+          "inputFormat": "messages",
+          "mode": {
+            "type": "regular"
+          },
+          "prompt": [
+            {
+              "role": "system",
+              "content": "cron system prompt"
+            },
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "parity-probe"
+                }
+              ]
+            }
+          ],
+          "maxTokens": 4096,
+          "temperature": 0,
+          "abortSignalPresent": true
+        }
+      ],
+      "hookFires": [
+        {
+          "hookId": "cron-step-recorder",
+          "payloadKeys": [
+            "experimental_providerMetadata",
+            "files",
+            "finishReason",
+            "isContinued",
+            "logprobs",
+            "providerMetadata",
+            "reasoning",
+            "reasoningDetails",
+            "request",
+            "response",
+            "sources",
+            "stepType",
+            "text",
+            "toolCalls",
+            "toolResults",
+            "usage",
+            "warnings"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "task",
+      "description": "src/tools/task.ts — prepareStep + outputHook(\"task:1\"), no repair.",
+      "spec": {
+        "model": "<RecordingMockLanguageModelV1>",
+        "providerOptions": null,
+        "tools": [],
+        "maxSteps": 10,
+        "maxTokens": 4096,
+        "system": "task system prompt",
+        "messages": [
+          {
+            "role": "user",
+            "content": "parity-probe"
+          }
+        ],
+        "abortSignalPresent": false,
+        "prepareStepPresent": true,
+        "repairPresent": false,
+        "hookCount": 1
+      },
+      "calls": [
+        {
+          "callIndex": 0,
+          "inputFormat": "messages",
+          "mode": {
+            "type": "regular"
+          },
+          "prompt": [
+            {
+              "role": "system",
+              "content": "task system prompt"
+            },
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "parity-probe"
+                }
+              ]
+            }
+          ],
+          "maxTokens": 4096,
+          "temperature": 0,
+          "abortSignalPresent": true
+        }
+      ],
+      "hookFires": [
+        {
+          "hookId": "output(task:1)",
+          "payloadKeys": [
+            "experimental_providerMetadata",
+            "files",
+            "finishReason",
+            "isContinued",
+            "logprobs",
+            "providerMetadata",
+            "reasoning",
+            "reasoningDetails",
+            "request",
+            "response",
+            "sources",
+            "stepType",
+            "text",
+            "toolCalls",
+            "toolResults",
+            "usage",
+            "warnings"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "tool-wrapper",
+      "description": "src/tools/tool-wrapper-run.ts — repair + outputHook + optional prepareStep.",
+      "spec": {
+        "model": "<RecordingMockLanguageModelV1>",
+        "providerOptions": null,
+        "tools": [],
+        "maxSteps": 8,
+        "maxTokens": 4096,
+        "system": "wrapper system prompt",
+        "messages": [
+          {
+            "role": "user",
+            "content": "parity-probe"
+          }
+        ],
+        "abortSignalPresent": false,
+        "prepareStepPresent": true,
+        "repairPresent": true,
+        "hookCount": 1
+      },
+      "calls": [
+        {
+          "callIndex": 0,
+          "inputFormat": "messages",
+          "mode": {
+            "type": "regular"
+          },
+          "prompt": [
+            {
+              "role": "system",
+              "content": "wrapper system prompt"
+            },
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "parity-probe"
+                }
+              ]
+            }
+          ],
+          "maxTokens": 4096,
+          "temperature": 0,
+          "abortSignalPresent": true
+        }
+      ],
+      "hookFires": [
+        {
+          "hookId": "output(wrap:1)",
+          "payloadKeys": [
+            "experimental_providerMetadata",
+            "files",
+            "finishReason",
+            "isContinued",
+            "logprobs",
+            "providerMetadata",
+            "reasoning",
+            "reasoningDetails",
+            "request",
+            "response",
+            "sources",
+            "stepType",
+            "text",
+            "toolCalls",
+            "toolResults",
+            "usage",
+            "warnings"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "subagent-initial",
+      "description": "src/tools/subagent.ts — initial call, shared outputHook(\"sub:1\").",
+      "spec": {
+        "model": "<RecordingMockLanguageModelV1>",
+        "providerOptions": null,
+        "tools": [],
+        "maxSteps": 12,
+        "maxTokens": 4096,
+        "system": "subagent system prompt",
+        "messages": [
+          {
+            "role": "user",
+            "content": "parity-probe"
+          }
+        ],
+        "abortSignalPresent": false,
+        "prepareStepPresent": true,
+        "repairPresent": true,
+        "hookCount": 1
+      },
+      "calls": [
+        {
+          "callIndex": 0,
+          "inputFormat": "messages",
+          "mode": {
+            "type": "regular"
+          },
+          "prompt": [
+            {
+              "role": "system",
+              "content": "subagent system prompt"
+            },
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "parity-probe"
+                }
+              ]
+            }
+          ],
+          "maxTokens": 4096,
+          "temperature": 0,
+          "abortSignalPresent": true
+        }
+      ],
+      "hookFires": [
+        {
+          "hookId": "output(sub:1)",
+          "payloadKeys": [
+            "experimental_providerMetadata",
+            "files",
+            "finishReason",
+            "isContinued",
+            "logprobs",
+            "providerMetadata",
+            "reasoning",
+            "reasoningDetails",
+            "request",
+            "response",
+            "sources",
+            "stepType",
+            "text",
+            "toolCalls",
+            "toolResults",
+            "usage",
+            "warnings"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "specialist-initial",
+      "description": "src/tools/specialist-run.ts — initial call, outputHook(\"spec:1\") + repair + prepareStep.",
+      "spec": {
+        "model": "<RecordingMockLanguageModelV1>",
+        "providerOptions": null,
+        "tools": [],
+        "maxSteps": 15,
+        "maxTokens": 4096,
+        "system": "specialist system prompt",
+        "messages": [
+          {
+            "role": "user",
+            "content": "parity-probe"
+          }
+        ],
+        "abortSignalPresent": false,
+        "prepareStepPresent": true,
+        "repairPresent": true,
+        "hookCount": 1
+      },
+      "calls": [
+        {
+          "callIndex": 0,
+          "inputFormat": "messages",
+          "mode": {
+            "type": "regular"
+          },
+          "prompt": [
+            {
+              "role": "system",
+              "content": "specialist system prompt"
+            },
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "parity-probe"
+                }
+              ]
+            }
+          ],
+          "maxTokens": 4096,
+          "temperature": 0,
+          "abortSignalPresent": true
+        }
+      ],
+      "hookFires": [
+        {
+          "hookId": "output(spec:1)",
+          "payloadKeys": [
+            "experimental_providerMetadata",
+            "files",
+            "finishReason",
+            "isContinued",
+            "logprobs",
+            "providerMetadata",
+            "reasoning",
+            "reasoningDetails",
+            "request",
+            "response",
+            "sources",
+            "stepType",
+            "text",
+            "toolCalls",
+            "toolResults",
+            "usage",
+            "warnings"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "main-agent",
+      "description": "src/agent.ts — tokenStatsHook + outputHook() + repair.",
+      "spec": {
+        "model": "<RecordingMockLanguageModelV1>",
+        "providerOptions": null,
+        "tools": [],
+        "maxSteps": 25,
+        "maxTokens": 4096,
+        "system": "main agent system prompt",
+        "messages": [
+          {
+            "role": "user",
+            "content": "parity-probe"
+          }
+        ],
+        "abortSignalPresent": false,
+        "prepareStepPresent": false,
+        "repairPresent": true,
+        "hookCount": 2
+      },
+      "calls": [
+        {
+          "callIndex": 0,
+          "inputFormat": "messages",
+          "mode": {
+            "type": "regular"
+          },
+          "prompt": [
+            {
+              "role": "system",
+              "content": "main agent system prompt"
+            },
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "parity-probe"
+                }
+              ]
+            }
+          ],
+          "maxTokens": 4096,
+          "temperature": 0,
+          "abortSignalPresent": true
+        }
+      ],
+      "hookFires": [
+        {
+          "hookId": "token-stats",
+          "payloadKeys": [
+            "experimental_providerMetadata",
+            "files",
+            "finishReason",
+            "isContinued",
+            "logprobs",
+            "providerMetadata",
+            "reasoning",
+            "reasoningDetails",
+            "request",
+            "response",
+            "sources",
+            "stepType",
+            "text",
+            "toolCalls",
+            "toolResults",
+            "usage",
+            "warnings"
+          ]
+        },
+        {
+          "hookId": "output()",
+          "payloadKeys": [
+            "experimental_providerMetadata",
+            "files",
+            "finishReason",
+            "isContinued",
+            "logprobs",
+            "providerMetadata",
+            "reasoning",
+            "reasoningDetails",
+            "request",
+            "response",
+            "sources",
+            "stepType",
+            "text",
+            "toolCalls",
+            "toolResults",
+            "usage",
+            "warnings"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -123,7 +123,7 @@ import {
   type EnqueueResult,
   type QueuedTurnSource,
 } from './turn-queue.js';
-import type { CoreMessage } from 'ai';
+import type { CoreMessage } from '../framework/sdk.js';
 import {
   resolveMainModel,
   mainVisionCapable,

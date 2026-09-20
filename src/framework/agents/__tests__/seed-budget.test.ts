@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { CoreMessage } from 'ai';
+import type { CoreMessage } from '../../sdk.js';
 import { seedBudgetRefusal, SEED_BUDGET_RATIO } from '../seed-budget.js';
 
 const text = (chars: number): CoreMessage => ({ role: 'user', content: 'x'.repeat(chars) });

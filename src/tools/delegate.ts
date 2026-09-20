@@ -1,8 +1,9 @@
-import { tool, type Tool } from 'ai';
+import type { Tool } from '../framework/sdk.js';
 import { z } from 'zod';
 import { attachMeta } from '../framework/tools/adapter.js';
 import type { AgentContext } from '../framework/context.js';
 import { mcpDelegateCategory, mcpServerSegment } from '../mcp-names.js';
+import { defineTool } from '../framework/tools/define-tool.js';
 
 /**
  * Per-server MCP delegation (#296). The main agent sees one thin
@@ -61,7 +62,7 @@ export function createDelegateTool(
   const more = toolNames.length > 8 ? `, +${toolNames.length - 8} more` : '';
   const capabilityBlurb = preview ? ` Its tools: ${preview}${more}.` : '';
   return attachMeta(
-    tool({
+    defineTool({
       description: `Delegate a natural-language task to the "${server}" MCP server.${capabilityBlurb} A helper runs the actual ${server} tool calls in an isolated context and returns a concise summary — you never see the raw results, so hand off the whole sub-task (e.g. "find the latest email from Jody and summarize it") rather than orchestrating individual calls yourself.`,
       parameters: z.object({
         task: z

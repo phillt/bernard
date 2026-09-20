@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { CoreMessage } from 'ai';
+import type { CoreMessage } from '../../sdk.js';
 import { visionRefusal } from '../vision-gate.js';
 import { hasImagePart } from '../../../image.js';
 

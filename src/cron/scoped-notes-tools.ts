@@ -1,9 +1,9 @@
-import { tool } from 'ai';
 import { z } from 'zod';
 import { CronNotesStore, MAX_NOTE_LENGTH } from './notes-store.js';
 import { formatEntryCompact } from '../tools/cron-notes.js';
 import { debugLog } from '../logger.js';
 import { attachMeta } from '../framework/tools/adapter.js';
+import { defineTool } from '../framework/tools/define-tool.js';
 
 /**
  * Builds `cron_notes_read` and `cron_notes_write` tools pre-scoped to a single
@@ -17,7 +17,7 @@ export function createScopedCronNotesTools(
   runId: string,
 ) {
   const scopedNotesRead = attachMeta(
-    tool({
+    defineTool({
       description:
         'Read notes previously written for this cron job by prior runs. Call this before acting to avoid duplicate work.',
       parameters: z.object({}),
@@ -42,7 +42,7 @@ export function createScopedCronNotesTools(
   );
 
   const scopedNotesWrite = attachMeta(
-    tool({
+    defineTool({
       description:
         "Append a short factual note recording a significant action this run took (e.g. 'Sent email to user@example.com', 'Created issue #123'). Keep it to one line.",
       parameters: z.object({

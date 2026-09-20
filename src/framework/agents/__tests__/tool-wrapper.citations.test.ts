@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { Tool } from 'ai';
+import type { Tool } from '../../sdk.js';
 import { toolWrapperDefinition } from '../tool-wrapper.js';
 import { CITATIONS_PROMPT } from '../../../agent-prompt.js';
 import type { AgentContext } from '../../context.js';

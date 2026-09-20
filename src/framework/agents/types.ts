@@ -1,4 +1,4 @@
-import type { CoreMessage, LanguageModel, Tool } from 'ai';
+import type { CoreMessage, LanguageModel, Tool } from '../sdk.js';
 import type { BernardConfig } from '../../config.js';
 import type { ContextMessageInputs } from '../../context-message.js';
 import type { RepairLabel } from '../../tool-call-repair.js';

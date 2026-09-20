@@ -1,9 +1,9 @@
-import { tool } from 'ai';
 import { z } from 'zod';
 import { htmlToMarkdown } from '../html-text.js';
 import { normalizeToolText } from '../text.js';
 import { attachMeta } from '../framework/tools/adapter.js';
 import type { ProvenanceStore } from '../provenance.js';
+import { defineTool } from '../framework/tools/define-tool.js';
 
 /** Maximum raw HTML size accepted before truncation (1 MB). */
 const MAX_HTML_BYTES = 1_000_000;
@@ -23,7 +23,7 @@ const USER_AGENT =
  */
 export function createWebReadTool(provenance?: ProvenanceStore) {
   return attachMeta(
-    tool({
+    defineTool({
       description:
         'Fetch a web page by URL and return its content as markdown. Useful for reading documentation, articles, Stack Overflow answers, GitHub pages, or any URL.',
       parameters: z.object({
