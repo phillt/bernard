@@ -32,6 +32,7 @@
  * this one answers "what is the user waiting on", and the user is waiting on all
  * of them at once.
  */
+import { getCurrentDispatchId } from '../framework/dispatch-context.js';
 import type { ToolMeta } from '../framework/tools/types.js';
 import { serverFromCategory } from '../mcp-names.js';
 
@@ -78,6 +79,79 @@ export async function runTracked<T>(label: string, run: () => Promise<T>): Promi
   } finally {
     endToolCall(id);
   }
+}
+
+/**
+ * How many augmented tool wrappers this dispatch is currently inside (#607).
+ *
+ * ## Why this is a SECOND registry rather than a field on the one above
+ *
+ * The two answer different questions and want different brackets, and the first
+ * cut of #607 tried to serve both from one entry and shipped a live-work-killing
+ * bug. `pendingCallNotice` wants a NARROW bracket — from the moment a call is
+ * really executing — which is why `runTracked` sits inside `runOrdered`: a read
+ * parked on the write barrier has not started, and registering it there would
+ * make it out-rank the write it is waiting on. The runner's liveness guard wants
+ * the WIDEST possible bracket: anything that can hold a `generateText` step open
+ * without completing it. Those are not the same span, and the gap between them
+ * is where a person lives.
+ *
+ * Measured, against the commit that had only the narrow one: with a high-risk
+ * tool and a `confirmAction` that never resolves, the dispatch has no finished
+ * step AND a zero count, and the guard kills it — `Dispatch timed out — no step
+ * completed for 150 ms with no tool running`, `confirmAction` still pending,
+ * `execute` never entered. `runBlockGate` and `runGate` both await a human
+ * OUTSIDE `runTracked` (`augment.ts`, both the envelope and the legacy/MCP
+ * branches). The streaming branch does not have this window, because
+ * `inFlightTools` counts the `tool-call` PART, which the SDK emits before
+ * `execute` is entered — so the part-counted signal already brackets the gates
+ * and the registry-counted one did not.
+ *
+ * ## Why a depth counter rather than a wider call list
+ *
+ * Widening the call list would have made one number mean two things — a call
+ * parked on a confirm prompt would start being NAMED by the spinner, and a read
+ * parked on the write barrier would out-rank the write. A counter keyed on the
+ * dispatch is the whole of what the guard reads (`=== 0`), so it can have the
+ * bracket it needs without touching what the notice sees.
+ *
+ * ## Why keyed on the dispatch
+ *
+ * `enterToolWrapper` reads the ALS, which `runWithDispatchId` preserves across
+ * `tool.execute` — measured, not assumed. A NESTED dispatch's own tools count
+ * under the child's id, which is what makes the liveness guard recursive: a
+ * parent blocked on `subagent` sees its own wrapper open and pauses, while the
+ * child's guard is the one watching the child. Counted globally, one busy
+ * dispatch would silence every other dispatch's guard for as long as it ran.
+ *
+ * `undefined` outside any dispatch — `apps/tool-dispatch.ts` runs a tool with no
+ * model at all, and nothing there is waiting on a step boundary.
+ */
+const wrapperDepth = new Map<string, number>();
+
+/** A dispatch has entered a tool wrapper — gates, barrier, execute and all. */
+export function enterToolWrapper(): string | undefined {
+  const id = getCurrentDispatchId();
+  if (id !== undefined) wrapperDepth.set(id, (wrapperDepth.get(id) ?? 0) + 1);
+  return id;
+}
+
+/**
+ * The wrapper has returned, however it returned.
+ *
+ * The key is DELETED at zero rather than left holding a `0`: a dispatch id is
+ * never reused, so a key per dispatch that ever ran a tool is an unbounded map
+ * in a process that stays up for days.
+ */
+export function exitToolWrapper(id: string | undefined): void {
+  if (id === undefined) return;
+  const n = (wrapperDepth.get(id) ?? 0) - 1;
+  if (n > 0) wrapperDepth.set(id, n);
+  else wrapperDepth.delete(id);
+}
+
+export function inFlightForDispatch(dispatchId: string): number {
+  return wrapperDepth.get(dispatchId) ?? 0;
 }
 
 /**
@@ -135,7 +209,13 @@ export function displayToolName(toolName: string, meta?: ToolMeta): string {
   return toolName;
 }
 
+/** Test seam for the retention rule: no production caller, and none should exist. */
+export function __wrapperDepthSize(): number {
+  return wrapperDepth.size;
+}
+
 /** Test seam: no production caller, and none should exist. */
 export function __resetInFlightCalls(): void {
   calls.clear();
+  wrapperDepth.clear();
 }

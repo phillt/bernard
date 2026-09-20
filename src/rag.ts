@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
   getEmbeddingProvider,
+  embeddingUnavailableReason,
   cosineSimilarity,
   EMBEDDING_MODEL_ID,
   type EmbeddingProvider,
@@ -486,7 +487,14 @@ export class RAGStore {
 
     const provider = await getEmbeddingProvider();
     if (!provider) {
-      debugLog('rag:addFacts', 'No embedding provider available, skipping');
+      // Which failure, not just that there was one (#607) — a cut-off model
+      // download and a broken install are the same `null` here and have
+      // opposite remedies. Fail-soft either way; this path has only a log to
+      // say it in.
+      debugLog(
+        'rag:addFacts',
+        `No embedding provider available, skipping: ${embeddingUnavailableReason() ?? 'unknown'}`,
+      );
       return 0;
     }
 

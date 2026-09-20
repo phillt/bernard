@@ -7,7 +7,12 @@ import {
   endToolCall,
   pendingCallNotice,
   runTracked,
+  inFlightForDispatch,
+  enterToolWrapper,
+  exitToolWrapper,
+  __wrapperDepthSize,
 } from './in-flight.js';
+import { runWithDispatchId } from '../framework/dispatch-context.js';
 import type { ToolMeta } from '../framework/tools/types.js';
 
 describe('the in-flight registry (#594)', () => {
@@ -108,5 +113,69 @@ describe('what a call is called', () => {
     expect(displayToolName('beeper_654785__send_message', meta({ category: 'mcp.beeper' }))).toBe(
       'beeper_654785__send_message',
     );
+  });
+});
+
+/**
+ * The wrapper-depth registry (#607). Separate from the call registry above
+ * because the two want different brackets: the notice wants the narrow one, the
+ * runner's liveness guard the widest available.
+ */
+describe('inFlightForDispatch (#607)', () => {
+  beforeEach(() => __resetInFlightCalls());
+
+  it('counts only the wrappers this dispatch is inside', async () => {
+    // Keying on the dispatch is what makes the guard recursive: a parent blocked
+    // on `subagent` pauses on its OWN wrapper while the child's tools belong to
+    // the child's clock. Counted globally, one busy dispatch would silence every
+    // other dispatch's guard for as long as it ran.
+    const seen: Record<string, number> = {};
+    await runWithDispatchId('aaaa', async () => {
+      const outer = enterToolWrapper();
+      await runWithDispatchId('bbbb', async () => {
+        const a = enterToolWrapper();
+        const b = enterToolWrapper();
+        seen.childFromChild = inFlightForDispatch('bbbb');
+        seen.parentFromChild = inFlightForDispatch('aaaa');
+        exitToolWrapper(a);
+        exitToolWrapper(b);
+      });
+      exitToolWrapper(outer);
+    });
+    expect(seen).toEqual({ childFromChild: 2, parentFromChild: 1 });
+    expect(inFlightForDispatch('aaaa')).toBe(0);
+    expect(inFlightForDispatch('cccc')).toBe(0);
+  });
+
+  it('is the WIDE bracket: a pending gate counts, and the notice still does not name it', () => {
+    // The whole reason this is a second registry. `runTracked` sits inside
+    // `runOrdered`, after both permission gates, so a call parked on a confirm
+    // prompt is not a running call — but the dispatch is unmistakably inside a
+    // tool and its step cannot finish.
+    runWithDispatchId('aaaa', () => {
+      const id = enterToolWrapper();
+      expect(inFlightForDispatch('aaaa')).toBe(1);
+      expect(pendingCallNotice(Date.now() + 60_000, 10_000)).toBeNull();
+      exitToolWrapper(id);
+    });
+    expect(inFlightForDispatch('aaaa')).toBe(0);
+  });
+
+  it('forgets a dispatch once its last wrapper returns', () => {
+    // A dispatch id is never reused, so a key left holding a `0` is an unbounded
+    // map in a process that stays up for days — the cron daemon, the applet host.
+    runWithDispatchId('aaaa', () => exitToolWrapper(enterToolWrapper()));
+    expect(__wrapperDepthSize()).toBe(0);
+  });
+
+  it('registers nothing when no dispatch is active', () => {
+    // `apps/tool-dispatch.ts` runs a tool with no model at all. Nothing there is
+    // waiting on a step boundary, so an un-keyed wrapper must not be
+    // attributable to some other dispatch's id.
+    const id = enterToolWrapper();
+    expect(id).toBeUndefined();
+    expect(inFlightForDispatch('aaaa')).toBe(0);
+    exitToolWrapper(id);
+    expect(__wrapperDepthSize()).toBe(0);
   });
 });

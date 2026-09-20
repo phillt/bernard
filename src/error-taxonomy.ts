@@ -618,6 +618,11 @@ function findInCauseChain<T>(err: unknown, f: (e: Error) => T | null): T | null 
  *  - `phase: 'stream'` — the runner's mid-stream watchdog, which spans the
  *    several HTTP requests one `fullStream` is assembled from and so can see a
  *    silence no single request can.
+ *  - `phase: 'dispatch'` — the same watchdog on the non-streaming branch (#607),
+ *    where there are no parts and a completed step is the only proof of life. It
+ *    is the one guard that can see `generateText` sitting on a settled fetch,
+ *    which is what `runNonStreaming`'s abort race was written for and which no
+ *    transport-level budget can observe.
  *
  * `producedOutput` is the half that decides recoverability, and it is a fact
  * about the SINK, not about the error. `OutputSink` is `append`-only — there is
@@ -641,7 +646,7 @@ function findInCauseChain<T>(err: unknown, f: (e: Error) => T | null): T | null 
  * it at the five dispatch boundaries when recovery gives up.
  */
 export interface ProviderStallInfo {
-  phase: 'headers' | 'body' | 'stream';
+  phase: 'headers' | 'body' | 'stream' | 'dispatch';
   /**
    * Whether re-issuing would repeat work the dispatch has already done.
    *

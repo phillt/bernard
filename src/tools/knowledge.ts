@@ -1,7 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { attachMeta } from '../framework/tools/adapter.js';
-import { getEmbeddingProvider } from '../embeddings.js';
+import { getEmbeddingProvider, embeddingUnavailableReason } from '../embeddings.js';
 import type { KnowledgeCorpus } from '../knowledge/corpus.js';
 import { searchCorpus } from '../knowledge/search.js';
 import { readSource } from '../knowledge/manage.js';
@@ -83,7 +83,13 @@ export function createKnowledgeTool(corpus: KnowledgeCorpus) {
         }
 
         const provider = await getEmbeddingProvider();
-        if (!provider) return 'Error: the embedding model is unavailable, so nothing can be read.';
+        if (!provider) {
+          // WHICH failure, not just that there was one (#607). A library that
+          // will not import and a download that was cut off both answered
+          // `null` here and both read as "unavailable" — two failures with
+          // opposite remedies, and the second one's remedy is to run this again.
+          return `Error: ${embeddingUnavailableReason() ?? 'the embedding model is unavailable'}, so nothing can be read.`;
+        }
 
         if (action === 'search') {
           if (!query) return 'Error: `query` is required when action is "search".';

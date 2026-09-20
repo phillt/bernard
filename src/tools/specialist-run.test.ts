@@ -341,19 +341,33 @@ describe('specialist-run tool', () => {
   });
 
   it('passes abortSignal to inner generateText', async () => {
-    mockGenerateText.mockResolvedValue({ text: 'Done' });
+    // Not identity since #607: every dispatch has a liveness budget, so the
+    // runner chains its own controller off the caller's and forwards that. What
+    // has to hold — and what Esc depends on — is that the caller's abort still
+    // reaches the model call, so that is what is asserted, observed while the
+    // dispatch is running rather than after the chain has been torn down.
+    let forwarded: AbortSignal | undefined;
+    mockGenerateText.mockImplementation((args: { abortSignal?: AbortSignal }) => {
+      forwarded = args.abortSignal;
+      return new Promise(() => {});
+    });
     vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
     const controller = new AbortController();
 
     const tool = createSpecialistRunTool(
       makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore),
     );
-    await tool.execute!(
+    const done = tool.execute!(
       { specialistId: 'email-triage', task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: controller.signal },
-    );
-    const call = mockGenerateText.mock.calls[0][0];
-    expect(call.abortSignal).toBe(controller.signal);
+    ).catch(() => 'aborted');
+    await new Promise((r) => setTimeout(r, 10));
+    expect(forwarded).toBeInstanceOf(AbortSignal);
+    expect(forwarded).not.toBe(controller.signal);
+    expect(forwarded!.aborted).toBe(false);
+    controller.abort();
+    expect(forwarded!.aborted).toBe(true);
+    await done;
   });
 
   it('works with specialist that has no guidelines', async () => {
