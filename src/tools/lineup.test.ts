@@ -76,6 +76,72 @@ describe('lineup_edit tool', () => {
     for (const roleId of Object.keys(reloaded.roles)) {
       expect(reloaded.roles[roleId as keyof typeof reloaded.roles].cheap.model).toBe('CHEAP-ALL');
     }
+    // The other axis is still untouched — `role: 'all'` fans across roles, not
+    // across tiers, which is the half #618 found missing.
+    expect(reloaded.roles.orchestrator.premium.model).not.toBe('CHEAP-ALL');
+  });
+
+  it('tier="all" fans a role binding out across every tier (#618)', async () => {
+    await run({
+      action: 'update',
+      id: 'xai',
+      slots: [{ role: 'coder', tier: 'all', provider: 'xai', model: 'CODER-ALL' }],
+    });
+    const { lineups } = await load();
+    const reloaded = lineups.loadLineups()['xai'];
+    for (const tier of lineups.LINEUP_TIERS) {
+      expect(reloaded.roles.coder[tier].model).toBe('CODER-ALL');
+    }
+    expect(reloaded.roles.orchestrator.premium.model).not.toBe('CODER-ALL');
+  });
+
+  it('role="all" with tier="all" binds the whole lineup from one entry (#618)', async () => {
+    // The agent-side half of "one action binds every (role, tier) slot": one
+    // entry where the pre-#618 tool needed three, and the pre-`role:"all"` tool
+    // eighteen.
+    await run({
+      action: 'update',
+      id: 'xai',
+      slots: [{ role: 'all', tier: 'all', provider: 'openai', model: 'ONE-MODEL' }],
+    });
+    const { lineups } = await load();
+    const reloaded = lineups.loadLineups()['xai'];
+    expect(lineups.uniformSlot(reloaded.roles)).toEqual({
+      provider: 'openai',
+      model: 'ONE-MODEL',
+    });
+  });
+
+  it('a later slot entry still overrides the sweep it follows', async () => {
+    // Ordering, not just coverage: "everything on X, except the coder" is the
+    // natural next request, and it only works if the fan-out does not win by
+    // being wider.
+    await run({
+      action: 'update',
+      id: 'xai',
+      slots: [
+        { role: 'all', tier: 'all', provider: 'openai', model: 'ONE-MODEL' },
+        { role: 'coder', tier: 'premium', provider: 'anthropic', model: 'SHARP' },
+      ],
+    });
+    const { lineups } = await load();
+    const reloaded = lineups.loadLineups()['xai'];
+    expect(reloaded.roles.coder.premium.model).toBe('SHARP');
+    expect(reloaded.roles.coder.mid.model).toBe('ONE-MODEL');
+    expect(reloaded.roles.orchestrator.premium.model).toBe('ONE-MODEL');
+    expect(lineups.uniformSlot(reloaded.roles)).toBeNull();
+  });
+
+  it('reports a uniform lineup as one line instead of six identical rows', async () => {
+    const out = await run({
+      action: 'update',
+      id: 'xai',
+      slots: [{ role: 'all', tier: 'all', provider: 'openai', model: 'ONE-MODEL' }],
+    });
+    // What the agent reads before deciding what to change. Six identical rows
+    // is how it concludes it must write 18 entries.
+    expect(out).toContain('Every slot (all 18 role × tier cells): openai/ONE-MODEL');
+    expect(out).not.toContain('Orchestrator ');
   });
 
   it('refuses an update with an unknown id and lists the options', async () => {
