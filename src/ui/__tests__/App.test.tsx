@@ -142,6 +142,7 @@ import { resolveReferences, shouldSkipResolver } from '../../reference-resolver.
 import { INTERRUPT_CANCEL_NOTE } from '../../react.js';
 import { INTERRUPTED_MARKER } from '../../session-markers.js';
 import { DimensionsProvider } from '../DimensionsContext.js';
+import { REWRITE_ICON } from '../Thread.js';
 import type { CoreMessage } from 'ai';
 import type { BernardConfig } from '../../config.js';
 import type { Agent } from '../../agent.js';
@@ -1646,6 +1647,173 @@ describe('<App> plain-text turn', () => {
     unmount();
   });
 
+  /**
+   * An agent whose `processInput` pushes the wrapped, timestamped user message
+   * and an answer, the way the real one does — so the turn-start commit has a
+   * canonical `role:'user'` message to skip and `getLastUserMessage` has one to
+   * hand back. A stub that pushes nothing would let the duplicate assertions
+   * below pass while the suppression did nothing.
+   */
+  function pushingTurn(history: CoreMessage[]) {
+    return vi.fn(async (text: string) => {
+      history.push({
+        role: 'user',
+        content: `<user_request>\n[2026-01-01T00:00:00+00:00] ${text}\n</user_request>`,
+      });
+      history.push({ role: 'assistant', content: 'answered' });
+    });
+  }
+
+  /**
+   * Holds the pre-turn pipeline open the way a slow provider does, by pausing
+   * the REWRITER — its second stage. Deliberately not `resolveReferences`: that
+   * one is gated on `shouldSkipResolver`, which this file mocks to `true` by
+   * default, so opening it means restoring two implementations instead of one
+   * and a miss leaves every later test unable to reach `processInput` at all.
+   */
+  async function pauseRewriter() {
+    const { rewritePrompt } = await import('../../prompt-rewriter.js');
+    let release: (() => void) | undefined;
+    vi.mocked(rewritePrompt).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ status: 'noop' as const });
+        }) as ReturnType<typeof rewritePrompt>,
+    );
+    return {
+      release: () => release?.(),
+      // `clearAllMocks` clears CALLS, not implementations, so a rewriter left
+      // pending here would hang the pipeline for every case that follows.
+      restore: () =>
+        vi
+          .mocked(rewritePrompt)
+          .mockResolvedValue({ status: 'noop' as const } as Awaited<
+            ReturnType<typeof rewritePrompt>
+          >),
+    };
+  }
+
+  it('paints what you typed before the pre-turn pipeline resolves (#613)', async () => {
+    // The gap is the window `pre-turn:end` already measures: up to three serial
+    // LLM round trips between `Prompt` emptying the input and the turn-start
+    // commit on the far side of them. The prompt cleared instantly and the
+    // transcript stayed blank for all of it.
+    const paused = await pauseRewriter();
+    const history: CoreMessage[] = [];
+    const processInput = pushingTurn(history);
+    // Mounted OUTSIDE the `try` so the `finally` can unmount it however the
+    // assertions go. Left inside, a failing case leaves a live `<App>` polling
+    // watchers for the rest of the file — which is not hypothetical: the
+    // mutation run for this change turned one red case into two, the second in
+    // an unrelated describe.
+    const { stdin, lastFrame, unmount } = renderApp({
+      config: { promptRewriter: true },
+      history,
+      agent: { processInput },
+    });
+    try {
+      await tick();
+      stdin.write('paint me now');
+      await tick();
+      stdin.write(ENTER);
+      await tick(40);
+
+      // The premise: the pipeline really is still in flight, which is the only
+      // state in which this assertion means anything.
+      expect(processInput).not.toHaveBeenCalled();
+      expect(stripAnsi(lastFrame() ?? '')).toContain('paint me now');
+
+      paused.release();
+      await tick(40);
+      // …and the turn-start commit does not paint it a second time. Counted
+      // rather than `toContain`: the echo makes containment true whether or not
+      // the canonical message was suppressed, so only a count can see the bug
+      // this half exists to prevent.
+      expect(processInput).toHaveBeenCalled();
+      const frame = stripAnsi(lastFrame() ?? '');
+      expect(frame.split('paint me now').length - 1).toBe(1);
+      expect(frame).toContain('answered');
+    } finally {
+      unmount();
+      paused.restore();
+    }
+  });
+
+  it('marks the echo when the rewriter changed what was dispatched (#613)', async () => {
+    // The echo is the RAW text, painted before the rewriter ran — so the `✎`
+    // that `/agent-options` promises by name can only arrive by revising the
+    // item already on screen. What it displays does not change; the marker does.
+    //
+    // **Full-screen, and that is the claim rather than harness convenience.**
+    // `<TranscriptViewport>` re-renders from `staticItems` every frame, so the
+    // revision lands; Ink's `<Static>` never repaints a row it has written to
+    // scrollback, so under `BERNARD_FULLSCREEN=false` the marker does not
+    // appear — the same accepted tradeoff that leaves printed rows unwrapped on
+    // resize. Asserting it in the legacy harness would simply fail, which is
+    // how the divergence was found rather than assumed.
+    const { rewritePrompt } = await import('../../prompt-rewriter.js');
+    vi.mocked(rewritePrompt).mockResolvedValue({
+      status: 'rewritten' as const,
+      text: 'RESHAPED-FOR-THE-MODEL',
+    } as Awaited<ReturnType<typeof rewritePrompt>>);
+    const history: CoreMessage[] = [];
+    const processInput = pushingTurn(history);
+    // Mounted outside the `try`, per the sibling above.
+    const { stdin, lastFrame, unmount } = renderApp({
+      config: { promptRewriter: true },
+      history,
+      agent: { processInput },
+      fullScreen: true,
+    });
+    try {
+      await tick();
+      await submit(stdin, 'what the user typed');
+      await tick(40);
+
+      expect(processInput.mock.calls[0]?.[0]).toBe('RESHAPED-FOR-THE-MODEL');
+      const frame = stripAnsi(lastFrame() ?? '');
+      // What the user typed, once, and never what the model was sent.
+      expect(frame.split('what the user typed').length - 1).toBe(1);
+      expect(frame).not.toContain('RESHAPED-FOR-THE-MODEL');
+      expect(frame).toContain(REWRITE_ICON);
+    } finally {
+      unmount();
+      vi.mocked(rewritePrompt).mockResolvedValue({ status: 'noop' as const } as Awaited<
+        ReturnType<typeof rewritePrompt>
+      >);
+      // A real rewrite spends the once-ever `rewriter:first-rewrite` hint, and
+      // the latch is on DISK (#583) — so leaving it taken makes the sibling
+      // case that asserts the hint fires unable to see it. Restored here rather
+      // than defended there, since this is the test that spent it.
+      const { saveActiveSettings } = await import('../../profiles.js');
+      saveActiveSettings({ shownHints: undefined });
+    }
+  });
+
+  it('keeps the timestamp under the bubble the echo replaced (#613)', async () => {
+    // The echo is built with `timestampUserMessage`, the same producer
+    // `parseUserMessage` is the consumer of. Hand-rolled as a bare string
+    // instead, every bubble in the product would silently lose its time —
+    // a regression on every turn rather than on rewritten ones.
+    const history: CoreMessage[] = [];
+    const { stdin, lastFrame, unmount } = renderApp({
+      history,
+      agent: { processInput: pushingTurn(history) },
+    });
+    await tick();
+    await submit(stdin, 'timestamp me');
+    await tick(40);
+    const lines = stripAnsi(lastFrame() ?? '').split('\n');
+    const bubble = lines.findIndex((l) => l.includes('timestamp me'));
+    expect(bubble).toBeGreaterThanOrEqual(0);
+    // The line BELOW the bubble, not anywhere in the frame: `AssistantMessage`
+    // renders `formatFriendlyTimestamp` too, so a whole-frame regex would be
+    // satisfied by the turn's own footer and could pass with the user's
+    // timestamp gone. `UserMessage` puts its footer on the next row.
+    expect(lines[bubble + 1]).toMatch(/\d{1,2}:\d{2}/);
+    unmount();
+  });
+
   it('announces a setting the first time Bernard uses it, once (#583)', async () => {
     // The wiring, which no unit test can reach: `setting-hints.test.ts` proves
     // the holder and the latch, and this proves the runtime moments are hooked
@@ -2157,6 +2325,19 @@ describe('<App> interrupted turn leaves a durable record (#403)', () => {
     // it gives the user a bubble whose entire content is transcript furniture,
     // beside the notice that already says it in their own channel.
     expect(frame).not.toContain(INTERRUPTED_MARKER);
+    unmount();
+  });
+
+  it('leaves exactly one bubble when Esc lands in that window (#613)', async () => {
+    // The optimistic echo painted the text on submit, and
+    // `recordInterruptedInput` then pushes the same raw input into history —
+    // which the `finally`'s `commitNewHistory` would paint a second time. The
+    // sibling assertion above is `toContain`, which is true of one bubble and
+    // of two; only a count distinguishes them, and this is the one window where
+    // #478's repair and #613's echo both write the same words.
+    const { lastFrame, unmount } = await interruptedBeforeProcessInput();
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame.split('a long question').length - 1).toBe(1);
     unmount();
   });
 

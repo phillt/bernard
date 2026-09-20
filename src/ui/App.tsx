@@ -104,7 +104,7 @@ import {
 } from '../image.js';
 import { runDefinition } from '../framework/agents/run.js';
 import { taskDefinition, type TaskInput } from '../framework/agents/task.js';
-import { renderTaskText, type UntrustedData } from '../framework/agents/user-message.js';
+import { attachTo, renderTaskText, type UntrustedData } from '../framework/agents/user-message.js';
 import { WatcherStore } from '../watchers/store.js';
 import { WatcherPoller } from '../watchers/poller.js';
 import { statFileSync } from '../watchers/probe.js';
@@ -240,6 +240,7 @@ import {
 import { setOutputSink } from '../framework/hooks/output-sink.js';
 import { setInkHandlers, type MenuResult } from './ink-handlers.js';
 import { formatAskUserAnswers, injectAskUserHistoryMessages } from '../tools/ask-user-history.js';
+import { timestampUserMessage } from '../tools/datetime.js';
 import {
   VoiceService,
   resolveBackend,
@@ -4939,16 +4940,15 @@ export function App({
 
   /**
    * Freeze every history message added since the last commit into the
-   * append-only `staticItems` log (#232). Called at the two turn boundaries
-   * where the per-message extras are known: at turn start for the just-pushed
-   * user message (its pre-rewrite original), and at turn end for the assistant
-   * message (its timing footer). Each item snapshots `config.toolDetails` and
-   * gets a fresh monotonic key, then `committedLenRef` advances so the next
-   * commit only picks up newer messages.
+   * append-only `staticItems` log (#232). Called at the two turn boundaries:
+   * at turn start, to advance the cursor past the just-pushed user message
+   * (which the echo in `runAgentTurn` has already painted since #613), and at
+   * turn end for the assistant message, whose timing footer is the one
+   * per-message extra only this boundary knows. Each item snapshots
+   * `config.toolDetails` and gets a fresh monotonic key, then `committedLenRef`
+   * advances so the next commit only picks up newer messages.
    */
   function commitNewHistory(opts?: {
-    /** Pre-rewrite text, attached to the just-pushed user message in the slice. */
-    rewriteForLastUser?: string;
     /** Timing footer, attached to the last assistant message in the slice. */
     timing?: { endedAt: number; durationMs: number };
     /** Estimated turn cost (#258), attached beside the timing footer. */
@@ -4978,15 +4978,12 @@ export function App({
     const start = committedLenRef.current;
     if (start >= history.length) return;
     const toolDetails = config.toolDetails;
-    // The rewrite original belongs to the just-pushed user message and the
-    // timing footer to the turn's assistant message — i.e. the last of each
-    // role in the slice. Resolve both targets here so callers only pass the
-    // payloads, not history indices to keep in sync.
-    let lastUserIdx = -1;
+    // The timing footer belongs to the turn's assistant message — the last one
+    // in the slice. Resolved here so callers pass the payload, not a history
+    // index to keep in sync.
     let lastAssistantIdx = -1;
     for (let i = start; i < history.length; i++) {
-      if (history[i].role === 'user') lastUserIdx = i;
-      else if (history[i].role === 'assistant') lastAssistantIdx = i;
+      if (history[i].role === 'assistant') lastAssistantIdx = i;
     }
     const appended: StaticItem[] = [];
     for (let i = start; i < history.length; i++) {
@@ -5011,17 +5008,18 @@ export function App({
       appended.push({
         key: String(itemKeyRef.current++),
         message,
-        rewriteOriginal:
-          opts?.rewriteForLastUser !== undefined && i === lastUserIdx
-            ? opts.rewriteForLastUser
-            : undefined,
         timing: opts?.timing && i === lastAssistantIdx ? opts.timing : undefined,
         costUsd: opts?.timing && i === lastAssistantIdx ? opts.costUsd : undefined,
         toolDetails,
       });
     }
     committedLenRef.current = history.length;
-    setStaticItems((prev) => [...prev, ...appended]);
+    // Nothing to append is now the COMMON case at turn start, not a rare one:
+    // since #613 the only message in that slice is the user's, and the echo
+    // has already painted it. `setStaticItems` with a fresh array is a new
+    // reference either way, so without this guard every turn start re-rendered
+    // the whole tree to say nothing. The cursor above still advances.
+    if (appended.length > 0) setStaticItems((prev) => [...prev, ...appended]);
   }
 
   /**
@@ -5115,6 +5113,45 @@ export function App({
     cancelPendingSpeech();
     setInterrupted(false);
     setBusy(true);
+    // Paint the user's own words NOW, before anything is awaited (#613).
+    //
+    // `Prompt` empties the input synchronously on Enter, and until this the
+    // next thing to reach the transcript was the turn-start `commitNewHistory`
+    // on the FAR SIDE of `runPreTurnPipeline` — up to three serial LLM round
+    // trips. The screen therefore sat blank for exactly the window
+    // `pre-turn:end` already measures, on every send.
+    //
+    // `drainNextTurn`'s shape, which is the one this file already proves:
+    // push the item, then mark the canonical history message as already on
+    // screen so the commit skips it. ONE write, never revised into a different
+    // message and never removed — which is what makes it `<Static>`-safe, and
+    // is why the alternative (commit a placeholder, swap it for the real slice
+    // later) is not available in an append-only log.
+    //
+    // Not for an announced turn: `drainNextTurn` has already rendered a
+    // `WakePanel` above it, and a `❯` bubble beside that panel is the exact
+    // duplicate the panel exists to prevent.
+    //
+    // Built with the same two builders `processInput` uses rather than by
+    // hand. `timestampUserMessage` is what `parseUserMessage` reads for the
+    // footer under the bubble, so without it every bubble would silently lose
+    // its time; it is minted at SUBMIT rather than at dispatch, which is both
+    // the truer answer to "when did I say this" and, at
+    // `formatFriendlyTimestamp`'s minute granularity, almost always the same
+    // string. `attachTo` keeps the `[image]` marker on an image turn.
+    // `wrapUserMessage` is deliberately absent — an LLM-only detail
+    // `parseUserMessage` strips anyway, and leaving it off keeps the timestamp
+    // at position 0 so a message whose own first line is `# Request` is not
+    // mistaken for the wrapper.
+    const echoKey = extra?.announced ? null : String(itemKeyRef.current++);
+    if (echoKey !== null) {
+      const echo: StaticItem = {
+        key: echoKey,
+        message: attachTo(timestampUserMessage(input), images),
+        toolDetails: config.toolDetails,
+      };
+      setStaticItems((prev) => [...prev, echo]);
+    }
     const turnStartedAt = Date.now();
     let turnCompleted = false;
     // Whether `agent.processInput` was reached. It is what pushes the user
@@ -5150,24 +5187,44 @@ export function App({
         // of the instruction slot by their type rather than by convention.
         ...(extra?.data ? { data: extra.data } : {}),
       });
-      // A turn whose provenance is already on screen must not also be painted
-      // as a user bubble. `drainNextTurn` renders a `WakePanel` immediately
-      // before this, and `agent.ts` joins the instruction with the observation
-      // block into one `role:'user'` message — so the transcript would show the
-      // whole wall again, behind a `❯` that says the user typed it.
+      // The user's words are already on screen — as the echo above, or, for an
+      // announced turn, as the `WakePanel` `drainNextTurn` pushed. Either way
+      // the canonical message must not be painted a second time: `agent.ts`
+      // joins the instruction with the observation block into one
+      // `role:'user'` message, so the transcript would show the whole wall
+      // again, behind a `❯` that says the user typed it.
       //
-      // Keyed on the RENDER that happened rather than on a text feature that
-      // correlates with it, which is what makes it cover a `time` wake (panel
-      // rendered, no data block) and a `say --run` prompt alike.
+      // Unconditional since #613, where it used to be gated on `announced`:
+      // every turn now paints before this line, so the flag decides which
+      // surface did it, never whether one did.
       //
       // By identity, from the agent that pushed it. The predecessor captured a
       // history length, re-read the array and scanned the range — forensics on
       // somebody else's private array for a message it had just created, resting
       // on two facts stated nowhere in `agent.ts`: that the push is synchronous
       // before the first await, and that there is exactly one of it.
-      const announced = extra?.announced ? agent.getLastUserMessage() : null;
-      if (announced) alreadyOnScreenRef.current.add(announced);
-      commitNewHistory({ rewriteForLastUser: input !== agentInput ? input : undefined });
+      const pushed = agent.getLastUserMessage();
+      if (pushed) alreadyOnScreenRef.current.add(pushed);
+      commitNewHistory();
+      // The rewriter ran AFTER the echo was painted, so the `✎` marker beside
+      // the timestamp — which `/agent-options` promises by name — can only
+      // arrive by revising the item that is already there. What it displays
+      // does not change: `rewriteOriginal` is the same raw text the echo
+      // already shows, and `UserMessage` reads it only to pick `display` and to
+      // decide the marker.
+      //
+      // Safe in both transcript surfaces and effective in one.
+      // `<TranscriptViewport>` re-renders from `staticItems` every frame, so
+      // the marker appears; Ink's `<Static>` never repaints a row it has
+      // written to scrollback, so under `BERNARD_FULLSCREEN=false` it does not
+      // — the same accepted tradeoff that leaves printed rows unwrapped on
+      // resize. The revision can neither duplicate a row nor remove one, which
+      // is the sense in which the log stays append-only.
+      if (echoKey !== null && input !== agentInput) {
+        setStaticItems((prev) =>
+          prev.map((item) => (item.key === echoKey ? { ...item, rewriteOriginal: input } : item)),
+        );
+      }
       // Snapshot history length AFTER the user message push (synchronous) so
       // the ask_user scanner below knows where this turn's tool results begin.
       const historyLenAfterUserMsg = agent.getHistory().length;
@@ -5260,8 +5317,15 @@ export function App({
       // Ahead of `persistAgentState` and `commitNewHistory` deliberately: both
       // run below, and recording after either would leave the message unsaved
       // or unrendered for the turn that produced it.
+      //
+      // Its return value is what stops this window painting the bubble TWICE
+      // since #613 — the echo is already on screen, and `commitNewHistory`
+      // below would otherwise render the message this call just pushed. The
+      // method has always handed the message back "so the caller can mark it as
+      // already rendered"; this is the first caller with a reason to.
       if (controller.signal.aborted && !inputRecorded) {
-        agent.recordInterruptedInput(input);
+        const interruptedMessage = agent.recordInterruptedInput(input);
+        if (interruptedMessage) alreadyOnScreenRef.current.add(interruptedMessage);
       }
       persistAgentState({ agent, historyStore, provenanceHistoryStore, turnContextStore });
       submittingRef.current = false;
