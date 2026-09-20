@@ -5,9 +5,11 @@ import {
   type CoreMessage,
   type GenerateTextResult,
   type LanguageModel,
+  type TextStreamPart,
   type Tool,
   type ToolCallRepairFunction,
 } from 'ai';
+import type { z } from 'zod';
 import { debugLog, isDebugEnabled } from '../logger.js';
 import { toolBlockBytes } from '../tool-bytes.js';
 import type { AgentHook, StepFinishPayload } from './hooks/types.js';
@@ -21,6 +23,44 @@ import {
 } from '../error-taxonomy.js';
 import { withStallBudget, DEFAULT_STALL_TIMEOUT_MS } from '../providers/stall-guard.js';
 import { inFlightForDispatch } from '../tools/in-flight.js';
+
+/**
+ * A tool set concrete enough for the SDK's own `TextStreamPart` union to stay
+ * whole — type-only, never constructed.
+ *
+ * `ToolSet` is `Record<string, Tool>` and `Tool.execute` is OPTIONAL, so
+ * `ToolResultUnion<ToolSet>` maps over "tools that can produce a result" and
+ * finds none: the `tool-result` arm of `TextStreamPart<ToolSet>` collapses to
+ * `never`. Naming one tool that HAS an `execute` keeps the arm, and typing its
+ * args and result as `unknown` keeps it honest — the runner erases tools on
+ * purpose, so it genuinely does not know what a part carries.
+ */
+type StreamProbeTools = {
+  probe: Tool<z.ZodType<unknown>, unknown> & {
+    execute: (args: unknown, options: never) => PromiseLike<unknown>;
+  };
+};
+
+/**
+ * The `fullStream` parts this runner acts on, **derived from the SDK's union**
+ * rather than hand-written (#sdk-boundary).
+ *
+ * What stood here was a local all-optional literal —
+ * `{type: string; textDelta?: string; toolCallId?: string; toolName?: string;
+ * args?: unknown; result?: unknown; error?: unknown}` — and it was the largest
+ * silent surface in the repo. Every field being optional means a rename
+ * upstream does not fail to compile: `part.textDelta` simply becomes
+ * `undefined`, so the streaming REPL renders no text at all; `part.args`
+ * becomes `undefined`, so every tool row shows a call with no arguments; and
+ * `part.result` becomes `undefined`, so `detectToolError` sees no failures and
+ * `successCount` climbs on calls that failed — the #363 accounting bug,
+ * restored by a type nobody would think to look at.
+ *
+ * Derived, a rename lands as a compile error at the read site. The `type`
+ * discriminator does the narrowing, so no field is read off an arm that does
+ * not declare it.
+ */
+type StreamPart = TextStreamPart<StreamProbeTools>;
 
 const WATCHDOG_INTERVAL_MS = 30_000;
 
@@ -943,25 +983,18 @@ async function runStreaming(
     while (true) {
       const next = await raceAbort(iter.next());
       if (next.done) break;
+      // The runner type-erases tools to `Record<string, Tool>`, so the stream
+      // it holds is `TextStreamPart<ToolSet>`, whose `tool-result` arm is
+      // `never` (see {@link StreamProbeTools}). One cast, to the SDK-DERIVED
+      // union — so the discriminator and every field below are the SDK's own
+      // and a rename is a compile error, which the hand-written literal this
+      // replaces could not be.
+      const part = next.value as unknown as StreamPart;
       // The stall guard's only progress signal (#325). Stamped before any
       // per-part branching so it covers every part type — including ones this
       // switch ignores (`reasoning`, `step-start`, …), which are still proof
       // the connection is alive.
-      progress?.onPart((next.value as { type?: string }).type ?? '');
-      // The AI SDK narrows `tool-call` / `tool-result` parts on the `TOOLS`
-      // generic; since we type-erase tools to `Record<string, Tool>` for the
-      // shared runner, those branches collapse to `never`. Cast through
-      // `unknown` so we can pattern-match on `type` without coupling the
-      // runner to a specific tool set.
-      const part = next.value as {
-        type: string;
-        textDelta?: string;
-        toolCallId?: string;
-        toolName?: string;
-        args?: unknown;
-        result?: unknown;
-        error?: unknown;
-      };
+      progress?.onPart(part.type);
       if (part.type === 'text-delta') {
         if (part.textDelta) spec.onTextDelta?.(part.textDelta);
       } else if (part.type === 'tool-call') {
