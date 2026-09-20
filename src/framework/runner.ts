@@ -544,25 +544,27 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
   // A dispatch that never returns is either stuck inside one of its own tools,
   // or stuck outside them — and only the second is this guard's to catch. The
   // first is covered rung by rung: the MCP deadline for a `tools/call`,
-  // `shellTimeout` for `shell`, a nested dispatch's own copy of this guard for
-  // `subagent` / `task` / `specialist_run` / `delegate_<server>`, and each
-  // remaining built-in by whatever bound it carries itself (`web_read` and
-  // `web_search` by `FETCH_TIMEOUT_MS`, `wait` by `MAX_WAIT_SECONDS`).
+  // `shellTimeout` for `shell`, `FETCH_TIMEOUT_MS` for `web_read` /
+  // `web_search`, `MAX_WAIT_SECONDS` for `wait`, `BERNARD_EMBEDDING_IDLE_TIMEOUT_MS`
+  // for `knowledge` and every RAG search, and a nested dispatch's own copy of
+  // this guard for `subagent` / `task` / `specialist_run` / `delegate_<server>`.
   // `ask_user` is the deliberate exception: paused forever, on purpose, because
   // a person is thinking.
   //
-  // **That enumeration is not exhaustive, and saying so is the point.** A
-  // built-in bounded by neither this guard nor a budget of its own is a fourth
-  // case, and at least one exists: `knowledge` and the RAG tools reach
-  // `getEmbeddingProvider()`, whose first call loads `@xenova/transformers` and
-  // on a cold cache downloads the model — `embeddings.ts` says so in as many
-  // words — with nothing timing it out. This guard pauses for it like any other
-  // tool, so acceptance criterion 1 is NOT met on that path. It fails open
-  // exactly as it did before #607, so nothing regresses; what is wrong is only a
-  // completeness claim, and the honest version is that the recursion covers
-  // every way a dispatch can sit inside a tool that has a bound at all. Bounding
-  // a model download is its own change — cutting it mid-transfer leaves a
-  // partial cache — and is deliberately not guessed at here.
+  // The last of those is new. The model load was the one built-in bounded by
+  // nothing — a cold-cache download reachable from a dispatch's own tool — and
+  // this guard pausing for it was correct while the inner bound was missing.
+  // It is bounded by SILENCE rather than by elapsed time, for the reason
+  // `embeddings.ts` sets out at length: a load is 180 ms warm and minutes on a
+  // slow link, so no duration is both a bound and safe.
+  //
+  // **What makes that list complete is a sweep, not an invariant, and the
+  // difference is worth stating.** Every built-in that reaches the network does
+  // so through `web.ts`, `web-search.ts`, MCP, the provider clients, or
+  // `getEmbeddingProvider` — checked by walking `src/tools/` for `fetch` and for
+  // a dynamic import, at the commit that closed the last one. Nothing mechanical
+  // stops a sixth from arriving unbounded: "does this tool have a bound" is not
+  // decidable from the registry the way `meta-coverage.test.ts`'s checks are.
   //
   // The two branches read their busy signal from different places, and the
   // streaming one is deliberately NOT moved onto the tool registry even though

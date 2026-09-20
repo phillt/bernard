@@ -19,6 +19,7 @@ vi.mock('./embeddings.js', () => ({
   // export every name the module under test imports, or the import throws.
   EMBEDDING_MODEL_ID: 'Xenova/all-MiniLM-L6-v2',
   getEmbeddingProvider: vi.fn(async () => mockProvider),
+  embeddingUnavailableReason: vi.fn(() => null),
   cosineSimilarity: vi.fn((a: number[], b: number[]) => {
     // Real cosine similarity for deterministic fake embeddings
     if (a.length !== b.length || a.length === 0) return 0;
