@@ -13,6 +13,7 @@ import type {
 
 type ReasoningPart = { type: 'reasoning'; text: string };
 type RedactedReasoningPart = { type: 'redacted-reasoning'; data: string };
+import { unwrapToolResultOutput } from '../tool-result-output.js';
 import { toolFailureFor, type ToolFailure } from '../tool-failure.js';
 import { getThemeColors } from '../theme.js';
 import { truncate } from '../text.js';
@@ -782,12 +783,17 @@ function ToolResultMessage({ message }: { message: CoreToolMessage }) {
   return (
     <Box flexDirection="column" marginLeft={2}>
       {visible.map((part: ToolResultPart, idx) => {
-        const snippet = renderResultSnippet(part.result);
+        // `unwrapToolResultOutput`, not `part.result`. This is the one of the
+        // four readers whose cast is the SDK's own type, so a rename here fails
+        // loudly while the other three go silent — which is exactly why they
+        // must not be kept separate.
+        const value = unwrapToolResultOutput(part);
+        const snippet = renderResultSnippet(value);
         // Recomputed rather than carried: the committed transcript is rebuilt
         // from `CoreMessage`s, which have no room for a sink-only field, and a
         // hint that only lived on the streaming event would disappear the
         // instant the turn ended.
-        const failure = toolFailureFor(part.toolName, part.result);
+        const failure = toolFailureFor(part.toolName, value);
         const isError = part.isError === true || failure !== undefined;
         return (
           <Box key={idx} flexDirection="column">
