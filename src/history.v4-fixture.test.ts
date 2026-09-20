@@ -91,12 +91,22 @@ describe('HistoryStore.load against a real ai@4 history', () => {
     // pass, so deleting the `.map(normalizeStoredMessage)` would leave them
     // green. Derived from the same fixture rather than checked in as a second
     // file, so the two cannot drift.
+    // All FIVE `LanguageModelV2ToolResultOutput` types, cycled across the
+    // parts. Covering only `text`/`json` — the two that happen to be lossless —
+    // is what let a downgrade that reclassified `error-text` as `text` pass
+    // review-free: a tool failure re-read as a success, made permanent by the
+    // next save.
+    const OUTPUT_TYPES = ['text', 'json', 'error-text', 'error-json', 'content'];
     const v5 = JSON.parse(FIXTURE_TEXT) as Record<string, unknown>[];
-    for (const part of toolResultParts(v5)) {
+    const assigned: string[] = [];
+    toolResultParts(v5).forEach((part, i) => {
+      const type = OUTPUT_TYPES[i % OUTPUT_TYPES.length];
+      assigned.push(type);
       const value = part.result;
       delete part.result;
-      part.output = { type: typeof value === 'string' ? 'text' : 'json', value };
-    }
+      part.output = { type, value };
+    });
+    expect(new Set(assigned)).toEqual(new Set(OUTPUT_TYPES));
     expect(toolResultParts(v5).every((p) => 'output' in p && !('result' in p))).toBe(true);
 
     const previous = fs.readFileSync(HISTORY_FILE, 'utf-8');
@@ -110,6 +120,12 @@ describe('HistoryStore.load against a real ai@4 history', () => {
       const values = (ms: unknown[]) => toolResultParts(ms).map((p) => JSON.stringify(p.result));
       expect(values(loaded)).toEqual(values(FIXTURE));
       expect(parts.map((p) => p.toolName)).toEqual(toolResultParts(FIXTURE).map((p) => p.toolName));
+      // The failure bit crosses. `error-*` becomes `isError: true` — v4's own
+      // channel, which the SDK forwards to the provider — and nothing else
+      // acquires a flag it did not have.
+      expect(parts.map((p) => p.isError === true)).toEqual(
+        assigned.map((t) => t.startsWith('error-')),
+      );
     } finally {
       fs.writeFileSync(HISTORY_FILE, previous, 'utf-8');
     }

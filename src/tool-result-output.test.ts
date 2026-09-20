@@ -3,6 +3,7 @@ import {
   TOOL_RESULT_OUTPUT_TARGET,
   normalizeToolResultPart,
   replaceToolResultOutput,
+  toolResultOutputType,
   unwrapToolResultOutput,
 } from './tool-result-output.js';
 
@@ -12,6 +13,8 @@ const v4Part = (result: unknown) => ({
   toolName: 'shell',
   result,
 });
+
+const ERROR_TYPES: ReadonlySet<string> = new Set(['error-text', 'error-json']);
 
 const v5Part = (type: string, value: unknown) => ({
   type: 'tool-result' as const,
@@ -88,6 +91,65 @@ describe('replaceToolResultOutput', () => {
     // promises to allocate nothing for a file already in the target shape.
     const part = v4Part('same');
     expect(replaceToolResultOutput(part, 'same')).toBe(part);
+  });
+});
+
+describe('the v5 output vocabulary round-trips', () => {
+  // `LanguageModelV2ToolResultOutput` has FIVE members. Covering only `json`
+  // — one of the two that happen to be lossless — is what let a downgrade that
+  // reclassified `error-text` as `text` pass: a tool failure shown to the model
+  // as a success, made permanent by the next save.
+  const ROUND_TRIP: Array<[type: string, value: unknown]> = [
+    ['text', 'hi'],
+    ['json', { a: 1 }],
+    ['error-text', 'boom'],
+    ['error-json', { err: 1 }],
+  ];
+
+  it.each(ROUND_TRIP)('%s survives the downgrade and comes back as itself', (type, value) => {
+    // Down: the live direction.
+    const down = normalizeToolResultPart(v5Part(type, value)) as Record<string, unknown>;
+    expect(unwrapToolResultOutput(down)).toEqual(value);
+    expect(down.isError).toBe(ERROR_TYPES.has(type) ? true : undefined);
+
+    // Up: composed from the exported helper, because the `output` arm of
+    // `replaceToolResultOutput` is guarded off by the installed target and no
+    // test may flip that constant.
+    expect(toolResultOutputType(unwrapToolResultOutput(down), down.isError === true)).toBe(type);
+  });
+
+  it('degrades `content` to `json` — the value survives, the tag does not', () => {
+    // Named rather than fixed: v4's analogue is `experimental_content`, whose
+    // element shape genuinely differs, so mapping it is a real conversion. No
+    // failure is reclassified, which is why this one is acceptable.
+    const value = [{ type: 'text', text: 'hi' }];
+    const down = normalizeToolResultPart(v5Part('content', value)) as Record<string, unknown>;
+    expect(unwrapToolResultOutput(down)).toEqual(value);
+    expect(down.isError).toBeUndefined();
+    expect(toolResultOutputType(value, false)).toBe('json');
+  });
+
+  it('flags a downgraded failure to the PROVIDER, not just to a later upgrade', () => {
+    // `isError` is v4's own channel: `convertToLanguageModelPrompt` forwards it
+    // and `@ai-sdk/anthropic` emits `is_error`. Carrying a stray `output` key
+    // instead would be recoverable but silent on the wire.
+    const down = normalizeToolResultPart(v5Part('error-text', 'boom')) as Record<string, unknown>;
+    expect(down.isError).toBe(true);
+    expect(down.output).toBeUndefined();
+  });
+
+  it('does not invent an error flag for a result that is not one', () => {
+    const down = normalizeToolResultPart(v5Part('text', 'fine')) as Record<string, unknown>;
+    expect('isError' in down).toBe(false);
+  });
+});
+
+describe('toolResultOutputType', () => {
+  it('maps value shape and the error bit onto the four scalar output types', () => {
+    expect(toolResultOutputType('s', false)).toBe('text');
+    expect(toolResultOutputType({ a: 1 }, false)).toBe('json');
+    expect(toolResultOutputType('s', true)).toBe('error-text');
+    expect(toolResultOutputType({ a: 1 }, true)).toBe('error-json');
   });
 });
 

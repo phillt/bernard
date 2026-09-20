@@ -45,6 +45,38 @@
  * and the direction of the conversion rather than discovering the problem on a
  * user's first turn after upgrading; and they are the rollback path, since a
  * history written by a bumped Bernard has to stay readable by an older one.
+ *
+ * ## The error distinction crosses, and it has to
+ *
+ * `LanguageModelV2ToolResultOutput` has FIVE members, not two — `text`, `json`,
+ * `error-text`, `error-json` and `content` — so a downgrade that kept only the
+ * VALUE would re-upgrade by guessing the type back from
+ * `typeof value === 'string'`, and an `error-text` result would come back as an
+ * ordinary `text` one. A result the provider was told was a failure would be
+ * shown to the model as a success: the silent-failure class this whole boundary
+ * exists to close, on the one path it introduces. It would also become
+ * permanent, because `load` migrates in memory and `save` writes what the agent
+ * holds.
+ *
+ * So the error bit is mapped through each vocabulary's OWN error channel rather
+ * than by smuggling a v5 key into a v4 file: `ai@4`'s `ToolResultPart.isError`
+ * and `ai@5`'s `error-*` output types. That is better than carrying `output`
+ * alongside `result` in two ways. It round-trips with no duplicated value on
+ * disk — which matters because `truncateToolResults` rewrites these parts, so a
+ * retained envelope would hold the pre-truncation value and quietly undo the
+ * size bound. And it is not merely recoverable but LIVE: `ai@4`'s
+ * `convertToLanguageModelPrompt` forwards `isError`, and `@ai-sdk/anthropic`
+ * emits it as `is_error`, so a downgraded error result is still flagged to the
+ * provider. A stray `output` key would be ignored by that converter, leaving the
+ * error unflagged on the wire for as long as the rollback lasted.
+ *
+ * **Residual, stated rather than discovered:** `content` degrades to `json`. The
+ * VALUE survives intact and no failure is reclassified — only the rendering tag
+ * is lost. `ai@4`'s analogue is `experimental_content`, whose element shape
+ * genuinely differs from v5's (`{type:'image', data, mimeType}` against
+ * `{type:'media', data, mediaType}`), so mapping it is a real conversion rather
+ * than a passthrough, and minting an `experimental_`-prefixed field is a
+ * commitment this module should not make quietly.
  */
 
 /**
@@ -62,7 +94,27 @@ type ToolResultPartLike = {
   type?: unknown;
   result?: unknown;
   output?: unknown;
+  /** `ai@4`'s own error channel. `ai@5` folds this into `output.type`. */
+  isError?: unknown;
 };
+
+/** The `ai@5` output types that mean "this tool call failed". */
+const ERROR_OUTPUT_TYPES: ReadonlySet<string> = new Set(['error-text', 'error-json']);
+
+/**
+ * The `ai@5` output type for a value that arrived without one.
+ *
+ * Exported because it is the half of the round trip no test can execute today:
+ * it is reached only from the `output` branch of
+ * {@link replaceToolResultOutput}, which {@link TOOL_RESULT_OUTPUT_TARGET}
+ * currently guards off. Testing it directly is honest; asserting the round trip
+ * by composing it with the live downgrade is what pins that the error bit
+ * survives.
+ */
+export function toolResultOutputType(value: unknown, isError: boolean): string {
+  if (isError) return typeof value === 'string' ? 'error-text' : 'error-json';
+  return typeof value === 'string' ? 'text' : 'json';
+}
 
 /** The `ai@5` envelope: a value plus how to render it back to the model. */
 interface ToolResultOutputEnvelope {
@@ -117,19 +169,27 @@ export function unwrapToolResultOutput(part: unknown): unknown {
 export function replaceToolResultOutput<T>(part: T, value: unknown): T {
   const p = asPart(part);
   if (!p) return part;
+  const existing = asEnvelope(p.output);
   if (TOOL_RESULT_OUTPUT_TARGET === 'result') {
+    // A v4-origin part has no `output`, so it comes straight back and never
+    // starts rewriting itself on every load.
     if ('result' in p && p.result === value && !('output' in p)) return part;
     const { output: _dropped, ...rest } = p;
-    return { ...rest, result: value } as T;
+    // The envelope's `type` is dropped, but its FAILURE bit is not: it moves to
+    // `isError`, which is v4's own channel for exactly this and which the SDK
+    // forwards to the provider. Without it, `error-text` would re-upgrade as
+    // `text` and a failure would read as a success.
+    return (
+      existing && ERROR_OUTPUT_TYPES.has(existing.type)
+        ? { ...rest, result: value, isError: true }
+        : { ...rest, result: value }
+    ) as T;
   }
-  const existing = asEnvelope(p.output);
   if (existing && existing.value === value && !('result' in p)) return part;
-  const { result: _dropped, ...rest } = p;
-  // `text` is the only type an older history can be read back as without
-  // guessing: a v4 `result` records no rendering intent, and claiming `json`
-  // for a value that happens to be an object would change how the model is
-  // shown it.
-  const type = existing?.type ?? (typeof value === 'string' ? 'text' : 'json');
+  // `isError` is not carried over: on `ai@5` the failure bit lives in the
+  // output TYPE, so keeping both would be two channels saying one thing.
+  const { result: _dropped, isError: _folded, ...rest } = p;
+  const type = existing?.type ?? toolResultOutputType(value, p.isError === true);
   return { ...rest, output: { type, value } } as T;
 }
 

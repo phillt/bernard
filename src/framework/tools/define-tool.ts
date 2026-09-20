@@ -33,27 +33,38 @@ import { tool } from 'ai';
  * conversion can proceed tool by tool afterwards, and each conversion simply
  * stops calling this.
  *
+ * ## Why the ARROW form and not `export const defineTool = tool`
+ *
+ * This is about the BINDING, not about which file it lives in, and the first
+ * draft of this module conflated the two. `export const defineTool = tool`
+ * dereferences the imported binding at module EVALUATION time, so a test that
+ * mocks `'ai'` with a partial factory omitting `tool` — `mcp.test.ts`,
+ * `mcp.call-safety.test.ts` and `runner.test.ts` all legitimately do — captures
+ * `undefined` and goes down at import. The arrow defers the read to call time.
+ * Measured both ways with the expression appended to `adapter.ts`: arrow form
+ * 117/117 across the five suites that mock `'ai'` partially, eager form 3 of 5
+ * files failing. Moving this into `adapter.ts` would NOT reintroduce that —
+ * the form is what fixes it, and it would be equally broken here.
+ *
  * ## Why its own file, beside `adapter.ts` rather than inside it
  *
- * Two reasons, and the second was measured rather than reasoned.
+ * The reason that survives measurement is LAYERING. `adapter.ts` is a
+ * BEHAVIOURAL adapter — it wraps `execute`, translates the `ToolResult`
+ * envelope, attaches non-enumerable meta. This is a naming boundary with no
+ * behaviour at all, and a true leaf: `ai` and nothing else. Five of the files
+ * adopting it (`plan`, `think`, `evaluate`, `subagent`, `specialist-run`) did
+ * not import `adapter.js` before, and a leaf is the cheaper edge to hand them.
  *
- * `adapter.ts` is a BEHAVIOURAL adapter — it wraps `execute`, translates the
- * `ToolResult` envelope, attaches non-enumerable meta. This is a naming
- * boundary with no behaviour at all, and it is a true leaf: `ai` and nothing
- * else. Five of the files adopting it (`plan`, `think`, `evaluate`, `subagent`,
- * `specialist-run`) did not import `adapter.js` before, and a leaf is the
- * cheaper edge to hand them.
+ * There is no import-graph argument on top of that: `adapter.ts` already does
+ * `import { tool } from 'ai'` on its first line, so hosting this would add no
+ * new edge of its own.
  *
- * Placed IN `adapter.ts` it stops being inert, in two ways that the suite
- * catches. `delegate.test.ts` mocks the whole adapter with a factory returning
- * only `attachMeta`, so every module importing a tool constructor from there
- * would need that factory extended — the test's mock made to track an import
- * graph it does not care about. And `mcp.test.ts`, `mcp.call-safety.test.ts`
- * and `runner.test.ts` mock `'ai'` with partial factories that legitimately
- * omit `tool`; a module-level `export const defineTool = tool` in `adapter.ts`
- * dereferences the missing binding at EVALUATION time and takes those three
- * files down at import. Hence both the separate file and the function form:
- * `tool` is read when a tool is built, not when the module loads.
+ * One genuine placement cost remains, and it is small. `delegate.test.ts` mocks
+ * the WHOLE adapter module with a factory returning only `attachMeta`, so with
+ * `defineTool` exported from there, `delegate.ts` importing it fails 6 of that
+ * file's 20 tests — measured, by repointing the import. That is a mock made to
+ * track an import graph it does not care about, and it is an argument for the
+ * split rather than the reason for it.
  *
  * ## The one thing not to rename
  *

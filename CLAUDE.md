@@ -1649,16 +1649,25 @@ and no Bernard-owned message type existed at all.
   and a `serializeForModel`, and every consumer of that tool's historical return
   shape becomes behaviour at risk), so it proceeds tool by tool afterwards and
   each conversion simply stops calling this.
-  - **Its own file, beside `adapter.ts` rather than inside it**, and the second
-    reason was measured. `adapter.ts` is a BEHAVIOURAL adapter; this is a naming
-    boundary with no behaviour and a true leaf. And placed inside, it stops being
-    inert: `delegate.test.ts` mocks the whole adapter with a factory returning
-    only `attachMeta`, and `mcp.test.ts` / `mcp.call-safety.test.ts` /
-    `runner.test.ts` mock `'ai'` with partial factories that legitimately omit
-    `tool` — a module-level `export const defineTool = tool` there dereferences
-    the missing binding at EVALUATION time and takes all three down at import.
-    Observed, not predicted: the first draft did exactly that and failed 6 tests
-    across 4 files. Hence both the separate file and the function form.
+  - **The arrow form is about the BINDING, not the placement**, and the first
+    draft of the comment conflated the two. `export const defineTool = tool`
+    dereferences the imported binding at module EVALUATION time, so a test that
+    mocks `'ai'` with a partial factory omitting `tool` — `mcp.test.ts`,
+    `mcp.call-safety.test.ts` and `runner.test.ts` all legitimately do —
+    captures `undefined` and goes down at import. Measured with the expression
+    appended to `adapter.ts`: **arrow form 117/117** across the five suites that
+    mock `'ai'` partially, **eager form 3 of 5 files failing**. Hosting it in
+    `adapter.ts` would not reintroduce that; the form is the fix.
+  - **Its own file, beside `adapter.ts` rather than inside it**, on LAYERING.
+    `adapter.ts` is a BEHAVIOURAL adapter; this is a naming boundary with no
+    behaviour and a true leaf, and five adopting files (`plan`, `think`,
+    `evaluate`, `subagent`, `specialist-run`) had no `adapter.js` edge before.
+    There is no import-graph argument on top: `adapter.ts` already imports
+    `tool` on its first line. One genuine placement cost remains and it is
+    small — `delegate.test.ts` mocks the WHOLE adapter with a factory returning
+    only `attachMeta`, so hosting `defineTool` there fails 6 of that file's 20
+    tests (measured, by repointing the import). An argument for the split, not
+    the reason for it.
   - **`adapter.ts` keeps calling `tool()` directly and is the only place that
     does.** It owns the translation, so routing it through `defineTool` buys
     nothing — the `parameters:` field it passes is right there — and would hand
@@ -1682,6 +1691,24 @@ and no Bernard-owned message type existed at all.
   is the one site that both reads and writes, so the one a rename could
   half-fix — reading the new field while writing the old truncates into a slot
   the provider ignores, with the counter still reporting the result as bounded.
+  - **The error distinction crosses, through each vocabulary's OWN channel.**
+    `LanguageModelV2ToolResultOutput` has FIVE members — `text`, `json`,
+    `error-text`, `error-json`, `content` — so a downgrade keeping only the
+    VALUE re-upgrades by guessing the type from `typeof value === 'string'`, and
+    an `error-text` result comes back as an ordinary `text` one: a failure shown
+    to the model as a success, made permanent by the next `save`. That is this
+    boundary's own subject, on the one path it introduces, and the first cut had
+    it. The failure bit maps to `ai@4`'s `ToolResultPart.isError` and back to
+    `error-*`, which beats carrying the v5 `output` key alongside `result` twice
+    over: no duplicated value on disk (`truncateToolResults` rewrites these
+    parts, so a retained envelope would hold the pre-truncation value and quietly
+    undo the size bound), and the flag is LIVE rather than merely recoverable —
+    `convertToLanguageModelPrompt` forwards `isError` and `@ai-sdk/anthropic`
+    emits `is_error`, where a stray `output` key would be ignored and the error
+    would travel unflagged. **Residual:** `content` degrades to `json`; the value
+    survives and nothing is reclassified, and v4's `experimental_content` has a
+    genuinely different element shape, so mapping it is a conversion rather than
+    a passthrough.
 - **`HistoryStore.load` normalizes rather than casts.** It was
   `JSON.parse(data) … as CoreMessage[]` behind a `'role' in entry` filter, so
   whatever was on disk went straight to the provider. Measured on a real install:
