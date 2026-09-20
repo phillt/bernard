@@ -145,6 +145,23 @@ describe('the model is identifiable, and the ceiling is visible (#520)', () => {
 });
 
 /**
+ * A promise this file settles by hand.
+ *
+ * Every case below that needs a load to be "still running" uses one instead of
+ * a real timer. A `setTimeout(…, 20)` makes the assertion a measurement of how
+ * busy the machine is, which this batch has already produced three of.
+ */
+class Deferred {
+  readonly promise: Promise<unknown>;
+  resolve!: (value: unknown) => void;
+  constructor() {
+    this.promise = new Promise((r) => {
+      this.resolve = r;
+    });
+  }
+}
+
+/**
  * The model load is bounded by SILENCE (#607). It is reachable from a
  * dispatch's own tool, so an unbounded one is a dispatch that can sit forever
  * with the runner's liveness guard correctly paused for a tool call.
@@ -154,6 +171,10 @@ describe('the model load is bounded, and by inactivity (#607)', () => {
 
   beforeEach(() => {
     _resetEmbeddingProvider();
+    // Call counts are per-case here, not per-file. Without this every
+    // `toHaveBeenCalledTimes` below counts every load the file has ever done —
+    // an assertion whose expected value is whatever order the suite ran in.
+    pipelineMock.mockClear();
     delete process.env.BERNARD_EMBEDDING_IDLE_TIMEOUT_MS;
   });
 
@@ -228,17 +249,27 @@ describe('the model load is bounded, and by inactivity (#607)', () => {
     // transformers.js dedupes nothing — so a pair of concurrent dispatches
     // fetched 46 MB instead of 23. Four dispatches run concurrently by default
     // and each one's RAG search awaits this.
-    let started = 0;
-    pipelineMock.mockImplementation(() => {
-      started += 1;
-      return new Promise((resolve) => setTimeout(() => resolve(mockExtractor), 20));
-    });
-    const [a, b, c] = await Promise.all([
-      getEmbeddingProvider(),
-      getEmbeddingProvider(),
-      getEmbeddingProvider(),
-    ]);
-    expect(started).toBe(1);
+    //
+    // **Asserted on promise IDENTITY, synchronously, and with no real timer.**
+    // The first cut counted `pipeline` invocations across three awaited calls,
+    // which is a measurement of the whole process rather than of these three
+    // callers: it went red in CI because a straggling load from the case below
+    // resumed inside this one's window and called `pipeline` a second time. No
+    // microtask can run between these three lines, so nothing anywhere can
+    // perturb them. The call count stays as a second assertion — it is
+    // deterministic now that nothing leaks — but it is no longer what the case
+    // rests on.
+    const deferred = new Deferred();
+    pipelineMock.mockImplementation(() => deferred.promise);
+    const p1 = getEmbeddingProvider();
+    const p2 = getEmbeddingProvider();
+    const p3 = getEmbeddingProvider();
+    expect(p2).toBe(p1);
+    expect(p3).toBe(p1);
+
+    deferred.resolve(mockExtractor);
+    const [a, b, c] = await Promise.all([p1, p2, p3]);
+    expect(pipelineMock).toHaveBeenCalledTimes(1);
     expect(a).toBe(b);
     expect(b).toBe(c);
   });
@@ -272,25 +303,35 @@ describe('the model load is bounded, and by inactivity (#607)', () => {
     // running is true whether `0` disabled the guard or silently fell back to
     // the default — a test that cannot fail, which is how the same case was
     // first written for `BERNARD_DISPATCH_STALL_TIMEOUT_MS` too. Advancing past
-    // the default is what discriminates.
-    vi.useFakeTimers();
+    // the default is what discriminates. (The parse is pinned separately above;
+    // this case pins that the parse reaches the guard.)
+    //
+    // **It also has to leave nothing behind, which is what broke CI.** It used
+    // to `void` the load and never settle it, so on a loaded machine the load
+    // had not yet reached `pipeline` when the clock was advanced — the case
+    // passed while proving nothing — and the straggler then called `pipeline`
+    // inside a LATER test, whose own assertion counted it. Hence the two
+    // additions: wait on real time until the load has actually started, so
+    // advancing the clock means something; and resolve it at the end, so the
+    // load finishes inside the case that owns it.
+    const deferred = new Deferred();
+    pipelineMock.mockImplementation(() => deferred.promise);
+    process.env.BERNARD_EMBEDDING_IDLE_TIMEOUT_MS = '0';
+    const loading = getEmbeddingProvider();
+    let settled = false;
+    void loading.then(() => {
+      settled = true;
+    });
     try {
-      pipelineMock.mockImplementation(() => new Promise(() => {}));
-      process.env.BERNARD_EMBEDDING_IDLE_TIMEOUT_MS = '0';
-      let settled = false;
-      void getEmbeddingProvider().then(() => {
-        settled = true;
-      });
-      // Let the load reach the point where it would arm its timer before the
-      // clock jumps. Without this the advance happens first and a timer armed
-      // afterwards is scheduled past the window — the assertion would hold for
-      // a reason that has nothing to do with the off switch.
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() => expect(pipelineMock).toHaveBeenCalledTimes(1));
+      vi.useFakeTimers();
       await vi.advanceTimersByTimeAsync(130_000);
       expect(settled).toBe(false);
     } finally {
-      delete process.env.BERNARD_EMBEDDING_IDLE_TIMEOUT_MS;
       vi.useRealTimers();
+      delete process.env.BERNARD_EMBEDDING_IDLE_TIMEOUT_MS;
+      deferred.resolve(mockExtractor);
+      await loading;
     }
   });
 });

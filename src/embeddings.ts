@@ -294,9 +294,17 @@ export function embeddingUnavailableReason(): string | null {
  * for which. The load is shared by concurrent callers and cached after it
  * succeeds; an abandoned one is not cached, so the next call retries it.
  */
-export async function getEmbeddingProvider(): Promise<EmbeddingProvider | null> {
-  load ??= loadProvider();
-  return load;
+export function getEmbeddingProvider(): Promise<EmbeddingProvider | null> {
+  // NOT `async`, and that is the difference between sharing being a behaviour
+  // and sharing being observable. An `async` wrapper mints a fresh promise per
+  // call, so two callers of one load hold two different objects and the only way
+  // to see that they share is to count `pipeline` invocations afterwards —
+  // which is a measurement any other test's straggler can perturb. Returning the
+  // memoized promise itself makes `getEmbeddingProvider() === getEmbeddingProvider()`
+  // true synchronously, with no microtask in between for anything to interleave.
+  // Safe because the body has no `await` and `loadProvider` is `async`, so it
+  // can never throw synchronously where this previously would have rejected.
+  return (load ??= loadProvider());
 }
 
 async function loadProvider(): Promise<EmbeddingProvider | null> {
