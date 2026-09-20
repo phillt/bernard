@@ -12,7 +12,7 @@ import {
   MAX_CONCURRENT_AGENTS_LIMIT,
 } from './tools/agent-pool.js';
 import { RESPONSE_STYLE_IDS, type ResponseStyle } from './agent-prompt.js';
-import { normalizeStoredModelMode, type ModelMode } from './model-policy.js';
+import { normalizeStoredModelMode, type ModelMode } from './model-modes.js';
 import { getCatalogForProvider } from './providers/catalog.js';
 import { BUILTIN_PROVIDERS, type BuiltinProvider } from './providers/types.js';
 import {

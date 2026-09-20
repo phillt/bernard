@@ -12,6 +12,7 @@ import { modelSupportsTemperature } from './providers/profiles.js';
 import { serializeModelParams, type ModelParams } from './providers/model-params.js';
 import { loadLineups, resolveActiveLineup, type Lineup } from './lineups.js';
 import { ALL_ROLE_IDS, DEFAULT_ROLE_TIERS, SITE_ROLE, type RoleId } from './model-roles.js';
+import { isKnownMode, type ModelMode } from './model-modes.js';
 import { debugLog } from './logger.js';
 import { isVisionCapableModel } from './image.js';
 
@@ -37,21 +38,6 @@ export type ModelSite =
   | 'specialist-consolidator'
   | 'memory-contradiction';
 
-/**
- * Three-value runtime mode (#170, redesigned by #225). The legacy `'off'` value
- * is gone — every active call site now flows through the active lineup. Stored
- * `'off'` is migrated to `'optimize-performance'` on first load (see
- * {@link normalizeStoredModelMode}).
- *
- * What `'off'` named — one model for every site — is still reachable, as a
- * lineup whose slots all name the same model. That is what makes removing it
- * from the settings rows a removal rather than a capability loss, so it is
- * pinned by a test rather than left as a claim (`model-policy.test.ts` → "a
- * lineup with one model in every slot"). `MODEL_MODES` (`src/model-modes.ts`)
- * is the row table every surface asks the question from.
- */
-export type ModelMode = 'optimize-tokens' | 'balanced' | 'optimize-performance';
-
 export type ModelTier = 'cheap' | 'mid' | 'premium';
 
 /** The AI SDK's `providerOptions` shape (`Record<string, Record<string, JSONValue>>`). */
@@ -67,38 +53,6 @@ type SdkProviderOptions = Parameters<typeof generateText>[0]['providerOptions'];
  */
 function tierForRole(mode: ModelMode, role: RoleId): ModelTier {
   return DEFAULT_ROLE_TIERS[mode][role];
-}
-
-/** True when `mode` is a recognized {@link ModelMode}. */
-function isKnownMode(mode: unknown): mode is ModelMode {
-  return mode === 'optimize-tokens' || mode === 'balanced' || mode === 'optimize-performance';
-}
-
-/**
- * Normalizes any modelMode-shaped value read from disk or env. Returns the
- * canonical runtime mode, or `undefined` for inputs that don't match. Migrates
- * legacy `'off'` → `'optimize-performance'` so existing users keep their
- * previously chosen model in the premium tier of the seeded lineup.
- *
- * **The migration stays even though the row is gone (#606), and the two are not
- * the same decision.** `'off'` is still on disk for anyone who chose it before
- * #225, and in `BERNARD_MODEL_MODE` for anyone who set it there; a
- * `normalizeStoredModelMode` that stopped recognising it would resolve
- * `undefined` and hand those users `DEFAULT_MODEL_MODE` instead — re-tiering
- * them silently, which is the one outcome worse than the row that was removed.
- *
- * It is also a best-effort READ of an old preference rather than a faithful
- * one, and that asymmetry is the whole argument. `'off'` meant `config.model`
- * for every site; this maps to the active lineup's premium slot, which is the
- * same model only when the lineup is the seeded one for that provider. Best
- * effort is the right posture for a value already written, and the wrong one
- * for a row somebody is picking right now with the label in front of them —
- * which is exactly what the wizard was doing with it.
- */
-export function normalizeStoredModelMode(v: unknown): ModelMode | undefined {
-  if (isKnownMode(v)) return v;
-  if (v === 'off') return 'optimize-performance';
-  return undefined;
 }
 
 /**

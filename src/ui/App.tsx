@@ -126,7 +126,6 @@ import {
   mainVisionCapable,
   logSiteModelSnapshot,
   providersInUse,
-  type ModelMode,
 } from '../model-policy.js';
 import {
   serializeMessages,
@@ -228,7 +227,7 @@ import {
   type RemoteMessageMode,
 } from '../remote-messages.js';
 import { COORDINATOR_MODES } from '../coordinator-modes.js';
-import { MODEL_MODES } from '../model-modes.js';
+import { MODEL_MODES, type ModelMode } from '../model-modes.js';
 import {
   CONFIRM_MODES,
   TOOL_MODES,

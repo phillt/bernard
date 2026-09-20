@@ -19,7 +19,8 @@
  * {@link SITE_ROLE} when one exists).
  */
 
-import type { ModelSite, ModelTier, ModelMode } from './model-policy.js';
+import type { ModelSite, ModelTier } from './model-policy.js';
+import type { ModelMode } from './model-modes.js';
 
 /** Stable identifier for a functional model role. */
 export type RoleId =

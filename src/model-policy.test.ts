@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import type { BernardConfig } from './config.js';
 import type { Specialist } from './specialists.js';
 import type { ModelSite } from './model-policy.js';
+import { normalizeStoredModelMode } from './model-modes.js';
 import { fullRoles } from './__tests__/lineup-fixtures.js';
 
 vi.mock('./logger.js', () => ({
@@ -516,7 +517,7 @@ describe('a lineup with one model in every slot (#606)', () => {
   // migration compatible with dropping the row: a user who chose `'off'` before
   // #225 still gets one model for everything, so long as their lineup says so.
   it('takes a stored legacy "off" there as well', async () => {
-    const { resolveSiteModel, normalizeStoredModelMode } = await loadModule();
+    const { resolveSiteModel } = await loadModule();
     const modelMode = normalizeStoredModelMode('off');
     expect(modelMode).toBe('optimize-performance');
     const config = makeConfig({ modelMode, activeLineupId: 'uniform' });
@@ -856,26 +857,5 @@ describe('resolveSiteModel — override-path logging (regression)', () => {
     expect(last.site).toBe('tool-wrapper');
     expect(last.source).toBe('specialist');
     expect(last.provider).toBe('anthropic');
-  });
-});
-
-describe('normalizeStoredModelMode', () => {
-  it('migrates legacy "off" to "optimize-performance"', async () => {
-    const { normalizeStoredModelMode } = await loadModule();
-    expect(normalizeStoredModelMode('off')).toBe('optimize-performance');
-  });
-
-  it('passes through valid modes', async () => {
-    const { normalizeStoredModelMode } = await loadModule();
-    expect(normalizeStoredModelMode('balanced')).toBe('balanced');
-    expect(normalizeStoredModelMode('optimize-tokens')).toBe('optimize-tokens');
-    expect(normalizeStoredModelMode('optimize-performance')).toBe('optimize-performance');
-  });
-
-  it('returns undefined for unknown values', async () => {
-    const { normalizeStoredModelMode } = await loadModule();
-    expect(normalizeStoredModelMode('nonsense')).toBeUndefined();
-    expect(normalizeStoredModelMode(undefined)).toBeUndefined();
-    expect(normalizeStoredModelMode(null)).toBeUndefined();
   });
 });

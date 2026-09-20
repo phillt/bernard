@@ -333,8 +333,18 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         // The clause that enumerated the other three went with it, because the
         // rows now carry their own notes; restating them here would put the
         // same sentence on the screen twice, which is `tool-modes.ts`'s rule.
+        //
+        // The third sentence is not decoration. "off ignores the lineup" was the
+        // only place this walk said the word LINEUP out loud, and what `'off'`
+        // named — one model everywhere — is now 18 slots in `/lineup` rather
+        // than a row here. Dropping the clause and naming nothing left a reader
+        // who wants the opposite of "move the small calls down" with nothing to
+        // follow, on the quick path, before they have met the REPL. `/model`
+        // points there too, which is the right pointer in the wrong place.
+        // Glossed inline because the quick walk asks three questions and
+        // `model`'s gloss is not one of them.
         description:
-          'Bernard makes a lot of small internal calls you never see. This picks which model handles them — cheap ones do those jobs just as well, so moving them down cuts the bill with nothing visible lost.',
+          'Bernard makes a lot of small internal calls you never see. This picks which model handles them — cheap ones do those jobs just as well, so moving them down cuts the bill with nothing visible lost. Whichever you pick, the models themselves come from your lineup, the named set /lineup edits — where you can bind every rung to the same model if you would rather choose once and be done.',
         // The shared table, not a second copy — see `model-modes.ts`.
         field: { kind: 'list', options: [...MODEL_MODES] },
         envVar: 'BERNARD_MODEL_MODE',

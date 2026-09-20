@@ -30,7 +30,7 @@ import {
   getAvailableProviders,
   resolveVoiceWarmupMs,
 } from './config.js';
-import { normalizeStoredModelMode } from './model-policy.js';
+import { legacyModelModeNotice, normalizeStoredModelMode } from './model-modes.js';
 import {
   consumeLineupRepairReport,
   loadLineups,
@@ -94,7 +94,7 @@ import { migrateFromLegacy } from './migrate.js';
 import { MCP_CONFIG_PATH, PROFILES_PATH, PREFS_PATH, RAG_DIR } from './paths.js';
 import { openCorpus } from './knowledge/corpus.js';
 import * as fs from 'node:fs';
-import { listProfiles } from './profiles.js';
+import { getActiveSettings, listProfiles, loadProfiles } from './profiles.js';
 import { MemoryStore } from './memory.js';
 import { serializeMessages, MIN_HISTORY_FOR_FACTS } from './context.js';
 import { RAGStore } from './rag.js';
@@ -504,6 +504,32 @@ async function runInkRepl(args: {
   loadLineups();
   const repairNotice = lineupRepairNotice(consumeLineupRepairReport());
   if (repairNotice) startupNotices.push(repairNotice);
+
+  // A legacy `modelMode: 'off'` is still accepted and still migrates — see
+  // `normalizeStoredModelMode` for why — but migrating it silently is the same
+  // defect the settings row had (#606): the most expensive mode in the product,
+  // selected by something that reads as opting out. Two populations reach it
+  // and neither is "a preference written long ago and read once": a shell
+  // profile exporting `BERNARD_MODEL_MODE=off` RE-PICKS it at every launch from
+  // a surface with no label at all, and anyone whose first run took the broken
+  // row since #582 has it in `profiles.json` now.
+  //
+  // Both raw values are read here rather than through `loadPreferences()`,
+  // which normalizes: `loadProfiles` casts its settings blob rather than
+  // validating it, so the unparsed `'off'` survives on the profile. That is
+  // what lets the decision be a pure function of two strings instead of a latch
+  // inside the normalizer.
+  try {
+    const legacyNotice = legacyModelModeNotice({
+      env: process.env.BERNARD_MODEL_MODE,
+      stored: getActiveSettings(loadProfiles().file).modelMode,
+    });
+    if (legacyNotice) startupNotices.push(legacyNotice);
+  } catch (err: unknown) {
+    // A profile read that throws must never block startup — the env half alone
+    // is still worth saying, but not at the cost of the REPL.
+    debugLog('model-mode:legacy-notice-error', err instanceof Error ? err.message : String(err));
+  }
 
   // Auto-correct a dangling `activeLineupId` (#264 follow-up). A stale id —
   // left over from a deleted lineup, or a typo in a hand-edited profile —
