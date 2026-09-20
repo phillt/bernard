@@ -1,6 +1,9 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { ToolMeta } from './framework/tools/types.js';
 import {
+  classifyMCPTool,
+  hasEmitVerb,
   isReadOnlyMCPToolName,
   riskFromMeta,
   shouldBlockInReadOnly,
@@ -305,5 +308,247 @@ describe('isReadOnlyMCPToolName — verb position', () => {
     // Segment matching, not substring: `updates` must not read as `update`.
     expect(isReadOnlyMCPToolName('get_message_updates')).toBe(true);
     expect(isReadOnlyMCPToolName('listing_details')).toBe(false);
+  });
+});
+
+/**
+ * A server that prefixes its own tools pushes the verb into the MIDDLE (#612).
+ *
+ * #569 moved this off a suffix and onto "a read verb at either END", which is a
+ * better guess and still the wrong shape. `google-mcp` names every tool
+ * `google_<product>_<verb>_<noun>`, so `list` lands at index 2 and every Gmail
+ * and Calendar lookup classified as a medium-risk WRITE — the watcher gate
+ * refused to poll an inbox and the user fell back to cron.
+ *
+ * The four names below are the table from the issue, and every one of them was
+ * measured `false` against the shipped classifier before this change.
+ */
+describe('isReadOnlyMCPToolName — a read verb in the middle', () => {
+  it.each([
+    'google_gmail_list_emails',
+    'google_gmail_list_unread_emails',
+    'google_gmail_get_email',
+    'google_calendar_get_events',
+    'google_calendar_find_free_time',
+    'google_drive_list_files',
+    'google_sheets_batch_get_values',
+  ])('reads %s', (name) => {
+    expect(isReadOnlyMCPToolName(name)).toBe(true);
+  });
+
+  it.each([
+    // Still refused, and by the write verb alone rather than by position — all
+    // read off `google-mcp`'s real 61-tool surface.
+    'google_gmail_send_email',
+    'google_gmail_reply_email',
+    'google_gmail_modify_labels',
+    'google_gmail_batch_delete_emails',
+    'google_calendar_create_event',
+    'google_calendar_update_event',
+    'google_drive_share_file',
+    'google_sheets_append_values',
+    // The sharpest of the real ones: a read verb at the LAST position with a
+    // write verb in the middle. Under either rule the write verb decides.
+    'google_tasks_set_default_list',
+  ])('refuses %s', (name) => {
+    expect(isReadOnlyMCPToolName(name)).toBe(false);
+  });
+
+  it('fixes the typography fold for a read, not just the risk tier', () => {
+    // `google_gmail_get_email` measured `nonIdempotent: true` AND eligible for
+    // the outbound prose fold, because `email` is an EMIT verb and the name
+    // classified as a write. So Bernard was rewriting a LOOKUP's arguments —
+    // `mcp-prose-args.ts` names that exact harm ("rewrite the SEARCH TERM") and
+    // the classification was what let it happen. Both halves are ANDed with
+    // `!isRead`, so reading the name correctly closes both at once.
+    expect(hasEmitVerb('google_gmail_get_email')).toBe(true);
+    expect(isReadOnlyMCPToolName('google_gmail_get_email')).toBe(true);
+    expect(classifyMCPTool('google_gmail_get_email').nonIdempotent).toBe(false);
+  });
+});
+
+/**
+ * The guard that the widening moved the whole burden onto.
+ *
+ * While the read test was end-anchored, a name with no read verb at either END
+ * was refused before `WRITE_VERBS` was ever consulted — which is why its own
+ * docstring said "do not treat it as a general vocabulary of writes". Matching
+ * any position removes that: this set is now the sole discriminator over every
+ * name containing a read verb anywhere.
+ *
+ * So every entry gets a negative case, and the shape is the one the widening
+ * made dangerous — a read verb in the MIDDLE, where nothing but this set
+ * refuses. The sweep is generated FROM THE SOURCE rather than from a hand list,
+ * because the failure worth catching is a verb added to the set without anyone
+ * thinking about what it now has to hold on its own.
+ */
+describe('WRITE_VERBS carries the widening', () => {
+  /**
+   * The set as declared, read out of `risk.ts`.
+   *
+   * It is module-private and stays that way: exporting it to satisfy a test
+   * would put a mutable `Set` on the public surface of a leaf that six gates
+   * read. `settings-coverage.test.ts` scans source for the same reason.
+   */
+  function declaredWriteVerbs(): string[] {
+    const src = readFileSync(new URL('./risk.ts', import.meta.url), 'utf8');
+    const block = /const WRITE_VERBS = new Set\(\[([\s\S]*?)\]\);/.exec(src);
+    expect(block, 'WRITE_VERBS declaration not found — did the shape change?').not.toBeNull();
+    return [...block![1].matchAll(/'([a-z]+)'/g)].map((m) => m[1]);
+  }
+
+  it('finds the declaration', () => {
+    // Guard the guard: a scan that silently matched nothing would make every
+    // assertion below vacuous, and `it.each` over an empty array passes.
+    expect(declaredWriteVerbs().length).toBeGreaterThan(30);
+  });
+
+  it.each(declaredWriteVerbs())('refuses `svc_get_%s_target`', (verb) => {
+    // `get` at index 1 and the write verb at index 2 — both mid-name, so this
+    // reads as a lookup under the widening unless the verb is in the set.
+    expect(isReadOnlyMCPToolName(`svc_get_${verb}_target`)).toBe(false);
+  });
+
+  it('refuses realistic co-occurrences the widening would otherwise admit', () => {
+    // The same property said in names somebody could plausibly ship, which is
+    // what makes the generated sweep above legible rather than mechanical.
+    for (const name of [
+      'github_pr_get_status_and_merge',
+      'github_issue_get_and_close',
+      'github_workflow_find_and_trigger',
+      'slack_channel_find_and_join',
+      'slack_channel_get_and_invite_users',
+      'drive_file_get_and_share',
+      'oauth_token_get_and_revoke',
+      'linear_issue_find_and_assign',
+      'notion_db_get_and_sync',
+      'vercel_project_get_and_deploy',
+      'calendar_event_get_and_respond',
+      'sheets_values_get_and_append',
+      'docs_body_get_and_replace_text',
+      'tasks_task_get_and_complete',
+      'calendar_get_and_import_ics',
+      'notion_page_get_and_publish',
+      'form_get_and_submit',
+      'run_list_and_approve',
+      'run_get_and_cancel',
+      'alert_rule_get_and_notify',
+    ]) {
+      expect(isReadOnlyMCPToolName(name), name).toBe(false);
+    }
+  });
+
+  it('keeps `email` out, because putting it in is #612 again', () => {
+    // `email` is an EMIT verb and deliberately not a write verb: it is the one
+    // segment that makes the two sets non-interchangeable, and adding it here
+    // would reclassify every Gmail lookup as a write — the bug being fixed.
+    expect(declaredWriteVerbs()).not.toContain('email');
+    expect(hasEmitVerb('get_email')).toBe(true);
+    expect(isReadOnlyMCPToolName('google_gmail_get_email')).toBe(true);
+  });
+
+  it('leaves `export` and `refresh` out, and that is a decision', () => {
+    // Both were considered. `get_export_url` and `get_refresh_token` are
+    // ordinary read names, and neither verb buys anything, because the mutating
+    // forms (`export_report`, `refresh_tokens`) carry no read verb and are
+    // already refused by absence. Inclusion is not free: a name whose read verb
+    // sits at an END was a read under the OLD rule too, so adding a verb can
+    // flip a live read to a write.
+    expect(isReadOnlyMCPToolName('drive_get_export_url')).toBe(true);
+    expect(isReadOnlyMCPToolName('oauth_get_refresh_token')).toBe(true);
+    expect(isReadOnlyMCPToolName('export_report')).toBe(false);
+    expect(isReadOnlyMCPToolName('refresh_tokens')).toBe(false);
+  });
+});
+
+/**
+ * The server's own declaration beats the name (#570).
+ *
+ * `isReadOnlyMCPSuffix` has always been a guess, and `risk.ts` said so in its
+ * own docstring: "#570 replaces the guessing entirely with MCP's own
+ * `readOnlyHint`". The blocker was `@ai-sdk/mcp`, which up to 1.0.21
+ * destructured `annotations` and forwarded only `.title`; 1.0.82 carries all
+ * four hints through to `tool.metadata.annotations`.
+ */
+describe('classifyMCPTool — annotation over guess', () => {
+  it('reads a tool whose name says write', () => {
+    // The direction that unblocks a watcher on a badly-named lookup.
+    expect(isReadOnlyMCPToolName('send_report')).toBe(false);
+    const c = classifyMCPTool('send_report', { readOnlyHint: true });
+    expect(c.isRead).toBe(true);
+    expect(c.readSource).toBe('annotation');
+    // A read is never worth refusing a repeat of, whatever the name emits.
+    expect(c.nonIdempotent).toBe(false);
+  });
+
+  it('writes a tool whose name says read', () => {
+    // #570 calls this the worse of the two directions: today a server
+    // explicitly marking a tool destructive is silently overridden by our regex.
+    expect(isReadOnlyMCPToolName('list_things')).toBe(true);
+    const c = classifyMCPTool('list_things', { readOnlyHint: false });
+    expect(c.isRead).toBe(false);
+    expect(c.readSource).toBe('annotation');
+  });
+
+  it('leaves an unannotated tool exactly as the name had it', () => {
+    // The fallback is the majority path and must not rot: `google-mcp`, the
+    // server behind #612, declares no annotations at all across its 61 tools.
+    for (const name of [
+      'google_gmail_list_emails',
+      'send_message',
+      'focus_app',
+      'list_drafts',
+      'get_or_create_chat',
+    ]) {
+      const c = classifyMCPTool(name);
+      expect(c.isRead, name).toBe(isReadOnlyMCPToolName(name));
+      expect(c.nonIdempotent, name).toBe(!isReadOnlyMCPToolName(name) && hasEmitVerb(name));
+      expect(c.readSource, name).toBe('name');
+    }
+    // And an annotations object that declares neither hint is the same as none.
+    expect(classifyMCPTool('send_message', {}).readSource).toBe('name');
+  });
+
+  it('takes idempotency from the server, in both directions', () => {
+    // `focus_app` carries neither verb, so the name guess calls it idempotent;
+    // a server saying otherwise is the whole point of the hint.
+    expect(classifyMCPTool('focus_app').nonIdempotent).toBe(false);
+    expect(classifyMCPTool('focus_app', { idempotentHint: false }).nonIdempotent).toBe(true);
+    expect(classifyMCPTool('focus_app', { idempotentHint: false }).idempotencySource).toBe(
+      'annotation',
+    );
+    // And the inverse: a name that emits, declared safe to repeat.
+    expect(classifyMCPTool('send_message').nonIdempotent).toBe(true);
+    expect(classifyMCPTool('send_message', { idempotentHint: true }).nonIdempotent).toBe(false);
+  });
+
+  it('asks idempotency only of a write', () => {
+    // MCP says `idempotentHint` is meaningful only when `readOnlyHint` is
+    // false, and Bernard already had the same rule for its own reason —
+    // `duplicate-guard.ts` must never refuse a repeated lookup. So a declared
+    // read ignores a contradictory `idempotentHint` rather than half-honouring
+    // it, and reports the source that actually decided.
+    const c = classifyMCPTool('list_messages', { readOnlyHint: true, idempotentHint: false });
+    expect(c.isRead).toBe(true);
+    expect(c.nonIdempotent).toBe(false);
+    expect(c.idempotencySource).toBe('annotation');
+    const d = classifyMCPTool('list_messages', { idempotentHint: false });
+    expect(d.nonIdempotent).toBe(false);
+    expect(d.idempotencySource).toBe('name');
+  });
+
+  it('ignores a hint that is not a boolean', () => {
+    // Annotations arrive as untrusted server data and reach this function as an
+    // untyped object; a string `"true"` must not read as a declaration. The
+    // installed SDK's zod schema would reject it first, but that is a property
+    // of the version installed rather than of this function.
+    const bad = { readOnlyHint: 'true', idempotentHint: 1 } as unknown as Parameters<
+      typeof classifyMCPTool
+    >[1];
+    const c = classifyMCPTool('send_message', bad);
+    expect(c.isRead).toBe(false);
+    expect(c.readSource).toBe('name');
+    expect(c.nonIdempotent).toBe(true);
+    expect(c.idempotencySource).toBe('name');
   });
 });

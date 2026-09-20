@@ -196,6 +196,37 @@ describe('MCPManager reconnection', () => {
       expect(executeFn.mock.calls[0][0]).toEqual({ subject: 'a — b' });
     });
 
+    it('does not fold a tool its own server declared read-only', async () => {
+      // `emitsProse`'s stated harm is rewriting a lookup's SEARCH TERM, and
+      // until #570 the only thing standing between that and a badly-named read
+      // tool was the name. `send_email` carries a write verb and an emit verb,
+      // so without the hand-off of the resolved `isRead` this folds.
+      const executeFn = vi.fn().mockResolvedValue('found');
+      await setupWithServer('test-server', {
+        send_email: {
+          ...makeDynamicTool(executeFn),
+          metadata: { annotations: { readOnlyHint: true } },
+        },
+      });
+
+      await manager
+        .getTools()
+        [mcpToolName('test-server', 'send_email')].execute({ subject: 'a — b' });
+
+      expect(executeFn.mock.calls[0][0]).toEqual({ subject: 'a — b' });
+      // Guard the guard: the same fixture without the annotation IS folded, so
+      // the assertion above is a verdict rather than a broken harness.
+      const control = vi.fn().mockResolvedValue('sent');
+      const m2 = new MCPManager();
+      mockCreateMCPClient.mockResolvedValue(
+        makeMockClient({ send_email: makeDynamicTool(control) }),
+      );
+      vi.spyOn(m2, 'loadConfig').mockReturnValue({ mcpServers: { srv: { url: 'http://s' } } });
+      await m2.connect();
+      await m2.getTools()[mcpToolName('srv', 'send_email')].execute({ subject: 'a — b' });
+      expect(control.mock.calls[0][0]).toEqual({ subject: 'a - b' });
+    });
+
     /**
      * The predecessor of this block asserted "sends the FOLDED args on the
      * reconnect retry too", and that test is now UNREACHABLE rather than merely
@@ -209,11 +240,17 @@ describe('MCPManager reconnection', () => {
      * tool that reaches the retry gets `args` back by identity from
      * `foldProseArgs`. The fold on the retry path is provably a no-op.
      *
-     * The retry still passes `outbound` rather than `args`, and that is
-     * deliberate: it costs nothing, and it is what keeps the two call sites
-     * honest should the predicates ever diverge. The coincidence is pinned by
-     * `mcp-prose-args.test.ts`'s "a foldable tool is never retried", so a
-     * divergence fails a test instead of silently resurrecting this gap.
+     * **"Provably" now means on the NAME path.** Since #570 a server can declare
+     * `readOnlyHint: false` with `idempotentHint: true` on a name carrying an
+     * emit verb, which makes `nonIdempotent` false while `emitsProse` stays
+     * true — so a folded call really can reach the retry.
+     *
+     * The retry still passes `outbound` rather than `args`, and that is what
+     * makes the divergence harmless rather than a bug: the retry re-sends the
+     * same folded payload to a tool its own server said is safe to repeat. It
+     * was written as insurance "should the predicates ever diverge"; they have.
+     * The coincidence is pinned by `mcp-prose-args.test.ts`'s "a foldable tool
+     * is never retried", which states the same restriction.
      */
   });
 
@@ -808,6 +845,179 @@ describe('MCPManager namespaced names (#413)', () => {
     expect(flag('send_message')).toBe(true);
     expect(flag('focus_app')).toBe(false);
     expect(flag('list_messages')).toBe(false);
+  });
+
+  /**
+   * The name guess is now the fallback, not the answer (#570).
+   *
+   * `classifyMCPTool` is unit-tested in `risk.test.ts`; what is only testable
+   * here is the WIRING — that `mcp.ts` reads `tool.metadata.annotations` off
+   * what `client.tools()` returns and feeds it in. That plumbing is the half
+   * that fails silently: a hint read from the wrong property, or not read at
+   * all, leaves every other assertion in this file green, because they all use
+   * unannotated fixtures.
+   *
+   * `metadata.annotations` is where `@ai-sdk/mcp@1.0.82` puts them — verified
+   * over a real stdio transport against both 1.0.21, which drops them entirely,
+   * and 1.0.82.
+   */
+  describe('server annotations', () => {
+    const annotated = (annotations: Record<string, unknown>) => ({
+      ...makeDynamicTool(vi.fn()),
+      metadata: { clientName: 'ai-sdk-mcp-client', annotations },
+    });
+
+    async function connectAnnotated() {
+      mockCreateMCPClient.mockResolvedValue(
+        makeMockClient({
+          // Name says write AND emits; server says read-only.
+          send_report: annotated({ readOnlyHint: true }),
+          // Name says read; server says it writes and is not repeatable.
+          list_things: annotated({ readOnlyHint: false, idempotentHint: false }),
+          // Name says it emits; server says repeating is harmless.
+          send_message: annotated({ idempotentHint: true }),
+          // The control: no annotations, decided by the name exactly as before.
+          google_gmail_list_emails: makeDynamicTool(vi.fn()),
+        }),
+      );
+      vi.spyOn(manager, 'loadConfig').mockReturnValue({ mcpServers: { srv: { url: 'http://s' } } });
+      await manager.connect();
+      const tools = manager.getTools();
+      return (t: string) => readToolMeta(tools[mcpToolName('srv', t)]);
+    }
+
+    it('prefers readOnlyHint over the name, in both directions', async () => {
+      const meta = await connectAnnotated();
+      // The direction that unblocks a lookup nobody named well...
+      expect(meta('send_report')?.kind).toBe('read');
+      expect(meta('send_report')?.sideEffect).toBe('network');
+      // ...and the one #570 calls the worse of the two, where our regex
+      // currently overrides a server that explicitly said "this writes".
+      expect(meta('list_things')?.kind).toBe('write');
+      expect(meta('list_things')?.sideEffect).toBe('local');
+    });
+
+    it('prefers idempotentHint over the emit-verb guess', async () => {
+      const meta = await connectAnnotated();
+      expect(meta('list_things')?.nonIdempotent).toBe(true);
+      // `send_message` is the name the guess gets right and the server
+      // overrules — so this fails if `idempotentHint` is dropped on the way in.
+      expect(meta('send_message')?.nonIdempotent).toBe(false);
+      // A declared read is never worth refusing a repeat of, whatever it emits.
+      expect(meta('send_report')?.nonIdempotent).toBe(false);
+    });
+
+    it('leaves an unannotated tool to the name', async () => {
+      const meta = await connectAnnotated();
+      // Also #612's own case end to end: a read verb in the MIDDLE, which
+      // classified as a medium-risk write until this change.
+      expect(meta('google_gmail_list_emails')?.kind).toBe('read');
+      expect(meta('google_gmail_list_emails')?.nonIdempotent).toBe(false);
+    });
+
+    it('ignores a malformed hint rather than trusting it', async () => {
+      // Annotations are untrusted server data by spec, and `tool.metadata`
+      // reaches `mcp.ts` as `any`. A string here must fall back to the name.
+      mockCreateMCPClient.mockResolvedValue(
+        makeMockClient({ send_message: annotated({ readOnlyHint: 'true' }) }),
+      );
+      vi.spyOn(manager, 'loadConfig').mockReturnValue({ mcpServers: { srv: { url: 'http://s' } } });
+      await manager.connect();
+      const meta = readToolMeta(manager.getTools()[mcpToolName('srv', 'send_message')]);
+      expect(meta?.kind).toBe('write');
+      expect(meta?.nonIdempotent).toBe(true);
+    });
+
+    /**
+     * Which source decided, once per server per connect (#570's last acceptance
+     * line: "shows which source decided, so a misclassification is diagnosable
+     * without reading code").
+     *
+     * It is also what gives `readToolAnnotations`' own type guard an observable
+     * consequence. `classifyMCPTool` guards too, so dropping the boundary one
+     * changes no classification — measured, that mutation survived every other
+     * assertion in this file. What it does change is the COUNT: a malformed
+     * hint would read as an annotated tool, and the line whose job is to say
+     * "this server declares nothing" would say the opposite.
+     */
+    it('logs which tools the server overruled', async () => {
+      vi.stubEnv('BERNARD_DEBUG', '1');
+      mockCreateMCPClient.mockResolvedValue(
+        makeMockClient({
+          send_report: annotated({ readOnlyHint: true }), // name says write
+          list_things: annotated({ readOnlyHint: false }), // name says read
+          send_message: annotated({ readOnlyHint: false }), // name agrees
+          bad_hint: annotated({ readOnlyHint: 'true' }), // not a declaration
+          google_gmail_list_emails: makeDynamicTool(vi.fn()), // no annotations
+        }),
+      );
+      vi.spyOn(manager, 'loadConfig').mockReturnValue({ mcpServers: { srv: { url: 'http://s' } } });
+      await manager.connect();
+
+      expect(debugLog).toHaveBeenCalledWith('mcp:classified', {
+        server: 'srv',
+        tools: 5,
+        // Three real declarations: the malformed one and the bare tool are not
+        // annotated, which is the half the boundary guard decides.
+        readFromServer: 3,
+        // `send_report` is declared read-only, so the read hint settles
+        // idempotency too and nothing else here declared one.
+        idempotencyFromServer: 1,
+        // Only the two the server actually contradicted — `send_message` agrees
+        // with the guess and is not worth a reader's attention.
+        overrideCount: 2,
+        overrides: ['send_report', 'list_things'],
+      });
+    });
+
+    it('bounds the override list and keeps the count honest', async () => {
+      // A server that annotates everything can disagree with the guess on any
+      // number of its tools, and this line runs once per connect into the debug
+      // JSONL. `overrideCount` carries the total so the cap costs nothing but
+      // bytes; without it a 200-tool server writes 200 names.
+      vi.stubEnv('BERNARD_DEBUG', '1');
+      const many = Object.fromEntries(
+        // Each reads like a lookup and is declared a write, so every one is an
+        // override.
+        Array.from({ length: 14 }, (_, i) => [
+          `list_things_${i}`,
+          annotated({ readOnlyHint: false }),
+        ]),
+      );
+      mockCreateMCPClient.mockResolvedValue(makeMockClient(many));
+      vi.spyOn(manager, 'loadConfig').mockReturnValue({ mcpServers: { srv: { url: 'http://s' } } });
+      await manager.connect();
+
+      const line = vi
+        .mocked(debugLog)
+        .mock.calls.find(([label]) => label === 'mcp:classified')?.[1] as {
+        overrideCount: number;
+        overrides: string[];
+      };
+      expect(line.overrideCount).toBe(14);
+      expect(line.overrides).toHaveLength(10);
+    });
+
+    it('says plainly when a server declares nothing', async () => {
+      // The other useful answer, and the common one: `google-mcp` — the server
+      // behind #612 — annotates none of its 61 tools, so every classification
+      // under this line is a guess and the line has to say so.
+      vi.stubEnv('BERNARD_DEBUG', '1');
+      mockCreateMCPClient.mockResolvedValue(
+        makeMockClient({ google_gmail_list_emails: makeDynamicTool(vi.fn()) }),
+      );
+      vi.spyOn(manager, 'loadConfig').mockReturnValue({ mcpServers: { srv: { url: 'http://s' } } });
+      await manager.connect();
+
+      expect(debugLog).toHaveBeenCalledWith('mcp:classified', {
+        server: 'srv',
+        tools: 1,
+        readFromServer: 0,
+        idempotencyFromServer: 0,
+        overrideCount: 0,
+        overrides: [],
+      });
+    });
   });
 
   // A name must depend only on its own server, never on config order — the

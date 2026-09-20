@@ -125,15 +125,25 @@ const PROSE_ARG_NAMES: ReadonlySet<string> = new Set(PROSE_ARGS.map((a) => a.nam
  * **false**: neither carries an emit verb at all, so both are refused by the
  * second conjunct alone and neither demonstrates why the first exists.
  *
- * The names that do are the emit-only verbs — `publish`, `submit`, `invite`,
- * `email`, `notify`, none of which is in `WRITE_VERBS`. `get_email` and
+ * The name that does is `email`, the one emit verb still absent from
+ * `WRITE_VERBS` — and absent there deliberately, since putting it in would make
+ * `google_gmail_get_email` a write, which is #612's own bug. `get_email` and
  * `search_email` are reads (no write verb anywhere) that carry an emit verb, so
  * `hasEmitVerb` alone would call them eligible. Dropping `!isRead` would put
  * `search_email({subject: "…"})` through the fold and rewrite the SEARCH TERM,
- * which is the concrete harm rather than a tidiness argument.
+ * which is the concrete harm rather than a tidiness argument. (`publish`,
+ * `submit`, `invite` and `notify` were in that sentence too and are now write
+ * verbs, so they no longer demonstrate it; the conjunct is unchanged.)
+ *
+ * `isRead` is the verdict the caller already holds, where it holds one. Since
+ * #570 `mcp.ts` decides it from the server's own `readOnlyHint` and falls back
+ * to the name, so re-deriving it here would fold the arguments of a tool its
+ * own server declared read-only — the same harm one source of truth over.
+ * Omitting it means the name decides, which is what a caller with no
+ * annotation in hand gets anyway.
  */
-export function emitsProse(rawToolName: string): boolean {
-  return !isReadOnlyMCPToolName(rawToolName) && hasEmitVerb(rawToolName);
+export function emitsProse(rawToolName: string, isRead?: boolean): boolean {
+  return !(isRead ?? isReadOnlyMCPToolName(rawToolName)) && hasEmitVerb(rawToolName);
 }
 
 /**
@@ -177,8 +187,8 @@ export function isProseValue(v: string): boolean {
  * level because servers nest (`{message: {subject, body}}`); the key is the gate
  * either way, so nesting widens coverage without widening what is folded.
  */
-export function foldProseArgs(args: unknown, rawToolName: string): unknown {
-  if (!emitsProse(rawToolName)) return args;
+export function foldProseArgs(args: unknown, rawToolName: string, isRead?: boolean): unknown {
+  if (!emitsProse(rawToolName, isRead)) return args;
   return walk(args, false);
 }
 
