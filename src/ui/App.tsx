@@ -7270,11 +7270,33 @@ function formatSlotLine(slot: LineupSlot): string {
  * A lineup-editor row that is not a role.
  *
  * Named, and `actionDetail` below keyed on it, because the two lists have to
- * agree and nothing said so: the record was a `Record<string, …>`, so a new
- * kind with no entry destructured `undefined` and threw the moment the cursor
- * landed on the row — invisible in review, loud at runtime, and on the one path
- * where the row exists precisely because it is new. As a `Record<LineupAction,
- * …>` the omission is a compile error.
+ * agree and nothing said so: the record was a `Record<string, …>`, so a kind
+ * with no entry destructured `undefined` and threw the moment the cursor landed
+ * on the row — invisible in review, loud at runtime, and on the one path where
+ * the row exists precisely because it is new. As a `Record<LineupAction, …>`
+ * that is `TS2741` in **both** directions: an entry without a member, and a
+ * member without an entry.
+ *
+ * **Keying the record was necessary and not sufficient, and the gap was the
+ * reader this docstring is written for.** `MenuItem.value` is `value?: unknown`
+ * and `renderLineupDetail` reads it with a CAST, so the natural way to add a
+ * row — `{ label: 'Duplicate lineup', value: { kind: 'duplicate' } }` — carried
+ * no type at all: measured, `tsc` reported nothing, the cast laundered
+ * `'duplicate'` into `LineupAction`, and the same `undefined` destructure threw
+ * at the same moment. The record closed the trap for someone already editing
+ * this union, who is already thinking about the exhaustive set, and left it
+ * open for someone who adds a row and stops.
+ *
+ * So every row in `runLineupEditorInk` carries `satisfies LineupMenuValue`.
+ * That reports `TS2322` naming the bad kind **at the row that declared it**,
+ * which is the better diagnostic and the one the reader who needs it will see.
+ * `satisfies` rather than an annotation because the array is typed `MenuEntry[]`
+ * and `value` must stay `unknown` for every other menu in the product.
+ *
+ * It also makes the handler's `if`-chain exhaustive by construction rather than
+ * by inspection: that array is the only producer of these values, so a kind
+ * outside the union can no longer be built, and a `never` check at the bottom
+ * of the chain would be guarding against something unconstructible.
  */
 type LineupAction = 'bind-all' | 'rename' | 'save' | 'save-new' | 'delete' | 'cancel';
 
@@ -7480,9 +7502,14 @@ async function runLineupEditorInk(
   while (true) {
     // Left-pane rows stay lean (just the role/action label); the right-pane
     // detail card carries the premium/mid/cheap ladder and the description.
+    //
+    // Every `value` below carries `satisfies LineupMenuValue`. `MenuEntry.value`
+    // is `unknown` and `renderLineupDetail` casts it, so without this a row
+    // naming a kind nobody declared type-checks perfectly and then throws when
+    // the cursor reaches it — see {@link LineupAction}.
     const roleRows: MenuEntry[] = MODEL_ROLES.map((role) => ({
       label: role.label,
-      value: { kind: 'role', roleId: role.id },
+      value: { kind: 'role', roleId: role.id } satisfies LineupMenuValue,
     }));
     const dirtyMark = isDirty() ? ' •' : '';
     const entries: MenuEntry[] = [
@@ -7494,24 +7521,42 @@ async function runLineupEditorInk(
       // uses ("+ Add custom provider…", "+ Type a new model name…") — and here
       // it also answers "bind them to what?", which the label has no room for.
       //
-      // Fifteen characters because the split layout's left pane is sized from
-      // its own longest label and then shrunk against the detail card, which
-      // leaves about eighteen columns INCLUDING the "7. " prefix — measured, at
-      // which "Classifier / router" and "Save as new lineup" already wrap on
-      // this screen today. "Bind every slot to one model…" fit none of that: it
-      // wrapped onto a second, unindented line AND widened the pane, taking
-      // five columns off the card that carries the sentence. So the sentence
-      // lives in the card, where there is room for it.
-      { label: 'Bind all slots…', value: { kind: 'bind-all' } },
-      { label: 'Rename lineup', value: { kind: 'rename' } },
+      // Fifteen characters, because the split layout's panes are content-sized
+      // and shrink against each other, so the label's own length decides how
+      // much room the detail card has. Measured through the real `/lineup`
+      // inside `<App>` (the `App.test.tsx` harness, a 98-column frame): the
+      // detail card's border sits at column 24, leaving the left pane 21
+      // columns, at which `5. Classifier /` and `10. Save as new` ALREADY wrap
+      // today. "Bind every slot to one model…" fit none of that — it wrapped
+      // onto a second, unindented line AND widened the pane. The width matters
+      // to both halves of that, so it is named rather than implied: a bare
+      // `MenuOverlay` rendered at 100 columns gives the left pane 55 and
+      // nothing wraps at all. So the sentence lives in the card, which has room
+      // for it on any of these screens.
+      { label: 'Bind all slots…', value: { kind: 'bind-all' } satisfies LineupMenuValue },
+      { label: 'Rename lineup', value: { kind: 'rename' } satisfies LineupMenuValue },
       ...(opts.isNew
-        ? [{ label: 'Save as new lineup', value: { kind: 'save-new' } } as MenuEntry]
+        ? [
+            {
+              label: 'Save as new lineup',
+              value: { kind: 'save-new' } satisfies LineupMenuValue,
+            } as MenuEntry,
+          ]
         : [
-            { label: `Save changes${dirtyMark}`, value: { kind: 'save' } } as MenuEntry,
-            { label: 'Save as new lineup', value: { kind: 'save-new' } } as MenuEntry,
-            { label: 'Delete lineup', value: { kind: 'delete' } } as MenuEntry,
+            {
+              label: `Save changes${dirtyMark}`,
+              value: { kind: 'save' } satisfies LineupMenuValue,
+            } as MenuEntry,
+            {
+              label: 'Save as new lineup',
+              value: { kind: 'save-new' } satisfies LineupMenuValue,
+            } as MenuEntry,
+            {
+              label: 'Delete lineup',
+              value: { kind: 'delete' } satisfies LineupMenuValue,
+            } as MenuEntry,
           ]),
-      { label: 'Cancel', value: { kind: 'cancel' } },
+      { label: 'Cancel', value: { kind: 'cancel' } satisfies LineupMenuValue },
     ];
     const pick = await requestMenu(entries, {
       title: `Lineup: ${draft.name}${opts.isNew ? ' (draft)' : ''}${
