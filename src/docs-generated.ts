@@ -382,10 +382,16 @@ Every call is scored before it runs.
 
 - **low** — reads. Reading a file, a web search, a lookup on a connected
   service.
-- **medium** — ordinary local writes, and any connected-service tool Bernard
-  cannot classify from its name.
-- **high** — a shell command that is not a plain read, and anything whose
-  effect leaves the machine.
+- **medium** — ordinary local writes, **and everything a connected service does
+  that is not a lookup**: sending a message, creating an event, filing an issue.
+- **high** — a shell command that is not a plain read, and deleting an applet.
+  That is the whole of it.
+
+The high list really is that short, and the consequence is worth stating
+plainly rather than leaving to be worked out: under the default level Bernard
+stops before a shell command and before deleting an applet, **and not before a
+connected service sends something on your behalf**. If you want to be asked
+about that, the level to pick is the strict one.
 
 A tool that says nothing about itself counts as **medium**, deliberately: the
 strict level stops on it and the default one does not, so an unrecognised tool
@@ -512,8 +518,12 @@ bernard add-provider ollama --sdk openai \\
 \`\`\`
 
 \`--sdk\` says which of the three wire formats the endpoint speaks, not who made
-the model behind it. A custom provider then behaves like a built-in one
-everywhere: \`/provider\` switches to it, \`/model\` picks a model on it.
+the model behind it. \`/models\` does the same job from inside a session, and
+\`bernard providers\` lists what is registered.
+
+A custom provider is then bound like a built-in one: \`/lineup\` is where a
+model — custom or not — gets attached to a tier. There is no command that sets
+one model for everything, because there is no one model; see the ladder below.
 
 ## One turn is not one model
 

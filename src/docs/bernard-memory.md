@@ -11,9 +11,10 @@ them apart is most of what anyone needs to know.
 ## Notes you asked it to keep
 
 Short written notes — a standing instruction, a preference, the name of
-something. Bernard writes one when you say "remember that…", and **every note
-is sent to the model on every call**, so these are the things that should hold
-true next month rather than the things that merely happened today.
+something. Bernard writes one when you say "remember that…", and **your notes
+go along with every turn of the conversation** rather than waiting to be
+relevant — so these are the things that should hold true next month, not the
+things that merely happened today.
 
 `/memory` lists them. Ask Bernard to change or drop one in plain words; it can
 write, retire and replace them.

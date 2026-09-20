@@ -207,7 +207,14 @@ export const TOOL_MODES: ReadonlyArray<{
     // This used to point at the next question, because the label was only true
     // in combination with it. The row writes `confirmMode` itself now, so the
     // note can finally say which calls it means.
-    description: 'Dangerous shell, or anything leaving your machine.',
+    // NOT "anything leaving your machine", which is what this said and which
+    // describes an empty set: nothing in the tree declares
+    // `sideEffect: 'external-api'` or a static `risk: 'high'`, and `mcp.ts`
+    // sets `sideEffect: 'local'` for a connected-service write precisely so it
+    // does NOT score high. So the old wording over-promised on the one thing a
+    // reader checks before trusting a connected account — it read as "Bernard
+    // asks before sending mail", and it does not.
+    description: 'Shell that writes. Not an ordinary file write.',
   },
   {
     value: UNRESTRICTED,
@@ -242,7 +249,10 @@ export const CONFIRM_MODES: ReadonlyArray<{
   {
     value: 'auto',
     label: 'Auto',
-    description: 'Only the riskiest: dangerous shell, or leaving your machine.',
+    // Same correction as the middle `TOOL_MODES` row above, and the same
+    // reason: the high tier is a write-shaped shell call plus `applet delete`,
+    // and nothing else reaches it.
+    description: 'Only the riskiest: shell commands that write.',
   },
   {
     value: 'strict',

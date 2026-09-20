@@ -295,6 +295,34 @@ describe('the shipped corpus', () => {
     }
   });
 
+  it('never names a `/command` that does not exist, in any document', () => {
+    // The fourth member of a family that had three, and the gap let a wrong
+    // sentence ship: `bernard-models` told the reader `/model` picks a model,
+    // and `/model` is a deprecation stub that flashes a toast pointing at
+    // `/lineup`. It is deliberately absent from `SLASH_COMMANDS` — the one
+    // command the catalogue omits on purpose — so the corpus contradicted
+    // itself, with `bernard-commands` correctly declining to list it two
+    // documents away.
+    //
+    // A slash command is the same promise to the same reader as a `bernard`
+    // subcommand, checked against a catalogue this file already imports. There
+    // was no reason for it to be the unguarded one except that nobody had
+    // written it.
+    const known = new Set(SLASH_COMMANDS.map((c) => c.name));
+    for (const doc of docs) {
+      // Backticked, like the `bernard` guard, and for the sharper version of
+      // the same reason: prose about "the /usage of a tool" is not a command,
+      // and a bare-slash scan reads every path in the corpus as one.
+      for (const span of doc.body.match(/`[^`\n]+`/g) ?? []) {
+        // The closing backtick is itself the terminator, so a bare `` `/help` ``
+        // needs no padding to match.
+        const named = /^`(\/[a-z][a-z-]*)[\s`]/.exec(span);
+        if (!named) continue;
+        expect([...known], `${doc.id} names ${named[1]}`).toContain(named[1]);
+      }
+    }
+  });
+
   it('never names a CLI flag that does not exist, in any document', () => {
     // The flag half of the same guarantee. Flags are where a manual rots
     // fastest: a command survives a rename far more often than its options do.
