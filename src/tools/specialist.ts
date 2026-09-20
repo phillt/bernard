@@ -28,6 +28,8 @@ import {
   type ScopeField,
 } from '../framework/agents/dispatch-profile.js';
 import { scopeList, plural } from '../text.js';
+import { unownedMCPNames } from '../mcp-names.js';
+import { listMCPServers } from '../mcp.js';
 import { deleteSpecialist } from '../specialist-lifecycle.js';
 
 const goodExampleSchema = z.object({
@@ -218,6 +220,64 @@ function stepRatioError(value: number | undefined): string | null {
  * that shape how a sub-agent approaches work. Unlike routines (procedures), specialists
  * define *how* to work rather than *what* steps to follow.
  */
+/**
+ * Fence entries that name an MCP server no longer in `mcp.json` (#377).
+ *
+ * Removing a server sweeps its tool profiles and grants, and deliberately does
+ * NOT edit a specialist — deleting user-authored configuration as a side effect
+ * of a config edit is not recoverable. But the removal reports that once, at
+ * removal, and a `bernard remove-mcp` line scrolls past while the `mcp_config`
+ * one goes to the model. `orphanedMCPServers` and `bernard tool-profiles`'
+ * footer exist because *nobody can name a key they have already forgotten*, and
+ * that argument applies verbatim here: this is the standing surface.
+ *
+ * Config only, never a live registry — `mcp.json` is what a CLI can read, and a
+ * fence pointing at a server that is merely down this session is not dangling.
+ *
+ * `servers` is a **parameter** rather than read here, which is what keeps
+ * `list` to one `mcp.json` read: the listing needs this twice per record (the
+ * row mark and the footer), so reading inside would be two file reads and two
+ * JSON parses per specialist — 84 on an install with 42 of them, for one line
+ * of output. `null` means the question could not be answered at all.
+ */
+function danglingFenceEntries(
+  targetTools: string[] | undefined,
+  servers: string[] | null,
+): string[] {
+  if (!servers || !targetTools || targetTools.length === 0) return [];
+  return unownedMCPNames(targetTools, servers);
+}
+
+/**
+ * The configured server keys, or `null` when `mcp.json` could not be read.
+ *
+ * **`null`, not `[]`**, and the distinction is the whole safety of this
+ * feature: `[]` is a real answer — no servers are configured, so every
+ * MCP-shaped fence entry genuinely names nothing — while a malformed file is no
+ * answer, and passing `[]` for it would flag every fence on the install at
+ * once, loudly and wrongly. `listMCPServers` already returns `[]` for an
+ * absent file and throws only for unparseable JSON, so the two cases are
+ * separable here and nowhere else.
+ */
+function configuredServerKeys(): string[] | null {
+  try {
+    return listMCPServers().map((s) => s.key);
+  } catch {
+    // A listing must never fail over a config file it does not need.
+    return null;
+  }
+}
+
+/** Footer naming every record with a dangling fence, or `''` when none has one. */
+function danglingFooter(affected: Array<{ id: string; stale: string[] }>): string {
+  if (affected.length === 0) return '';
+  return (
+    `\n\n⚠ ${affected.length} ${plural(affected.length, 'specialist', 'specialists')} targeting ` +
+    `tools from a server no longer in mcp.json — those entries are dropped at dispatch:\n` +
+    affected.map((r) => `  - ${r.id}: ${scopeList(r.stale)}`).join('\n')
+  );
+}
+
 export function createSpecialistTool(
   specialistStore?: SpecialistStore,
   candidateStore?: CandidateStoreReader,
@@ -431,15 +491,25 @@ export function createSpecialistTool(
           case 'list': {
             const specialists = store.list();
             if (specialists.length === 0) return 'No specialists saved yet.';
-            return `Specialists (${specialists.length}):\n${specialists
+            // Once for the whole listing: the row mark and the footer are two
+            // readings of one fact, not two facts.
+            const servers = configuredServerKeys();
+            const dangling = specialists
+              .map((s) => ({ id: s.id, stale: danglingFenceEntries(s.targetTools, servers) }))
+              .filter((r) => r.stale.length > 0);
+            const staleById = new Map(dangling.map((r) => [r.id, r.stale]));
+            const listing = `Specialists (${specialists.length}):\n${specialists
               .map((s) => {
                 const modelTag =
                   s.provider || s.model
                     ? ` [${s.provider ?? 'default'}/${s.model ?? 'default'}]`
                     : '';
-                return `  - ${s.id} — ${s.name}: ${s.description}${modelTag}`;
+                const n = staleById.get(s.id)?.length ?? 0;
+                const fenceTag = n > 0 ? ` — ⚠ ${n} ${plural(n, 'dead tool', 'dead tools')}` : '';
+                return `  - ${s.id} — ${s.name}: ${s.description}${modelTag}${fenceTag}`;
               })
               .join('\n')}`;
+            return listing + danglingFooter(dangling);
           }
 
           case 'read': {
@@ -452,6 +522,18 @@ export function createSpecialistTool(
             }
             if (specialist.targetTools && specialist.targetTools.length > 0) {
               output += `\nTarget tools: ${specialist.targetTools.join(', ')}`;
+              // The fence is what this record can reach, and an entry naming a
+              // server no longer in `mcp.json` reaches nothing — silently, since
+              // `buildChildTools` drops it with no error (#331). Said here
+              // because `read` is what an agent calls before editing a record.
+              const stale = danglingFenceEntries(specialist.targetTools, configuredServerKeys());
+              if (stale.length > 0) {
+                output +=
+                  `\n⚠ ${scopeList(stale)} ${plural(stale.length, 'names', 'name')} no ` +
+                  `configured MCP server — dropped at dispatch, so this specialist runs ` +
+                  `without ${plural(stale.length, 'it', 'them')}. ` +
+                  `Update targetTools, or re-add the server.`;
+              }
             }
             if (specialist.structuredOutput) {
               output += `\nStructured output: true`;

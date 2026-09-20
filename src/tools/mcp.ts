@@ -1,6 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { listMCPServers, addMCPServer, removeMCPServer, getMCPServer } from '../mcp.js';
+import { listMCPServers, addMCPServer, getMCPServer } from '../mcp.js';
+import { removeMCPServerEverywhere, describeMCPRemoval } from '../mcp-lifecycle.js';
 import { attachMeta } from '../framework/tools/adapter.js';
 
 /**
@@ -13,7 +14,7 @@ export function createMCPConfigTool() {
   return attachMeta(
     tool({
       description:
-        'Manage MCP server configuration. Add, remove, list, or inspect MCP servers. Changes take effect after restarting Bernard. For ADDING or FIXING a server, prefer the `mcp-manager` specialist (via tool_wrapper_run) — it auto-detects transport (stdio vs HTTP/SSE), the correct flags (e.g. --stdio) and credential env vars, and verifies the connection. If you add/edit directly here, ALWAYS run `mcp_verify` afterward to confirm it actually connects (an unverified stdio config can hang the next startup).',
+        "Manage MCP server configuration. Add, remove, list, or inspect MCP servers. Changes take effect after restarting Bernard. For ADDING or FIXING a server, prefer the `mcp-manager` specialist (via tool_wrapper_run) — it auto-detects transport (stdio vs HTTP/SSE), the correct flags (e.g. --stdio) and credential env vars, and verifies the connection. If you add/edit directly here, ALWAYS run `mcp_verify` afterward to confirm it actually connects (an unverified stdio config can hang the next startup). REMOVE also deletes that server's learned tool profiles and permission grants, and reports any specialist left short of tools — it never edits or deletes a specialist, so act on that report yourself.",
       parameters: z.object({
         action: z.enum(['list', 'add', 'remove', 'get']).describe('The action to perform'),
         key: z.string().optional().describe('Server name/key (required for add, remove, get)'),
@@ -76,8 +77,13 @@ export function createMCPConfigTool() {
             if (!key) return 'Error: key is required for remove action.';
 
             try {
-              removeMCPServer(key);
-              return `MCP server "${key}" removed. Restart Bernard for changes to take effect.`;
+              // Through the lifecycle sweep, never `removeMCPServer` directly
+              // (#377): a bare config edit leaves this server's tool profiles
+              // and permission grants on disk with nothing able to reach them.
+              // The lines include any specialist left without tools — reported
+              // to the model, and deliberately never acted on here.
+              const result = removeMCPServerEverywhere(key);
+              return describeMCPRemoval(key, result).join('\n');
             } catch (err: unknown) {
               const msg = err instanceof Error ? err.message : String(err);
               return `Error removing server: ${msg}`;
