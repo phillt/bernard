@@ -374,13 +374,32 @@ interface RegisteredTool {
  * name guess. Verified over a real stdio transport against both versions:
  * 1.0.21 leaves `tool.metadata` undefined, 1.0.82 carries both hints.
  *
- * Every field is re-checked for type rather than trusted. The MCP spec says a
- * client must treat annotations as untrusted unless the server is, and from
- * here the object is `any` off the wire; `@ai-sdk/mcp`'s own zod schema would
- * reject a non-boolean, but that is a property of the version installed, not of
- * this reader. Returns `undefined` when the tool declared nothing usable, so
- * "did this server annotate at all" is answerable rather than inferred from an
- * object of `undefined`s.
+ * **The `typeof === 'boolean'` check cannot change any verdict, and is kept for
+ * what it does to the TYPE rather than to the behaviour.** `raw` is an object
+ * off the wire, so `bag[key]` is `unknown`; the check is what discharges that
+ * honestly, and without it the only way to satisfy `MCPToolAnnotations` is a
+ * bare `as boolean | undefined` — a cast that states something about untrusted
+ * server data which nothing has established.
+ *
+ * Its behavioural redundancy is measured rather than assumed: replacing it with
+ * that cast leaves all 224 tests across the four touched files passing.
+ * A malformed hint is inert at two layers below this one — `classifyMCPTool`
+ * applies the same `typeof` check before it will call anything a declaration
+ * (pinned by `risk.test.ts` → "ignores a hint that is not a boolean", which is
+ * the assertion this function's redundancy RESTS on rather than a duplicate of
+ * it), and `@ai-sdk/mcp@1.0.82` types the hints `z.optional(z.boolean())`, so a
+ * non-boolean fails `listTools()` before Bernard sees the tool at all. Even the
+ * `mcp:classified` counts are safe, since they key on
+ * `MCPToolClassification.readSource` and not on whether this returned an object.
+ *
+ * So: no test here pins it, because none can, and one that appeared to would be
+ * asserting a consequence measured to be absent. The MCP spec's "treat
+ * annotations as untrusted unless the server is" is the reason to WANT the
+ * check; it is not evidence that this copy of it is load-bearing.
+ *
+ * Returns `undefined` when the tool declared nothing usable, so "did this server
+ * annotate at all" is answerable rather than inferred from an object of
+ * `undefined`s.
  */
 function readToolAnnotations(tool: unknown): MCPToolAnnotations | undefined {
   const metadata = (tool as { metadata?: unknown } | undefined)?.metadata;

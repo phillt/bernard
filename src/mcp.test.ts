@@ -933,12 +933,21 @@ describe('MCPManager namespaced names (#413)', () => {
      * line: "shows which source decided, so a misclassification is diagnosable
      * without reading code").
      *
-     * It is also what gives `readToolAnnotations`' own type guard an observable
-     * consequence. `classifyMCPTool` guards too, so dropping the boundary one
-     * changes no classification — measured, that mutation survived every other
-     * assertion in this file. What it does change is the COUNT: a malformed
-     * hint would read as an annotated tool, and the line whose job is to say
-     * "this server declares nothing" would say the opposite.
+     * **This does NOT pin `readToolAnnotations`' own type guard, and an earlier
+     * version of this comment claimed it did.** The reasoning was that a
+     * malformed hint would inflate the count — false: `readFromServer` keys on
+     * `MCPToolClassification.readSource`, which `classifyMCPTool` sets from its
+     * own `typeof` check, so `bad_hint` below stays uncounted whether or not the
+     * boundary guard exists. Measured: replacing that guard with a bare cast
+     * leaves all 224 tests across the four touched files passing, this one
+     * included. The guard is kept for the TYPE and is unobservable by
+     * construction; `src/mcp.ts` records why, and `risk.test.ts` → "ignores a
+     * hint that is not a boolean" asserts the condition it rests on.
+     *
+     * `bad_hint` earns its place here all the same — not as a guard on the
+     * boundary check, but because it is what makes `readFromServer: 3` mean
+     * "three tools the server really declared" rather than "however many
+     * carried an annotations object".
      */
     it('logs which tools the server overruled', async () => {
       vi.stubEnv('BERNARD_DEBUG', '1');

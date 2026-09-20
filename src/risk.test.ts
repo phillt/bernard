@@ -413,26 +413,95 @@ describe('WRITE_VERBS carries the widening', () => {
     // The same property said in names somebody could plausibly ship, which is
     // what makes the generated sweep above legible rather than mechanical.
     for (const name of [
-      'github_pr_get_status_and_merge',
       'github_issue_get_and_close',
-      'github_workflow_find_and_trigger',
-      'slack_channel_find_and_join',
-      'slack_channel_get_and_invite_users',
-      'drive_file_get_and_share',
       'oauth_token_get_and_revoke',
       'linear_issue_find_and_assign',
-      'notion_db_get_and_sync',
-      'vercel_project_get_and_deploy',
       'calendar_event_get_and_respond',
       'sheets_values_get_and_append',
       'docs_body_get_and_replace_text',
       'tasks_task_get_and_complete',
-      'calendar_get_and_import_ics',
       'notion_page_get_and_publish',
       'form_get_and_submit',
       'run_list_and_approve',
       'run_get_and_cancel',
       'alert_rule_get_and_notify',
+    ]) {
+      expect(isReadOnlyMCPToolName(name), name).toBe(false);
+    }
+  });
+
+  /**
+   * The real read names that decided which verbs are IN, pinned so the set
+   * cannot grow back into them.
+   *
+   * `@zereight/mcp-gitlab@2.1.64` is a published server, and the first ten
+   * below are its own tool names. A `merge` entry refused **twenty** of its
+   * read tools, so a user pointing a watcher at GitLab merge requests would
+   * have been told `"…list_merge_requests" is not a read-only tool` — the same
+   * sentence, for the same reason, that #612 is about. `trigger` cost two more.
+   * Measured: dropping the ten recovered 22 real reads and leaked zero of that
+   * server's 104 real write names.
+   */
+  it('reads the real names that ten dropped verbs would have refused', () => {
+    for (const name of [
+      'list_merge_requests',
+      'get_merge_request',
+      'get_merge_request_diffs',
+      'list_merge_request_notes',
+      'get_merge_request_approval_state',
+      'list_group_merge_requests',
+      'list_merge_request_pipelines',
+      'get_pipeline_trigger',
+      'list_pipeline_trigger_jobs',
+      'list_deployment_merge_requests',
+      // Not from that server, but the same shape and the reason the other eight
+      // went: `<read>_<noun that happens to be a verb>_<noun>` is how vendors
+      // name lookups.
+      'list_deploy_keys',
+      'get_sync_status',
+      'get_share_link',
+      'get_join_url',
+      'get_invite_link',
+      'get_import_status',
+      'drive_get_export_url',
+      'oauth_get_refresh_token',
+    ]) {
+      expect(isReadOnlyMCPToolName(name), name).toBe(true);
+    }
+  });
+
+  it('pays for that by letting those verbs through in a compound', () => {
+    // The accepted cost, stated rather than left to be discovered. These are
+    // the shape the dropped verbs were added for — and the shape that was not
+    // found on any real server, which is why the trade goes this way.
+    for (const name of [
+      'github_pr_get_status_and_merge',
+      'github_workflow_find_and_trigger',
+      'slack_channel_find_and_join',
+      'drive_file_get_and_share',
+      'notion_db_get_and_sync',
+      'vercel_project_get_and_deploy',
+    ]) {
+      expect(isReadOnlyMCPToolName(name), name).toBe(true);
+    }
+  });
+
+  it('refuses the mutating names with no help from this set at all', () => {
+    // Half the reason the set is twelve rather than twenty-two: a mutating tool
+    // is named for its mutation, so it carries no read verb and is refused by
+    // ABSENCE. None of these depends on a `WRITE_VERBS` entry — measured for
+    // all twenty candidates, every one still refused with its verb removed.
+    for (const name of [
+      'merge_pull_request',
+      'sync_folder',
+      'share_file',
+      'join_channel',
+      'invite_user',
+      'deploy_app',
+      'trigger_workflow',
+      'import_calendar',
+      'export_report',
+      'refresh_tokens',
     ]) {
       expect(isReadOnlyMCPToolName(name), name).toBe(false);
     }
@@ -447,17 +516,24 @@ describe('WRITE_VERBS carries the widening', () => {
     expect(isReadOnlyMCPToolName('google_gmail_get_email')).toBe(true);
   });
 
-  it('leaves `export` and `refresh` out, and that is a decision', () => {
-    // Both were considered. `get_export_url` and `get_refresh_token` are
-    // ordinary read names, and neither verb buys anything, because the mutating
-    // forms (`export_report`, `refresh_tokens`) carry no read verb and are
-    // already refused by absence. Inclusion is not free: a name whose read verb
-    // sits at an END was a read under the OLD rule too, so adding a verb can
-    // flip a live read to a write.
-    expect(isReadOnlyMCPToolName('drive_get_export_url')).toBe(true);
-    expect(isReadOnlyMCPToolName('oauth_get_refresh_token')).toBe(true);
-    expect(isReadOnlyMCPToolName('export_report')).toBe(false);
-    expect(isReadOnlyMCPToolName('refresh_tokens')).toBe(false);
+  it('keeps the ten dropped verbs out, by name', () => {
+    // The membership half of the two behavioural tests above, so a verb added
+    // back fails here as well as there — and so the list of what was rejected
+    // survives in the record rather than only in a PR thread.
+    for (const verb of [
+      'merge',
+      'trigger',
+      'deploy',
+      'sync',
+      'share',
+      'join',
+      'invite',
+      'import',
+      'export',
+      'refresh',
+    ]) {
+      expect(declaredWriteVerbs(), verb).not.toContain(verb);
+    }
   });
 });
 

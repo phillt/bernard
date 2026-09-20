@@ -44,34 +44,39 @@ const READ_VERBS = new Set(['search', 'list', 'find', 'get', 'query', 'read', 'l
  * server — `google_tasks_set_default_list` ends with one too. All three are
  * refused here.
  *
- * **The bound its previous docstring stated is gone, and that is why this list
- * is no longer short (#612).** While the read test was end-anchored, a name
- * with no read verb at either END was already refused, so this only ever
- * decided names that CO-OCCURRED a write verb with a read verb at an end —
- * which is what licensed "do not treat it as a general vocabulary of writes".
- * Matching a read verb at any POSITION removes that licence: this is now the
- * sole discriminator over every name containing a read verb anywhere, a far
- * larger population, and a mutation verb missing from it is a tool that loses
- * the confirm gate, the read-only block gate, the write barrier and the
- * duplicate guard in one go. So it was widened in the same change, which is the
- * only order in which the widening is safe.
+ * **The bound its previous docstring stated moved rather than vanished
+ * (#612).** While the read test was end-anchored, this only ever decided names
+ * that CO-OCCURRED a write verb with a read verb AT AN END — which is what
+ * licensed "do not treat it as a general vocabulary of writes". Matching a read
+ * verb at any POSITION widens that population to every co-occurrence wherever
+ * the read verb sits, and makes this the sole discriminator over it. The old
+ * advice still stands, for a reason the next paragraph measures rather than
+ * asserts: the set grew by twelve, not by sixty.
  *
- * The rule for adding to it: an unambiguous mutation that appears as a
- * tool-name verb on a mainstream MCP server. `risk.test.ts` carries a negative
- * case per entry, each riding on a MIDDLE read verb, because that is the
- * population this now has to hold on its own.
+ * **What an entry here can actually do is much narrower than "refuse a write",
+ * and the obvious justification for one is measurably wrong.** A mutating tool
+ * is named for its mutation — `merge_pull_request`, `share_file`,
+ * `sync_folder`, `send_message` — so it carries no read verb and is refused by
+ * ABSENCE, with or without the verb in this set. Measured over all twenty
+ * candidates considered for #612: every single one, still refused without it.
+ * So an entry can only ever fire on a name that CO-OCCURS a read verb, which
+ * means the compound shape (`github_pr_get_status_and_merge`) and nothing else.
  *
- * **Inclusion is not free, and the tempting version of that sentence is
- * wrong.** A verb added here does not merely leave a read where the widening
- * found it: a name whose read verb sits at an END was a read under the OLD rule
- * too, so `get_merge_status` or `get_sync_status` flip read → write. That is
- * over-refusal — an extra confirm prompt in `strict`, and not watchable — where
- * the other direction loses the confirm gate, the read-only block gate, the
- * write barrier and the duplicate guard at once, on a tool that merges pull
- * requests or shares files. The asymmetry is what licenses erring toward
- * inclusion; it does not make it costless, and a verb whose mutating form
- * carries no read verb anyway (`export_report`, `refresh_tokens` — already
- * writes by absence) buys nothing against that cost and stays out.
+ * **And the co-occurrence shape that actually exists in the wild is a READ.**
+ * `get_X_status`, `list_X_requests`, `get_X_link`, `list_X_keys` — that is how
+ * vendors name lookups, and the compound this set exists for was not found on
+ * any real server. So the rule for adding is NOT "is it a mutation"; it is:
+ * does a real read name co-occur it? `@zereight/mcp-gitlab` alone answers yes
+ * for `merge` (twenty read tools) and `trigger` (two), and dropping those two
+ * plus eight others recovered 22 real reads while leaking ZERO of that server's
+ * 104 real write names. An entry that fails this test costs a user a watcher
+ * they cannot point at GitLab merge requests — the same sentence, for the same
+ * reason, that #612 is about — and buys a compound nobody ships.
+ *
+ * `risk.test.ts` carries a negative case per entry, each riding on a MIDDLE
+ * read verb, because that is the population this holds on its own; it also
+ * pins the accepted cost, which is that the dropped verbs let their compounds
+ * through.
  *
  * **`email` is deliberately absent**, and it is the case that shows this set
  * and {@link EMIT_VERBS} are not interchangeable: it is an emit verb, and
@@ -108,32 +113,28 @@ const WRITE_VERBS = new Set([
   'forward',
   'clear',
   'draft',
-  // Widened with the any-position read match (#612). Each is a mutation a real
-  // server uses as a tool-name verb; the first five were read off `google-mcp`'s
-  // own 61-tool surface, the rest off mainstream servers (GitHub, Slack,
-  // Notion, Drive). `export` and `refresh` were considered and dropped — see
-  // the cost paragraph above; `get_export_url` and `get_refresh_token` are
-  // ordinary read names, and neither verb buys anything, since `export_report`
-  // and `refresh_tokens` carry no read verb and are already writes.
+  // Added with the any-position read match (#612), and the paragraph above says
+  // what they can and cannot do: none of these is why its own server's mutating
+  // tool is refused, and they exist for the compound shape alone.
+  //
+  // Ten more were considered and DROPPED on measurement, because a real read
+  // name co-occurs each: `merge`, `trigger`, `deploy`, `sync`, `share`, `join`,
+  // `invite`, `import`, `export`, `refresh`. `merge` is the one that decides it
+  // — `@zereight/mcp-gitlab` exports twenty read tools carrying it
+  // (`list_merge_requests`, `get_merge_request_diffs`, …), so keeping it would
+  // have refused a watcher on GitLab merge requests with the same sentence, for
+  // the same reason, that #612 is about.
   'append',
   'replace',
-  'share',
   'complete',
   'respond',
-  'merge',
-  'join',
   'approve',
   'cancel',
   'revoke',
   'assign',
   'close',
-  'trigger',
-  'deploy',
-  'sync',
-  'import',
   'publish',
   'submit',
-  'invite',
   'notify',
 ]);
 
