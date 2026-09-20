@@ -1,7 +1,7 @@
-import { tool } from 'ai';
 import { z } from 'zod';
 import { RoutineStore } from '../routines.js';
 import { attachMeta } from '../framework/tools/adapter.js';
+import { defineTool } from '../framework/tools/define-tool.js';
 
 /**
  * Creates the routine management tool for saving and retrieving reusable multi-step workflows.
@@ -13,7 +13,7 @@ export function createRoutineTool(routineStore?: RoutineStore) {
   const store = routineStore ?? new RoutineStore();
 
   return attachMeta(
-    tool({
+    defineTool({
       description:
         'Manage reusable multi-step workflows (routines). Routines capture procedures the user teaches you — deploy scripts, release checklists, onboarding flows, etc. Once saved, the user can invoke them with /{routine-id} in the REPL. Content should be free-form markdown capturing steps, decisions, and intent.',
       parameters: z.object({

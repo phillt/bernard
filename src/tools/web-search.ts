@@ -1,8 +1,8 @@
-import { tool } from 'ai';
 import { z } from 'zod';
 import { parse } from 'node-html-parser';
 import { attachMeta } from '../framework/tools/adapter.js';
 import type { ProvenanceStore } from '../provenance.js';
+import { defineTool } from '../framework/tools/define-tool.js';
 
 /** One search result. Kept minimal so the LLM can cheaply decide which URLs to `web_read`. */
 export interface SearchResult {
@@ -215,7 +215,7 @@ function formatResults(results: SearchResult[], ids?: string[]): string {
  */
 export function createWebSearchTool(provenance?: ProvenanceStore) {
   return attachMeta(
-    tool({
+    defineTool({
       description:
         'Search the web and return a ranked list of {title, url, snippet} results. Use before web_read when you do not yet know the right URL. Provider chain: Brave → Tavily → DuckDuckGo (no API key required for the fallback).',
       parameters: z.object({

@@ -1,4 +1,3 @@
-import { tool } from 'ai';
 import type { Tool } from '../framework/sdk.js';
 import { invocationRefusal } from '../specialist-authority.js';
 import { attachmentsArg, resolveAttachments } from './attachment-args.js';
@@ -25,6 +24,7 @@ import { debugLog } from '../logger.js';
 import { runDispatchOrFail } from './dispatch-failure.js';
 import { recordDispatch } from '../reasoning-log.js';
 import { captureToolCalls } from './capture-tool-calls.js';
+import { defineTool } from '../framework/tools/define-tool.js';
 
 /**
  * Creates the specialist execution tool for running tasks through a saved
@@ -77,7 +77,7 @@ export function createSpecialistRunTool(
   registerBuiltinDefinitions();
   const { config } = ctx;
   const specialistStore = ctx.stores.specialists;
-  return tool({
+  return defineTool({
     description:
       "Invoke a saved specialist agent to handle a task using its custom persona, instructions, and behavioral guidelines. The specialist runs as an independent sub-agent with its own system prompt. Use this when the task matches an existing specialist's domain.",
     parameters: z.object({

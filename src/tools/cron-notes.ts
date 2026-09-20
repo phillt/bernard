@@ -1,10 +1,10 @@
-import { tool } from 'ai';
 import { z } from 'zod';
 import { CronNotesStore, MAX_NOTE_LENGTH, type CronNoteEntry } from '../cron/notes-store.js';
 import { CronStore } from '../cron/store.js';
 import { debugLog } from '../logger.js';
 import { missing } from './cron.js';
 import { attachActionMeta } from '../framework/tools/adapter.js';
+import { defineTool } from '../framework/tools/define-tool.js';
 
 function pluralizeEntries(n: number): string {
   return `${n} ${n === 1 ? 'entry' : 'entries'}`;
@@ -119,7 +119,7 @@ export function createCronNotesTool() {
 
   return {
     cron_notes: attachActionMeta(
-      tool({
+      defineTool({
         description: `Read and append persistent per-job cron notes. Notes survive daemon restarts and record what prior runs actually did, so a job can avoid repeating work.
 
 Actions: read · write · list · view

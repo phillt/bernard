@@ -1,7 +1,7 @@
-import { tool } from 'ai';
 import type { UserContent } from '../framework/sdk.js';
 import { z } from 'zod';
 import { attachMeta } from '../framework/tools/adapter.js';
+import { defineTool } from '../framework/tools/define-tool.js';
 
 /** Regex matching the [ISO-8601] prefix produced by timestampUserMessage. */
 const TIMESTAMP_PREFIX_RE = /^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}\] /;
@@ -9,7 +9,7 @@ const TIMESTAMP_PREFIX_RE = /^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{
 /** Creates a tool that returns the current local date and time as a human-readable string. */
 export function createDateTimeTool() {
   return attachMeta(
-    tool({
+    defineTool({
       description:
         'Get the current date and time including hours and minutes. Timestamps are automatically attached to user messages, so use this only when you need a precise mid-turn timestamp (e.g., after a long-running tool call).',
       parameters: z.object({}),

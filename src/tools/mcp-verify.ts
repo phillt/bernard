@@ -1,8 +1,8 @@
-import { tool } from 'ai';
 import { z } from 'zod';
 import { getMCPServer, verifyMCPServer, getActiveMCPManager } from '../mcp.js';
 import { attachMeta } from '../framework/tools/adapter.js';
 import { nameList } from '../text.js';
+import { defineTool } from '../framework/tools/define-tool.js';
 
 /**
  * Reconciles a successful fresh probe against the tools actually wired into the
@@ -97,7 +97,7 @@ function buildVerdict(key: string, verdict: VerifyVerdict, detail = ''): string 
  */
 export function createMCPVerifyTool() {
   return attachMeta(
-    tool({
+    defineTool({
       description:
         "Test-connect a configured MCP server WITHOUT restarting Bernard. Spawns/connects it with a timeout, lists its tools, and reconciles the probe against THIS running session (loaded or not; tools callable or missing). Always run this after adding or editing an MCP server. READ THE FIRST LINE: every result opens with a single 'VERDICT:' line and that line alone decides the outcome — '\u2713 VERDICT' means the server is correctly configured and you must NOT re-add or remove it, '\u26a0 VERDICT' means it works but something needs a decision (such as a startup failure), '\u2717 VERDICT' means it genuinely could not connect. The indented lines below are supporting detail, never a second verdict. A server you just added is normally not loaded in the current session yet; that is expected and is NOT a failure \u2014 it only needs a Bernard restart.",
       parameters: z.object({

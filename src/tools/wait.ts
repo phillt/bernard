@@ -1,6 +1,6 @@
-import { tool } from 'ai';
 import { z } from 'zod';
 import { attachMeta } from '../framework/tools/adapter.js';
+import { defineTool } from '../framework/tools/define-tool.js';
 
 /** Upper bound for the wait tool's delay (5 minutes). */
 export const MAX_WAIT_SECONDS = 300;
@@ -10,7 +10,7 @@ export const MIN_WAIT_SECONDS = 0.1;
 /** Creates a tool that pauses execution for a specified number of seconds. */
 export function createWaitTool() {
   return attachMeta(
-    tool({
+    defineTool({
       description:
         'Pause execution for a specified number of seconds. ' +
         'Use when a task requires waiting within the current turn ' +

@@ -1,4 +1,3 @@
-import { tool } from 'ai';
 import type { Tool } from '../framework/sdk.js';
 import { invocationRefusal } from '../specialist-authority.js';
 import { z } from 'zod';
@@ -40,6 +39,7 @@ import {
   type ToolWrapperInput,
 } from '../framework/agents/index.js';
 import { runDefinition } from '../framework/agents/run.js';
+import { defineTool } from '../framework/tools/define-tool.js';
 
 // Re-export the helpers that other modules (tests, parity scripts) already
 // import from this path. Implementations live in `framework/agents/tool-wrapper.ts`.
@@ -520,7 +520,7 @@ export function renderWrapperParentView(
  */
 export function createToolWrapperRunTool(ctx: AgentContext) {
   return attachMeta(
-    tool({
+    defineTool({
       description:
         'Dispatch to a saved tool-wrapper specialist that handles a concrete tool or CLI (e.g. shell-wrapper, file-wrapper). Returns JSON {status, result, error?}. Use this for tool-heavy operations where domain-specific examples and error handling reduce misuse. Also used to invoke meta specialists (specialist-creator, correction-agent). Call multiple times in one response to run independent dispatches in parallel — each result reports how many agent slots remain free.',
       parameters: z.object({

@@ -1,4 +1,3 @@
-import { tool } from 'ai';
 import type { Tool } from '../framework/sdk.js';
 import { z } from 'zod';
 import { resolveProviderAndModel, defaultProviderErrorMessage } from '../config.js';
@@ -12,6 +11,7 @@ import { runPAC } from '../framework/pac/run-pac.js';
 import { withSlot, _resetPool, getMaxConcurrentAgents, slotStatusLine } from './agent-pool.js';
 import { runDispatchOrFail } from './dispatch-failure.js';
 import { attachmentsArg, resolveAttachments } from './attachment-args.js';
+import { defineTool } from '../framework/tools/define-tool.js';
 
 /**
  * Resets the shared concurrency pool state.
@@ -35,7 +35,7 @@ export function _resetSubAgentState(): void {
  */
 export function createSubAgentTool(ctx: AgentContext): Tool {
   registerBuiltinDefinitions();
-  return tool({
+  return defineTool({
     description:
       'Delegate a task to an independent sub-agent that runs in parallel. Sub-agents have NO conversation history and limited steps — your task description must be fully self-contained and highly prescriptive. Specify exact commands, file paths, expected output format, edge cases, and success/failure criteria. Call multiple times in one response for parallel execution.',
     parameters: z.object({

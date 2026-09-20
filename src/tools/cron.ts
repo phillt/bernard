@@ -1,4 +1,3 @@
-import { tool } from 'ai';
 import { z } from 'zod';
 import cron from 'node-cron';
 import { CronStore } from '../cron/store.js';
@@ -9,6 +8,7 @@ import { duplicateJob, failureStreak, jobCountNotice, jobSignals } from '../cron
 import { isDaemonRunning, startDaemon, stopDaemon } from '../cron/client.js';
 import { debugLog } from '../logger.js';
 import { attachActionMeta } from '../framework/tools/adapter.js';
+import { defineTool } from '../framework/tools/define-tool.js';
 
 function ensureDaemon(): string | null {
   if (!isDaemonRunning()) {
@@ -361,7 +361,7 @@ export function createCronTool() {
 
   return {
     cron: attachActionMeta(
-      tool({
+      defineTool({
         description: `Manage scheduled cron jobs — background AI prompts that run on a schedule via an independent daemon, whether or not a session is open.
 
 Actions: create · list · get · update · delete · enable · disable · run · status · bounce

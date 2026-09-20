@@ -1,4 +1,3 @@
-import { tool } from 'ai';
 import { z } from 'zod';
 import { attachMeta } from '../framework/tools/adapter.js';
 import { debugLog } from '../logger.js';
@@ -10,6 +9,7 @@ import {
   type AppletStore,
   type StoreOp,
 } from './store.js';
+import { defineTool } from '../framework/tools/define-tool.js';
 
 /**
  * `applet_store`, pre-scoped to one applet (#422).
@@ -45,7 +45,7 @@ function isWriteAction(args: unknown): boolean {
 
 export function createAppletStoreTool(appId: string) {
   return attachMeta(
-    tool({
+    defineTool({
       description:
         "This applet's persistent key-value store. Values are JSON text. " +
         'Data written here survives restarts and is visible to the applet page.',

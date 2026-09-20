@@ -1,4 +1,3 @@
-import { tool } from 'ai';
 import { z } from 'zod';
 import { attachActionMeta } from '../framework/tools/adapter.js';
 import { capSubagentResult } from './result-cap.js';
@@ -40,6 +39,7 @@ import {
   type AppPermissions,
   type RawAppManifest,
 } from '../apps/manifest.js';
+import { defineTool } from '../framework/tools/define-tool.js';
 
 /**
  * `applet` — authoring the small local web apps Bernard serves.
@@ -296,7 +296,7 @@ export interface AppletToolDeps {
 export function createAppletTool(registry?: AppRegistry, deps: AppletToolDeps = {}) {
   const store = registry ?? new AppRegistry();
   return attachActionMeta(
-    tool({
+    defineTool({
       description:
         'Create or edit an applet: a small local web app served on its own origin, whose ' +
         'buttons run Bernard actions. Actions are tool-less and read-only when created — the ' +

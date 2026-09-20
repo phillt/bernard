@@ -1,4 +1,3 @@
-import { tool } from 'ai';
 import { z } from 'zod';
 import {
   SpecialistStore,
@@ -31,6 +30,7 @@ import { scopeList, plural } from '../text.js';
 import { unownedMCPNames } from '../mcp-names.js';
 import { listMCPServers } from '../mcp.js';
 import { deleteSpecialist } from '../specialist-lifecycle.js';
+import { defineTool } from '../framework/tools/define-tool.js';
 
 const goodExampleSchema = z.object({
   input: z.string(),
@@ -286,7 +286,7 @@ export function createSpecialistTool(
   const store = specialistStore ?? new SpecialistStore();
 
   return attachMeta(
-    tool({
+    defineTool({
       description:
         'Manage reusable expert profiles (specialists). Specialists are persistent personas with custom instructions and behavioral guidelines that shape how a sub-agent approaches work. Unlike routines (step-by-step procedures), specialists define expertise and behavioral rules for recurring task patterns. Bundled specialists (those that ship with Bernard, e.g. shell-wrapper, specialist-creator) are protected: update and delete are refused on them.',
       parameters: z.object({

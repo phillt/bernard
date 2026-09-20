@@ -1,4 +1,3 @@
-import { tool } from 'ai';
 import { z } from 'zod';
 
 import { attachActionMeta } from '../framework/tools/adapter.js';
@@ -22,6 +21,7 @@ import {
   type WatchPredicate,
   type WatchTarget,
 } from '../watchers/types.js';
+import { defineTool } from '../framework/tools/define-tool.js';
 
 /**
  * Creating and cancelling watchers (#479/#201).
@@ -338,7 +338,7 @@ export function createWatcherTool(
 
   return {
     watcher: attachActionMeta(
-      tool({
+      defineTool({
         description: `Watch for something to change, then react to it. A watcher polls, and when its condition is met it starts a new turn carrying your instructions. It ends there unless \`repeating\` is set.
 
 Actions: create · list · get · cancel

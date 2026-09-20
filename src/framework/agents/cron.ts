@@ -1,4 +1,3 @@
-import { tool } from 'ai';
 import type { CoreMessage, Tool } from '../sdk.js';
 import { z } from 'zod';
 import { createTools } from '../../tools/index.js';
@@ -17,6 +16,7 @@ import { cronStepRecorderHook } from '../hooks/cron-step-recorder.js';
 import { NormalStrategy } from '../strategies/normal.js';
 import type { AgentDefinition, ResolvedModel } from './types.js';
 import { readOnlyShellSummary } from '../../tool-permissions.js';
+import { defineTool } from '../tools/define-tool.js';
 
 export const DAEMON_SYSTEM_PROMPT = `You are Bernard, running as a background cron job in daemon mode. There is no interactive user present — you execute autonomously and have a limited step budget, so work efficiently.
 
@@ -149,7 +149,7 @@ export const cronDefinition: AgentDefinition<CronInput, string> = {
     const mcpTools = surface.mcpTools;
 
     const notifyTool = attachMeta(
-      tool({
+      defineTool({
         description:
           'Send a desktop notification to alert the user. Use this when you find something that requires user attention. Clicking the notification will open a terminal with the alert context.',
         parameters: z.object({
@@ -186,7 +186,7 @@ export const cronDefinition: AgentDefinition<CronInput, string> = {
     );
 
     const selfDisableTool = attachMeta(
-      tool({
+      defineTool({
         description:
           "Disable this cron job so it will not run again. Use when the job's task is complete and no further executions are needed.",
         parameters: z.object({

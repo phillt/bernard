@@ -1,4 +1,3 @@
-import { tool } from 'ai';
 import { normalizeToolText } from '../text.js';
 import { z } from 'zod';
 import { MAX_VERIFY_TEXT } from '../provenance.js';
@@ -9,6 +8,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import type { ProvenanceStore } from '../provenance.js';
+import { defineTool } from '../framework/tools/define-tool.js';
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
@@ -227,7 +227,7 @@ function detectLineEnding(content: string): string {
 export function createFileTools(provenance?: ProvenanceStore) {
   return {
     file_read_lines: attachMeta(
-      tool({
+      defineTool({
         description:
           'Read a file with line numbers. Returns structured line-numbered content for precise referencing. Use offset/limit to paginate large files.',
         parameters: z.object({
@@ -373,7 +373,7 @@ export function createFileTools(provenance?: ProvenanceStore) {
     // not. (`formatWrappedResult` still maps its error shape, for a specialist
     // that names `file_write` in its own `targetTools`.)
     file_write: attachMeta(
-      tool({
+      defineTool({
         description:
           'Write a complete file in one call, creating it if needed and replacing it if it exists. Use this to author scripts, reports, JSON payloads, or any file content — instead of embedding the payload in a shell heredoc, which is fragile and can be truncated. Use file_edit_lines to modify an existing file in place.',
         parameters: z.object({
@@ -456,7 +456,7 @@ export function createFileTools(provenance?: ProvenanceStore) {
     ),
 
     file_edit_lines: attachMeta(
-      tool({
+      defineTool({
         description:
           'Edit a file with precise line-based operations. Supports replace, insert, delete, and append actions. Multiple edits are applied atomically (all or nothing). Always read the file first with file_read_lines to get current line numbers.',
         parameters: z.object({

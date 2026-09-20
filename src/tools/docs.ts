@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import { tool } from 'ai';
 import { allDocs, docIndex, findDoc, renderDoc, renderIndex } from '../docs-store.js';
 import { attachMeta } from '../framework/tools/adapter.js';
+import { defineTool } from '../framework/tools/define-tool.js';
 
 /**
  * `docs` — Bernard's own documentation, findable by the agent that needs it.
@@ -72,7 +72,7 @@ const DESCRIPTION =
   'the user asks what Bernard can do — it is more reliable than reconstructing an answer.';
 
 export function createDocsTool() {
-  const t = tool({
+  const t = defineTool({
     description: DESCRIPTION,
     parameters: PARAMETERS,
     execute: async (args) => {

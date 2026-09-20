@@ -1,8 +1,8 @@
-import { tool } from 'ai';
 import { z } from 'zod';
 import { attachMeta } from '../framework/tools/adapter.js';
 import type { ProvenanceStore } from '../provenance.js';
 import { locateQuote, sourceBody } from '../claim-verifier.js';
+import { defineTool } from '../framework/tools/define-tool.js';
 
 /**
  * Creates the `cite` tool. Lets the agent inspect the per-turn ProvenanceStore
@@ -71,7 +71,7 @@ const LOCATE_CONTEXT_CHARS = 400;
 
 export function createCiteTool(provenance: ProvenanceStore) {
   return attachMeta(
-    tool({
+    defineTool({
       description:
         'Inspect the citation sources collected during this turn. action="list" returns every registered source (id, kind, label, preview); action="get" with an id returns the full details including the rawRef (URL, file path, memory key); action="locate" with a quote finds exactly where that text sits in a source and returns the surrounding passage. Use this before attaching a [^Sn] citation marker if you want to verify the source actually says what you are about to claim.',
       parameters: z.object({

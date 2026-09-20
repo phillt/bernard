@@ -1,6 +1,6 @@
-import { tool } from 'ai';
 import { z } from 'zod';
 import { attachMeta } from '../framework/tools/adapter.js';
+import { defineTool } from '../framework/tools/define-tool.js';
 
 /**
  * Converts a military/24-hour time integer to total minutes since midnight.
@@ -47,7 +47,7 @@ export function formatHours(totalMinutes: number): string {
 export function createTimeTools() {
   return {
     time_range: attachMeta(
-      tool({
+      defineTool({
         description:
           'Calculate the duration between two military/24-hour times. Handles next-day wrap (e.g. 2300 to 0100 = 2 hours).',
         parameters: z.object({
@@ -72,7 +72,7 @@ export function createTimeTools() {
     ),
 
     time_range_total: attachMeta(
-      tool({
+      defineTool({
         description: 'Calculate the total duration across multiple military time ranges.',
         parameters: z.object({
           ranges: z
