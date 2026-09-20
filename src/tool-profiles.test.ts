@@ -1230,10 +1230,24 @@ describe('profile continuity across a key rename (#413)', () => {
     expect(fsUtils.atomicWriteFileSync).not.toHaveBeenCalled();
   });
 
-  it('is a no-op when there is no legacy profile to carry', () => {
+  it('is a no-op when there is no legacy profile and no category to carry', () => {
     onDisk();
     store.ensureSeeded('mcp.pw_ab12cd__browser_click', 'browser_click');
     expect(fsUtils.atomicWriteFileSync).not.toHaveBeenCalled();
+  });
+
+  // The owning server is the one field a later `record*` call cannot
+  // reproduce, because those call `getOrCreate(toolKey)` with no opts. The
+  // predecessor's guard compared the category against the one `getOrCreate`
+  // had just assigned from it, so it was always false and every fresh MCP
+  // profile reached disk with no server on it — measured, every `delegate_*`
+  // profile on a real install. That blinds `filterLiveProfiles` and #377's
+  // orphan report, both of which read this field.
+  it('persists the owning server for a brand-new profile', () => {
+    onDisk();
+    store.ensureSeeded('delegate_pw_ab12cd', undefined, 'mcp-delegate.playwright');
+    const written = vi.mocked(fsUtils.atomicWriteFileSync).mock.calls.at(-1);
+    expect(JSON.parse(written![1] as string).category).toBe('mcp-delegate.playwright');
   });
 
   it('never surfaces both a profile and the one it superseded', () => {
@@ -1315,5 +1329,23 @@ describe('profile continuity across a key rename (#413)', () => {
     const out = buildToolProfilesPrompt(store, { liveKeys: new Set<string>() });
     expect(out).toContain('shell (git commands)');
     expect(out).toContain('use --no-pager');
+  });
+
+  // The filter is scoped to `mcp.<server>` and deliberately NOT to
+  // `mcp-delegate.<server>`, which is the natural "finish the job" edit and
+  // would be a regression: `liveKeys` is the live TOOL surface and holds no
+  // delegate names, so widening it drops every LIVE delegate profile rather
+  // than only the orphaned ones. Removing an orphaned delegate profile from
+  // disk is `bernard remove-mcp`'s job (#377), not this filter's.
+  it('leaves a delegate profile alone even though its category names a server', () => {
+    onDisk(
+      makeProfile({
+        toolName: 'delegate_playwright_7827e8',
+        category: 'mcp-delegate.playwright',
+        guidelines: ['ask for one page at a time'],
+      }),
+    );
+    const out = buildToolProfilesPrompt(store, { liveKeys: new Set(['anything_else']) });
+    expect(out).toContain('delegate_playwright_7827e8');
   });
 });

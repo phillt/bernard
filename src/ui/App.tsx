@@ -80,6 +80,7 @@ import {
   deleteProfile,
   validateProfileName,
   saveActiveSettings,
+  loadActiveProfileRules,
   type ProfileSettings,
 } from '../profiles.js';
 import { ruleLabel, type PermissionRule, type ToolPermissionEffect } from '../tool-permissions.js';
@@ -5807,10 +5808,26 @@ export function App({
       : { effect, tool: toolName, _v: 2 };
   }
 
-  /** Append a rule to the active profile and persist (#261). */
+  /**
+   * Append a rule to the active profile and persist (#261).
+   *
+   * Composed from **disk**, never from `config.toolPermissions` (#377). That
+   * array is a live in-memory copy the gates read through a thunk, and anything
+   * else that writes `profiles.json` while this session is open — the MCP
+   * removal sweep, a cron daemon, `bernard script` — leaves it stale. Appending
+   * to the stale copy and saving it silently writes the other writer's removals
+   * back, permanently: one "always allow" after removing an MCP server restored
+   * every rule that sweep had dropped.
+   *
+   * `saveAppGrants` never had the bug for the reason copied here — it calls
+   * `readAll()` on every write, so it has no in-memory master to go stale.
+   * `config.toolPermissions` is then refreshed from the result, which is what
+   * keeps it a read cache rather than the record.
+   */
   function persistPermissionRule(rule: PermissionRule): void {
-    config.toolPermissions = [...config.toolPermissions, rule];
-    saveActiveSettings({ toolPermissions: config.toolPermissions });
+    const updated = [...loadActiveProfileRules(), rule];
+    config.toolPermissions = updated;
+    saveActiveSettings({ toolPermissions: updated });
   }
 
   /**
@@ -5820,7 +5837,11 @@ export function App({
    */
   async function runToolPermissionsMenu(): Promise<void> {
     const skipOn = config.skipPermissions;
-    const rules = config.toolPermissions;
+    // From disk for the reason `persistPermissionRule` gives: this list is both
+    // what the menu displays and what its index-based remove/flip below compose
+    // from, so it must be the stored one or a stale entry is edited back in.
+    const rules = loadActiveProfileRules();
+    config.toolPermissions = rules;
     const entries: MenuEntry[] = [
       {
         label: 'Run Without Permission Checks or Safeguards',

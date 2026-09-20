@@ -75,8 +75,20 @@ function sanitize(s: string): string {
  * docstring.
  */
 export function mcpServerSegment(server: string): string {
-  const label = sanitize(server).slice(0, SERVER_LABEL_MAX);
-  return `${label}_${shortHash(server, MCP_HASH_LEN)}`;
+  return `${serverLabel(server)}_${shortHash(server, MCP_HASH_LEN)}`;
+}
+
+/**
+ * The human half of a server segment — what {@link stripHash} recovers, and
+ * therefore what every un-hashed legacy spelling is built from.
+ *
+ * Extracted so {@link mcpNameOwnedBy} derives the legacy forms it must match
+ * rather than re-spelling `sanitize(...).slice(...)`: the two would then be one
+ * `SERVER_LABEL_MAX` edit away from disagreeing, and the disagreement is
+ * silent — a sweep that stops matching simply leaves debris.
+ */
+function serverLabel(server: string): string {
+  return sanitize(server).slice(0, SERVER_LABEL_MAX);
 }
 
 /**
@@ -174,6 +186,75 @@ export function aliasesOf(name: string): string[] {
   return out;
 }
 
+/**
+ * True when `name` is a registry key or delegate name Bernard minted **for
+ * `server`** — the inverse of {@link mcpToolName}, and the only tool→server
+ * attribution available with no live registry.
+ *
+ * That constraint is what the removal sweep (#377) is built on: `mcp.json` is
+ * edited from a CLI that has connected nothing, and the server being removed is
+ * frequently the one that no longer starts. A name is therefore attributed from
+ * its own bytes or not at all.
+ *
+ * Four spellings, all of them ones Bernard has actually written:
+ *
+ * - `<label>_<hash6>__<tool>` — the R0 registry key.
+ * - `<hash6>__<tool>` — R1/R2, where a long server name cost the label.
+ * - `delegate_<label>_<hash6>` — the delegate tool since #413.
+ * - `delegate_<server>` — the delegate tool before it, under the raw key.
+ *
+ * **The un-hashed `<label>__<tool>` form is deliberately NOT matched**, though
+ * {@link aliasesOf} answers to it. Bernard never minted it — pre-#413 it
+ * registered bare tool names, and that alias exists only because the
+ * `@ai-sdk/mcp` convention would have produced it — so matching it can only
+ * ever fire on a hand-written record, while costing a real false positive: the
+ * label is lossy (`my.server` and `my-server` both collapse to `my_server`), so
+ * one such name belongs to two servers and removing either would take the
+ * other's grant with it. The hash is what makes every other rung safe.
+ *
+ * A **bare** tool name is never owned by anybody here, and that is the whole
+ * shape of what this cannot do: `browser_click` was exported by two of the
+ * servers on the install this was measured against, so attributing it needs the
+ * live surface `makeAliasResolver` reads and fails closed on.
+ */
+export function mcpNameOwnedBy(name: string, server: string): boolean {
+  const parsed = parseMCPToolName(name);
+  if (parsed) {
+    return (
+      parsed.serverSegment === mcpServerSegment(server) ||
+      parsed.serverSegment === shortHash(server, MCP_HASH_LEN)
+    );
+  }
+  return name === `delegate_${mcpServerSegment(server)}` || name === `delegate_${server}`;
+}
+
+/**
+ * The names in `names` that are shaped like an MCP registry key or delegate
+ * name and belong to **none** of `servers`.
+ *
+ * The standing counterpart to {@link mcpNameOwnedBy}: that one answers "is this
+ * this server's?", this one answers "is there any server left that could
+ * answer it?". Its consumer is a specialist's `targetTools` fence, which names
+ * tools by string and drops silently when one matches nothing (#331) — so a
+ * fence entry left behind by a removed server is the quietest failure in this
+ * area, and asking for it needs no live registry, only `mcp.json`.
+ *
+ * A **bare** name is never reported, for the reason it is never attributed:
+ * `browser_click` is indistinguishable from a Bernard built-in from here, and
+ * flagging every built-in in every fence would bury the one entry that matters.
+ * So this is strictly the population the namespace made legible.
+ *
+ * In this leaf rather than beside the sweep so the caller supplies its own
+ * server list: a consumer that already knows the configured keys should not
+ * acquire an edge to `mcp.ts` to have them read again.
+ */
+export function unownedMCPNames(names: readonly string[], servers: readonly string[]): string[] {
+  return names.filter((name) => {
+    if (!parseMCPToolName(name) && !name.startsWith('delegate_')) return false;
+    return !servers.some((server) => mcpNameOwnedBy(name, server));
+  });
+}
+
 /** `<label>_<6hex>` -> `<label>`, or `null` when there is no hash to strip. */
 function stripHash(segment: string): string | null {
   const m = new RegExp(`^(.*)_[0-9a-f]{${MCP_HASH_LEN}}$`).exec(segment);
@@ -264,6 +345,58 @@ export function mcpProfileKey(toolName: string): string {
 /** `mcp.<name>` -> `<name>`, or `null` when `key` is not an MCP profile key. */
 export function toolNameFromProfileKey(key: string): string | null {
   return key.startsWith(MCP_PROFILE_PREFIX) ? key.slice(MCP_PROFILE_PREFIX.length) : null;
+}
+
+/** `ToolMeta.category` prefix for a tool a server exports. */
+const MCP_CATEGORY_PREFIX = 'mcp.';
+
+/** `ToolMeta.category` prefix for a server's `delegate_<server>` tool. */
+const MCP_DELEGATE_CATEGORY_PREFIX = 'mcp-delegate.';
+
+/**
+ * `ToolMeta.category` for an MCP tool, and for a delegate — plus the inverse.
+ *
+ * Same mint/parse join as {@link mcpProfileKey} one field over, and it was
+ * spelled out in **six** places across five files before #377: minted in
+ * `mcp.ts` and `tools/delegate.ts`, parsed in `tool-profiles.ts`,
+ * `tools/in-flight.ts` (as a bare `slice(4)`) and twice in the removal sweep.
+ * The category is the only place a removed server's name survives in full —
+ * the registry key carries a six-hex hash of it — so a prefix that drifted
+ * would leave the sweep silently attributing nothing, with no type error.
+ *
+ * Neither prefix is a prefix of the other (`mcp-` against `mcp.`), so the two
+ * tests are independent and their order carries no meaning.
+ */
+export function mcpToolCategory(server: string): string {
+  return `${MCP_CATEGORY_PREFIX}${server}`;
+}
+
+/** @see mcpToolCategory */
+export function mcpDelegateCategory(server: string): string {
+  return `${MCP_DELEGATE_CATEGORY_PREFIX}${server}`;
+}
+
+/**
+ * The server a `ToolMeta.category` names, or `null` for anything else — a
+ * shell sub-category, a failure taxonomy value, or nothing at all.
+ *
+ * `kind` is reported rather than collapsed because the two are not
+ * interchangeable at every reader: `filterLiveProfiles` matches its candidates
+ * against the live *tool* surface, which contains no delegate names, so
+ * widening it to delegates would drop every live delegate profile from the
+ * prompt rather than only the orphaned ones.
+ */
+export function serverFromCategory(
+  category: string | undefined,
+): { server: string; kind: 'tool' | 'delegate' } | null {
+  if (!category) return null;
+  if (category.startsWith(MCP_DELEGATE_CATEGORY_PREFIX)) {
+    return { server: category.slice(MCP_DELEGATE_CATEGORY_PREFIX.length), kind: 'delegate' };
+  }
+  if (category.startsWith(MCP_CATEGORY_PREFIX)) {
+    return { server: category.slice(MCP_CATEGORY_PREFIX.length), kind: 'tool' };
+  }
+  return null;
 }
 
 /**

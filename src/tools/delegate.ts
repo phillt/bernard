@@ -2,7 +2,7 @@ import { tool, type Tool } from 'ai';
 import { z } from 'zod';
 import { attachMeta } from '../framework/tools/adapter.js';
 import type { AgentContext } from '../framework/context.js';
-import { mcpServerSegment } from '../mcp-names.js';
+import { mcpDelegateCategory, mcpServerSegment } from '../mcp-names.js';
 
 /**
  * Per-server MCP delegation (#296). The main agent sees one thin
@@ -97,7 +97,7 @@ export function createDelegateTool(
       deterministic: false,
       sideEffect: 'none',
       cacheable: false,
-      category: `mcp-delegate.${server}`,
+      category: mcpDelegateCategory(server),
     },
   ) as unknown as Tool;
 }

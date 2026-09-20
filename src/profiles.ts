@@ -26,7 +26,11 @@ import { PREFS_PATH, PROFILES_PATH, PROFILES_MIGRATED_MARKER } from './paths.js'
 import { atomicWriteFileSync } from './fs-utils.js';
 import type { RemoteMessageMode } from './remote-messages.js';
 import type { ResponseStyle } from './agent-prompt.js';
-import type { ToolPermissions, ToolPermissionRules } from './tool-permissions.js';
+import {
+  sanitizePermissionRules,
+  type ToolPermissions,
+  type ToolPermissionRules,
+} from './tool-permissions.js';
 import type { AppCspGrant } from './host/csp-grant.js';
 import type { VoiceBackend } from './voice-service.js';
 
@@ -484,6 +488,59 @@ export function saveActiveSettings(patch: ProfileSettings): ProfilesFile {
     updatedAt: new Date().toISOString(),
   };
   writeFile(file);
+  return file;
+}
+
+/**
+ * The active profile's permission rules **as stored**, sanitized.
+ *
+ * The one reader every writer of `toolPermissions` should compose from, and it
+ * exists because they did not (#377). `config.toolPermissions` is a live array
+ * the REPL mutates mid-session, so `App.tsx`'s three writers were each building
+ * the new list out of that in-memory copy — which silently wrote back anything
+ * another writer had removed from disk since the session started. `saveAppGrants`
+ * never had the bug for the reason worth copying: it calls `readAll()` on every
+ * write, so it has no in-memory master to go stale.
+ *
+ * Sanitized here, not at each caller, because `profiles.json` is hand-editable
+ * and a malformed rule that reached the engine would be matched against rather
+ * than ignored.
+ */
+export function loadActiveProfileRules(): ToolPermissionRules {
+  return sanitizePermissionRules(getActiveSettings(loadProfiles().file).toolPermissions);
+}
+
+/**
+ * Applies `edit` to **every** profile's settings and writes the file once.
+ *
+ * `saveActiveSettings` is the right writer for a preference, which belongs to
+ * the profile that is live. It is the wrong one for a fact that is global:
+ * there is one `mcp.json`, so removing a server removes it for every profile,
+ * while its grants sit in each profile's own settings (#377). Sweeping them
+ * needs a writer that crosses profiles, and one write rather than N so a
+ * failure cannot leave half the file swept.
+ *
+ * `edit` returns `null` to leave a profile alone; nothing is written when every
+ * profile answers `null`, so a no-op sweep does not rewrite `profiles.json` and
+ * re-stamp every `updatedAt`.
+ *
+ * Deliberately **not** exported as a general settings writer. Its only caller
+ * removes an entry that addresses something which no longer exists anywhere —
+ * it never widens a setting and never adds one, which is what makes editing a
+ * profile the user is not looking at acceptable here.
+ */
+export function updateAllProfileSettings(
+  edit: (settings: ProfileSettings, profileId: string) => ProfileSettings | null,
+): ProfilesFile {
+  const { file } = loadProfiles();
+  let changed = false;
+  for (const [id, profile] of Object.entries(file.profiles)) {
+    const next = edit(profile.settings, id);
+    if (!next) continue;
+    file.profiles[id] = { ...profile, settings: next, updatedAt: new Date().toISOString() };
+    changed = true;
+  }
+  if (changed) writeFile(file);
   return file;
 }
 
