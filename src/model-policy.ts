@@ -12,6 +12,7 @@ import { modelSupportsTemperature } from './providers/profiles.js';
 import { serializeModelParams, type ModelParams } from './providers/model-params.js';
 import { loadLineups, resolveActiveLineup, type Lineup } from './lineups.js';
 import { ALL_ROLE_IDS, DEFAULT_ROLE_TIERS, SITE_ROLE, type RoleId } from './model-roles.js';
+import { isKnownMode, type ModelMode } from './model-modes.js';
 import { debugLog } from './logger.js';
 import { isVisionCapableModel } from './image.js';
 
@@ -37,14 +38,6 @@ export type ModelSite =
   | 'specialist-consolidator'
   | 'memory-contradiction';
 
-/**
- * Three-value runtime mode (#170, redesigned). The legacy `'off'` value is
- * gone — every active call site now flows through the active lineup. Stored
- * `'off'` is migrated to `'optimize-performance'` on first load (see
- * {@link normalizeStoredModelMode}).
- */
-export type ModelMode = 'optimize-tokens' | 'balanced' | 'optimize-performance';
-
 export type ModelTier = 'cheap' | 'mid' | 'premium';
 
 /** The AI SDK's `providerOptions` shape (`Record<string, Record<string, JSONValue>>`). */
@@ -60,23 +53,6 @@ type SdkProviderOptions = Parameters<typeof generateText>[0]['providerOptions'];
  */
 function tierForRole(mode: ModelMode, role: RoleId): ModelTier {
   return DEFAULT_ROLE_TIERS[mode][role];
-}
-
-/** True when `mode` is a recognized {@link ModelMode}. */
-function isKnownMode(mode: unknown): mode is ModelMode {
-  return mode === 'optimize-tokens' || mode === 'balanced' || mode === 'optimize-performance';
-}
-
-/**
- * Normalizes any modelMode-shaped value read from disk or env. Returns the
- * canonical runtime mode, or `undefined` for inputs that don't match. Migrates
- * legacy `'off'` → `'optimize-performance'` so existing users keep their
- * previously chosen model in the premium tier of the seeded lineup.
- */
-export function normalizeStoredModelMode(v: unknown): ModelMode | undefined {
-  if (v === 'optimize-tokens' || v === 'balanced' || v === 'optimize-performance') return v;
-  if (v === 'off') return 'optimize-performance';
-  return undefined;
 }
 
 /**
@@ -103,10 +79,19 @@ export interface SiteModel {
   /**
    * Where the (provider, model) ultimately came from. `'override'` =
    * invocation-level args; `'specialist'` = persisted specialist record;
-   * `'policy'` = tier-table lookup; `'config'` = session global; `'fallback'`
-   * = tier lookup attempted but bailed (custom provider, unknown tier, etc.).
+   * `'policy'` = lineup slot for this (role, tier); `'fallback'` = that slot
+   * was resolved and its provider has no key, so `config.provider`/
+   * `config.model` stood in.
+   *
+   * There was a fifth arm, `'config'`, meaning "the session global, because
+   * `modelMode` was `'off'`". It outlived its producer: #225 moved tiering onto
+   * lineups and the mode went with it, leaving a member of this union that
+   * nothing in the tree could ever mint and every reader had to allow for
+   * (#606). `'fallback'` is what reaching `config.provider`/`config.model`
+   * means now, and it says why — which the removed arm could not, since it
+   * named a mode rather than a reason.
    */
-  source: 'override' | 'specialist' | 'policy' | 'config' | 'fallback';
+  source: 'override' | 'specialist' | 'policy' | 'fallback';
   tier?: ModelTier;
 }
 

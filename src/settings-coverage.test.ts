@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OPTIONS_REGISTRY } from './config.js';
+import { MODEL_MODES, normalizeStoredModelMode } from './model-modes.js';
 import { WIZARD_FIELDS } from './profiles-wizard-data.js';
 import type { ProfileSettings } from './profiles.js';
 
@@ -264,6 +265,119 @@ describe('first-use hints', () => {
 });
 
 /**
+ * A row the runtime cannot accept is not a setting, it is a trap (#606).
+ *
+ * `modelMode` offered four rows against a three-member union. `Off` was the
+ * stale one — `ModelMode` lost it when #225 moved tiering onto lineups — and it
+ * failed in the worst available direction, which is why "rejected" is not the
+ * assertion: the value was not refused at all. `normalizeStoredModelMode`
+ * MIGRATED it to `optimize-performance`, so a reader who picked the row that
+ * reads as opting out was silently handed the premium slot at every call site.
+ * #582 then made that field one of the three questions a first run asks.
+ *
+ * So a row is pinned by ROUND TRIP through the function that decides what a
+ * stored or environment value becomes: `normalizeStoredModelMode(v) === v` is
+ * "the runtime takes this as written". It catches both failures a predicate
+ * catches only one of — rejected outright, and quietly turned into something
+ * else. That second is the one that shipped.
+ *
+ * The other direction needs an enumeration a function cannot give, so the union
+ * members are read out of the source — the `declaredTriggers` move. A mode the
+ * runtime has and no surface offers is how a setting quietly becomes env-only,
+ * which is the cost `tool-modes.ts` records paying by accident.
+ *
+ * `MODEL_MODES` rather than `WIZARD_FIELDS` is the subject, because it is the
+ * table both surfaces read. Pinning the table makes the TABLE sound and does not
+ * make a surface read it, so both surfaces are pinned too — the wizard by
+ * import, `/agent-options` by a source scan, which is what is available across
+ * the `src/ui` boundary this module keeps out of its own graph. A scan is
+ * weaker than an import and this file says why ("a source scan for `take('x')`
+ * would pass on a commented-out line"); it is strictly stronger than what that
+ * surface had, which was nothing, and it is the surface the drift came from.
+ *
+ * The sibling tables are in the same position — `coordinator-modes.test.ts` and
+ * `tool-modes.test.ts` both pin the wizard registry and neither pins `App.tsx`.
+ * That is the house convention rather than a lapse, and this is the PR that
+ * found out what it costs.
+ */
+describe('model mode rows', () => {
+  const SRC = path.join(path.dirname(fileURLToPath(import.meta.url)), 'model-modes.ts');
+
+  /** The members of `export type ModelMode = 'a' | 'b';`, as declared. */
+  function declaredModes(): string[] {
+    const source = fs.readFileSync(SRC, 'utf-8');
+    const at = source.indexOf('export type ModelMode =');
+    expect(at).toBeGreaterThan(-1);
+    const body = source.slice(at, source.indexOf(';', at));
+    return [...body.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  }
+
+  it('reads the union it is checking', () => {
+    // Guard the guard: a regex that matched nothing makes both cases below
+    // vacuously true.
+    expect(declaredModes()).toContain('balanced');
+    expect(declaredModes().length).toBeGreaterThan(2);
+  });
+
+  it('offers nothing the runtime rejects or rewrites', () => {
+    for (const row of MODEL_MODES) {
+      expect(normalizeStoredModelMode(row.value), row.label).toBe(row.value);
+    }
+  });
+
+  it('would have failed on the row that shipped', () => {
+    // Guard the guard: the case above is a round trip, and a round trip that
+    // could not fail is the shape this whole file is written against. `'off'`
+    // is the value that was on screen — it normalizes to something else, which
+    // is exactly what nothing checked.
+    expect(normalizeStoredModelMode('off')).not.toBe('off');
+    expect(normalizeStoredModelMode('off')).toBe('optimize-performance');
+  });
+
+  it('offers every mode the runtime has', () => {
+    const offered = MODEL_MODES.map((m) => m.value as string);
+    expect([...offered].sort()).toEqual([...declaredModes()].sort());
+  });
+
+  it('is the table the wizard asks from', () => {
+    // The registry reads `MODEL_MODES` today. Asserted because the assertions
+    // above are about that table, and a wizard that went back to a literal
+    // would take its own rows out from under them without failing anything.
+    const field = WIZARD_FIELDS.find((f) => f.key === 'modelMode')!;
+    expect(field.field.kind).toBe('list');
+    if (field.field.kind !== 'list') return;
+    expect(field.field.options.map((o) => o.value)).toEqual(MODEL_MODES.map((m) => m.value));
+  });
+
+  it('is the table `/agent-options` asks from', () => {
+    // The other door, and the one the drift came through: `/agent-options`
+    // dropped the `Off` row when #225 retired the mode and the wizard did not,
+    // so for months the two surfaces disagreed about what the answers were.
+    // Every assertion above is about `MODEL_MODES`, and until this case
+    // `runModelModePrompt` could go back to a literal array tomorrow with all of
+    // them still green.
+    //
+    // A scan rather than an import: `App.tsx` is the whole Ink tree and this
+    // module is a pure data reconciliation. Both halves are asserted — that the
+    // table is read, AND that no mode literal survives beside it — because
+    // either alone passes on the mutation that matters (a literal list added
+    // while the `.map` stays, or the `.map` kept for one row and the rest
+    // spelled out).
+    const src = fs.readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), 'ui', 'App.tsx'),
+      'utf-8',
+    );
+    const at = src.indexOf('async function runModelModePrompt');
+    expect(at).toBeGreaterThan(-1);
+    const body = src.slice(at, src.indexOf('\n  }\n', at));
+    expect(body).toContain('MODEL_MODES.map(');
+    for (const m of MODEL_MODES) {
+      expect(body, `${m.value} spelled out in App.tsx`).not.toContain(`'${m.value}'`);
+    }
+  });
+});
+
+/**
  * `OPTIONS_REGISTRY` and the wizard both describe the four numeric options, and
  * neither derives from the other — `/options` reads one, the wizard reads the
  * other, and a bound changed in one is invisible to the other.
@@ -374,6 +488,20 @@ describe('every question says enough to decide on', () => {
     // and cut.
     const d = WIZARD_FIELDS.find((f) => f.key === 'recallFilter')!.description;
     expect(d).toMatch(/never the notes you asked it to keep/i);
+  });
+
+  it('tells a model-mode reader where the models themselves come from', () => {
+    // The clause that went — "off ignores the lineup" — was the only place this
+    // walk said the word LINEUP out loud, and what the removed mode named (one
+    // model everywhere) is now 18 slots in `/lineup` rather than a row here
+    // (#606, #618). Dropping it and naming nothing left a reader who wants the
+    // opposite of "move the small calls down" with nothing to follow, on the
+    // quick path, before they have met the REPL. Glossed inline because the
+    // quick walk asks three questions and `model`'s gloss is not one of them.
+    const d = WIZARD_FIELDS.find((f) => f.key === 'modelMode')!.description;
+    expect(d, 'names the surface').toContain('/lineup');
+    expect(d, 'glosses the word for a quick-path reader').toMatch(/named set/i);
+    expect(d, 'says one model everywhere is still reachable').toMatch(/same model/i);
   });
 
   it('explains a word that means something only here', () => {

@@ -135,6 +135,39 @@ describe('profiles store', () => {
     const prefs = config.loadPreferences();
     expect(prefs.modelMode).toBe('optimize-performance');
   });
+
+  // The OTHER `'off'` migration (#606). `readLegacyPreferences` carried a
+  // hand-written copy of the same three-member list plus its own `'off'` arm,
+  // on the one-shot `preferences.json` → `profiles.json` path — redundant,
+  // since its output passes through `parseSettings` afterwards, and untested,
+  // which is why the list could sit there through every change to the others.
+  // It asks `normalizeStoredModelMode` now, so a fourth mode is handled rather
+  // than silently dropped for want of an `else`.
+  it('ingests a legacy preferences.json modelMode="off" as "optimize-performance"', async () => {
+    const configDir = path.join(tmpDir, 'bernard');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(configDir, 'preferences.json'),
+      JSON.stringify({ provider: 'anthropic', model: 'm', modelMode: 'off' }),
+    );
+    const m = await loadModule();
+    const loaded = m.loadProfiles();
+    expect(loaded.migratedFromPreferences).toBe(true);
+    expect(m.getActiveSettings(loaded.file).modelMode).toBe('optimize-performance');
+  });
+
+  it('drops a legacy preferences.json modelMode it cannot read', async () => {
+    // Guard the guard: the case above passes for an ingest that copies the
+    // string through unvalidated, which is what the collapse must not become.
+    const configDir = path.join(tmpDir, 'bernard');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(configDir, 'preferences.json'),
+      JSON.stringify({ provider: 'anthropic', model: 'm', modelMode: 'nonsense' }),
+    );
+    const m = await loadModule();
+    expect(m.getActiveSettings(m.loadProfiles().file).modelMode).toBeUndefined();
+  });
 });
 
 /**

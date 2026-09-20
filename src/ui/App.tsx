@@ -227,6 +227,7 @@ import {
   type RemoteMessageMode,
 } from '../remote-messages.js';
 import { COORDINATOR_MODES } from '../coordinator-modes.js';
+import { MODEL_MODES, type ModelMode } from '../model-modes.js';
 import {
   CONFIRM_MODES,
   TOOL_MODES,
@@ -3911,36 +3912,20 @@ export function App({
   }
 
   async function runModelModePrompt(): Promise<void> {
-    const modes: Array<{
-      value: 'optimize-tokens' | 'balanced' | 'optimize-performance';
-      label: string;
-      desc: string;
-    }> = [
-      {
-        value: 'balanced',
-        label: 'Balanced',
-        desc: 'Premium orchestrator; mid executor/function-caller/summarizer; cheap classifier.',
-      },
-      {
-        value: 'optimize-tokens',
-        label: 'Optimize for token usage',
-        desc: 'Aggressive cost-saving.',
-      },
-      {
-        value: 'optimize-performance',
-        label: 'Optimize for performance',
-        desc: 'Strongest model everywhere.',
-      },
-    ];
-    const entries: MenuEntry[] = modes.map((m) => ({
+    // The shared table, not a second copy — see `model-modes.ts`. This menu and
+    // the setup wizard each hand-wrote these rows, and they came apart: the
+    // wizard kept an `Off` row for a value `ModelMode` has not had since #225,
+    // which `normalizeStoredModelMode` migrated to the most expensive mode
+    // there is (#606).
+    const entries: MenuEntry[] = MODEL_MODES.map((m) => ({
       label: m.label,
-      description: m.desc,
+      description: m.description,
       active: config.modelMode === m.value,
       value: m.value,
     }));
     const result = await requestMenu(entries, { title: `Model mode: ${config.modelMode}` });
     if (result.cancelled) return;
-    const chosen = result.item.value as (typeof modes)[number]['value'];
+    const chosen = result.item.value as ModelMode;
     config.modelMode = chosen;
     savePreferences({
       ...loadPreferences(),
@@ -4249,7 +4234,7 @@ export function App({
           label: 'Model mode',
           annotation: `= ${config.modelMode}`,
           description:
-            'Off = single model. Balanced / Optimize-tokens / Optimize-performance pick a model per site.',
+            'Bernard makes many small internal calls you never see. This picks how much model they get, and whether your own turns keep the strong one.',
         },
         action: runModelModePrompt,
       },

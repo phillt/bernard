@@ -38,6 +38,7 @@ import { MAX_CONCURRENT_AGENTS_LIMIT } from './tools/agent-pool.js';
 import { RESPONSE_STYLE_IDS, type ResponseStyle } from './agent-prompt.js';
 import { REMOTE_MESSAGE_MODES } from './remote-messages.js';
 import { COORDINATOR_MODES } from './coordinator-modes.js';
+import { MODEL_MODES } from './model-modes.js';
 import { TOOL_MODES } from './tool-modes.js';
 import { THEMES } from './theme.js';
 import type { ProfileSettings } from './profiles.js';
@@ -322,17 +323,30 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
       {
         key: 'modelMode',
         label: 'Model mode',
+        // It used to end "; off ignores the lineup", and offer an `Off` row to
+        // go with it. Neither survived #225's move onto lineups: `ModelMode`
+        // has no such value, and the row was not refused — it was MIGRATED, by
+        // `normalizeStoredModelMode`, to `optimize-performance`, the most
+        // expensive setting in the product, reached by the row that reads as
+        // opting out (#606).
+        //
+        // The clause that enumerated the other three went with it, because the
+        // rows now carry their own notes; restating them here would put the
+        // same sentence on the screen twice, which is `tool-modes.ts`'s rule.
+        //
+        // The third sentence is not decoration. "off ignores the lineup" was the
+        // only place this walk said the word LINEUP out loud, and what `'off'`
+        // named — one model everywhere — is now 18 slots in `/lineup` rather
+        // than a row here. Dropping the clause and naming nothing left a reader
+        // who wants the opposite of "move the small calls down" with nothing to
+        // follow, on the quick path, before they have met the REPL. `/model`
+        // points there too, which is the right pointer in the wrong place.
+        // Glossed inline because the quick walk asks three questions and
+        // `model`'s gloss is not one of them.
         description:
-          'Bernard makes a lot of small internal calls you never see. This picks which model handles them — cheap ones do those jobs just as well, so moving them down cuts the bill with nothing visible lost. Balanced keeps the strong model for your own turns; optimize for token usage moves those down too; optimize for performance uses the strong one everywhere; off ignores the lineup.',
-        field: {
-          kind: 'list',
-          options: [
-            { value: 'off', label: 'Off' },
-            { value: 'balanced', label: 'Balanced' },
-            { value: 'optimize-tokens', label: 'Optimize for token usage' },
-            { value: 'optimize-performance', label: 'Optimize for performance' },
-          ],
-        },
+          'Bernard makes a lot of small internal calls you never see. This picks which model handles them — cheap ones do those jobs just as well, so moving them down cuts the bill with nothing visible lost. Whichever you pick, the models themselves come from your lineup, the named set /lineup edits — where you can bind every rung to the same model if you would rather choose once and be done.',
+        // The shared table, not a second copy — see `model-modes.ts`.
+        field: { kind: 'list', options: [...MODEL_MODES] },
         envVar: 'BERNARD_MODEL_MODE',
         // Quick: what every turn costs. `balanced` sends `main` to the lineup's
         // premium slot, and nothing in the terminal says what that is spending.

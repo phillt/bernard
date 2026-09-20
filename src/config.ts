@@ -12,7 +12,7 @@ import {
   MAX_CONCURRENT_AGENTS_LIMIT,
 } from './tools/agent-pool.js';
 import { RESPONSE_STYLE_IDS, type ResponseStyle } from './agent-prompt.js';
-import { normalizeStoredModelMode, type ModelMode } from './model-policy.js';
+import { normalizeStoredModelMode, type ModelMode } from './model-modes.js';
 import { getCatalogForProvider } from './providers/catalog.js';
 import { BUILTIN_PROVIDERS, type BuiltinProvider } from './providers/types.js';
 import {
@@ -428,15 +428,6 @@ export function isRemoteMessages(v: unknown): v is RemoteMessageMode {
 /** Type guard for `toolMode` string values (#179). */
 export function isToolMode(v: unknown): v is 'read-only' | 'write' {
   return v === 'read-only' || v === 'write';
-}
-
-/**
- * Type guard for runtime `modelMode` string values. Accepts only the three
- * post-#170-redesign values; legacy `'off'` is migrated via
- * {@link normalizeStoredModelMode} at the read boundary, not here.
- */
-export function isModelMode(v: unknown): v is ModelMode {
-  return v === 'optimize-tokens' || v === 'balanced' || v === 'optimize-performance';
 }
 
 /** Type guard for `responseStyle` string values (#133). */

@@ -24,6 +24,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { PREFS_PATH, PROFILES_PATH, PROFILES_MIGRATED_MARKER } from './paths.js';
 import { atomicWriteFileSync } from './fs-utils.js';
+import { normalizeStoredModelMode, type ModelMode } from './model-modes.js';
 import type { RemoteMessageMode } from './remote-messages.js';
 import type { ResponseStyle } from './agent-prompt.js';
 import {
@@ -59,7 +60,16 @@ export interface ProfileSettings {
   theme?: string;
   autoUpdate?: boolean;
   coordinatorMode?: 'on' | 'off' | 'auto';
-  modelMode?: 'optimize-tokens' | 'balanced' | 'optimize-performance';
+  /**
+   * The runtime type, not a re-declared copy of it (#606). Spelled out as a
+   * union here until this file could import one — `model-modes.ts` is a
+   * zero-import leaf precisely so it can, across the
+   * `model-policy` → `config` → `profiles` cycle that kept them apart. A
+   * second spelling is the more durable of the two the fix collapsed: this
+   * is the type the WIZARD writes, so the persisted shape and the runtime
+   * type could diverge with no error anywhere.
+   */
+  modelMode?: ModelMode;
   subagentPac?: boolean;
   toolDetails?: boolean;
   autoCreateSpecialists?: boolean;
@@ -319,15 +329,14 @@ function readLegacyPreferences(): ProfileSettings | null {
     } else if (typeof src.reactMode === 'boolean') {
       out.coordinatorMode = src.reactMode ? 'on' : 'off';
     }
-    if (
-      src.modelMode === 'optimize-tokens' ||
-      src.modelMode === 'balanced' ||
-      src.modelMode === 'optimize-performance'
-    ) {
-      out.modelMode = src.modelMode;
-    } else if (src.modelMode === 'off') {
-      out.modelMode = 'optimize-performance';
-    }
+    // A SECOND `'off'` migration used to live here, hand-enumerating the same
+    // three members beside it (#606). Redundant rather than wrong — this output
+    // passes through `parseSettings` → `normalizeStoredModelMode` afterwards —
+    // but it carried the failure mode every other copy had: a fourth mode added
+    // everywhere else was silently DROPPED here, since there is no `else` and
+    // the field simply stays unset, landing the user on `DEFAULT_MODEL_MODE`.
+    const modelMode = normalizeStoredModelMode(src.modelMode);
+    if (modelMode !== undefined) out.modelMode = modelMode;
     if (src.confirmMode === 'off' || src.confirmMode === 'auto' || src.confirmMode === 'strict') {
       out.confirmMode = src.confirmMode;
     }
