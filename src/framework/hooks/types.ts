@@ -53,7 +53,14 @@ export interface OpenAICompatibleCacheTokens {
  * So the type cannot be the guard here, and optional fields are worse than they
  * look — TypeScript does not even compare an index signature against an
  * OPTIONAL target property, so a hand-built payload of the wrong shape passes
- * silently. That is precisely why
+ * silently.
+ *
+ * That is not merely "a renamed field slips through", which is how this was
+ * first written and is an understatement: **any** type on an optional property
+ * is accepted. Measured against `Record<string, Record<string, JSONValue>>`,
+ * this interface compiles with `cacheReadInputTokens` declared as
+ * `(n: number) => void` — a cache count typed as a function. The boundary was
+ * blind to every wrong shape, not just to a rename. That is precisely why
  * `src/framework/hooks/__tests__/cache-metadata.contract.test.ts` exists, must
  * NOT `vi.mock('ai')`, and asserts the emitted KEY SET rather than only the
  * numbers: a renamed field has to fail by naming the new key, not by reporting

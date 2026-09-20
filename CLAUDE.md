@@ -1742,7 +1742,10 @@ and no Bernard-owned message type existed at all.
   assignability and breaks `onStepFinish` against BOTH `generateText` and
   `streamText`, plus four direct `normalizeUsage` call sites. Six errors, all
   false. Optional is also worse than it looks, because TypeScript does not
-  compare an index signature against an optional target property **at all**. So
+  compare an index signature against an optional target property **at all** —
+  and that is not just "a rename slips through": measured, the interface
+  compiles with a cache count declared as `(n: number) => void`, so it was blind
+  to **any** wrong type. So
   the names live in two required-field interfaces with a compile-time key-tuple
   coverage assertion (in production code — `tsconfig.json` excludes tests, so a
   `@ts-expect-error` in one is compiled by nothing), and the real guard is
