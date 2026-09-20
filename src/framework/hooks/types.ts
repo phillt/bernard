@@ -96,8 +96,6 @@ type _OpenAIKeysCovered =
     : never;
 const _anthropicKeysCovered: _AnthropicKeysCovered = true;
 const _openAIKeysCovered: _OpenAIKeysCovered = true;
-void _anthropicKeysCovered;
-void _openAIKeysCovered;
 
 /**
  * Payload passed to `onStepFinish` by the AI SDK after each generation step.

@@ -1612,6 +1612,141 @@ running risky tools.`), which tells a reader what the words mean and nothing
     only `settings-coverage.test.ts` reconciles them; this adds a field to one of
     them rather than a fourth table, which is the direction #441 wants.
 
+## The Vendor Boundary
+
+Everything Bernard names from the Vercel AI SDK crosses in four places, and the
+rule is not "an adapter exists" but **"it is the only door, and typed strictly
+enough to refuse the wrong shape."** An adapter a fifth of the traffic routes
+through is worse than none — it buys the belief of protection. The layer existed
+in three places before #sdk-boundary and failed three different ways: the tool
+adapter was correct and bypassed, `normalizeUsage` was the only door and blind,
+and no Bernard-owned message type existed at all.
+
+- **`src/framework/sdk.ts` is the vocabulary.** Every `ai` TYPE Bernard names is
+  re-exported from there under the SDK's current spelling, plus the two error
+  classes `tool-call-repair.ts` matches with `.isInstance()`. It gives no type
+  safety and the docstring says so at the top, so nobody "improves" it into a
+  structural copy of the SDK's types — a copy drifts, and the drift is invisible
+  because both sides compile. What it buys is arithmetic: `CoreMessage` appears
+  323 times across 53 files and `Tool` another 208, and at the next major those
+  become **one line**, `export type { ModelMessage as CoreMessage } from 'ai'`.
+  That is also why the identifiers are not renamed to something
+  Bernard-flavoured: renaming touches the same sites for no further benefit.
+  Almost everything is a TYPE deliberately — a type re-export is erased, so the
+  module adds no runtime edge, and the suite mocks `'ai'` with PARTIAL factories
+  in about a dozen places where a value re-export of an omitted name fails at
+  module evaluation. `generateText` / `streamText` stay out: they are call-site
+  functions rather than vocabulary, and every caller is a `vi.mock('ai')` target.
+  `ai/test` stays out because a production module must not re-export a test
+  surface.
+- **`defineTool` (`src/framework/tools/define-tool.ts`) closes the bypass.** 31
+  files called the SDK's `tool()` directly across 37 call sites, against 9 call
+  sites in 5 files going through `toolToAISDK`. `defineTool(x)` IS `tool(x)` —
+  the cast to `typeof tool` ties it to the SDK's own overloaded signature rather
+  than restating one, so both overloads keep their inference and adoption is
+  provably inert. It is deliberately NOT a conversion to `BernardTool`: that is
+  the real fix and a real per-tool refactor (each grows a `ToolResult` envelope
+  and a `serializeForModel`, and every consumer of that tool's historical return
+  shape becomes behaviour at risk), so it proceeds tool by tool afterwards and
+  each conversion simply stops calling this.
+  - **Its own file, beside `adapter.ts` rather than inside it**, and the second
+    reason was measured. `adapter.ts` is a BEHAVIOURAL adapter; this is a naming
+    boundary with no behaviour and a true leaf. And placed inside, it stops being
+    inert: `delegate.test.ts` mocks the whole adapter with a factory returning
+    only `attachMeta`, and `mcp.test.ts` / `mcp.call-safety.test.ts` /
+    `runner.test.ts` mock `'ai'` with partial factories that legitimately omit
+    `tool` — a module-level `export const defineTool = tool` there dereferences
+    the missing binding at EVALUATION time and takes all three down at import.
+    Observed, not predicted: the first draft did exactly that and failed 6 tests
+    across 4 files. Hence both the separate file and the function form.
+  - **`adapter.ts` keeps calling `tool()` directly and is the only place that
+    does.** It owns the translation, so routing it through `defineTool` buys
+    nothing — the `parameters:` field it passes is right there — and would hand
+    it an edge it does not need. `adapter.test.ts` likewise keeps building
+    fixtures with the raw SDK `tool()`: it tests the boundary from outside, so
+    its inputs must be genuine SDK tools.
+  - **`BernardTool.parameters` is Bernard's OWN vocabulary and must never be
+    renamed**, now or ever. `toolToAISDK` is where it crosses into the SDK, and
+    that translation is correct as written.
+- **`src/tool-result-output.ts` owns where a `tool-result` value lives.** One
+  question had four answers: a required cast (`context.ts:96`), an explicit `any`
+  (`truncateToolResults`), the SDK's own type (`Thread.tsx`) and an optional cast
+  (`ask-user-history.ts`). Under a rename one fails loudly and three go silent,
+  each in a different subsystem — truncation stops truncating and every oversized
+  result goes back in full, the transcript renders a bare marker under every tool
+  call, and `ask_user` answers stop being injected into history. **The asymmetry
+  is what makes a mechanical rename actively wrong**: at STEP level
+  (`toolResults[i]`) the value is raw, but inside a `role:'tool'` MESSAGE the part
+  carries an envelope `{type, value}`. This module owns the message-part side
+  only, and says so; step-level readers must not call it. `truncateToolResults`
+  is the one site that both reads and writes, so the one a rename could
+  half-fix — reading the new field while writing the old truncates into a slot
+  the provider ignores, with the counter still reporting the result as bounded.
+- **`HistoryStore.load` normalizes rather than casts.** It was
+  `JSON.parse(data) … as CoreMessage[]` behind a `'role' in entry` filter, so
+  whatever was on disk went straight to the provider. Measured on a real install:
+  **324 messages, 365 `tool-result` parts, all 365 carrying `result` and none
+  carrying `output`** — and the next major types `output` as required, making
+  every returning user's file a hard failure on their first turn after the
+  upgrade. The existing `try/catch` does not help: it guards the READ, and the
+  failure lands later. The conversion is shape-directed and per part, so on
+  `ai@4` it is identity and returns parts by reference.
+  - **No version stamp**, which looks like the obvious companion. The file is a
+    bare JSON array, so stamping means wrapping it in an object — and `load`
+    rejects a non-array, so a user who rolled back to an older Bernard would
+    silently lose their whole history. A per-part shape check is strictly
+    stronger anyway: it stays correct for a file written across an upgrade
+    boundary, which one stamp cannot describe.
+  - **`redacted-reasoning` parts are deliberately not stripped.** They are valid
+    on `ai@4` and handing them back is correct for Anthropic extended thinking,
+    so dropping them now is a live behaviour change for a problem that does not
+    exist yet. That strip belongs in the bump.
+  - Pinned by `src/__tests__/fixtures/history-v4.json`, a redacted copy of a real
+    file with its key structure kept byte-for-byte. It earned its keep at once by
+    finding two things a hand-written fixture would not have: assistant and tool
+    messages carry an `id` field `CoreMessage` does not declare, and a
+    `tool-result`'s `result` is a string, an object AND an array within one file.
+- **Some of this the type system cannot hold, and `CacheMetadata` is the case.**
+  "Delete the `?` so a wrong shape fails to compile" was measured and does not
+  work: the SDK types provider metadata as
+  `Record<string, Record<string, JSONValue>>` and names none of the cache keys,
+  and TypeScript will not let a string index signature satisfy a required
+  property — so making them required takes the SDK's own `StepResult` out of
+  assignability and breaks `onStepFinish` against BOTH `generateText` and
+  `streamText`, plus four direct `normalizeUsage` call sites. Six errors, all
+  false. Optional is also worse than it looks, because TypeScript does not
+  compare an index signature against an optional target property **at all**. So
+  the names live in two required-field interfaces with a compile-time key-tuple
+  coverage assertion (in production code — `tsconfig.json` excludes tests, so a
+  `@ts-expect-error` in one is compiled by nothing), and the real guard is
+  `cache-metadata.contract.test.ts`, which injects a byte-verbatim provider HTTP
+  response and asserts the emitted KEY SETS as well as the arithmetic. A renamed
+  field folds to zero, so a numeric assertion alone fails by reporting a
+  plausible number rather than naming the key.
+- **Two integration tests may never `vi.mock('ai')`**, which is the point of
+  them. `cache-metadata.contract.test.ts` measures the SDK's mapping from wire
+  JSON to `providerMetadata`; the wire field names are the providers' public
+  contract and do not move when the SDK majors, which is what makes the fixture
+  version-independent. Its OpenAI-compatible half runs through `createXai`,
+  pinning the opposite arithmetic (cached is a SUBSET of prompt, not disjoint)
+  on Bernard's only shipped user of that cache branch.
+  `mcp-tool-schema.integration.test.ts` speaks the MCP wire protocol to a real
+  child process and asserts the JSON Schema reaching `doGenerate` is deep-equal
+  to what the server declared. `src/mcp.ts` is `any` end to end through that
+  path, so deleting `convertTool` — which the bump does — produces no type error
+  whether the deletion is right or wrong; a runtime assertion is the only thing
+  that can license it, and every OTHER MCP test in the repo mocks
+  `@ai-sdk/mcp`, so all of them pass with `convertTool` returning garbage. Its
+  fixture server is dependency-free because `@modelcontextprotocol/sdk` is not
+  installed, and asserting interop through a second vendor's server would measure
+  that vendor instead.
+- **`scripts/__fixtures__/framework-parity.json` is captured, not regenerable.**
+  It is the byte-stable record of everything reaching `doGenerate` across the six
+  dispatch shapes, and it is the only before/after the migration will have: the
+  harness's own "check out the other branch and re-run" recipe needs the OLD `ai`
+  in `node_modules`, which the bump removes. Compare against it with
+  `BERNARD_EVAL=1 BERNARD_EVAL_BASELINE=scripts/__fixtures__/framework-parity.json`.
+
 ## Key Patterns
 
 - **Worker tool surface (#253, #322)** — `createTools(..., { surface: 'worker' })` drops the tools a dispatched worker has no business using: `routine`, `lineup_edit`, `specialist`, the `cron` family, and `mcp_config` / `mcp_add_url` / `mcp_verify`. Measured 35 tools → 11, ~24.1k chars → 6.4k (≈4.4k tokens per dispatch end-to-end; ~3.7k of that is the surface option itself, the rest the cron consolidation below). Unlike the main agent's block this is billed at full rate every time, because ephemeral dispatches are never prompt-cache-marked. It is also a containment fix: `createRoutineTool(undefined)` falls back to `new RoutineStore()`, so a worker handed no store still got a live one pointed at the user's real routines. The registry is a table of **lazily-constructed, audience-tagged groups** (`ToolGroup` in `src/tools/index.ts`): `audience: 'main' | 'any'` is a REQUIRED field, so omitting it is a compile error rather than a silent per-dispatch leak, and a filtered-out group's thunk is simply never invoked — which is what lets the declaration be the single source of truth despite those constructors touching disk. The distinction is "who owns this decision", not "is this a write": `shell` and `file_edit_lines` are `'any'`. (Meta can't answer this — `ToolMeta` lives on a _constructed_ tool, and not constructing is the whole point — which is why the declaration sits beside the constructor.) Which surface a dispatch gets is **not** opted into per call site: `runDefinition` resolves it (see **Dispatch tool surface** below). Groups spread in declaration order and MCP merges last, so a colliding MCP tool still wins.

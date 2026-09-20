@@ -72,6 +72,16 @@ describe('replaceToolResultOutput', () => {
     expect(replaceToolResultOutput(v5Part('text', 'old'), 'new')).toEqual(v4Part('new'));
   });
 
+  it('cannot have its `output`-writing branch exercised on the installed SDK', () => {
+    // Stated rather than pretended-covered. That branch is the bump's target
+    // and is reachable only by flipping `TOOL_RESULT_OUTPUT_TARGET`, which no
+    // test may do — the constant is what every other assertion here is
+    // relative to. The READ half of the v5 shape is covered above; the WRITE
+    // half is not, and this is the test that says so out loud so a coverage
+    // report is not mistaken for a guarantee.
+    expect(TOOL_RESULT_OUTPUT_TARGET).toBe('result');
+  });
+
   it('returns the input BY REFERENCE when nothing needs changing', () => {
     // This is the cost claim, not a nicety: `truncateToolResults` promises the
     // same array back when it truncated nothing, and `HistoryStore.load`

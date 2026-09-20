@@ -70,6 +70,14 @@ interface ToolResultOutputEnvelope {
   value: unknown;
 }
 
+/**
+ * Deliberately NOT `tool-result-shape.isPlainObject`, which is the obvious
+ * reuse. That predicate requires a literal `Object.prototype`, correctly, since
+ * it guards against a class instance arriving in an untrusted MCP payload. The
+ * question here is a different one — "is this a message part I can read a field
+ * off" — where a reader should be liberal, and importing it would give this
+ * zero-import leaf an edge to `error-taxonomy.js` for one line.
+ */
 function asPart(part: unknown): ToolResultPartLike | null {
   return part !== null && typeof part === 'object' ? (part as ToolResultPartLike) : null;
 }

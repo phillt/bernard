@@ -14,13 +14,11 @@ import { normalizeToolResultPart } from './tool-result-output.js';
  */
 function normalizeStoredMessage(message: CoreMessage): CoreMessage {
   if (message.role !== 'tool' || !Array.isArray(message.content)) return message;
-  let changed = false;
-  const content = message.content.map((part) => {
-    const next = normalizeToolResultPart(part);
-    if (next !== part) changed = true;
-    return next;
-  });
-  return changed ? { ...message, content } : message;
+  // Checked before mapping, so a message needing no conversion allocates no
+  // array either — otherwise the common path would build and discard one per
+  // tool message (132 of them on the measured install) on every start.
+  if (!message.content.some((part) => normalizeToolResultPart(part) !== part)) return message;
+  return { ...message, content: message.content.map(normalizeToolResultPart) };
 }
 
 /**

@@ -10,11 +10,11 @@ import { tool } from 'ai';
  *
  * ## Why it exists
  *
- * {@link toolToAISDK} in `./adapter.js` is the correct adapter and most traffic
- * bypasses it: measured, 31 files call the SDK's `tool()` directly across 37
- * call sites, against 8 that go through the adapter. An adapter a fifth of the
- * callers route through is worse than none, because it buys the belief of
- * protection.
+ * `toolToAISDK` in `./adapter.js` is the correct adapter and most traffic
+ * bypassed it: measured, 31 files called the SDK's `tool()` directly across 37
+ * call sites, against 9 call sites in 5 files going through the adapter. An
+ * adapter a fifth of the callers route through is worse than none, because it
+ * buys the belief of protection.
  *
  * The next SDK major renames `tool()`'s `parameters:` field to `inputSchema:`.
  * Through here that is one edit; direct, it is 37 spread across `src/tools`,
