@@ -218,6 +218,15 @@ describe('eligibility', () => {
     // `mcp.test.ts` explains an absent test by it. Pinned here so a divergence
     // fails rather than silently reopening that gap.
     //
+    // **It holds for the NAME path only, and since #570 that is a real
+    // restriction rather than a formality.** A server declaring
+    // `readOnlyHint: false` with `idempotentHint: true` on a name carrying an
+    // emit verb makes `nonIdempotent` false while `emitsProse` stays true, so
+    // such a call really can be folded and then retried. It is harmless because
+    // the retry re-sends `outbound` rather than `args` — the line `mcp.test.ts`
+    // calls "deliberate, should the predicates ever diverge", which is now live
+    // rather than hypothetical.
+    //
     // **The fixture list is the whole test, and the first draft's was inert.**
     // This recomputes the expression inline, so it can only fail on a name where
     // the two halves DISAGREE — and `send_email` / `create_event` are true under
@@ -225,12 +234,14 @@ describe('eligibility', () => {
     // under either, so dropping `!isRead` entirely passed all five. Measured.
     //
     // A discriminator exists because `EMIT_VERBS` is not a subset of
-    // `WRITE_VERBS`: `publish`, `submit`, `invite`, `email` and `notify` emit
-    // without writing. `get_email` is therefore a READ that carries an emit
-    // verb — conjunction false, `hasEmitVerb` alone true — so under that
-    // mutation it becomes foldable and `search_email({subject})` has its SEARCH
-    // TERM rewritten. `search_email` is here as well because it is the shape
-    // where the harm is legible rather than merely possible.
+    // `WRITE_VERBS`: `email` emits without writing, and is the last one that
+    // does — `publish`, `submit`, `invite` and `notify` were in this sentence
+    // and became write verbs in #612, which changes nothing here but is why
+    // `email` now carries the case alone. `get_email` is therefore a READ that
+    // carries an emit verb — conjunction false, `hasEmitVerb` alone true — so
+    // under that mutation it becomes foldable and `search_email({subject})` has
+    // its SEARCH TERM rewritten. `search_email` is here as well because it is
+    // the shape where the harm is legible rather than merely possible.
     for (const name of [
       'send_email',
       'create_event',
@@ -253,6 +264,24 @@ describe('eligibility', () => {
     expect(foldProseArgs({ subject: `a ${EM} b` }, 'search_email')).toEqual({
       subject: `a ${EM} b`,
     });
+  });
+
+  it('takes the caller’s read verdict over the name when it has one', () => {
+    // Since #570 `mcp.ts` can decide `isRead` from the server's own
+    // `readOnlyHint`, and it hands that verdict down rather than letting this
+    // module re-derive it. Without the hand-off, a server declaring a tool
+    // read-only would still have its `subject` folded, which is the harm the
+    // conjunct above exists to prevent with the annotation ignored.
+    const args = { subject: `a ${EM} b` };
+    expect(emitsProse('send_report')).toBe(true);
+    expect(emitsProse('send_report', true)).toBe(false);
+    expect(foldProseArgs(args, 'send_report', true)).toBe(args);
+    // The inverse: a declared WRITE on a name that reads, which the name alone
+    // would have exempted.
+    expect(emitsProse('list_invitations')).toBe(false);
+    expect(emitsProse('list_invitations', false)).toBe(false);
+    // Omitting it is the status quo for every caller with no annotation.
+    expect(emitsProse('send_message', undefined)).toBe(emitsProse('send_message'));
   });
 });
 

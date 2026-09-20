@@ -5,7 +5,7 @@ import { Experimental_StdioMCPTransport } from '@ai-sdk/mcp/mcp-stdio';
 import { jsonSchema } from 'ai';
 import { printError } from './output.js';
 import { MCP_CONFIG_PATH as CONFIG_PATH } from './paths.js';
-import { debugLog, openSessionSidecarFd } from './logger.js';
+import { debugLog, isDebugEnabled, openSessionSidecarFd } from './logger.js';
 import {
   flattenServerTools,
   makeAliasResolver,
@@ -14,7 +14,7 @@ import {
   mcpToolName,
 } from './mcp-names.js';
 import { attachMeta } from './framework/tools/adapter.js';
-import { hasEmitVerb, isReadOnlyMCPToolName } from './risk.js';
+import { classifyMCPTool, isReadOnlyMCPToolName, type MCPToolAnnotations } from './risk.js';
 import type { ToolMeta } from './framework/tools/types.js';
 import { normalizeToolResult } from './text.js';
 import { foldProseArgs } from './mcp-prose-args.js';
@@ -179,13 +179,30 @@ class MCPCallAbandoned extends Error {
 /**
  * Runs one `tools/call`, bounded by the deadline and by the caller's signal.
  *
- * Both are races rather than cancellations, and they cannot be anything else:
- * nothing in `@ai-sdk/mcp` can withdraw an in-flight JSON-RPC request, so
- * abandoning it is the whole of what is available. The request id stays
- * registered in the client's `responseHandlers` map for the life of the
- * connection — a leak of one entry per abandoned call, inside the SDK, stated
- * here rather than papered over because it is the residue of the vendor bug this
- * works around.
+ * Both are races rather than cancellations, and the DEADLINE cannot be anything
+ * else: `MCPClient.callTool` hard-codes its request options to `{signal}` and
+ * offers no way to pass the `timeout` its own `request()` accepts, so there is
+ * no vendor budget to delegate to at any version. Measured against a server
+ * that accepts a `tools/call` and never answers, `@ai-sdk/mcp@1.0.82` sits on
+ * it indefinitely exactly as 1.0.21 did.
+ *
+ * The SIGNAL race is belt-and-braces as of 1.0.82 and was load-bearing before
+ * it. 1.0.21's `request()` called `signal.throwIfAborted()` once at entry and
+ * then only re-checked when a response arrived, so a server that never answered
+ * ignored Esc outright; 1.0.82 registers a real abort listener and rejects
+ * mid-flight — verified, it rejected 8,042 ms into an 8,000 ms abort. It is
+ * kept because the two rejections are not interchangeable: the retry gate below
+ * branches on {@link MCPCallAbandoned.cancelled} to tell "the user pressed Esc"
+ * from "we gave up waiting", and the SDK's own rejection is an untyped
+ * `MCPClientError` that says neither.
+ *
+ * The residue is correspondingly narrower than it was. 1.0.21 left the request
+ * id registered in the client's `responseHandlers` map for the life of the
+ * connection, one entry per abandoned call. 1.0.82's abort listener cleans up,
+ * so the cancelled path no longer leaks; OUR deadline firing does not abort the
+ * caller's signal, so the timeout path still does. Stated rather than papered
+ * over, because it is the residue of a vendor bug we work around and not one we
+ * can close.
  *
  * What the race buys is that Bernard's await ends: the agent loop moves on, the
  * turn can finish, and Esc ends the *call* rather than only the turn.
@@ -338,14 +355,67 @@ export interface LiveRegistration {
  * The raw name is retained rather than re-derived from the namespaced key
  * because it cannot always be re-derived — `mcpToolName`'s R2 rung truncates a
  * long tool name through the middle. Risk classification in particular must
- * read the server's own name (`isReadOnlyMCPToolName` looks for a trailing verb),
- * and `mcp_verify` reports raw names back to the user, so guessing them from
- * the key would be wrong in exactly the cases that are hardest to notice.
+ * read the server's own name (`isReadOnlyMCPToolName` segments it for a read
+ * verb), and `mcp_verify` reports raw names back to the user, so guessing them
+ * from the key would be wrong in exactly the cases that are hardest to notice.
  */
 interface RegisteredTool {
   raw: string;
   tool: any;
 }
+
+/**
+ * What the server declared about this tool, if it declared anything (#570).
+ *
+ * `@ai-sdk/mcp` delivers annotations at `tool.metadata.annotations` as of
+ * 1.0.82. Up to 1.0.21 — the version this repo pinned until #612 — the
+ * conversion loop destructured `annotations` and forwarded only `.title`, which
+ * is the blocker #570 recorded and the whole reason the classification was a
+ * name guess. Verified over a real stdio transport against both versions:
+ * 1.0.21 leaves `tool.metadata` undefined, 1.0.82 carries both hints.
+ *
+ * **The `typeof === 'boolean'` check cannot change any verdict, and is kept for
+ * what it does to the TYPE rather than to the behaviour.** `raw` is an object
+ * off the wire, so `bag[key]` is `unknown`; the check is what discharges that
+ * honestly, and without it the only way to satisfy `MCPToolAnnotations` is a
+ * bare `as boolean | undefined` — a cast that states something about untrusted
+ * server data which nothing has established.
+ *
+ * Its behavioural redundancy is measured rather than assumed: replacing it with
+ * that cast leaves all 224 tests across the four touched files passing.
+ * A malformed hint is inert at two layers below this one — `classifyMCPTool`
+ * applies the same `typeof` check before it will call anything a declaration
+ * (pinned by `risk.test.ts` → "ignores a hint that is not a boolean", which is
+ * the assertion this function's redundancy RESTS on rather than a duplicate of
+ * it), and `@ai-sdk/mcp@1.0.82` types the hints `z.optional(z.boolean())`, so a
+ * non-boolean fails `listTools()` before Bernard sees the tool at all. Even the
+ * `mcp:classified` counts are safe, since they key on
+ * `MCPToolClassification.readSource` and not on whether this returned an object.
+ *
+ * So: no test here pins it, because none can, and one that appeared to would be
+ * asserting a consequence measured to be absent. The MCP spec's "treat
+ * annotations as untrusted unless the server is" is the reason to WANT the
+ * check; it is not evidence that this copy of it is load-bearing.
+ *
+ * Returns `undefined` when the tool declared nothing usable, so "did this server
+ * annotate at all" is answerable rather than inferred from an object of
+ * `undefined`s.
+ */
+function readToolAnnotations(tool: unknown): MCPToolAnnotations | undefined {
+  const metadata = (tool as { metadata?: unknown } | undefined)?.metadata;
+  const raw = (metadata as { annotations?: unknown } | undefined)?.annotations;
+  if (!raw || typeof raw !== 'object') return undefined;
+  const bag = raw as Record<string, unknown>;
+  const bool = (key: string): boolean | undefined =>
+    typeof bag[key] === 'boolean' ? (bag[key] as boolean) : undefined;
+  const readOnlyHint = bool('readOnlyHint');
+  const idempotentHint = bool('idempotentHint');
+  if (readOnlyHint === undefined && idempotentHint === undefined) return undefined;
+  return { readOnlyHint, idempotentHint };
+}
+
+/** How many disagreeing tools a connect line names before it stops. */
+const MAX_LOGGED_OVERRIDES = 10;
 
 /** Re-keys a server's freshly-listed tools under their namespaced names. */
 function namespaceTools(
@@ -355,6 +425,43 @@ function namespaceTools(
   const out: Record<string, RegisteredTool> = {};
   for (const [raw, tool] of Object.entries(tools)) {
     out[mcpToolName(server, raw)] = { raw, tool };
+  }
+  // Which source decided, once per server per connect (#570's last acceptance
+  // line). It goes HERE and not beside the `ToolMeta` it explains, because
+  // `getServerTools` runs on every watcher poll and every dispatch — a line per
+  // tool there would be thousands a session — while this function is the one
+  // place both `connect` and `reconnectServer` pass through.
+  //
+  // The counts come off `classifyMCPTool`'s own `readSource` /
+  // `idempotencySource` rather than being re-derived from the annotations,
+  // which is what stops the line describing a precedence the classifier does
+  // not have. `overrides` is the set worth having: the tools where the server
+  // DISAGREED with what the name guess would have said, which is exactly what
+  // someone hunting a misclassification is looking for, and tiny by
+  // construction. All zeroes is the other useful answer — this server declares
+  // nothing, so every classification under it is a guess.
+  if (isDebugEnabled()) {
+    let readFromServer = 0;
+    let idempotencyFromServer = 0;
+    let overrideCount = 0;
+    const overrides: string[] = [];
+    for (const [raw, tool] of Object.entries(tools)) {
+      const c = classifyMCPTool(raw, readToolAnnotations(tool));
+      if (c.idempotencySource === 'annotation') idempotencyFromServer++;
+      if (c.readSource !== 'annotation') continue;
+      readFromServer++;
+      if (c.isRead === isReadOnlyMCPToolName(raw)) continue;
+      overrideCount++;
+      if (overrides.length < MAX_LOGGED_OVERRIDES) overrides.push(raw);
+    }
+    debugLog('mcp:classified', {
+      server,
+      tools: Object.keys(tools).length,
+      readFromServer,
+      idempotencyFromServer,
+      overrideCount,
+      overrides,
+    });
   }
   return out;
 }
@@ -653,24 +760,23 @@ export class MCPManager {
         const baseTool = this.convertTool(name, tool);
         const originalExecute = baseTool.execute;
 
-        // Classified on the RAW name, which is what makes this correct for an
-        // R2-truncated key: that key's trailing characters are the tool's tail,
-        // not its verb, so the namespace strip inside the classifier is not
-        // enough on its own.
-        const isRead = isReadOnlyMCPToolName(raw);
-        // Whether repeating this with identical arguments emits a second time
-        // (#575). Computed HERE, above the wrapper, because two things need it
-        // and they were 43 lines apart: `meta.nonIdempotent` below, and the
-        // retry gate inside the closure. The retry could not see it at all, so
-        // the reconnect-and-retry wrapper re-issued a `send_message` whose
-        // outcome was unknown (#594).
+        // The server's own declaration first, the name only where it made none
+        // (#570). Both facts come back from one call because they are decided
+        // together: idempotency is asked only of a write, and the conjunction
+        // that used to live here as `!isRead && hasEmitVerb(raw)` is now inside
+        // `classifyMCPTool`, where the next caller cannot recombine it wrongly.
         //
-        // ANDed with the read test rather than replacing it, so `list_drafts`
-        // stays a lookup. Deliberately NOT `!isRead` on its own: `focus_app`
-        // carries neither verb and so classifies as a write, and the dispatch
-        // that double-sent called it twice with identical args — once before
-        // each send — so a write-keyed rule refuses the wrong call.
-        const nonIdempotent = !isRead && hasEmitVerb(raw);
+        // Classified on the RAW name, which is what makes the fallback correct
+        // for an R2-truncated key: that key's trailing characters are the tool's
+        // tail, not its verb, so the namespace strip inside the classifier is
+        // not enough on its own.
+        //
+        // `nonIdempotent` is computed HERE, above the wrapper, because two
+        // things need it and they were 43 lines apart: `meta.nonIdempotent`
+        // below, and the retry gate inside the closure. The retry could not see
+        // it at all, so the reconnect-and-retry wrapper re-issued a
+        // `send_message` whose outcome was unknown (#594).
+        const { isRead, nonIdempotent } = classifyMCPTool(raw, readToolAnnotations(tool));
 
         const wrapped = {
           ...baseTool,
@@ -700,7 +806,10 @@ export class MCPManager {
             // URL, a path, a selector and a regex, which is why it had been
             // reversed to default-off — and default-off meant the mojibake
             // #442 reports kept shipping.
-            const outbound = asciiOutboundEnabled() ? foldProseArgs(args, raw) : args;
+            // `isRead` is handed over rather than re-derived: since #570 it can
+            // come from the server's own `readOnlyHint`, and `emitsProse`'s own
+            // docstring is about not folding a lookup's arguments.
+            const outbound = asciiOutboundEnabled() ? foldProseArgs(args, raw, isRead) : args;
             const budgetMs = mcpCallTimeoutMs();
             const describe = () => `MCP tool "${raw}" on server "${serverName}"`;
             try {
@@ -783,7 +892,8 @@ export class MCPManager {
 
         // Risk-based confirmation gate (#144): tag every MCP tool with metadata
         // so the augment layer can route it through `confirmAction` at the right
-        // threshold. A read-only verb at either end and no write verb anywhere →
+        // threshold. `readOnlyHint: true`, or — where the server declared
+        // nothing — a read verb at any segment and no write verb anywhere →
         // `kind: 'read'` (low risk, never prompts). Everything else →
         // `kind: 'write'` with `sideEffect: 'local'` (medium risk, prompts only
         // in `strict` mode). Users can promote a tool to high via a future

@@ -38,19 +38,54 @@ const READ_VERBS = new Set(['search', 'list', 'find', 'get', 'query', 'read', 'l
 /**
  * Verbs that disqualify a name however it is shaped.
  *
- * Checked against EVERY segment, and it is what makes matching a leading verb
- * safe: `get_or_create_chat` leads with a read verb and creates, and
- * `mark_as_read` ENDS with one while writing. Both are refused here.
+ * Checked against EVERY segment, and it is what makes matching a read verb
+ * ANYWHERE safe: `get_or_create_chat` leads with a read verb and creates,
+ * `mark_as_read` ENDS with one while writing, and — measured off a real
+ * server — `google_tasks_set_default_list` ends with one too. All three are
+ * refused here.
  *
- * **Its job is much narrower than the list makes it look**, and stating the
- * bound is what stops it growing to sixty entries: a name with no read verb at
- * either end is already refused, so this only ever decides names that CO-OCCUR
- * a write verb with a read verb at an end. Do not treat it as a general
- * vocabulary of writes.
+ * **The bound its previous docstring stated moved rather than vanished
+ * (#612).** While the read test was end-anchored, this only ever decided names
+ * that CO-OCCURRED a write verb with a read verb AT AN END — which is what
+ * licensed "do not treat it as a general vocabulary of writes". Matching a read
+ * verb at any POSITION widens that population to every co-occurrence wherever
+ * the read verb sits, and makes this the sole discriminator over it. The old
+ * advice still stands, for a reason the next paragraph measures rather than
+ * asserts: the set grew by twelve, not by sixty.
  *
- * It is also a stop-gap. #570 replaces the guessing entirely with MCP's own
- * `readOnlyHint`, at which point this is the fallback for unannotated servers
- * rather than the primary answer.
+ * **What an entry here can actually do is much narrower than "refuse a write",
+ * and the obvious justification for one is measurably wrong.** A mutating tool
+ * is named for its mutation — `merge_pull_request`, `share_file`,
+ * `sync_folder`, `send_message` — so it carries no read verb and is refused by
+ * ABSENCE, with or without the verb in this set. Measured over all twenty
+ * candidates considered for #612: every single one, still refused without it.
+ * So an entry can only ever fire on a name that CO-OCCURS a read verb, which
+ * means the compound shape (`github_pr_get_status_and_merge`) and nothing else.
+ *
+ * **And the co-occurrence shape that actually exists in the wild is a READ.**
+ * `get_X_status`, `list_X_requests`, `get_X_link`, `list_X_keys` — that is how
+ * vendors name lookups, and the compound this set exists for was not found on
+ * any real server. So the rule for adding is NOT "is it a mutation"; it is:
+ * does a real read name co-occur it? `@zereight/mcp-gitlab` alone answers yes
+ * for `merge` (twenty read tools) and `trigger` (two), and dropping those two
+ * plus eight others recovered 22 real reads while leaking ZERO of that server's
+ * 104 real write names. An entry that fails this test costs a user a watcher
+ * they cannot point at GitLab merge requests — the same sentence, for the same
+ * reason, that #612 is about — and buys a compound nobody ships.
+ *
+ * `risk.test.ts` carries a negative case per entry, each riding on a MIDDLE
+ * read verb, because that is the population this holds on its own; it also
+ * pins the accepted cost, which is that the dropped verbs let their compounds
+ * through.
+ *
+ * **`email` is deliberately absent**, and it is the case that shows this set
+ * and {@link EMIT_VERBS} are not interchangeable: it is an emit verb, and
+ * putting it here would classify `google_gmail_get_email` as a write — the
+ * exact bug #612 reports.
+ *
+ * It is also a stop-gap for a server that declares nothing. Since #570
+ * {@link classifyMCPTool} prefers MCP's own `readOnlyHint` over any of this,
+ * so on an annotating server this is the fallback rather than the answer.
  */
 const WRITE_VERBS = new Set([
   'create',
@@ -78,6 +113,29 @@ const WRITE_VERBS = new Set([
   'forward',
   'clear',
   'draft',
+  // Added with the any-position read match (#612), and the paragraph above says
+  // what they can and cannot do: none of these is why its own server's mutating
+  // tool is refused, and they exist for the compound shape alone.
+  //
+  // Ten more were considered and DROPPED on measurement, because a real read
+  // name co-occurs each: `merge`, `trigger`, `deploy`, `sync`, `share`, `join`,
+  // `invite`, `import`, `export`, `refresh`. `merge` is the one that decides it
+  // — `@zereight/mcp-gitlab` exports twenty read tools carrying it
+  // (`list_merge_requests`, `get_merge_request_diffs`, …), so keeping it would
+  // have refused a watcher on GitLab merge requests with the same sentence, for
+  // the same reason, that #612 is about.
+  'append',
+  'replace',
+  'complete',
+  'respond',
+  'approve',
+  'cancel',
+  'revoke',
+  'assign',
+  'close',
+  'publish',
+  'submit',
+  'notify',
 ]);
 
 /**
@@ -88,17 +146,29 @@ const WRITE_VERBS = new Set([
  * end-anchoring as load-bearing reasoning. A name that describes a mechanism the
  * function no longer has is the same defect as a comment that outran the code.
  *
- * Matches a read verb at EITHER end, which is the fix: this was end-anchored
- * only (`/(?:^|_)(search|list|…)$/`), so it recognised `messages_list` and not
- * `list_messages` — and verb-first naming is at least as common. Beeper's
- * `list_messages` was therefore classified `kind: 'write'`, which is not a
- * watcher problem: `mcp.ts` feeds this into every tool's risk tier, so on any
- * verb-first server EVERY read tool was a medium-risk write — refused outright
- * under `toolMode: 'read-only'`, prompting under `strict`, and excluded from the
- * resolver's lookup allowlist.
+ * Matches a read verb at ANY segment position, with no write verb anywhere.
  *
- * It is a loosening, so it is guarded rather than widened: a read verb at either
- * end, and NO write verb anywhere. The verb set itself is unchanged.
+ * It got there in two steps, and the second is the interesting one. #569 moved
+ * it off a pure suffix (`/(?:^|_)(search|list|…)$/`), which recognised
+ * `messages_list` and not `list_messages` — verb-first naming is at least as
+ * common, so on any verb-first server EVERY read tool was a medium-risk write.
+ * That fix matched a read verb at either END, which is a better guess and still
+ * the wrong shape: a server that prefixes its own tools with a namespace pushes
+ * the verb into the MIDDLE, and `google-mcp` does exactly that. Measured,
+ * `google_gmail_list_emails`, `google_gmail_list_unread_emails`,
+ * `google_gmail_get_email` and `google_calendar_get_events` were all writes, so
+ * a watcher refused to poll a Gmail inbox and the user fell back to cron (#612).
+ *
+ * The consequence is not only the watcher gate. `mcp.ts` feeds this into every
+ * MCP tool's `kind`, `sideEffect` and `nonIdempotent`, which reach six places:
+ * the confirm gate, the read-only block gate, `write-barrier.ts`, the
+ * reconnect-retry refusal, `duplicate-guard.ts` and `mcp-prose-args.ts` — so
+ * `google_gmail_get_email` was also having its arguments typographically
+ * folded as though it emitted something.
+ *
+ * Widening moves the whole burden onto {@link WRITE_VERBS}, which is why that
+ * set grew in the same change; see its docstring for the invariant that
+ * replaced "a name with no read verb at either end is already refused".
  *
  * The namespace is stripped first. Keys are `server_hash__tool` since #413, so
  * segmenting the whole key would make the first segment the server name and the
@@ -128,9 +198,10 @@ const WRITE_VERBS = new Set([
  * A rule keyed on write-ness refuses the second `focus_app` before the send it
  * exists to stop is ever reached.
  *
- * Same stop-gap status as its neighbour above, and the same replacement: MCP
- * declares `idempotentHint` for exactly this, and #570 is where reading the
- * server's own annotations lands. Until then a name is all there is.
+ * Same stop-gap status as its neighbour above, and the same replacement, which
+ * has now landed: MCP declares `idempotentHint` for exactly this, and
+ * {@link classifyMCPTool} prefers it. This is what answers for a server that
+ * declares nothing, which is still nearly all of them.
  */
 const EMIT_VERBS = new Set([
   'send',
@@ -156,7 +227,9 @@ const EMIT_VERBS = new Set([
  * shared `parseMCPToolName`, so the two cannot disagree about where the tool
  * name starts. Callers must AND this with `!isReadOnlyMCPToolName(name)`:
  * `list_drafts` and `search_posts` carry an emit verb and are lookups, and a
- * read is never worth refusing.
+ * read is never worth refusing. {@link classifyMCPTool} does that conjunction
+ * for the MCP path; `mcp-prose-args.ts` still spells it out because it asks a
+ * narrower question of its own.
  */
 export function hasEmitVerb(name: string): boolean {
   const bare = parseMCPToolName(name)?.tool ?? name;
@@ -178,7 +251,106 @@ export function isReadOnlyMCPToolName(name: string): boolean {
   const bare = parseMCPToolName(name)?.tool ?? name;
   const segments = bare.toLowerCase().split('_').filter(Boolean);
   if (segments.some((seg) => WRITE_VERBS.has(seg))) return false;
-  return READ_VERBS.has(segments[0]) || READ_VERBS.has(segments[segments.length - 1]);
+  return segments.some((seg) => READ_VERBS.has(seg));
+}
+
+/**
+ * What a server declares about one of its own tools (#570).
+ *
+ * The two fields Bernard acts on, and no more. MCP defines two others —
+ * `destructiveHint` and `openWorldHint` — and they are deliberately NOT here:
+ * `destructiveHint` maps onto `kind: 'dangerous'`, which is `high` risk, which
+ * cron auto-denies headlessly under its default posture, so reading it would
+ * start failing cron jobs that work today. That is a tightening worth making
+ * and it is a decision of its own, not a free rider on a bug fix. A field
+ * nothing enforces is a lie on disk.
+ */
+export interface MCPToolAnnotations {
+  /** `true` → the tool does not modify its environment. */
+  readOnlyHint?: boolean;
+  /** `true` → repeating the call with identical arguments adds no effect. */
+  idempotentHint?: boolean;
+}
+
+/** Whether a classification came from the server or from the name guess. */
+export type ClassificationSource = 'annotation' | 'name';
+
+export interface MCPToolClassification {
+  isRead: boolean;
+  nonIdempotent: boolean;
+  /** Which source decided {@link isRead} — see #570's last acceptance line. */
+  readSource: ClassificationSource;
+  /** Which source decided {@link nonIdempotent}. */
+  idempotencySource: ClassificationSource;
+}
+
+/**
+ * The two facts `mcp.ts` needs about an MCP tool, from the server where it said
+ * so and from the name where it did not (#570).
+ *
+ * Precedence, and the second rung is the one that matters: `readOnlyHint: true`
+ * makes a tool a read whatever its name looks like, and `readOnlyHint: false`
+ * makes it a write **even when the name reads like a lookup** — today's
+ * direction of failure, where a server explicitly marking a tool destructive is
+ * silently overridden by our own regex. Absent, the name heuristic decides
+ * exactly as it did before, which is the fallback for the overwhelming majority
+ * of servers: `google-mcp`, the server behind #612, declares no annotations at
+ * all across its 61 tools, so its fix comes entirely from the widened name
+ * match above.
+ *
+ * "Annotations are untrusted" is not an argument for the regex, and #570 spends
+ * a section on why: a hostile server that would lie in `readOnlyHint: true` can
+ * equally name its destructive tool `get_stuff`. Same attacker, same trust
+ * model, and the name is simply the worse instrument — wrong on the honest
+ * servers, which are the whole population that matters. The real controls are
+ * the permission gates, the write scope and `confirmMode`, and none of them
+ * moves here.
+ *
+ * Idempotency is only asked of a WRITE. MCP says `idempotentHint` is meaningful
+ * only when `readOnlyHint` is false, and Bernard already had the same rule for
+ * its own reason — `duplicate-guard.ts` must never refuse a repeated lookup —
+ * which is why `mcp.ts` spelled it `!isRead && hasEmitVerb(raw)`. That
+ * conjunction moves in here so the two halves cannot be recombined wrongly by
+ * the next caller.
+ *
+ * Note what is deliberately NOT inherited from the spec: MCP says an
+ * unannotated tool should be assumed destructive and non-idempotent. Applying
+ * that would make every unannotated write non-idempotent, which turns off the
+ * reconnect-and-retry for effectively every server in the wild and hands
+ * `duplicate-guard.ts` a far wider population than it was measured against.
+ * #570 asks for the opposite and says so: an unannotated tool behaves exactly
+ * as it does now.
+ */
+export function classifyMCPTool(
+  rawName: string,
+  annotations?: MCPToolAnnotations,
+): MCPToolClassification {
+  // `typeof === 'boolean'`, not `!== undefined`: this object originates as
+  // untyped server data, so a string `"true"` must not read as a declaration.
+  // The reader in `mcp.ts` type-guards too — twice rather than once, because
+  // that one is the boundary and this one is the decision.
+  const declaredRead = annotations?.readOnlyHint;
+  const hasDeclaredRead = typeof declaredRead === 'boolean';
+  const isRead = hasDeclaredRead ? declaredRead : isReadOnlyMCPToolName(rawName);
+  const readSource: ClassificationSource = hasDeclaredRead ? 'annotation' : 'name';
+
+  // A read is never worth refusing a repeat of, so whatever decided `isRead`
+  // decided this too — which is why the source is carried across rather than
+  // reported as a second, unasked question.
+  if (isRead) {
+    return { isRead, nonIdempotent: false, readSource, idempotencySource: readSource };
+  }
+
+  const declaredIdempotent = annotations?.idempotentHint;
+  if (typeof declaredIdempotent === 'boolean') {
+    return {
+      isRead,
+      nonIdempotent: !declaredIdempotent,
+      readSource,
+      idempotencySource: 'annotation',
+    };
+  }
+  return { isRead, nonIdempotent: hasEmitVerb(rawName), readSource, idempotencySource: 'name' };
 }
 
 /**
