@@ -139,7 +139,7 @@ import type {
   PermissionConsentRequest,
   ToolOptions,
 } from './tools/types.js';
-import type { CoreMessage } from 'ai';
+import type { CoreMessage } from './framework/sdk.js';
 import {
   SESSION_BOUNDARY_ACK,
   SESSION_BOUNDARY_NOTICE,

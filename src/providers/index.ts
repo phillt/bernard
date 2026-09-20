@@ -1,7 +1,7 @@
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createXai } from '@ai-sdk/xai';
-import type { LanguageModel } from 'ai';
+import type { LanguageModel } from '../framework/sdk.js';
 import type { SupportedSdk } from './types.js';
 import type { BernardConfig } from '../config.js';
 import { getProviderApiKey } from '../config.js';

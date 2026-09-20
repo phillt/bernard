@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { formatAskUserAnswers, injectAskUserHistoryMessages } from './ask-user-history.js';
-import type { CoreMessage } from 'ai';
+import type { CoreMessage } from '../framework/sdk.js';
 import type { AskUserBatchResult } from './types.js';
 
 // ---------------------------------------------------------------------------

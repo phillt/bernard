@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { Tool } from 'ai';
+import type { Tool } from '../../sdk.js';
 import {
   mcpDelegateDefinition,
   MCP_DELEGATE_STEP_RATIO,

@@ -1,4 +1,5 @@
-import { tool, type Tool } from 'ai';
+import { tool } from 'ai';
+import type { Tool } from '../sdk.js';
 import type { BernardTool, ToolMeta, ToolResult, ToolRisk } from './types.js';
 import { isToolResult } from './types.js';
 // Leaf module (no imports of its own), so this cannot create a cycle.

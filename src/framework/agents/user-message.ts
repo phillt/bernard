@@ -1,4 +1,4 @@
-import type { CoreMessage } from 'ai';
+import type { CoreMessage } from '../sdk.js';
 
 /**
  * The seed user message a dispatched agent receives.

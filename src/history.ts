@@ -1,5 +1,5 @@
 import * as fs from 'node:fs';
-import type { CoreMessage } from 'ai';
+import type { CoreMessage } from './framework/sdk.js';
 import { STATE_DIR, HISTORY_FILE } from './paths.js';
 import { stripImagesFromHistory } from './image.js';
 

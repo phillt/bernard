@@ -1,4 +1,5 @@
-import { tool, type UserContent } from 'ai';
+import { tool } from 'ai';
+import type { UserContent } from '../framework/sdk.js';
 import { z } from 'zod';
 import { attachMeta } from '../framework/tools/adapter.js';
 

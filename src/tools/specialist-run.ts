@@ -1,4 +1,5 @@
-import { tool, type Tool } from 'ai';
+import { tool } from 'ai';
+import type { Tool } from '../framework/sdk.js';
 import { invocationRefusal } from '../specialist-authority.js';
 import { attachmentsArg, resolveAttachments } from './attachment-args.js';
 import { z } from 'zod';

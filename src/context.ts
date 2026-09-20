@@ -1,4 +1,5 @@
-import { generateText, type CoreMessage } from 'ai';
+import { generateText } from 'ai';
+import type { CoreMessage } from './framework/sdk.js';
 import { debugLog, isDebugEnabled } from './logger.js';
 import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';

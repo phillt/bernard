@@ -1,4 +1,5 @@
-import { zodSchema, type Tool } from 'ai';
+import { zodSchema } from 'ai';
+import type { Tool } from './framework/sdk.js';
 
 /**
  * Wire size of a dispatch's tool block, in characters (#253).

@@ -1,4 +1,4 @@
-import type { Tool } from 'ai';
+import type { Tool } from '../framework/sdk.js';
 import { createTools } from '../tools/index.js';
 import type { AgentContext } from '../framework/context.js';
 import { buildChildTools, type ToolWrapperInput } from '../framework/agents/index.js';

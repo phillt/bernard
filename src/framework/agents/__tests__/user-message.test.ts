@@ -14,7 +14,7 @@ import { subAgentDefinition } from '../sub.js';
 import { taskDefinition } from '../task.js';
 import { specialistDefinition } from '../specialist.js';
 import { mcpDelegateDefinition } from '../mcp-delegate.js';
-import type { CoreMessage } from 'ai';
+import type { CoreMessage } from '../../sdk.js';
 
 /**
  * One brief, and the invariant that makes replacing four builders with it safe:

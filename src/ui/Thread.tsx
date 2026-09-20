@@ -9,7 +9,7 @@ import type {
   ImagePart,
   ToolCallPart,
   ToolResultPart,
-} from 'ai';
+} from '../framework/sdk.js';
 
 type ReasoningPart = { type: 'reasoning'; text: string };
 type RedactedReasoningPart = { type: 'redacted-reasoning'; data: string };

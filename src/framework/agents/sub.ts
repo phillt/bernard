@@ -1,4 +1,4 @@
-import type { CoreMessage } from 'ai';
+import type { CoreMessage } from '../sdk.js';
 import { buildDispatchUserMessage, type DispatchInput } from './user-message.js';
 import { capSubagentResult } from '../../tools/result-cap.js';
 import { appendActivitySummary } from '../../tools/activity-summary.js';

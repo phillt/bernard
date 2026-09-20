@@ -1,11 +1,11 @@
+import { generateText } from 'ai';
 import {
-  generateText,
   type CoreMessage,
   type ToolCallRepairFunction,
   type ToolSet,
   NoSuchToolError,
   InvalidToolArgumentsError,
-} from 'ai';
+} from './framework/sdk.js';
 import { getModelForConfig, getProviderOptionsForConfig } from './providers/index.js';
 import type { BernardConfig } from './config.js';
 import type { ModelTier } from './model-policy.js';

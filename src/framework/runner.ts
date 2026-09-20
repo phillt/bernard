@@ -1,14 +1,13 @@
 import crypto from 'node:crypto';
-import {
-  generateText,
-  streamText,
-  type CoreMessage,
-  type GenerateTextResult,
-  type LanguageModel,
-  type TextStreamPart,
-  type Tool,
-  type ToolCallRepairFunction,
-} from 'ai';
+import { generateText, streamText } from 'ai';
+import type {
+  CoreMessage,
+  GenerateTextResult,
+  LanguageModel,
+  TextStreamPart,
+  Tool,
+  ToolCallRepairFunction,
+} from './sdk.js';
 import type { z } from 'zod';
 import { debugLog, isDebugEnabled } from '../logger.js';
 import { toolBlockBytes } from '../tool-bytes.js';

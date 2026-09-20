@@ -1,4 +1,5 @@
-import { tool, type Tool } from 'ai';
+import { tool } from 'ai';
+import type { Tool } from '../framework/sdk.js';
 import { z } from 'zod';
 import { resolveProviderAndModel, defaultProviderErrorMessage } from '../config.js';
 import { printSubAgentStart, printSubAgentEnd } from '../output.js';

@@ -51,7 +51,7 @@ import { MemoryStore } from './memory.js';
 import type { RAGStore, RAGSearchResult } from './rag.js';
 import type { BernardConfig } from './config.js';
 import { clearLLMCache } from './llm-cache.js';
-import type { CoreMessage } from 'ai';
+import type { CoreMessage } from './framework/sdk.js';
 
 function makeConfig(): BernardConfig {
   return {

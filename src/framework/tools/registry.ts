@@ -1,4 +1,4 @@
-import type { Tool } from 'ai';
+import type { Tool } from '../sdk.js';
 import type { BernardTool, ToolMeta } from './types.js';
 import { toolToAISDK } from './adapter.js';
 

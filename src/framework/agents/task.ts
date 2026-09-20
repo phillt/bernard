@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { CoreMessage } from 'ai';
+import type { CoreMessage } from '../sdk.js';
 import { buildDispatchUserMessage, type DispatchInput } from './user-message.js';
 import type { BernardConfig } from '../../config.js';
 import { extractJsonBlock, nullableOptional } from '../../structured-output.js';

@@ -1,4 +1,4 @@
-import { type CoreMessage } from 'ai';
+import type { CoreMessage } from './framework/sdk.js';
 import { getModelProfile } from './providers/index.js';
 import { getProviderRequestCount } from './providers/request-counter.js';
 import {

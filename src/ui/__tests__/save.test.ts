@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type { CoreMessage } from 'ai';
+import type { CoreMessage } from '../../framework/sdk.js';
 import { persistAgentState } from '../save.js';
 import type { Agent } from '../../agent.js';
 import type { HistoryStore } from '../../history.js';

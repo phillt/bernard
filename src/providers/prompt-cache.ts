@@ -1,5 +1,5 @@
 import type { BernardConfig } from '../config.js';
-import type { CoreMessage } from 'ai';
+import type { CoreMessage } from '../framework/sdk.js';
 
 /**
  * Anthropic prompt caching (#269).

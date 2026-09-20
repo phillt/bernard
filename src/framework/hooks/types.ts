@@ -1,4 +1,4 @@
-import type { CoreMessage } from 'ai';
+import type { CoreMessage } from '../sdk.js';
 
 /**
  * The cache-token fields `@ai-sdk/anthropic` writes under its own namespace.

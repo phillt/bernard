@@ -1,4 +1,4 @@
-import type { CoreMessage } from 'ai';
+import type { CoreMessage } from './framework/sdk.js';
 import type { MemoryStore } from './memory.js';
 import type { RAGSearchResult } from './rag.js';
 import type { RoutineSummary } from './routines.js';

@@ -142,7 +142,7 @@ import { resolveReferences, shouldSkipResolver } from '../../reference-resolver.
 import { INTERRUPT_CANCEL_NOTE } from '../../react.js';
 import { INTERRUPTED_MARKER } from '../../session-markers.js';
 import { DimensionsProvider } from '../DimensionsContext.js';
-import type { CoreMessage } from 'ai';
+import type { CoreMessage } from '../../framework/sdk.js';
 import type { BernardConfig } from '../../config.js';
 import type { Agent } from '../../agent.js';
 import type { HistoryStore } from '../../history.js';

@@ -4,7 +4,7 @@
  * it easy to unit-test without wiring up the full REPL.
  */
 
-import type { CoreMessage } from 'ai';
+import type { CoreMessage } from '../framework/sdk.js';
 import type { AskUserBatchResult } from './types.js';
 
 /**

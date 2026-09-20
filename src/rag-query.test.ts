@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { CoreMessage } from 'ai';
+import type { CoreMessage } from './framework/sdk.js';
 import {
   extractRecentUserTexts,
   extractRecentToolContext,

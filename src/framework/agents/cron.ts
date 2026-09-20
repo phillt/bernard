@@ -1,4 +1,5 @@
-import { tool, type CoreMessage, type Tool } from 'ai';
+import { tool } from 'ai';
+import type { CoreMessage, Tool } from '../sdk.js';
 import { z } from 'zod';
 import { createTools } from '../../tools/index.js';
 import { formatCurrentDateTime } from '../../tools/datetime.js';

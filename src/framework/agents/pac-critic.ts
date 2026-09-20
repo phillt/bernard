@@ -1,4 +1,4 @@
-import type { CoreMessage, Tool } from 'ai';
+import type { CoreMessage, Tool } from '../sdk.js';
 import { z } from 'zod';
 import { parseStructuredOutput } from '../../structured-output.js';
 import { createDateTimeTool } from '../../tools/datetime.js';

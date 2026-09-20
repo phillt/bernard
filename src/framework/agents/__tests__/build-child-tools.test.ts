@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildChildTools } from '../tool-wrapper.js';
-import type { Tool } from 'ai';
+import type { Tool } from '../../sdk.js';
 
 const reg = (names: string[]) =>
   Object.fromEntries(names.map((n) => [n, {} as Tool])) as Record<string, Tool>;
