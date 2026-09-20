@@ -24,6 +24,97 @@ import { MANIFEST_PATH, ICON_PATH } from './host/webmanifest.js';
 import { UI_RUNTIME_PATH } from './host/ui-runtime.js';
 import { INTENT_FIELDS, INTENT_FIELD_LABELS } from './apps/brief.js';
 import { SLASH_COMMANDS } from './ui/slash-commands.js';
+import { CONFIRM_MODES, TOOL_MODES } from './tool-modes.js';
+import { COORDINATOR_MODES } from './coordinator-modes.js';
+import { REMOTE_MESSAGE_MODES } from './remote-messages.js';
+import { DEFAULT_ROLE_TIERS, MODEL_ROLES } from './model-roles.js';
+import { WIZARD_CATEGORIES_DATA } from './profiles-wizard-data.js';
+
+/**
+ * The whole index, which is what `docs list` returns.
+ *
+ * Measured rather than chosen: the corpus rendered 1,656 characters over 7
+ * documents when this was raised, i.e. about 222 per row. The previous bound
+ * was 2,000 — one spare row — so writing a manual against it fails on the
+ * SECOND file, on an assertion naming whichever document happened to be added
+ * last.
+ *
+ * The finished manual measures **5,458 over 22 documents**, about 250 a row:
+ * the estimate this was set from was low, because the older corpus had shorter
+ * titles and terser descriptions. So the remaining headroom is two or three
+ * documents rather than a dozen, and the right response to the next one that
+ * does not fit is to cut a routing line rather than to raise this — the index
+ * is what a model reads before choosing, and a line that names its trigger in
+ * fewer words is a better line.
+ *
+ * Affordable because the index is returned on a `list` CALL, never carried in
+ * the cached prefix: `docs.ts`'s `DESCRIPTION` deliberately does not enumerate
+ * the documents for exactly that reason. So this is a per-call cost on a tool
+ * used once or twice in a session, not a per-turn tax — which is the only
+ * reason raising it is cheap, and the reason it must not become the place the
+ * corpus grows without anyone noticing.
+ */
+const MAX_INDEX_CHARS = 6_000;
+
+/**
+ * One row of that index. See the per-document assertion for why a sum needs a
+ * per-row ceiling as well.
+ */
+const MAX_DESCRIPTION_CHARS = 220;
+
+/** `src/index.ts`, read once — the only statement of what the CLI accepts. */
+const cliSource = fs.readFileSync(path.join('src', 'index.ts'), 'utf-8');
+
+/** Every `.command('<name> …')` Commander is given, in declaration order. */
+const cliCommands = [...cliSource.matchAll(/\.command\('([a-z][a-z0-9-]*)/g)].map((m) => m[1]);
+
+/**
+ * Every `--flag` spelling that appears in `src/index.ts`, as whole tokens.
+ *
+ * Deliberately every occurrence rather than only the first argument of an
+ * `.option()` call: a flag named in a description or a comment there is still a
+ * flag this CLI knows about, and parsing Commander's option grammar to be
+ * stricter would fail on `-b, --bundled` and `--allow <specifier...>` long
+ * before it caught anything.
+ *
+ * Whole tokens matter, though. A substring test passes `--voice-normalize`,
+ * which does not exist — the real flag is `--no-voice-normalize`, and the
+ * option Commander derives from it is not something a reader can type.
+ */
+const cliFlags = new Set(cliSource.match(/--[a-z][a-z0-9-]*/g) ?? []);
+
+/**
+ * Commander's own flags, which are real and appear in no `.option()` call.
+ * `--version` is registered by `.version()`, `--help` by Commander itself.
+ */
+const BUILTIN_FLAGS = new Set(['--help', '--version']);
+
+/**
+ * Words that follow `bernard` in a backticked span without naming a command,
+ * each with the reason — a `Record`, never a bare list, so a lazy exclusion has
+ * to be argued for in review (`settings-coverage.test.ts`'s rule).
+ *
+ * The collision is real rather than sloppy: `bernard` is ALSO the JavaScript
+ * global an applet page calls, and the browser's own message for a missing one
+ * is quoted verbatim in `applet-page` — verbatim being the entire value, since
+ * a reader greps the console text. Excluded by the following word rather than
+ * by loosening the pattern, because every looser rule that skips this also
+ * skips a real reference: dropping three-token spans loses `bernard app list`,
+ * and requiring a flag loses `bernard setup`.
+ */
+const NOT_A_SUBCOMMAND: Record<string, string> = {
+  is: "the browser error `bernard is not defined`, where `bernard` is the page's JS global",
+};
+
+/** Every `.ts`/`.tsx` file under `src/`, excluding tests. */
+function sourceFiles(dir = 'src', out: string[] = []): string[] {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) sourceFiles(full, out);
+    else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) out.push(full);
+  }
+  return out;
+}
 
 describe('the document budget', () => {
   it('leaves a budget-sized document under the only cut a tool result meets', () => {
@@ -110,6 +201,14 @@ describe('the shipped corpus', () => {
     for (const doc of docs) {
       for (const m of doc.body.match(/`(--[a-z][a-z0-9-]*)`/g) ?? []) {
         const name = m.slice(1, -1);
+        // A CLI flag shares the `--name` spelling, and the manual backticks
+        // `--sdk` and `--allow` exactly as it backticks `--accent`. Those are
+        // checked against `src/index.ts` by the flag guard below, so the two
+        // guards together still say that EVERY backticked `--name` is either a
+        // token the stylesheet serves or a flag the CLI accepts — which is
+        // strictly stronger than either alone, and is why this is an exemption
+        // rather than a narrower regex.
+        if (cliFlags.has(name)) continue;
         expect(served, `${doc.id} names ${name}`).toHaveProperty(name);
       }
     }
@@ -125,6 +224,140 @@ describe('the shipped corpus', () => {
     for (const doc of docs) {
       for (const m of doc.body.match(/\/__bernard\/[A-Za-z0-9._-]+/g) ?? []) {
         expect([...served], `${doc.id} names ${m}`).toContain(m);
+      }
+    }
+  });
+
+  it('never names a `bernard` command that does not exist, in any document', () => {
+    // Same shape as the served-path guard above, and the direction that has
+    // actually failed: `docs/manual.html` still tells people to set
+    // `BERNARD_REFERENCE_LOOKUP`, which #447 deleted along with the module it
+    // gated. A manual naming a command that was removed is worse than one that
+    // omits it — the reader types it, gets an error, and distrusts the rest.
+    //
+    // BACKTICKED only. Prose legitimately says "ask bernard to check the
+    // deploy", and a bare-word scan would read `to` as a subcommand.
+    for (const doc of docs) {
+      for (const span of doc.body.match(/`[^`\n]+`/g) ?? []) {
+        const named = /^`bernard\s+([a-z][a-z0-9-]*)/.exec(span);
+        if (!named || named[1] in NOT_A_SUBCOMMAND) continue;
+        expect(cliCommands, `${doc.id} names \`bernard ${named[1]}\``).toContain(named[1]);
+      }
+    }
+  });
+
+  it('routes to every other document from `bernard-capabilities`', () => {
+    // That document is the one the base prompt points at for "what can you
+    // do?", so a topic it does not name is a topic reachable only by a model
+    // that already guessed the id. There is no search — `renderIndex` is the
+    // whole retrieval layer — so the router is the other half of discovery,
+    // and it is the half that rots, since adding a document does not touch it.
+    const body = findDoc('bernard-capabilities')!.body;
+    for (const doc of docs) {
+      if (doc.id === 'bernard-capabilities') continue;
+      expect(body, `nothing routes to ${doc.id}`).toContain(doc.id);
+    }
+  });
+
+  it('documents every `bernard` command, or says why not', () => {
+    // The record-to-table direction, which is the one the mistake is made in:
+    // a command added to `src/index.ts` works, ships, and is simply absent from
+    // the manual, which nothing notices. `settings-coverage.test.ts` makes the
+    // same argument for `ProfileSettings`.
+    //
+    // A `Record`, never a `string[]`. Requiring a sentence is the cheapest
+    // thing that makes a lazy exclusion visible in review — "we did not get to
+    // it" does not survive being written down next to the name.
+    const excluded: Record<string, string> = {
+      'validate-lineup':
+        'a diagnostic probe; `bernard-models` tells the reader to run it without tabulating it as a command',
+      'voice-test':
+        'a diagnostic; `bernard-cli` names it under diagnostics and `/voice` is the surface people use',
+      'tool-profiles': 'a diagnostic readout of what Bernard learned, named under diagnostics',
+    };
+    // Backticked spans, with a leading `bernard ` optional, because a document
+    // grouping a family writes `` `remove-key` `` and a document showing an
+    // invocation writes `` `bernard say <text>` ``. Matching the bare word in
+    // prose would accept `app`, `usage`, `update` and `script` by accident,
+    // which are the four this guard most needs to be right about.
+    const mentioned = new Set<string>();
+    for (const doc of docs) {
+      for (const span of doc.body.match(/`[^`\n]+`/g) ?? []) {
+        const inner = span.slice(1, -1).replace(/^bernard\s+/, '');
+        const head = /^([a-z][a-z0-9-]*)/.exec(inner);
+        // Whole token: `cron-delete-all` must not stand in for `cron-delete`.
+        if (head) mentioned.add(head[1]);
+      }
+    }
+    for (const name of cliCommands) {
+      if (name in excluded) continue;
+      expect([...mentioned], `\`bernard ${name}\` is documented nowhere`).toContain(name);
+    }
+  });
+
+  it('never names a `/command` that does not exist, in any document', () => {
+    // The fourth member of a family that had three, and the gap let a wrong
+    // sentence ship: `bernard-models` told the reader `/model` picks a model,
+    // and `/model` is a deprecation stub that flashes a toast pointing at
+    // `/lineup`. It is deliberately absent from `SLASH_COMMANDS` — the one
+    // command the catalogue omits on purpose — so the corpus contradicted
+    // itself, with `bernard-commands` correctly declining to list it two
+    // documents away.
+    //
+    // A slash command is the same promise to the same reader as a `bernard`
+    // subcommand, checked against a catalogue this file already imports. There
+    // was no reason for it to be the unguarded one except that nobody had
+    // written it.
+    const known = new Set(SLASH_COMMANDS.map((c) => c.name));
+    for (const doc of docs) {
+      // Backticked, like the `bernard` guard, and for the sharper version of
+      // the same reason: prose about "the /usage of a tool" is not a command,
+      // and a bare-slash scan reads every path in the corpus as one.
+      for (const span of doc.body.match(/`[^`\n]+`/g) ?? []) {
+        // The closing backtick is itself the terminator, so a bare `` `/help` ``
+        // needs no padding to match.
+        const named = /^`(\/[a-z][a-z-]*)[\s`]/.exec(span);
+        if (!named) continue;
+        expect([...known], `${doc.id} names ${named[1]}`).toContain(named[1]);
+      }
+    }
+  });
+
+  it('never names a CLI flag that does not exist, in any document', () => {
+    // The flag half of the same guarantee. Flags are where a manual rots
+    // fastest: a command survives a rename far more often than its options do.
+    //
+    // CSS custom properties share the `--name` spelling and are checked by
+    // their own guard above, so they are excluded here rather than matched
+    // loosely — a regex narrow enough to miss `--img-src` would also miss
+    // `--no-open`.
+    const cssTokens = new Set([
+      ...Object.keys(APPLET_COLOR_TOKENS),
+      ...Object.keys(APPLET_SCALE_TOKENS),
+    ]);
+    for (const doc of docs) {
+      for (const m of doc.body.match(/(?<![\w-])--[a-z][a-z0-9-]*/g) ?? []) {
+        if (cssTokens.has(m) || BUILTIN_FLAGS.has(m)) continue;
+        expect([...cliFlags], `${doc.id} names ${m}`).toContain(m);
+      }
+    }
+  });
+
+  it('never names a `BERNARD_*` variable nothing reads, in any document', () => {
+    // The third direction of the same rule, and the one the 0.9 manual got
+    // wrong. A variable that is documented and read by nothing is a setting the
+    // reader believes they have changed: they set it, nothing happens, and
+    // there is no error to search for.
+    //
+    // Read sites rather than a registry, because there is no registry — a
+    // setting reaches `loadConfig` as `prefs.X ?? process.env.BERNARD_X ??
+    // DEFAULT`, written inline at each field.
+    const reads = sourceFiles()
+      .map((f) => fs.readFileSync(f, 'utf-8'))
+      .join('\n');
+    for (const doc of docs) {
+      for (const m of doc.body.match(/\bBERNARD_[A-Z0-9_]+/g) ?? []) {
+        expect(reads, `${doc.id} names ${m}`).toContain(`process.env.${m}`);
       }
     }
   });
@@ -148,6 +381,77 @@ describe('the shipped corpus', () => {
     }
   });
 
+  it('derives the permission document from the mode tables', () => {
+    // `tool-modes.ts` exists because three surfaces spelled the same three
+    // answers three different ways and one of them was wrong. A manual is the
+    // fourth surface and the one a reader trusts most, so both halves of every
+    // row are asserted: a label alone would let the explanation drift, which is
+    // precisely the half that was wrong last time.
+    const body = findDoc('bernard-permissions')!.body;
+    for (const table of [TOOL_MODES, CONFIRM_MODES, COORDINATOR_MODES, REMOTE_MESSAGE_MODES]) {
+      for (const row of table) {
+        expect(body).toContain(row.label);
+        expect(body).toContain(row.description);
+      }
+    }
+  });
+
+  it('derives the model document from the role record', () => {
+    // `model-roles.ts` calls itself the single source of truth and derives the
+    // lineup slots, the tier table and the editor menu from one list. Six
+    // labels and eighteen tier cells restated by hand are the one copy running
+    // Bernard cannot check.
+    const body = findDoc('bernard-models')!.body;
+    for (const role of MODEL_ROLES) {
+      expect(body).toContain(role.label);
+      expect(body).toContain(role.description);
+      expect(body).toContain(role.lookFor);
+    }
+    // The grid, whole rows rather than cells. Asserting that the tier NAMES
+    // appear somewhere would pass on a table with every row wrong, and the
+    // reader's question — "what does balanced cost me?" — is answered by a row.
+    for (const role of MODEL_ROLES) {
+      const tiers = (['optimize-tokens', 'balanced', 'optimize-performance'] as const)
+        .map((mode) => DEFAULT_ROLE_TIERS[mode][role.id])
+        .join(' | ');
+      expect(body, `tier row for ${role.id}`).toContain(`| **${role.label}** | ${tiers} |`);
+    }
+  });
+
+  it('derives the settings document from the wizard registry', () => {
+    // `settings-coverage.test.ts` already binds that registry to
+    // `ProfileSettings`, so binding the document to the registry makes the
+    // manual complete by transitivity — a setting added to Bernard fails that
+    // test until it is declared, and fails this one until it is documented.
+    const body = findDoc('bernard-settings')!.body;
+    for (const category of WIZARD_CATEGORIES_DATA) {
+      expect(body).toContain(category.title);
+      for (const field of category.fields) {
+        expect(body, `${field.key} label`).toContain(field.label);
+        // The variable is the half a reader copies into a shell, and the half
+        // the 0.9 manual got wrong by naming one that had been deleted.
+        if (field.envVar) expect(body, `${field.key} variable`).toContain(field.envVar);
+      }
+    }
+  });
+
+  it('keeps every settings cell on one row', () => {
+    // The document renders a first sentence into a markdown table. Nothing
+    // stops a wizard description wrapping inside its first sentence or
+    // containing a pipe — it is prose written for a full-screen step — and
+    // either one silently breaks the table for every row after it.
+    // EXACTLY three cells, not "at most". A pipe inside a cell gives too many
+    // and a newline inside one gives too few, by splitting the row across two
+    // lines — and only the first of those two failures is the one that springs
+    // to mind, which is how a `toBeLessThanOrEqual` here would have shipped
+    // blind to the likelier half.
+    const body = findDoc('bernard-settings')!.body;
+    for (const line of body.split('\n')) {
+      if (!line.startsWith('| ')) continue;
+      expect(line.split(/(?<!\\)\|/).length, `row: ${line}`).toBe(5);
+    }
+  });
+
   it.each(cases)('%s fits the budget', (_id, doc) => {
     expect(doc.body.length).toBeLessThanOrEqual(MAX_DOC_CHARS);
   });
@@ -160,6 +464,11 @@ describe('the shipped corpus', () => {
     expect(doc.description.length).toBeGreaterThan(40);
     expect(doc.description).toMatch(/\b(read|use|consult|check)\b/i);
     expect(doc.title.length).toBeLessThan(60);
+    // And an upper bound, because {@link MAX_INDEX_CHARS} is a SUM. Without a
+    // per-row ceiling one expansive description silently spends three other
+    // documents' share of the index, and the failure then surfaces on whichever
+    // document happened to be added last — which is never the one at fault.
+    expect(doc.description.length).toBeLessThanOrEqual(MAX_DESCRIPTION_CHARS);
   });
 
   it.each(cases)('%s round-trips byte-identically through read', (_id, doc) => {
@@ -181,7 +490,7 @@ describe('the shipped corpus', () => {
   it('keeps the index small enough to hand over whole', () => {
     // L1 is what makes the corpus discoverable without paying for it. If the
     // index itself needs paging, the design has stopped working.
-    expect(renderIndex(docIndex()).length).toBeLessThan(2_000);
+    expect(renderIndex(docIndex()).length).toBeLessThan(MAX_INDEX_CHARS);
   });
 
   it('lists every document it can serve', () => {
