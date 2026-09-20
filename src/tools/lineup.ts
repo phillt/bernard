@@ -5,7 +5,9 @@ import {
   saveLineup,
   resolveActiveLineup,
   validateLineupName,
+  uniformSlot,
   LINEUP_TIERS,
+  LINEUP_SLOT_COUNT,
   type Lineup,
   type LineupTier,
   type LineupSlot,
@@ -44,8 +46,16 @@ const SlotSchema = z.object({
         `the common case when the user pastes a single provider's premium/mid/cheap set.`,
     ),
   tier: z
-    .enum(LINEUP_TIERS as unknown as [string, ...string[]])
-    .describe('Cost tier: premium (strongest), mid, or cheap.'),
+    .enum([...LINEUP_TIERS, 'all'] as unknown as [string, ...string[]])
+    // Each axis's `describe` states its OWN fan-out and nothing else; the
+    // combined `role:"all" + tier:"all"` form is named once, in the top-level
+    // description, where the call is chosen. Spelling it in all three cost ~95
+    // bytes of a prompt-cached prefix to repeat a fact the model has already
+    // been told on the way in.
+    .describe(
+      'Cost tier: premium (strongest), mid, or cheap. ' +
+        'Use "all" to apply the same (provider, model) to every tier of this role.',
+    ),
   provider: z.string().describe('Provider id, e.g. "openai", "anthropic", "xai", or a custom one.'),
   model: z.string().describe('Model name as the provider expects it, e.g. "gpt-5.5-pro".'),
   params: z
@@ -60,21 +70,34 @@ const SlotSchema = z.object({
     ),
 });
 
+/** `provider/model` plus a `{k=v,…}` params suffix. */
+function formatCell(s: LineupSlot): string {
+  const p = s.params
+    ? ` {${Object.entries(s.params)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(',')}}`
+    : '';
+  return `${s.provider}/${s.model}${p}`;
+}
+
+/**
+ * The lineup as the agent reads it before deciding what to change.
+ *
+ * A uniform lineup collapses to one line rather than printing six identical
+ * rows — lossless, since every cell holds the same binding, and it is the
+ * legibility half of #618 on the agent's side: six rows to diff by eye is how
+ * an agent concludes it must write 18 slot entries.
+ */
 function formatMatrix(l: Lineup): string {
+  const bound = uniformSlot(l.roles);
+  if (bound) {
+    return `  Every slot (all ${LINEUP_SLOT_COUNT} role × tier cells): ${formatCell(bound)}`;
+  }
   const lines: string[] = [];
   for (const roleId of ALL_ROLE_IDS) {
     const slots = l.roles[roleId];
-    const cell = (t: LineupTier): string => {
-      const s = slots[t];
-      const p = s.params
-        ? ` {${Object.entries(s.params)
-            .map(([k, v]) => `${k}=${v}`)
-            .join(',')}}`
-        : '';
-      return `${s.provider}/${s.model}${p}`;
-    };
     lines.push(
-      `  ${getRole(roleId).label.padEnd(16)} premium=${cell('premium')}  mid=${cell('mid')}  cheap=${cell('cheap')}`,
+      `  ${getRole(roleId).label.padEnd(16)} premium=${formatCell(slots.premium)}  mid=${formatCell(slots.mid)}  cheap=${formatCell(slots.cheap)}`,
     );
   }
   return lines.join('\n');
@@ -82,14 +105,16 @@ function formatMatrix(l: Lineup): string {
 
 /**
  * Applies sparse slot assignments onto a (cloned) role matrix, mutating it in
- * place. `role: 'all'` fans the binding out across every role at that tier.
+ * place. `role: 'all'` fans the binding out across every role; `tier: 'all'`
+ * across every tier. Both together bind all {@link LINEUP_SLOT_COUNT} cells —
+ * the one-entry form of #618's "bind every slot to one model", so the agent
+ * needs one call where it previously needed 18 (or, after `role: 'all'`, 3).
  */
 function applySlots(
   roles: Record<RoleId, RoleSlots>,
   slots: Array<z.infer<typeof SlotSchema>>,
 ): void {
   for (const s of slots) {
-    const tier = s.tier as LineupTier;
     const provider = s.provider.trim();
     const model = s.model.trim();
     // Capability-gate params: drop anything this (provider, model) rejects so a
@@ -100,8 +125,13 @@ function applySlots(
       model,
       ...(safeParams && Object.keys(safeParams).length > 0 ? { params: safeParams } : {}),
     };
-    const targets: RoleId[] = s.role === 'all' ? [...ALL_ROLE_IDS] : [s.role as RoleId];
-    for (const r of targets) roles[r] = { ...roles[r], [tier]: { ...binding } };
+    const targetRoles: RoleId[] = s.role === 'all' ? [...ALL_ROLE_IDS] : [s.role as RoleId];
+    const targetTiers: LineupTier[] = s.tier === 'all' ? [...LINEUP_TIERS] : [s.tier as LineupTier];
+    for (const r of targetRoles) {
+      const ladder = { ...roles[r] };
+      for (const t of targetTiers) ladder[t] = { ...binding };
+      roles[r] = ladder;
+    }
   }
 }
 
@@ -132,7 +162,8 @@ export function createLineupTool(config?: BernardConfig) {
         '- action="update": change slots on an existing lineup (pass its `id`). Unspecified slots keep their current value.\n' +
         '- action="create": make a new lineup (pass `name`). Unspecified slots are copied from `base` (or the active lineup).\n' +
         '- action="validate": live-probe every distinct model in a lineup (pass `id`, or omit for the active lineup) with the real API key and report which are reachable.\n\n' +
-        'Provide bindings via `slots`: each entry is {role, tier, provider, model}. Use role="all" to set one tier for every role at once (the usual case). ' +
+        'Provide bindings via `slots`: each entry is {role, tier, provider, model}. Use role="all" to set one tier for every role at once (the usual case), ' +
+        'and tier="all" for every tier — role="all" with tier="all" points the entire lineup at one model in a single entry, which is what "use X for everything" means. ' +
         'Set activate=true to make the lineup active immediately. Do NOT guess an id — if unsure which lineup the user means, list and ask.\n\n' +
         'After create/update the new bindings are AUTOMATICALLY live-validated (set validate=false to skip). A model can pass validation and still be too weak for real work, so a green check means "reachable", not "good".',
       parameters: z.object({

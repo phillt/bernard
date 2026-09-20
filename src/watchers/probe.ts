@@ -20,7 +20,7 @@
 import { statSync } from 'node:fs';
 
 import { readToolMeta } from '../framework/tools/adapter.js';
-import { isReadOnlyMCPToolName } from '../risk.js';
+import { isReadOnlyMCPToolName, shouldBlockInReadOnly } from '../risk.js';
 import { digestOf, type Observation } from './evaluate.js';
 import { idPathRefusal, idsAt } from './extract.js';
 import {
@@ -92,11 +92,21 @@ export function watchableToolRefusal(
     return `No tool named "${toolName}" is available in this session.${hint}`;
   }
   const meta = readToolMeta(tool);
-  // A built-in declares its own kind; an MCP tool is classified from its suffix
-  // by `mcp.ts`, which sets `kind: 'read'` for the `*_list` / `*_search` /
-  // `*_get` family. Accept either statement of the same fact.
+  // A built-in declares its own kind; an MCP tool is classified by `mcp.ts`,
+  // which since #570 prefers the server's own `readOnlyHint` and falls back to
+  // the name. Accept either statement of the same fact — the name is still
+  // consulted for a tool carrying no meta at all.
   const declaredRead = meta?.kind === 'read';
-  if (!declaredRead && !isReadOnlyMCPToolName(meta?.rawName ?? toolName)) {
+  // A declared WRITE is authoritative, and this is the branch that makes it so.
+  // The name fallback used to run for every non-read meta, so a server saying
+  // `readOnlyHint: false` about a tool called `list_things` would have been
+  // overridden here by the very guess the annotation exists to replace —
+  // #570's second acceptance line, and the direction it calls the worse of the
+  // two. Written as `shouldBlockInReadOnly(meta)` rather than a second
+  // `kind === 'write'` test so there is one answer to "does this mutate";
+  // `inert` is neither, and keeps falling through to the name exactly as before.
+  const declaredWrite = shouldBlockInReadOnly(meta);
+  if (!declaredRead && (declaredWrite || !isReadOnlyMCPToolName(meta?.rawName ?? toolName))) {
     return `Tool "${toolName}" is not a read-only tool, so a watcher cannot poll it.`;
   }
   if (typeof (tool as { execute?: unknown }).execute !== 'function') {

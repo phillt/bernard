@@ -27,11 +27,17 @@ import { detectResultFailure } from '../../tool-result-shape.js';
  * Pass the AI-SDK MCP `Tool` (already reconnect-wrapped by `MCPManager.getTools`)
  * plus the originating server name. The default `kind` is derived from the
  * tool's own verbs (`isReadOnlyMCPToolName`): a name carrying
- * `search|list|find|get|query|read|lookup` at either end, and no write verb
+ * `search|list|find|get|query|read|lookup` at any segment, and no write verb
  * anywhere, is treated as `read`; everything else is treated as `write`. This drives the risk-based confirmation gate
  * (#144) so write-style MCP tools (Gmail send, Calendar create, etc.) are
  * surfaceable without per-tool config. Callers can still override with
  * `metaOverride` when they know better than the heuristic.
+ *
+ * Note that is the NAME guess alone, where the live path in `src/mcp.ts` now
+ * prefers the server's own `readOnlyHint` through `classifyMCPTool` (#570).
+ * Reaching for the annotation here too would mean threading `tool.metadata`
+ * through a function that has been unwired since it was written; if this is
+ * ever wired up, that is the first thing to change.
  */
 export function wrapMCPTool(
   name: string,

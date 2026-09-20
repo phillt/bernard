@@ -69,6 +69,52 @@ describe('watchableToolRefusal', () => {
     expect(watchableToolRefusal('srv_ab12__messages_search', bare)).toBeNull();
     expect(watchableToolRefusal('srv_ab12__messages_send', bare)).toMatch(/not a read-only/);
   });
+
+  it('allows a read verb in the middle of the name', () => {
+    // #612, at the gate that reported it. `google-mcp` names every tool
+    // `google_<product>_<verb>_<noun>`, so the verb is never at an end and a
+    // Gmail inbox could not be watched at all — the user fell back to cron.
+    const bare = { execute: async () => ({}) };
+    expect(watchableToolRefusal('srv_ab12__google_gmail_list_emails', bare)).toBeNull();
+    expect(watchableToolRefusal('srv_ab12__google_calendar_get_events', bare)).toBeNull();
+    expect(watchableToolRefusal('srv_ab12__google_gmail_send_email', bare)).toMatch(
+      /not a read-only/,
+    );
+  });
+
+  it('refuses a declared write even when its name reads like a lookup', () => {
+    // The name fallback used to run for every non-read meta, so a server
+    // declaring `readOnlyHint: false` about a tool called `list_things` was
+    // overridden HERE by the very guess the annotation exists to replace —
+    // #570's second acceptance line, and the direction it calls the worse of
+    // the two. `rawName` is what `mcp.ts` records and what the fallback reads,
+    // so the fixture has to carry it or this passes for the wrong reason.
+    const r = watchableToolRefusal(
+      'srv_ab12__list_things',
+      fakeTool({ kind: 'write', rawName: 'list_things' }, async () => ({})),
+    );
+    expect(r).toMatch(/not a read-only/);
+    // And the inverse still works: a declared read whose name says otherwise.
+    expect(
+      watchableToolRefusal(
+        'srv_ab12__send_report',
+        fakeTool({ kind: 'read', rawName: 'send_report' }, async () => ({})),
+      ),
+    ).toBeNull();
+  });
+
+  it('still lets an inert tool fall through to the name', () => {
+    // `shouldBlockInReadOnly` is the write test, and `inert` is neither read nor
+    // write — so it keeps reaching the name exactly as before. Narrowing the new
+    // branch to `kind !== 'read'` would refuse a whole classification for no
+    // reason, which is the cheap version of this fix and the wrong one.
+    expect(
+      watchableToolRefusal(
+        'gmail_list',
+        fakeTool({ kind: 'inert', rawName: 'gmail_list' }, async () => ({})),
+      ),
+    ).toBeNull();
+  });
 });
 
 describe('probe — http', () => {

@@ -38,10 +38,13 @@ import {
 } from '../custom-providers.js';
 import {
   LINEUP_TIERS,
+  LINEUP_SLOT_COUNT,
   type Lineup,
   type LineupSlot,
   type LineupTier,
   type RoleSlots,
+  bindEverySlot,
+  uniformSlot,
   loadLineups,
   resolveActiveLineup,
   saveLineup,
@@ -104,7 +107,7 @@ import {
 } from '../image.js';
 import { runDefinition } from '../framework/agents/run.js';
 import { taskDefinition, type TaskInput } from '../framework/agents/task.js';
-import { renderTaskText, type UntrustedData } from '../framework/agents/user-message.js';
+import { attachTo, renderTaskText, type UntrustedData } from '../framework/agents/user-message.js';
 import { WatcherStore } from '../watchers/store.js';
 import { WatcherPoller } from '../watchers/poller.js';
 import { statFileSync } from '../watchers/probe.js';
@@ -240,6 +243,7 @@ import {
 import { setOutputSink } from '../framework/hooks/output-sink.js';
 import { setInkHandlers, type MenuResult } from './ink-handlers.js';
 import { formatAskUserAnswers, injectAskUserHistoryMessages } from '../tools/ask-user-history.js';
+import { timestampUserMessage } from '../tools/datetime.js';
 import {
   VoiceService,
   resolveBackend,
@@ -2840,11 +2844,22 @@ export function App({
         config.provider,
       ).id;
       const primaryRole = MODEL_ROLES[0];
+      // One row is one line, so it can carry one role's ladder at most — which
+      // is why the fallback names WHICH role it is showing. A uniform lineup
+      // has no such caveat and says the whole truth in the same space (#618);
+      // showing role[0]'s ladder there would be six identical facts reported as
+      // one role's, the least legible reading of the most legible state.
+      const describeLineup = (l: Lineup): string => {
+        const bound = uniformSlot(l.roles);
+        return bound
+          ? `every slot — ${formatSlotLine(bound)}`
+          : `${primaryRole.id} — ${summarizeRoleSlots(l.roles[primaryRole.id])}`;
+      };
       const entries: MenuEntry[] = all.map((l) => ({
         label: l.name,
         annotation: `(${l.id})`,
         active: l.id === activeId,
-        description: `${primaryRole.id} — ${summarizeRoleSlots(l.roles[primaryRole.id])}`,
+        description: describeLineup(l),
         value: l.id,
       }));
       entries.push({ type: 'section', title: '' });
@@ -4939,16 +4954,15 @@ export function App({
 
   /**
    * Freeze every history message added since the last commit into the
-   * append-only `staticItems` log (#232). Called at the two turn boundaries
-   * where the per-message extras are known: at turn start for the just-pushed
-   * user message (its pre-rewrite original), and at turn end for the assistant
-   * message (its timing footer). Each item snapshots `config.toolDetails` and
-   * gets a fresh monotonic key, then `committedLenRef` advances so the next
-   * commit only picks up newer messages.
+   * append-only `staticItems` log (#232). Called at the two turn boundaries:
+   * at turn start, to advance the cursor past the just-pushed user message
+   * (which the echo in `runAgentTurn` has already painted since #613), and at
+   * turn end for the assistant message, whose timing footer is the one
+   * per-message extra only this boundary knows. Each item snapshots
+   * `config.toolDetails` and gets a fresh monotonic key, then `committedLenRef`
+   * advances so the next commit only picks up newer messages.
    */
   function commitNewHistory(opts?: {
-    /** Pre-rewrite text, attached to the just-pushed user message in the slice. */
-    rewriteForLastUser?: string;
     /** Timing footer, attached to the last assistant message in the slice. */
     timing?: { endedAt: number; durationMs: number };
     /** Estimated turn cost (#258), attached beside the timing footer. */
@@ -4978,15 +4992,12 @@ export function App({
     const start = committedLenRef.current;
     if (start >= history.length) return;
     const toolDetails = config.toolDetails;
-    // The rewrite original belongs to the just-pushed user message and the
-    // timing footer to the turn's assistant message — i.e. the last of each
-    // role in the slice. Resolve both targets here so callers only pass the
-    // payloads, not history indices to keep in sync.
-    let lastUserIdx = -1;
+    // The timing footer belongs to the turn's assistant message — the last one
+    // in the slice. Resolved here so callers pass the payload, not a history
+    // index to keep in sync.
     let lastAssistantIdx = -1;
     for (let i = start; i < history.length; i++) {
-      if (history[i].role === 'user') lastUserIdx = i;
-      else if (history[i].role === 'assistant') lastAssistantIdx = i;
+      if (history[i].role === 'assistant') lastAssistantIdx = i;
     }
     const appended: StaticItem[] = [];
     for (let i = start; i < history.length; i++) {
@@ -5011,17 +5022,18 @@ export function App({
       appended.push({
         key: String(itemKeyRef.current++),
         message,
-        rewriteOriginal:
-          opts?.rewriteForLastUser !== undefined && i === lastUserIdx
-            ? opts.rewriteForLastUser
-            : undefined,
         timing: opts?.timing && i === lastAssistantIdx ? opts.timing : undefined,
         costUsd: opts?.timing && i === lastAssistantIdx ? opts.costUsd : undefined,
         toolDetails,
       });
     }
     committedLenRef.current = history.length;
-    setStaticItems((prev) => [...prev, ...appended]);
+    // Nothing to append is now the COMMON case at turn start, not a rare one:
+    // since #613 the only message in that slice is the user's, and the echo
+    // has already painted it. `setStaticItems` with a fresh array is a new
+    // reference either way, so without this guard every turn start re-rendered
+    // the whole tree to say nothing. The cursor above still advances.
+    if (appended.length > 0) setStaticItems((prev) => [...prev, ...appended]);
   }
 
   /**
@@ -5115,6 +5127,45 @@ export function App({
     cancelPendingSpeech();
     setInterrupted(false);
     setBusy(true);
+    // Paint the user's own words NOW, before anything is awaited (#613).
+    //
+    // `Prompt` empties the input synchronously on Enter, and until this the
+    // next thing to reach the transcript was the turn-start `commitNewHistory`
+    // on the FAR SIDE of `runPreTurnPipeline` — up to three serial LLM round
+    // trips. The screen therefore sat blank for exactly the window
+    // `pre-turn:end` already measures, on every send.
+    //
+    // `drainNextTurn`'s shape, which is the one this file already proves:
+    // push the item, then mark the canonical history message as already on
+    // screen so the commit skips it. ONE write, never revised into a different
+    // message and never removed — which is what makes it `<Static>`-safe, and
+    // is why the alternative (commit a placeholder, swap it for the real slice
+    // later) is not available in an append-only log.
+    //
+    // Not for an announced turn: `drainNextTurn` has already rendered a
+    // `WakePanel` above it, and a `❯` bubble beside that panel is the exact
+    // duplicate the panel exists to prevent.
+    //
+    // Built with the same two builders `processInput` uses rather than by
+    // hand. `timestampUserMessage` is what `parseUserMessage` reads for the
+    // footer under the bubble, so without it every bubble would silently lose
+    // its time; it is minted at SUBMIT rather than at dispatch, which is both
+    // the truer answer to "when did I say this" and, at
+    // `formatFriendlyTimestamp`'s minute granularity, almost always the same
+    // string. `attachTo` keeps the `[image]` marker on an image turn.
+    // `wrapUserMessage` is deliberately absent — an LLM-only detail
+    // `parseUserMessage` strips anyway, and leaving it off keeps the timestamp
+    // at position 0 so a message whose own first line is `# Request` is not
+    // mistaken for the wrapper.
+    const echoKey = extra?.announced ? null : String(itemKeyRef.current++);
+    if (echoKey !== null) {
+      const echo: StaticItem = {
+        key: echoKey,
+        message: attachTo(timestampUserMessage(input), images),
+        toolDetails: config.toolDetails,
+      };
+      setStaticItems((prev) => [...prev, echo]);
+    }
     const turnStartedAt = Date.now();
     let turnCompleted = false;
     // Whether `agent.processInput` was reached. It is what pushes the user
@@ -5150,24 +5201,44 @@ export function App({
         // of the instruction slot by their type rather than by convention.
         ...(extra?.data ? { data: extra.data } : {}),
       });
-      // A turn whose provenance is already on screen must not also be painted
-      // as a user bubble. `drainNextTurn` renders a `WakePanel` immediately
-      // before this, and `agent.ts` joins the instruction with the observation
-      // block into one `role:'user'` message — so the transcript would show the
-      // whole wall again, behind a `❯` that says the user typed it.
+      // The user's words are already on screen — as the echo above, or, for an
+      // announced turn, as the `WakePanel` `drainNextTurn` pushed. Either way
+      // the canonical message must not be painted a second time: `agent.ts`
+      // joins the instruction with the observation block into one
+      // `role:'user'` message, so the transcript would show the whole wall
+      // again, behind a `❯` that says the user typed it.
       //
-      // Keyed on the RENDER that happened rather than on a text feature that
-      // correlates with it, which is what makes it cover a `time` wake (panel
-      // rendered, no data block) and a `say --run` prompt alike.
+      // Unconditional since #613, where it used to be gated on `announced`:
+      // every turn now paints before this line, so the flag decides which
+      // surface did it, never whether one did.
       //
       // By identity, from the agent that pushed it. The predecessor captured a
       // history length, re-read the array and scanned the range — forensics on
       // somebody else's private array for a message it had just created, resting
       // on two facts stated nowhere in `agent.ts`: that the push is synchronous
       // before the first await, and that there is exactly one of it.
-      const announced = extra?.announced ? agent.getLastUserMessage() : null;
-      if (announced) alreadyOnScreenRef.current.add(announced);
-      commitNewHistory({ rewriteForLastUser: input !== agentInput ? input : undefined });
+      const pushed = agent.getLastUserMessage();
+      if (pushed) alreadyOnScreenRef.current.add(pushed);
+      commitNewHistory();
+      // The rewriter ran AFTER the echo was painted, so the `✎` marker beside
+      // the timestamp — which `/agent-options` promises by name — can only
+      // arrive by revising the item that is already there. What it displays
+      // does not change: `rewriteOriginal` is the same raw text the echo
+      // already shows, and `UserMessage` reads it only to pick `display` and to
+      // decide the marker.
+      //
+      // Safe in both transcript surfaces and effective in one.
+      // `<TranscriptViewport>` re-renders from `staticItems` every frame, so
+      // the marker appears; Ink's `<Static>` never repaints a row it has
+      // written to scrollback, so under `BERNARD_FULLSCREEN=false` it does not
+      // — the same accepted tradeoff that leaves printed rows unwrapped on
+      // resize. The revision can neither duplicate a row nor remove one, which
+      // is the sense in which the log stays append-only.
+      if (echoKey !== null && input !== agentInput) {
+        setStaticItems((prev) =>
+          prev.map((item) => (item.key === echoKey ? { ...item, rewriteOriginal: input } : item)),
+        );
+      }
       // Snapshot history length AFTER the user message push (synchronous) so
       // the ask_user scanner below knows where this turn's tool results begin.
       const historyLenAfterUserMsg = agent.getHistory().length;
@@ -5260,8 +5331,15 @@ export function App({
       // Ahead of `persistAgentState` and `commitNewHistory` deliberately: both
       // run below, and recording after either would leave the message unsaved
       // or unrendered for the turn that produced it.
+      //
+      // Its return value is what stops this window painting the bubble TWICE
+      // since #613 — the echo is already on screen, and `commitNewHistory`
+      // below would otherwise render the message this call just pushed. The
+      // method has always handed the message back "so the caller can mark it as
+      // already rendered"; this is the first caller with a reason to.
       if (controller.signal.aborted && !inputRecorded) {
-        agent.recordInterruptedInput(input);
+        const interruptedMessage = agent.recordInterruptedInput(input);
+        if (interruptedMessage) alreadyOnScreenRef.current.add(interruptedMessage);
       }
       persistAgentState({ agent, historyStore, provenanceHistoryStore, turnContextStore });
       submittingRef.current = false;
@@ -6992,19 +7070,23 @@ export async function pickGenerationParamsInk(
  * user can extend the remembered model list inline. The provider step ends
  * with "+ Add custom provider…" which round-trips through `runAddProviderInk`
  * and re-renders the step with the new provider appended.
+ *
+ * `slotLabel` is what the two titles say this pick is FOR, supplied whole by
+ * the caller rather than composed here from a `(tier, roleLabel?)` pair. It
+ * used to be the pair, which read as "… for Orchestrator / PREMIUM slot" and
+ * had no honest form for the bind-every-slot caller (#618), whose pick belongs
+ * to no single role and no single tier. The `tier` parameter fed nothing else,
+ * and the `roleLabel`-absent branch had no call site at all.
  */
 async function pickLineupSlotInk(
   config: BernardConfig,
-  tier: LineupTier,
+  slotLabel: string,
   current: LineupSlot,
   requestMenu: RequestMenu,
   requestGridMenu: RequestGridMenu,
   requestTextInput: RequestTextInput,
   flashToast: FlashToast,
-  roleLabel?: string,
 ): Promise<LineupSlot | null> {
-  const slotLabel = (t: LineupTier): string =>
-    roleLabel ? `${roleLabel} / ${t.toUpperCase()}` : `${t.toUpperCase()}`;
   const providerDisplayName = (name: string): string => {
     if (Object.hasOwn(PROVIDER_DISPLAY_NAMES, name)) {
       return PROVIDER_DISPLAY_NAMES[name as keyof typeof PROVIDER_DISPLAY_NAMES];
@@ -7067,7 +7149,7 @@ async function pickLineupSlotInk(
     entries.push({ label: '+ Add custom provider…', value: { kind: 'add-custom' } as const });
 
     const pick = await requestMenu(entries, {
-      title: `Pick provider for ${slotLabel(tier)} slot`,
+      title: `Pick provider for ${slotLabel}`,
       headerLines: [formatCatalogFooter()],
     });
     if (pick.cancelled) return null;
@@ -7109,7 +7191,7 @@ async function pickLineupSlotInk(
         : 0;
 
     const result = await requestGridMenu(items, {
-      title: `Pick ${providerDisplayName(provider)} model for ${slotLabel(tier)} slot`,
+      title: `Pick ${providerDisplayName(provider)} model for ${slotLabel}`,
       footer: formatCatalogFooter(),
       initialIndex,
       currentItem: currentModelForProvider,
@@ -7230,11 +7312,63 @@ function formatParamsSummary(params?: ModelParams): string {
   return parts.length > 0 ? parts.join(', ') : '';
 }
 
+/**
+ * How the lineup surfaces spell a bound slot in a sentence: `provider/model`,
+ * plus its params when it has any.
+ *
+ * Three callers — the `/lineups` row description, the bind-all detail card and
+ * the toast that confirms the bind — i.e. three places that would otherwise each
+ * decide whether params are worth naming, and then disagree about the same
+ * lineup on the same screen. The
+ * role detail card deliberately does NOT use this: it needs the model and the
+ * params as separate `<Text>` nodes so it can colour them differently, and
+ * `summarizeRoleSlots` deliberately omits params because it puts three slots on
+ * one line and has no room.
+ */
+function formatSlotLine(slot: LineupSlot): string {
+  const params = formatParamsSummary(slot.params);
+  return `${slot.provider}/${slot.model}${params ? ` · ${params}` : ''}`;
+}
+
+/**
+ * A lineup-editor row that is not a role.
+ *
+ * Named, and `actionDetail` below keyed on it, because the two lists have to
+ * agree and nothing said so: the record was a `Record<string, …>`, so a kind
+ * with no entry destructured `undefined` and threw the moment the cursor landed
+ * on the row — invisible in review, loud at runtime, and on the one path where
+ * the row exists precisely because it is new. As a `Record<LineupAction, …>`
+ * that is `TS2741` in **both** directions: an entry without a member, and a
+ * member without an entry.
+ *
+ * **Keying the record was necessary and not sufficient, and the gap was the
+ * reader this docstring is written for.** `MenuItem.value` is `value?: unknown`
+ * and `renderLineupDetail` reads it with a CAST, so the natural way to add a
+ * row — `{ label: 'Duplicate lineup', value: { kind: 'duplicate' } }` — carried
+ * no type at all: measured, `tsc` reported nothing, the cast laundered
+ * `'duplicate'` into `LineupAction`, and the same `undefined` destructure threw
+ * at the same moment. The record closed the trap for someone already editing
+ * this union, who is already thinking about the exhaustive set, and left it
+ * open for someone who adds a row and stops.
+ *
+ * So every row in `runLineupEditorInk` carries `satisfies LineupMenuValue`.
+ * That reports `TS2322` naming the bad kind **at the row that declared it**,
+ * which is the better diagnostic and the one the reader who needs it will see.
+ * `satisfies` rather than an annotation because the array is typed `MenuEntry[]`
+ * and `value` must stay `unknown` for every other menu in the product.
+ *
+ * It also makes the handler's `if`-chain exhaustive by construction rather than
+ * by inspection: that array is the only producer of these values, so a kind
+ * outside the union can no longer be built, and a `never` check at the bottom
+ * of the chain would be guarding against something unconstructible.
+ */
+type LineupAction = 'bind-all' | 'rename' | 'save' | 'save-new' | 'delete' | 'cancel';
+
+type LineupMenuValue = { kind: 'role'; roleId: RoleId } | { kind: LineupAction };
+
 function renderLineupDetail(item: MenuItem, draft: Lineup): ReactNode {
   const colors = getThemeColors();
-  const value = item.value as
-    | { kind: 'role'; roleId: RoleId }
-    | { kind: 'rename' | 'save' | 'save-new' | 'delete' | 'cancel' };
+  const value = item.value as LineupMenuValue;
 
   if (value.kind === 'role') {
     const role = getRole(value.roleId);
@@ -7268,7 +7402,24 @@ function renderLineupDetail(item: MenuItem, draft: Lineup): ReactNode {
     );
   }
 
-  const actionDetail: Record<string, { explain: string; hint: string }> = {
+  // Only the bind-all card depends on the draft: it is the one row whose job is
+  // to report the state it would replace, which is the legibility half of #618
+  // ("a lineup in that state is legible as such rather than having to be read
+  // slot by slot"). Computed here rather than in a bespoke card so every action
+  // row keeps one shape, and below the role branch so a role row never pays the
+  // scan.
+  const bound = uniformSlot(draft.roles);
+
+  const actionDetail: Record<LineupAction, { explain: string; hint: string }> = {
+    'bind-all': {
+      explain:
+        `Point all ${LINEUP_SLOT_COUNT} (role, tier) cells at one model in a single pass — ` +
+        'what "just use this model for everything" means here. ' +
+        (bound
+          ? `Every slot is currently ${formatSlotLine(bound)}.`
+          : 'The roles currently carry different bindings; open one to see its ladder.'),
+      hint: '↵ pick one model for every slot',
+    },
     rename: { explain: 'Give this lineup a new display name.', hint: '↵ rename' },
     save: { explain: 'Persist your edits to this lineup.', hint: '↵ save' },
     'save-new': {
@@ -7333,13 +7484,12 @@ async function runRoleSlotsEditorInk(
     if (value.kind === 'back') return slots;
     const next = await pickLineupSlotInk(
       config,
-      value.tier,
+      `${role.label} / ${value.tier.toUpperCase()} slot`,
       slots[value.tier],
       requestMenu,
       requestGridMenu,
       requestTextInput,
       flashToast,
-      role.label,
     );
     if (next) slots = { ...slots, [value.tier]: next };
   }
@@ -7416,23 +7566,61 @@ async function runLineupEditorInk(
   while (true) {
     // Left-pane rows stay lean (just the role/action label); the right-pane
     // detail card carries the premium/mid/cheap ladder and the description.
+    //
+    // Every `value` below carries `satisfies LineupMenuValue`. `MenuEntry.value`
+    // is `unknown` and `renderLineupDetail` casts it, so without this a row
+    // naming a kind nobody declared type-checks perfectly and then throws when
+    // the cursor reaches it — see {@link LineupAction}.
     const roleRows: MenuEntry[] = MODEL_ROLES.map((role) => ({
       label: role.label,
-      value: { kind: 'role', roleId: role.id },
+      value: { kind: 'role', roleId: role.id } satisfies LineupMenuValue,
     }));
     const dirtyMark = isDirty() ? ' •' : '';
     const entries: MenuEntry[] = [
       ...roleRows,
       { type: 'section', title: '' },
-      { label: 'Rename lineup', value: { kind: 'rename' } },
+      // Ahead of the lifecycle rows: it edits the GRID, like the role rows
+      // above it, where rename/save/delete act on the lineup as a record. The
+      // `…` matches the convention every other row that opens a further picker
+      // uses ("+ Add custom provider…", "+ Type a new model name…") — and here
+      // it also answers "bind them to what?", which the label has no room for.
+      //
+      // Fifteen characters, because the split layout's panes are content-sized
+      // and shrink against each other, so the label's own length decides how
+      // much room the detail card has. Measured through the real `/lineup`
+      // inside `<App>` (the `App.test.tsx` harness, a 98-column frame): the
+      // detail card's border sits at column 24, leaving the left pane 21
+      // columns, at which `5. Classifier /` and `10. Save as new` ALREADY wrap
+      // today. "Bind every slot to one model…" fit none of that — it wrapped
+      // onto a second, unindented line AND widened the pane. The width matters
+      // to both halves of that, so it is named rather than implied: a bare
+      // `MenuOverlay` rendered at 100 columns gives the left pane 55 and
+      // nothing wraps at all. So the sentence lives in the card, which has room
+      // for it on any of these screens.
+      { label: 'Bind all slots…', value: { kind: 'bind-all' } satisfies LineupMenuValue },
+      { label: 'Rename lineup', value: { kind: 'rename' } satisfies LineupMenuValue },
       ...(opts.isNew
-        ? [{ label: 'Save as new lineup', value: { kind: 'save-new' } } as MenuEntry]
+        ? [
+            {
+              label: 'Save as new lineup',
+              value: { kind: 'save-new' } satisfies LineupMenuValue,
+            } as MenuEntry,
+          ]
         : [
-            { label: `Save changes${dirtyMark}`, value: { kind: 'save' } } as MenuEntry,
-            { label: 'Save as new lineup', value: { kind: 'save-new' } } as MenuEntry,
-            { label: 'Delete lineup', value: { kind: 'delete' } } as MenuEntry,
+            {
+              label: `Save changes${dirtyMark}`,
+              value: { kind: 'save' } satisfies LineupMenuValue,
+            } as MenuEntry,
+            {
+              label: 'Save as new lineup',
+              value: { kind: 'save-new' } satisfies LineupMenuValue,
+            } as MenuEntry,
+            {
+              label: 'Delete lineup',
+              value: { kind: 'delete' } satisfies LineupMenuValue,
+            } as MenuEntry,
           ]),
-      { label: 'Cancel', value: { kind: 'cancel' } },
+      { label: 'Cancel', value: { kind: 'cancel' } satisfies LineupMenuValue },
     ];
     const pick = await requestMenu(entries, {
       title: `Lineup: ${draft.name}${opts.isNew ? ' (draft)' : ''}${
@@ -7446,9 +7634,7 @@ async function runLineupEditorInk(
       if (exit.done) return exit.result;
       continue;
     }
-    const value = pick.item.value as
-      | { kind: 'role'; roleId: RoleId }
-      | { kind: 'rename' | 'save' | 'save-new' | 'delete' | 'cancel' };
+    const value = pick.item.value as LineupMenuValue;
     if (value.kind === 'cancel') {
       const exit = await handleExit();
       if (exit.done) return exit.result;
@@ -7468,6 +7654,34 @@ async function runLineupEditorInk(
         ...draft,
         roles: { ...draft.roles, [value.roleId]: nextSlots },
       };
+      continue;
+    }
+    if (value.kind === 'bind-all') {
+      // Seed the picker from the binding already everywhere, so re-opening the
+      // row lands on the current model rather than on whatever role[0] happens
+      // to hold. The fallback is only reached when the grid is NOT uniform, and
+      // then any cell is as arbitrary as any other — role[0]'s premium is the
+      // one the rest of this module already treats as the anchor.
+      const current = uniformSlot(draft.roles) ?? draft.roles[MODEL_ROLES[0].id].premium;
+      const next = await pickLineupSlotInk(
+        config,
+        'EVERY slot in this lineup',
+        current,
+        requestMenu,
+        requestGridMenu,
+        requestTextInput,
+        flashToast,
+      );
+      if (next) {
+        draft = { ...draft, roles: bindEverySlot(next) };
+        // The issue's other half: "gets no confirmation they have covered them
+        // all". The count is what says so, and it is derived, so a 7th role
+        // moves it rather than making this sentence false.
+        flashToast(
+          `Bound all ${LINEUP_SLOT_COUNT} slots to ${formatSlotLine(next)}. Save changes to keep it.`,
+          'success',
+        );
+      }
       continue;
     }
     if (value.kind === 'rename') {

@@ -32,11 +32,26 @@ import type { MessageStore, StreamEvent } from './message-store.js';
 /**
  * One finalized transcript entry. `<App>` builds these at turn boundaries and
  * appends them to the append-only log it feeds into `<Static>` (#232). Each
- * item snapshots everything `<MessageBlock>` needs at commit time — the
- * rewrite original (known at turn start) and the timing footer (known at turn
- * end) — because a Static item is written to terminal scrollback once and can
- * never be re-rendered. `toolDetails` is captured per-item for the same
- * reason: toggling the setting only affects subsequent turns.
+ * item snapshots what `<MessageBlock>` needs at the boundary that knows it —
+ * the timing footer at turn end — and `toolDetails` is captured per-item for
+ * the same reason: toggling the setting only affects subsequent turns.
+ *
+ * **A field does NOT have to be resolvable at a turn boundary (#613.)** The
+ * rewrite original is the counter-example and the reason this paragraph says
+ * so: the echo is painted on submit and the prompt rewriter runs afterwards,
+ * so `rewriteOriginal` arrives by REVISION — `<App>` maps over `staticItems`
+ * and replaces the item once the pre-turn pipeline has answered.
+ *
+ * **Re-rendering an already-appended item is supported in one surface and
+ * silently dropped in the other.** `<TranscriptViewport>` renders from
+ * `staticItems` every frame, so a revision appears; `<Static>` has already
+ * written that row to terminal scrollback and cannot unwrite it, so under
+ * `BERNARD_FULLSCREEN=false` the revision is a no-op. A revision therefore
+ * buys a nicety, never a correctness property — and it must land in a LATER
+ * commit than the append, which the append-only log plus Ink's sync-mode
+ * flushing already guarantee. Removal degrades the same way rather than worse:
+ * `<Static>` never un-prints, so the row stays in scrollback (the `ask_user`
+ * withdraw path accepts exactly that).
  */
 export interface StaticItem {
   /** Stable, monotonic id (never the history index — that shifts on /compact). */
