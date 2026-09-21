@@ -150,6 +150,20 @@ function main() {
   };
   watchOwnBuild({ log, onStale: () => void restartForNewBuild() });
 
+  // Same reason as the applet host: spawned `stdio: 'ignore'`, so without
+  // this a crash leaves nothing anywhere and has to be inferred from a job
+  // that simply stopped running.
+  process.on('uncaughtException', (err: unknown) => {
+    log(`Fatal: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+    process.exit(1);
+  });
+  process.on('unhandledRejection', (reason: unknown) => {
+    log(
+      `Fatal (unhandled rejection): ${reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)}`,
+    );
+    process.exit(1);
+  });
+
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
 

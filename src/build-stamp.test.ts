@@ -122,7 +122,7 @@ describe('watchOwnBuild', () => {
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
   /** Short enough to keep the suite quick, long enough to be a real window. */
-  const FAST = { debounceMs: 20, settleMs: 40 };
+  const FAST = { pollMs: 25 };
 
   it('fires once when the tree changes', async () => {
     const d = mk();

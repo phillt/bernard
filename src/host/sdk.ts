@@ -1,3 +1,6 @@
+import { ICON_PATHS } from './icon-data.js';
+import { ICON_SIZES } from './icons.js';
+
 /**
  * The client an applet page talks to Bernard through.
  *
@@ -69,6 +72,8 @@ function build(): string {
   var STORE = '/__bernard/store';
   var VIOLATION = '/__bernard/violation';
   var FORBIDDEN_HELP = ${JSON.stringify(FORBIDDEN_HELP)};
+  var ICON_PATHS = ${JSON.stringify(ICON_PATHS)};
+  var ICON_SIZES = ${JSON.stringify(ICON_SIZES)};
 
   function BernardError(message, code) {
     var err = new Error(message);
@@ -238,6 +243,8 @@ function build(): string {
     },
     invoke: invoke,
     showError: show,
+    icon: icon,
+    icons: { hydrate: hydrateIcons, names: Object.keys(ICON_PATHS).sort() },
     store: {
       get: function (key) { return storeOp('get', key); },
       set: function (key, value) { return storeOp('set', key, value); },
@@ -253,6 +260,78 @@ function build(): string {
       delete: function (key) { return storeOp('delete', key); },
     },
   };
+
+  /**
+   * One icon, as SVG markup.
+   *
+   * Returns '' for a name that does not exist rather than throwing: an icon
+   * is decoration on a control that already works, and a page that dies
+   * because of a typo'd icon name is a worse outcome than a missing glyph.
+   * page-validate catches the typo at authoring time, where it is cheap.
+   */
+  function icon(name, opts) {
+    var body = Object.prototype.hasOwnProperty.call(ICON_PATHS, name) ? ICON_PATHS[name] : null;
+    if (body === null) return '';
+    opts = opts || {};
+    var px = ICON_SIZES[opts.size] || ICON_SIZES.md;
+    var cls = 'icon' + (opts.className ? ' ' + opts.className : '');
+    // Hidden from assistive tech unless the caller supplies a label. The
+    // common case is an icon beside its own text, where announcing it reads
+    // as a stutter; an icon-ONLY control must pass title.
+    var a11y = opts.title
+      ? 'role="img" aria-label="' + esc(opts.title) + '"'
+      : 'aria-hidden="true" focusable="false"';
+    return (
+      '<svg class="' + esc(cls) + '" xmlns="http://www.w3.org/2000/svg" width="' + px +
+      '" height="' + px + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+      'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ' + a11y + '>' +
+      body + '</svg>'
+    );
+  }
+
+  function esc(v) {
+    return String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  /**
+   * Replaces every <span data-icon="name"> under root with its markup.
+   *
+   * The declarative half, and the one that matters most: the default applet
+   * is plain HTML with no rendering code, so an icon API that could only be
+   * reached from JavaScript would go unused there. Writing
+   * <span data-icon="search"></span> needs no script of the author's own.
+   *
+   * Runs on DOMContentLoaded and is re-callable after any dynamic render.
+   * Marks what it has done, so calling it twice is free.
+   */
+  function hydrateIcons(root) {
+    var scope = root || (typeof document === 'undefined' ? null : document);
+    // Tolerant of a host with no queryable DOM. The SDK is a classic script
+    // that runs the moment it loads, so this fires before the page has said
+    // anything about itself — and it must not be able to take the whole
+    // client down with it. Every other member of bernard is unreachable if
+    // this throws at load.
+    if (!scope || typeof scope.querySelectorAll !== 'function') return 0;
+    var nodes = scope.querySelectorAll('[data-icon]:not([data-icon-done])');
+    for (var i = 0; i < nodes.length; i += 1) {
+      var el = nodes[i];
+      var markup = icon(el.getAttribute('data-icon'), {
+        size: el.getAttribute('data-icon-size') || undefined,
+        title: el.getAttribute('data-icon-title') || undefined,
+      });
+      if (!markup) continue;
+      el.innerHTML = markup;
+      el.setAttribute('data-icon-done', '');
+    }
+    return nodes.length;
+  }
+
+  if (typeof document !== 'undefined' && document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () { hydrateIcons(); });
+  } else {
+    hydrateIcons();
+  }
 
   window.bernard = bernard;
 })();

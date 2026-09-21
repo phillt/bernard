@@ -2,6 +2,7 @@ import { MANIFEST_PATH } from '../host/webmanifest.js';
 import { SDK_PATH } from '../host/sdk.js';
 import { TOKENS_PATH, APPLET_COLOR_TOKENS } from '../host/tokens.js';
 import { nearestToken, HEX_LITERAL_RE } from '../color.js';
+import { isIconName, ICON_NAMES } from '../host/icons.js';
 
 /**
  * Refusing to write an applet page that cannot work.
@@ -241,6 +242,32 @@ export function validateAppletPage(
 
   colourIssues(html, 'the page', warn);
   cssIssues(html, opts.files ?? {}, refuse, warn);
+
+  /**
+   * An icon name the set does not have.
+   *
+   * WARN, not refuse, by this module's own certainty rule: the name may be
+   * built at runtime (`data-icon="${kind}"`), so a literal that matches
+   * nothing is strong evidence and not proof. It is worth reporting at all
+   * because the failure is INVISIBLE — `bernard.icon` returns '' for an
+   * unknown name and the hydrator skips the node, so a typo renders as
+   * nothing at all with no error in the console and no gap in the layout to
+   * notice.
+   *
+   * Both spellings are scanned: the declarative attribute, which is what a
+   * plain-HTML applet writes, and the call, which is what a runtime page
+   * writes. Only string literals — an expression is not decidable here.
+   */
+  const iconRefs = new Set<string>();
+  for (const m of html.matchAll(/data-icon=["']([a-z0-9-]+)["']/g)) iconRefs.add(m[1]);
+  for (const m of html.matchAll(/\bbernard\.icon\(\s*["']([a-z0-9-]+)["']/g)) iconRefs.add(m[1]);
+  const unknownIcons = [...iconRefs].filter((n) => !isIconName(n));
+  if (unknownIcons.length > 0) {
+    warn(
+      `These icon names do not exist and will render as nothing: ${unknownIcons.join(', ')}. ` +
+        `The set has ${ICON_NAMES.length} icons; see the applet-styling document for the list.`,
+    );
+  }
 
   return issues;
 }

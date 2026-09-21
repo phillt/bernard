@@ -89,20 +89,22 @@ export function ownBuildDir(): string {
   return path.dirname(fileURLToPath(import.meta.url));
 }
 
-/** How long after the last write before the tree is re-hashed. */
-const DEBOUNCE_MS = 750;
 /**
- * A build writes hundreds of files over seconds, so the first hash after the
- * first write describes a half-written tree. Restarting on that would boot a
- * replacement against a graph `tsc` has not finished emitting — the exact
- * failure this module exists to remove, caused by the fix for it. So a change
- * must hold the SAME fingerprint across two passes before it counts.
- */
-const SETTLE_MS = 750;
-/**
- * Fallback cadence where a recursive watch is unavailable. Node supports one
- * on Linux since 19.1 and on macOS/Windows before that, so this is for a
- * platform or filesystem that refuses rather than an expected path.
+ * How often the tree is re-hashed.
+ *
+ * A POLL, not an `fs.watch`. The first cut watched `dist/` recursively and it
+ * took the applet host down: an `FSWatcher` is an `EventEmitter`, an `'error'`
+ * event with no listener THROWS, and the daemon runs `stdio: 'ignore'` — so a
+ * recursive watch over ~30 directories being rewritten wholesale by `tsc`
+ * ended the process with no restart line, no shutdown line and nothing on
+ * disk to say why. A self-heal that can kill the thing it is healing is worse
+ * than the staleness it fixes.
+ *
+ * Polling removes the entire surface: no inotify, no per-platform recursive
+ * support, no queue to overflow, no error event. It costs a 10 ms hash of the
+ * real 11 MB tree every 30 s in a process that otherwise sits idle, and the
+ * only thing given up is latency — picking a rebuild up within half a minute
+ * is not a property anybody needs sharpened.
  */
 const POLL_MS = 30_000;
 
@@ -121,8 +123,7 @@ export interface WatchBuildOptions {
    * time, and a test that cannot compress it cannot make it. Production
    * passes neither.
    */
-  debounceMs?: number;
-  settleMs?: number;
+  pollMs?: number;
 }
 
 /**
@@ -136,77 +137,53 @@ export interface WatchBuildOptions {
 export function watchOwnBuild(opts: WatchBuildOptions): () => void {
   const dir = opts.dir ?? ownBuildDir();
   const log = opts.log ?? ((): void => {});
-  const debounceMs = opts.debounceMs ?? DEBOUNCE_MS;
-  const settleMs = opts.settleMs ?? SETTLE_MS;
+  const pollMs = opts.pollMs ?? POLL_MS;
   const baseline = buildFingerprint(dir);
 
   let fired = false;
-  let debounce: NodeJS.Timeout | undefined;
-  let settle: NodeJS.Timeout | undefined;
-  let watcher: fs.FSWatcher | undefined;
-  let poll: NodeJS.Timeout | undefined;
+  /** A change seen once and not yet confirmed by a second look. */
+  let pending: string | undefined;
 
   const stop = (): void => {
-    if (debounce) clearTimeout(debounce);
-    if (settle) clearTimeout(settle);
-    if (poll) clearInterval(poll);
-    watcher?.close();
+    clearInterval(timer);
   };
 
-  /** Re-hash until two passes agree, then report. */
-  const settleThenFire = (previous: string): void => {
-    // Clear first. Without this every `check()` during a build starts ANOTHER
-    // settle timer while only the newest stays reachable through `settle`, so
-    // `stop()` can cancel one of them and the rest fire — observed as six
-    // writes producing five restart requests. Re-checking `fired` on entry is
-    // the belt to this braces: a timer already queued when the first one fires
-    // cannot be cancelled at all.
-    if (settle) clearTimeout(settle);
-    settle = setTimeout(() => {
-      if (fired) return;
-      const now = buildFingerprint(dir);
-      if (now !== previous) {
-        settleThenFire(now);
-        return;
-      }
-      if (now === baseline) {
-        // Written and reverted, or a no-op rebuild whose content matched
-        // after all. Nothing to do, and re-arming is free.
-        check();
-        return;
-      }
-      fired = true;
-      stop();
-      log(`build changed under a running process (${baseline.slice(0, 12)} -> ${now.slice(0, 12)})`);
-      opts.onStale(now);
-    }, settleMs);
-    settle.unref?.();
-  };
-
+  /**
+   * One pass. Requires the SAME new fingerprint twice before reporting.
+   *
+   * A build writes hundreds of files over seconds, so the first differing
+   * hash describes a half-written tree; restarting on it would boot a
+   * replacement against a graph `tsc` has not finished emitting — the exact
+   * failure this module exists to remove, caused by its own fix.
+   *
+   * Written as a state machine over the one interval rather than a nested
+   * settle timer. The nested version reset itself on every poll, so whenever
+   * the poll was faster than the settle it never fired at all — a self-heal
+   * that silently does nothing, which is the worst of the three outcomes.
+   */
   const check = (): void => {
     if (fired) return;
     const now = buildFingerprint(dir);
-    if (now === baseline) return;
-    settleThenFire(now);
+    if (now === baseline) {
+      // Written and reverted, or a rebuild whose output matched after all.
+      // Back to waiting; a latch here would miss the next real build.
+      pending = undefined;
+      return;
+    }
+    if (pending !== now) {
+      pending = now;
+      return;
+    }
+    fired = true;
+    stop();
+    log(`build changed under a running process (${baseline.slice(0, 12)} -> ${now.slice(0, 12)})`);
+    opts.onStale(now);
   };
 
-  const bump = (): void => {
-    if (fired) return;
-    if (debounce) clearTimeout(debounce);
-    debounce = setTimeout(check, debounceMs);
-    debounce.unref?.();
-  };
-
-  try {
-    watcher = fs.watch(dir, { recursive: true }, bump);
-    // `unref` so a pending watch can never be the reason a process will not
-    // exit — the rule `src/inbox/` already follows for its own watcher.
-    watcher.unref?.();
-  } catch (err) {
-    log(`no recursive watch on ${dir} (${String(err)}); polling every ${POLL_MS} ms`);
-    poll = setInterval(check, POLL_MS);
-    poll.unref?.();
-  }
+  // `unref` so a pending timer can never be the reason a process will not
+  // exit — the rule `src/inbox/` already follows for its own watcher.
+  const timer = setInterval(check, pollMs);
+  timer.unref?.();
 
   return stop;
 }

@@ -144,6 +144,7 @@ export const APPLET_STYLED_SELECTORS = [
   '.row',
   '.actions',
   '.hidden',
+  '.icon',
   '.muted',
   '.note',
   '.error',
@@ -275,6 +276,24 @@ button {
   font: inherit;
   cursor: pointer;
 }
+
+/* An icon inside a control (issue 610).
+
+   \`display: inline-flex\` with a gap is what makes \`icon + text\` the easy
+   thing to write: a button gets its label spaced from its glyph with no
+   author CSS, which is the shape the planners are told to prefer for
+   anything whose meaning is not universal. \`min-height\` already gives the
+   button a 36px target, so a 16-20px icon sits inside a hit area far larger
+   than itself without anyone sizing one.
+
+   \`vertical-align\` covers the other case — an icon in flowing text, where
+   there is no flex container to align it. -0.125em is the usual optical
+   correction for a 24-viewBox glyph on a text baseline.
+
+   \`flex: none\` so a long label never squashes the glyph: a compressed icon
+   is the one thing worse than no icon, and it happens silently. */
+.icon { vertical-align: -0.125em; flex: none; }
+button { display: inline-flex; align-items: center; gap: var(--space-2); }
 
 button:hover { filter: brightness(1.08); }
 button:disabled { opacity: 0.5; cursor: default; }

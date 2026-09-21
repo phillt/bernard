@@ -223,6 +223,30 @@ async function main(): Promise<void> {
     onStale: () => void restartForNewBuild(),
   });
 
+  /**
+   * A crash must leave a trace.
+   *
+   * The daemon is spawned `stdio: 'ignore'`, so anything Node writes to
+   * stderr on the way down goes nowhere — and this file's log is the only
+   * place a person can look. That gap cost real debugging time: an unhandled
+   * `'error'` event from a recursive `fs.watch` ended the host mid-session
+   * with no restart line, no shutdown line, and nothing on disk to say it had
+   * happened at all. The watch is gone, but the next silent death should not
+   * have to be reconstructed from its absence.
+   *
+   * It re-throws rather than swallowing. A process that keeps running after
+   * an unhandled exception is in a state nobody designed, and the pid file
+   * would still name it while it served nothing.
+   */
+  process.on('uncaughtException', (err: unknown) => {
+    log(`fatal: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+    process.exit(1);
+  });
+  process.on('unhandledRejection', (reason: unknown) => {
+    log(`fatal (unhandled rejection): ${reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)}`);
+    process.exit(1);
+  });
+
   process.on('SIGTERM', () => void shutdown());
   process.on('SIGINT', () => void shutdown());
 }
