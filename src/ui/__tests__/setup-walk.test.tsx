@@ -61,6 +61,7 @@ const CTX: SetupContext = {
     autoCreateApplets: false,
     autoOpenApplets: true,
     autoStyleApplets: true,
+    autoReviewApplets: true,
     appletPlanning: true,
     autoCreateThreshold: 0.8,
     autoUpdate: false,

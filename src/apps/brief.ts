@@ -25,6 +25,7 @@
  */
 
 import { plural } from '../text.js';
+import { renderDesignLines, type AppletDesign } from './design-model.js';
 
 /** The twelve things worth knowing before building, from #473's research. */
 export const INTENT_FIELDS = [
@@ -69,6 +70,22 @@ export interface BriefNote {
 export interface AppletBrief {
   intent: Partial<Record<IntentField, string>>;
   notes: BriefNote[];
+  /**
+   * The design the planners produced, when one was.
+   *
+   * Absent for every applet built before the model existed, and absent for
+   * one built with planning turned off — so every reader treats it as
+   * optional rather than as a thing that should be there.
+   *
+   * It lives here rather than in the manifest because `AppManifestSchema` is
+   * `.strict()`, so a field there is a schema-version decision; and because
+   * this is the same kind of object as `intent` — what the applet is FOR and
+   * how that was decided, as opposed to what it can do, which is the
+   * manifest's. It is persisted at CREATE rather than at plan time: an
+   * applet being planned has no id yet, and writing one would orphan a brief
+   * for an id `create` may never be called with.
+   */
+  design?: AppletDesign;
 }
 
 /**
@@ -182,6 +199,16 @@ export function renderBrief(brief: AppletBrief, budget = MAX_BRIEF_CHARS): strin
     kept.push(block);
     used += block.length;
   }
+  // Between intent and notes: the design is what the applet was supposed to
+  // BE, which sits naturally after what it is for and before what has
+  // happened to it. Unbudgeted, unlike notes — it is one bounded summary
+  // rather than an accumulating log, and it is the half a reviewer checks the
+  // page against, so dropping it silently would be the worse failure.
+  if (brief.design) {
+    const design = renderDesignLines(brief.design);
+    if (design.length > 0) lines.push('', '## Design', ...design);
+  }
+
   // Rendered oldest-first, so it reads as a history.
   if (kept.length > 0) lines.push('', '## Decisions and notes', ...kept.reverse());
   if (dropped > 0) {

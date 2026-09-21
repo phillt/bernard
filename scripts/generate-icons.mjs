@@ -37,19 +37,61 @@ const root = path.dirname(fileURLToPath(import.meta.url));
  */
 export const ICON_NAMES = [
   // Actions
-  'plus', 'minus', 'x', 'check', 'search', 'filter', 'refresh-cw',
-  'download', 'upload', 'save', 'trash-2', 'pencil', 'copy',
-  'external-link', 'settings', 'more-horizontal',
+  'plus',
+  'minus',
+  'x',
+  'check',
+  'search',
+  'filter',
+  'refresh-cw',
+  'download',
+  'upload',
+  'save',
+  'trash-2',
+  'pencil',
+  'copy',
+  'external-link',
+  'settings',
+  'more-horizontal',
   // Navigation
-  'chevron-right', 'chevron-left', 'chevron-up', 'chevron-down',
-  'arrow-right', 'arrow-left', 'menu', 'house',
+  'chevron-right',
+  'chevron-left',
+  'chevron-up',
+  'chevron-down',
+  'arrow-right',
+  'arrow-left',
+  'menu',
+  'house',
   // Status
-  'circle-check', 'circle-alert', 'triangle-alert', 'info', 'circle-x',
+  'circle-check',
+  'circle-alert',
+  'triangle-alert',
+  'info',
+  'circle-x',
   'loader-circle',
   // Things
-  'file-text', 'folder', 'calendar', 'clock', 'user', 'users', 'mail',
-  'link', 'star', 'bookmark', 'tag', 'list', 'layout-grid', 'database',
-  'globe', 'image', 'play', 'pause', 'eye', 'eye-off', 'lock', 'bell',
+  'file-text',
+  'folder',
+  'calendar',
+  'clock',
+  'user',
+  'users',
+  'mail',
+  'link',
+  'star',
+  'bookmark',
+  'tag',
+  'list',
+  'layout-grid',
+  'database',
+  'globe',
+  'image',
+  'play',
+  'pause',
+  'eye',
+  'eye-off',
+  'lock',
+  'bell',
 ];
 
 const pkgRoot = path.dirname(require.resolve('lucide-static/package.json'));
@@ -94,5 +136,14 @@ export const LUCIDE_VERSION = ${JSON.stringify(version)};
 `;
 
 const dest = path.join(root, '..', 'src', 'host', 'icon-data.ts');
-fs.writeFileSync(dest, out);
-console.log(`wrote ${entries.length} icons from lucide-static@${version} -> ${path.relative(path.join(root, '..'), dest)}`);
+// Formatted before writing, because the result is COMMITTED and
+// `npm run format:check` runs over `src/`. Without this the generator and
+// prettier disagree about line wrapping forever: every regeneration fails the
+// format gate, and every format pass makes the file differ from what the
+// generator produces — so neither is ever canonical.
+const prettier = await import('prettier');
+const config = (await prettier.resolveConfig(dest)) ?? {};
+fs.writeFileSync(dest, await prettier.format(out, { ...config, parser: 'typescript' }));
+console.log(
+  `wrote ${entries.length} icons from lucide-static@${version} -> ${path.relative(path.join(root, '..'), dest)}`,
+);

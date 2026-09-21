@@ -29,10 +29,12 @@ const okWith = (bodies: Record<string, unknown>) =>
   }));
 
 describe('makeAppletPlanner', () => {
-  it('runs the architect first and the other two against its scope', async () => {
-    // The ordering IS the design: two planners given the same brief and no
-    // shared scope plan differently-sized applets, and the contradiction only
-    // surfaces for whoever has to write one page from both.
+  it('runs scope first, then the pair, then interaction against both', async () => {
+    // The ordering IS the design, and it runs large decisions before small
+    // ones. Two planners given the same brief and no shared scope plan
+    // differently-sized applets; and an interaction stage deciding "this
+    // needs a trash icon" before anything established that a destructive
+    // delete belongs here is the same mistake one level down.
     const order: string[] = [];
     const dispatch = vi.fn(async ({ specialistId, input }) => {
       order.push(specialistId);
@@ -49,7 +51,13 @@ describe('makeAppletPlanner', () => {
 
     expect(outcome.planned).toBe(true);
     expect(order[0]).toBe('applet-architect');
-    expect(order.slice(1).sort()).toEqual(['applet-data-planner', 'applet-ux-planner']);
+    expect(order.slice(1, 3).sort()).toEqual(['applet-data-planner', 'applet-ux-planner']);
+    // Interaction is strictly after the pair — it reads what they decided, so
+    // it cannot join the parallel arm even though that would be faster.
+    expect(order[3]).toBe('applet-interaction-designer');
+    // Wording did not run: this design has no controls and no destructive
+    // action, which is `needsMicrocopy` declining rather than a failure.
+    expect(order).toHaveLength(4);
   });
 
   it('runs the interface and data planners in parallel, not one after the other', async () => {
@@ -191,7 +199,9 @@ describe('makeAppletPlanner', () => {
 
     await makeAppletPlanner(CTX)(TARGET);
 
-    expect(dispatch).toHaveBeenCalledTimes(3);
+    // Every stage, including the two added later — the property is about the
+    // dispatch shape, so a new stage that forgot the flag is what this catches.
+    expect(dispatch).toHaveBeenCalledTimes(4);
     for (const call of dispatch.mock.calls) expect(call[0].skipCorrectionEnqueue).toBe(true);
   });
 

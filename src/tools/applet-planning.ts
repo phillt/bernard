@@ -4,6 +4,17 @@ import { capSubagentResult } from './result-cap.js';
 import { debugLog } from '../logger.js';
 import { renderIntentLines } from '../apps/brief.js';
 import type { AppletBrief } from '../apps/brief.js';
+import {
+  ArchitectPlanSchema,
+  DataPlanSchema,
+  InteractionPlanSchema,
+  MicrocopyPlanSchema,
+  UxPlanSchema,
+  controlsOf,
+  parseStagePlan,
+  type AppletDesign,
+} from '../apps/design-model.js';
+import { checkDesign, renderDesignIssues } from '../apps/design-checks.js';
 import type { AgentContext } from '../framework/context.js';
 
 /**
@@ -76,7 +87,22 @@ import type { AgentContext } from '../framework/context.js';
  */
 
 /** What the planning pass produced, as the caller has to render it either way. */
-export type PlanOutcome = { planned: true; spec: string } | { planned: false; reason: string };
+export type PlanOutcome =
+  | {
+      planned: true;
+      spec: string;
+      /**
+       * The typed model behind the spec, for `create` to persist.
+       *
+       * Separate from `spec` because they serve different readers: `spec` is
+       * prose for the model that writes the page, `design` is the record that
+       * outlives the turn. Before this the spec was the only artefact and it
+       * was dropped at the end of the turn — after being truncated twice on
+       * the way there.
+       */
+      design: AppletDesign;
+    }
+  | { planned: false; reason: string };
 
 /** What an applet is being planned from — the interview's answers, before it exists. */
 export interface PlanTarget {
@@ -99,6 +125,8 @@ export type AppletPlanner = (target: PlanTarget, signal?: AbortSignal) => Promis
 export const ARCHITECT_SPECIALIST_ID = 'applet-architect';
 export const UX_PLANNER_SPECIALIST_ID = 'applet-ux-planner';
 export const DATA_PLANNER_SPECIALIST_ID = 'applet-data-planner';
+export const INTERACTION_SPECIALIST_ID = 'applet-interaction-designer';
+export const MICROCOPY_SPECIALIST_ID = 'applet-microcopy';
 
 /**
  * The brief's intent, rendered for a planner.
@@ -160,8 +188,46 @@ export function buildPlannerBrief(target: PlanTarget, scope: string, job: string
   ].join('\n');
 }
 
-/** One dispatch, reduced to the two things the assembler needs. */
-type Section = { ok: true; body: string } | { ok: false; reason: string };
+/**
+ * The brief for a stage that reads what earlier stages decided.
+ *
+ * Every prior body is spliced in VERBATIM, for the reason
+ * {@link buildPlannerBrief} already gives about the architect's scope:
+ * re-wording it per stage is the one edit that quietly reintroduces the
+ * divergence the hierarchy exists to prevent. A stage that failed is named as
+ * missing rather than omitted, so a downstream stage knows the difference
+ * between "nobody decided this" and "this was decided to be nothing".
+ */
+export function buildStageBrief(
+  target: PlanTarget,
+  scope: string,
+  priors: Array<[string, Section]>,
+  job: string,
+): string {
+  return [
+    `${job} for "${target.name}".`,
+    '',
+    '## Scope',
+    '',
+    scope,
+    ...priors.flatMap(([title, section]) => [
+      '',
+      `## ${title}`,
+      '',
+      section.ok ? section.body : `(not planned — ${section.reason}. Work without it.)`,
+    ]),
+  ].join('\n');
+}
+
+/**
+ * One dispatch, reduced to what the assembler needs.
+ *
+ * `body` is the prose the MODEL is shown; `result` is the raw payload the
+ * typed model is parsed from. Both, because parsing is additive: a stage
+ * whose shape we did not anticipate still contributes its prose, and only
+ * loses its checks.
+ */
+type Section = { ok: true; body: string; result: unknown } | { ok: false; reason: string };
 
 /**
  * Renders a wrapper result as a section body, bounded.
@@ -230,7 +296,9 @@ async function runPlanner(
     // An empty body is a failure wearing a success's clothes. The dispatch
     // returned, so nothing downstream would notice, and the assembled spec
     // would carry a heading with nothing under it.
-    return body ? { ok: true, body } : { ok: false, reason: 'returned no plan' };
+    return body
+      ? { ok: true, body, result: wrapped.result }
+      : { ok: false, reason: 'returned no plan' };
   }
   // `error` is the code (`pool_exhausted`, `no_api_key`, `step_limit`);
   // `result` is the human message. The code is what a reader acts on.
@@ -243,16 +311,53 @@ function renderSection(title: string, section: Section): string {
     ? `## ${title}\n\n${section.body}`
     : `## ${title}\n\n(not planned — ${section.reason}. Decide this yourself as you build.)`;
 }
+/**
+ * Should the wording pass run?
+ *
+ * The countable-test idiom `UI_RUNTIME_RULE` already uses, rather than a
+ * judgement about whether an applet "needs" better words. A one-button applet
+ * has one label and the interaction stage already set it; the pass earns its
+ * ~6 s and its uncacheable ~4.4k prompt tokens once there is enough copy for
+ * verbosity to accumulate, or once a confirmation exists — a confirmation is
+ * where generated wording goes wrong most reliably, and where it costs most.
+ */
+export function needsMicrocopy(design: AppletDesign): boolean {
+  const controls = controlsOf(design);
+  if (controls.length > 4) return true;
+  return (
+    controls.some((c) => c.confirm === true) ||
+    (design.architect?.actions ?? []).some((a) => a.intent === 'destroy' || a.risk === 'high')
+  );
+}
 
 /**
  * Builds the planning callback for one turn's context.
  *
- * The architect's own body is what the pair plan against, so its failure is the
- * one that stops everything: with no scope the two would plan
- * differently-sized applets, which is worse than not planning at all.
+ * ## Large decisions before small ones
+ *
+ * The architect's own body is what everything downstream plans against, so
+ * its failure is the one that stops everything: with no scope the rest would
+ * plan differently-sized applets, which is worse than not planning at all.
+ *
+ * The order is the design, not a pipeline that happened to grow: scope, then
+ * shape and storage, then the form each action takes, then the words. You do
+ * not want an interaction stage deciding "this needs a trash icon" before
+ * something upstream has established that a destructive delete belongs here
+ * at all — and that is not hypothetical. On the applet this was built for,
+ * the architect scoped five views OUT and the UX planner planned all five,
+ * because the only thing carrying the decision downstream was prose.
+ *
+ * ## The fan-out stays at two
+ *
+ * `withSlot` does NOT queue — at the cap it calls `onExhausted` immediately —
+ * so a three-way fan-out from inside a main-agent turn would hold three of
+ * the four slots and starve anything else the turn wanted to do. The two new
+ * stages are therefore sequential, which the hierarchy wanted anyway: each
+ * reads what the one before it decided.
  */
 export function makeAppletPlanner(ctx: AgentContext): AppletPlanner {
   return async (target, signal) => {
+    const design: AppletDesign = {};
     try {
       const architect = await runPlanner(
         ctx,
@@ -269,6 +374,7 @@ export function makeAppletPlanner(ctx: AgentContext): AppletPlanner {
         });
         return { planned: false, reason: `scope could not be decided (${architect.reason})` };
       }
+      design.architect = parseStagePlan(ArchitectPlanSchema, architect.result) ?? undefined;
 
       const [ux, data] = await Promise.all([
         runPlanner(
@@ -291,22 +397,93 @@ export function makeAppletPlanner(ctx: AgentContext): AppletPlanner {
         debugLog('applet:plan:error', { name: target.name, stage: 'ux', reason: ux.reason });
       if (!data.ok)
         debugLog('applet:plan:error', { name: target.name, stage: 'data', reason: data.reason });
+      if (ux.ok) design.ux = parseStagePlan(UxPlanSchema, ux.result) ?? undefined;
+      if (data.ok) design.data = parseStagePlan(DataPlanSchema, data.result) ?? undefined;
+
+      // The form each action takes, decided from what the action MEANS. Needs
+      // the scope's semantics and the layout, so it cannot run beside them.
+      const interaction = await runPlanner(
+        ctx,
+        INTERACTION_SPECIALIST_ID,
+        'interaction',
+        buildStageBrief(target, architect.body, [['Interface', ux]], 'Decide the controls'),
+        signal,
+      );
+      if (!interaction.ok)
+        debugLog('applet:plan:error', {
+          name: target.name,
+          stage: 'interaction',
+          reason: interaction.reason,
+        });
+      if (interaction.ok) {
+        design.interaction = parseStagePlan(InteractionPlanSchema, interaction.result) ?? undefined;
+      }
+
+      let microcopy: Section | null = null;
+      if (needsMicrocopy(design)) {
+        microcopy = await runPlanner(
+          ctx,
+          MICROCOPY_SPECIALIST_ID,
+          'wording',
+          buildStageBrief(
+            target,
+            architect.body,
+            [
+              ['Interface', ux],
+              ['Controls', interaction],
+            ],
+            'Write the words',
+          ),
+          signal,
+        );
+        if (!microcopy.ok)
+          debugLog('applet:plan:error', {
+            name: target.name,
+            stage: 'microcopy',
+            reason: microcopy.reason,
+          });
+        if (microcopy.ok) {
+          design.microcopy = parseStagePlan(MicrocopyPlanSchema, microcopy.result) ?? undefined;
+        }
+      }
+
+      // Everything decidable by arithmetic, before the model reads a word of
+      // it. A control naming an action the scope never declared is the one
+      // this exists for.
+      const issues = checkDesign(design);
+      debugLog('applet:plan:checked', {
+        name: target.name,
+        refusals: issues.filter((i) => i.level === 'refuse').length,
+        warnings: issues.filter((i) => i.level === 'warn').length,
+        stages: Object.keys(design),
+        microcopy: microcopy !== null,
+      });
+
+      const sections = [
+        renderSection('Scope', architect),
+        renderSection('Interface', ux),
+        renderSection('Data and actions', data),
+        renderSection('Controls', interaction),
+        ...(microcopy ? [renderSection('Wording', microcopy)] : []),
+      ];
+      const problems = renderDesignIssues(issues);
 
       return {
         planned: true,
+        design,
         spec: [
           `# Build plan for "${target.name}"`,
           '',
-          renderSection('Scope', architect),
-          '',
-          renderSection('Interface', ux),
-          '',
-          renderSection('Data and actions', data),
+          sections.join('\n\n'),
+          ...(problems ? ['', '## Problems found in this plan', '', problems] : []),
           '',
           '---',
           '',
           'Build this. Where a section is missing, decide it yourself rather than',
           'widening the scope to cover it.',
+          ...(problems
+            ? ['Fix everything under "Problems found in this plan" before you build.']
+            : []),
         ].join('\n'),
       };
     } catch (err) {

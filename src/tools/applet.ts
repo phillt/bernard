@@ -8,6 +8,7 @@ import { defaultAppletPage } from '../apps/page-template.js';
 import { SpecialistStore, type Specialist } from '../specialists.js';
 import { directInvocableRefusalByName, toolArgRefusal } from '../apps/direct-tool.js';
 import type { AppletStyler, StyleOutcome } from './applet-styling.js';
+import type { AppletReviewer, ReviewOutcome } from './applet-review.js';
 import type { AppletPlanner, PlanTarget } from './applet-planning.js';
 import { AppletBriefStore } from '../apps/brief-store.js';
 import {
@@ -40,6 +41,7 @@ import {
   type RawAppManifest,
 } from '../apps/manifest.js';
 import { defineTool } from '../framework/tools/define-tool.js';
+import { claimDesign, stashDesign } from '../apps/design-stash.js';
 
 /**
  * `applet` — authoring the small local web apps Bernard serves.
@@ -181,6 +183,14 @@ const PARAMETERS = z.object({
         '. Supply what you actually know; an empty string clears a field. Set on `create` and ' +
         'edit with `brief`.',
     ),
+  planId: z
+    .string()
+    .optional()
+    .describe(
+      'The id `plan` returned. Pass it to `create` so the design the planners produced is ' +
+        'stored with the applet, rather than being re-derived by whoever edits it next. ' +
+        'Nothing breaks without it; the record is simply not kept.',
+    ),
   note: z
     .string()
     .max(MAX_NOTE_CHARS)
@@ -289,6 +299,11 @@ export interface AppletToolDeps {
   requestConsent?: ToolOptions['requestPermissionConsent'];
   /** The design pass. Absent on every instance `createTools` builds. */
   style?: AppletStyler;
+  /**
+   * The review pass. Absent from a dispatched specialist's registry, which is
+   * the recursion guard — see `applet-review.ts`.
+   */
+  review?: AppletReviewer;
   /** The planning pass. Absent for the same reason, and it is the same guard. */
   plan?: AppletPlanner;
 }
@@ -361,7 +376,7 @@ async function run(
   deps: AppletToolDeps,
   abortSignal?: AbortSignal,
 ): Promise<string> {
-  const { requestConsent, style: styleApplet, plan: planApplet } = deps;
+  const { requestConsent, style: styleApplet, review: reviewApplet, plan: planApplet } = deps;
   switch (args.action) {
     case 'list': {
       const ids = store.listIds();
@@ -419,7 +434,16 @@ async function run(
       // one whose next editor re-derives intent from the page, which is the
       // defect. Before consent for the same reason the write is — nothing
       // below can turn a successful create into a failed tool call.
-      if (args.intent) briefStore().write(created.id, { intent: args.intent });
+      // The design and the intent land together: both are "what this applet is
+      // for", and an applet whose brief half-landed is one whose next editor
+      // trusts the half that did.
+      const design = claimDesign(args.planId);
+      if (args.intent || design) {
+        briefStore().write(created.id, {
+          ...(args.intent ? { intent: args.intent } : {}),
+          ...(design ? { design } : {}),
+        });
+      }
       // A warning, not a refusal: `create` has to stay usable from a test and
       // from someone who knows exactly what they want, and the failure is
       // visible — a thinner applet — rather than silent.
@@ -434,6 +458,12 @@ async function run(
       // a failed tool call — the rule `askForPermissions` and `openedNote`
       // already follow.
       const styled = await styleNote(created, styleApplet, abortSignal);
+      // The open comes BEFORE the review, deliberately: review changes
+      // nothing, so making the browser wait on it costs the seconds the
+      // applet could already have been on screen. Styling is the opposite and
+      // runs above, or the user is shown a scaffold and has to refresh.
+      const opened = await openedNote(created.id);
+      const reviewed = await reviewNote(created, reviewApplet, abortSignal);
       return (
         `Applet "${created.name}" (${created.id}) created with ` +
         `${Object.keys(created.actions).length} action(s).` +
@@ -443,7 +473,8 @@ async function run(
         noIntent +
         warningsFor(issues) +
         formatWarnings(dispatch.warnings) +
-        (await openedNote(created.id))
+        opened +
+        reviewed
       );
     }
     case 'update': {
@@ -625,9 +656,13 @@ async function run(
         intent,
       };
       const outcome = await planApplet(target, abortSignal);
-      return outcome.planned
-        ? outcome.spec
-        : `Error: planning did not run (${outcome.reason}). ${buildDirectly}`;
+      if (!outcome.planned) {
+        return `Error: planning did not run (${outcome.reason}). ${buildDirectly}`;
+      }
+      // The id is how the design reaches `create` without the model retyping
+      // it — see `stashDesign`.
+      const planId = stashDesign(outcome.design);
+      return `${outcome.spec}\n\nPass \`planId: "${planId}"\` to \`create\` so this plan is kept with the applet.`;
     }
     case 'style': {
       const id = need(args.id, 'id', 'style');
@@ -831,7 +866,7 @@ function grantHint(appId: string, actions: string[]): string {
  * gets it wrong.
  */
 async function appletFlag(
-  key: 'autoOpenApplets' | 'autoStyleApplets' | 'appletPlanning',
+  key: 'autoOpenApplets' | 'autoStyleApplets' | 'autoReviewApplets' | 'appletPlanning',
 ): Promise<boolean | undefined> {
   try {
     const { loadConfig } = await import('../config.js');
@@ -923,6 +958,42 @@ async function styleNote(
   // Named, not swallowed. "It looks unstyled" with no reason is the report
   // that costs someone an afternoon.
   return ` It has the default page — the design pass did not run (${outcome.reason}).`;
+}
+
+/**
+ * Runs the review pass and reports it, or says why it did not run.
+ *
+ * Gated by `autoReviewApplets`, read the way `styleNote` reads
+ * `autoStyleApplets` — lazily, inside a `try`, because `loadConfig` throws
+ * with no provider key, and with no key there is no model to dispatch anyway.
+ *
+ * Its own try for the reason `styleNote` has one: the applet is on disk and
+ * already open by this point, so a throw reaching `execute`'s catch would
+ * report a create that SUCCEEDED as `Error:`, telling the model to retry one
+ * that would then fail as "already exists".
+ */
+async function reviewNote(
+  manifest: AppManifest,
+  reviewApplet?: AppletReviewer,
+  signal?: AbortSignal,
+): Promise<string> {
+  if (!reviewApplet) return '';
+  if (!(await appletFlag('autoReviewApplets'))) return '';
+  let outcome: ReviewOutcome;
+  try {
+    outcome = await reviewApplet(
+      { id: manifest.id, name: manifest.name, actions: Object.keys(manifest.actions) },
+      signal,
+    );
+  } catch (err) {
+    outcome = { reviewed: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+  if (outcome.reviewed) {
+    return outcome.summary ? ` Reviewed: ${outcome.summary}.` : ' Reviewed, nothing to fix.';
+  }
+  // Named rather than swallowed. An applet reported as built and silently
+  // never checked is the state this whole wiring exists to end.
+  return ` Not reviewed (${outcome.reason}) — run \`bernard app check ${manifest.id}\` yourself.`;
 }
 
 /**

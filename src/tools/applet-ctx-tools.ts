@@ -2,6 +2,7 @@ import { createAppletTool } from './applet.js';
 import { AppRegistry } from '../apps/registry.js';
 import { makeAppletStyler } from './applet-styling.js';
 import { makeAppletPlanner } from './applet-planning.js';
+import { makeAppletReviewer } from './applet-review.js';
 import type { AgentContext } from '../framework/context.js';
 
 /**
@@ -33,5 +34,6 @@ export function createMainAppletTool(ctx: AgentContext) {
     requestConsent: ctx.toolOptions.requestPermissionConsent,
     style: makeAppletStyler(ctx),
     plan: makeAppletPlanner(ctx),
+    review: makeAppletReviewer(ctx),
   });
 }

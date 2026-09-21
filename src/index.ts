@@ -1623,9 +1623,7 @@ program
           }
           case 'check': {
             if (!appId) {
-              throw new Error(
-                "Usage: bernard app check <appId> [--action <name> --args '<json>']",
-              );
+              throw new Error("Usage: bernard app check <appId> [--action <name> --args '<json>']");
             }
             await cli.appCheck(appId, {
               ...(options.action ? { action: options.action } : {}),

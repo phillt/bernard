@@ -239,7 +239,13 @@ describe('the two-path rule is stated once (#466)', () => {
  * write path does not grant, fails as a WORSE PLAN rather than as an error.
  */
 describe('the applet planners (#13)', () => {
-  const PLANNERS = ['applet-architect', 'applet-ux-planner', 'applet-data-planner'];
+  const PLANNERS = [
+    'applet-architect',
+    'applet-ux-planner',
+    'applet-data-planner',
+    'applet-interaction-designer',
+    'applet-microcopy',
+  ];
 
   const load = (name: string) =>
     JSON.parse(fs.readFileSync(path.join(DIR, `${name}.json`), 'utf-8')) as {
@@ -380,6 +386,9 @@ describe('the applet planners (#13)', () => {
     const { PLAIN_LANGUAGE_RULE, interviewPlaybook } = await import('../apps/interview.js');
     expect(interviewPlaybook()).toContain(PLAIN_LANGUAGE_RULE);
     expect(load('applet-ux-planner').systemPrompt).toContain(PLAIN_LANGUAGE_RULE);
+    // The wording specialist is the third surface, and the one whose whole
+    // job this rule is. A constant exists so none of them paraphrases it.
+    expect(load('applet-microcopy').systemPrompt).toContain(PLAIN_LANGUAGE_RULE);
   });
 
   it('no planner claims it can grant tools', () => {

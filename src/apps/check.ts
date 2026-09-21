@@ -141,7 +141,11 @@ export async function checkApplet(
   }
 
   const served = await checkServedApplet(record.port, actionNames, opts);
-  const steps = [manifestStep, { name: 'host', ok: true, detail: `serving at ${origin}` }, ...served];
+  const steps = [
+    manifestStep,
+    { name: 'host', ok: true, detail: `serving at ${origin}` },
+    ...served,
+  ];
   return { appId, origin, steps, ok: steps.every((s) => s.ok) };
 }
 

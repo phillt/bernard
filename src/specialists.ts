@@ -320,6 +320,8 @@ export const POST_V1_BUNDLED = [
   'applet-architect.json',
   'applet-ux-planner.json',
   'applet-data-planner.json',
+  'applet-interaction-designer.json',
+  'applet-microcopy.json',
 ];
 
 /**

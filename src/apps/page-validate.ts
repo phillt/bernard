@@ -1,7 +1,7 @@
 import { MANIFEST_PATH } from '../host/webmanifest.js';
 import { SDK_PATH } from '../host/sdk.js';
 import { TOKENS_PATH, APPLET_COLOR_TOKENS } from '../host/tokens.js';
-import { nearestToken, HEX_LITERAL_RE } from '../color.js';
+import { nearestToken, contrastOver, HEX_LITERAL_RE } from '../color.js';
 import { isIconName, ICON_NAMES } from '../host/icons.js';
 
 /**
@@ -320,6 +320,65 @@ function colourIssues(source: string, where: string, warn: (m: string) => void):
 }
 
 /**
+ * Colours an applet paints that fail WCAG AA against the floor's own
+ * backgrounds.
+ *
+ * `color.ts` has computed real contrast ratios since #465 — and only for the
+ * SERVED floor, which `tokens.test.ts` pins at nineteen pairs. An applet's own
+ * `.css` got a nearest-token hint and no arithmetic at all, so the one design
+ * property that is genuinely decidable was being decided nowhere for the one
+ * file a person actually writes.
+ *
+ * ## What makes this sound without a CSS parser
+ *
+ * There is no parser here and there will not be one — the module says so. So
+ * this cannot know what a given colour is painted ON. What it can know is that
+ * the floor provides exactly two surfaces to paint on, `--bg` and `--surface`,
+ * and a foreground failing against BOTH fails wherever the floor put it. That
+ * is a real ratio rather than a resemblance, and it is the strongest claim
+ * available without parsing.
+ *
+ * WARN, not refuse, by this module's certainty rule: the applet may have
+ * painted its own background underneath, in which case the pairing is one
+ * nothing here can see. Strong evidence, not proof.
+ */
+/** WCAG 2.x AA for body text. The same number `tokens.test.ts` holds the floor to. */
+const WCAG_AA_TEXT = 4.5;
+
+function contrastIssues(css: string, where: string, warn: (m: string) => void): void {
+  const surfaces = [APPLET_COLOR_TOKENS['--bg'], APPLET_COLOR_TOKENS['--surface']].filter(
+    (v): v is string => typeof v === 'string',
+  );
+  if (surfaces.length === 0) return;
+
+  // `color:` only. A literal in `background:` is the other half of the pair
+  // and needs the foreground to say anything, which is the parse this refuses
+  // to do — so it stays with the existing "sets colours directly" warning.
+  const declarations = css.matchAll(/(^|[;{\s])color\s*:\s*([^;}]+)/gi);
+  const failing: string[] = [];
+  const seen = new Set<string>();
+  for (const m of declarations) {
+    const value = m[2].trim();
+    const hex = value.match(HEX_LITERAL_RE)?.[0];
+    if (!hex || seen.has(hex)) continue;
+    seen.add(hex);
+    const ratios = surfaces.map((bg) => contrastOver(hex, [bg]));
+    // A colour we cannot parse, or one over a translucent surface, is not a
+    // finding — `color.ts` answers `null` rather than guessing and so does this.
+    if (ratios.some((r) => r === null)) continue;
+    const best = Math.max(...ratios.map((r) => r ?? 0));
+    if (best < WCAG_AA_TEXT) failing.push(`${hex} (best ${best.toFixed(2)}:1)`);
+  }
+  if (failing.length === 0) return;
+  warn(
+    `${where} paints text that fails WCAG AA against every background the floor provides: ` +
+      `${failing.slice(0, 3).join(', ')}${failing.length > 3 ? `, and ${failing.length - 3} more` : ''}. ` +
+      `AA wants ${WCAG_AA_TEXT}:1 for body text. Use \`var(--text)\` or \`var(--muted)\`, which ` +
+      'are held to that by a test.',
+  );
+}
+
+/**
  * The files shipped beside `index.html`.
  *
  * These earn a refusal where a colour does not, and for the reason this module
@@ -358,6 +417,7 @@ function cssIssues(
       );
     }
     colourIssues(content, `\`${name}\``, warn);
+    contrastIssues(content, `\`${name}\``, warn);
   }
 }
 
