@@ -3,6 +3,7 @@
   "name": "Applet Microcopy",
   "description": "Writes an applet's words — labels, empty states, errors and confirmations — at reading age nine, in the fewest that make it obvious.",
   "kind": "tool-wrapper",
+  "pipeline": "applet-design",
   "targetTools": [
     "docs"
   ],

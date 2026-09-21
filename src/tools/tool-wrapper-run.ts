@@ -1,5 +1,5 @@
 import type { Tool } from '../framework/sdk.js';
-import { invocationRefusal } from '../specialist-authority.js';
+import { invocationRefusal, type InvocationVia } from '../specialist-authority.js';
 import { z } from 'zod';
 import { createTools } from './index.js';
 import { resolveProviderAndModel } from '../config.js';
@@ -149,6 +149,19 @@ export interface DispatchToolWrapperArgs {
    * never made.
    */
   skipCorrectionEnqueue?: boolean;
+
+  /**
+   * Who is dispatching, for {@link invocationRefusal}. Defaults to a plain
+   * tool call, which is what every existing caller is.
+   *
+   * **This must never become a tool parameter.** It is the channel a pipeline
+   * uses to say it is the pipeline, and a record marked `pipeline` refuses
+   * everything else — so a model able to set it could name any pipeline and
+   * walk straight back through the gate. It lives on this TypeScript
+   * interface, which `tool_wrapper_run`'s zod schema does not reach;
+   * `skipCorrectionEnqueue` above is the same shape for the same reason.
+   */
+  via?: InvocationVia;
 }
 
 /**
@@ -230,7 +243,7 @@ export async function dispatchToolWrapper(
       error: 'not_found',
     };
   }
-  const refusal = invocationRefusal(specialist, { kind: 'tool' });
+  const refusal = invocationRefusal(specialist, args.via ?? { kind: 'tool' });
   if (refusal) {
     return { status: 'error', result: refusal.message, error: refusal.code };
   }

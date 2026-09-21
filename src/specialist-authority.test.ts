@@ -6,6 +6,7 @@ import {
   assertCanDeleteSpecialist,
   assertCanEditSpecialist,
   ProtectedSpecialistError,
+  invocationRefusal,
 } from './specialist-authority.js';
 
 // These tests run against the real shipped manifest (src/builtin-specialists/),
@@ -71,5 +72,62 @@ describe('specialist-authority', () => {
       expect(e.action).toBe('delete');
       expect(e.message).toContain('bundled');
     }
+  });
+});
+
+/**
+ * A pipeline stage is not a specialist anybody calls directly (#610 follow-up).
+ *
+ * The applet design pipeline was bypassed in exactly this way: three of its
+ * five stages were ordinary roster records, the main agent dispatched them by
+ * hand, and the two stages that exist only inside the pipeline never ran at
+ * all — zero dispatches, ever. Neither did the cross-stage checks, which are
+ * code rather than prose.
+ */
+describe('pipeline-only stages', () => {
+  const stage = { id: 'applet-architect', pipeline: 'applet-design' };
+
+  it('refuses a stage dispatched as an ordinary tool call', () => {
+    const out = invocationRefusal(stage, { kind: 'tool' });
+    expect(out?.code).toBe('pipeline');
+    expect(out?.message).toContain('applet-design');
+  });
+
+  it('permits the pipeline that owns it', () => {
+    expect(invocationRefusal(stage, { kind: 'pipeline', pipeline: 'applet-design' })).toBeNull();
+  });
+
+  it('refuses a DIFFERENT pipeline', () => {
+    // The mark carries a name rather than a boolean for exactly this: a
+    // second pipeline must not be able to drive the first one's stages.
+    const out = invocationRefusal(stage, { kind: 'pipeline', pipeline: 'something-else' });
+    expect(out?.code).toBe('pipeline');
+  });
+
+  it('refuses an applet dispatch too', () => {
+    // A stage has no business behind an applet button either, and the `app`
+    // arm is the one that PERMITS for `boundTo` — so it has to be shown not
+    // to permit here.
+    const out = invocationRefusal(stage, { kind: 'app', appId: 'x', action: 'y' });
+    expect(out?.code).toBe('pipeline');
+  });
+
+  it('leaves an unmarked record alone from every channel', () => {
+    // The guard that stops this becoming "nothing is dispatchable".
+    const plain = { id: 'shell-wrapper' };
+    expect(invocationRefusal(plain, { kind: 'tool' })).toBeNull();
+    expect(invocationRefusal(plain, { kind: 'pipeline', pipeline: 'applet-design' })).toBeNull();
+  });
+
+  it('still refuses a disabled stage as disabled, not as a pipeline stage', () => {
+    // Order matters for the message: "re-enable it" is the actionable one.
+    const out = invocationRefusal(
+      { ...stage, disabled: true },
+      {
+        kind: 'pipeline',
+        pipeline: 'applet-design',
+      },
+    );
+    expect(out?.code).toBe('disabled');
   });
 });

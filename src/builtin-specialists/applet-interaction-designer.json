@@ -3,6 +3,7 @@
   "name": "Applet Interaction Designer",
   "description": "Turns an applet's action set into components, variants, icons and confirmations — the form each action takes, decided from what it means.",
   "kind": "tool-wrapper",
+  "pipeline": "applet-design",
   "targetTools": [
     "docs"
   ],

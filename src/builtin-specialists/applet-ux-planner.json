@@ -3,6 +3,7 @@
   "name": "Applet UX Planner",
   "description": "Plans an applet's controls, its empty and error states, and whether it needs the UI runtime — before the page is written.",
   "kind": "tool-wrapper",
+  "pipeline": "applet-design",
   "targetTools": [
     "docs"
   ],

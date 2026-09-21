@@ -121,6 +121,17 @@ export interface PlanTarget {
  */
 export type AppletPlanner = (target: PlanTarget, signal?: AbortSignal) => Promise<PlanOutcome>;
 
+/**
+ * The name every stage record declares, and the name this module claims when
+ * it dispatches one.
+ *
+ * Exported so `bundled-manifest.test.ts` can walk the five records to it
+ * rather than restating the string — the record-to-constant direction, which
+ * is the one the mistake is made in. A stage whose `pipeline` does not match
+ * this is unreachable by anything, including its own pipeline.
+ */
+export const APPLET_DESIGN_PIPELINE = 'applet-design';
+
 /** The specialists this routes to. Bundled, so they are always present. */
 export const ARCHITECT_SPECIALIST_ID = 'applet-architect';
 export const UX_PLANNER_SPECIALIST_ID = 'applet-ux-planner';
@@ -285,6 +296,12 @@ async function runPlanner(
       // the queue really can reach and teach a frozen record. A planner that
       // lost a pool slot is not a call-shape mistake.
       skipCorrectionEnqueue: true,
+      // The channel that says this IS the pipeline. Every stage record is
+      // marked `pipeline`, so `invocationRefusal` refuses it from anywhere
+      // else — which is the whole lock-down, and this one line is what keeps
+      // the legitimate caller working. It rides the internal args interface
+      // rather than the tool's schema precisely so a model cannot claim it.
+      via: { kind: 'pipeline', pipeline: APPLET_DESIGN_PIPELINE },
       // Per CALL, not per construction: the tool is built once a turn but the
       // signal belongs to the invocation.
       ...(signal ? { abortSignal: signal } : {}),

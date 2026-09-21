@@ -6,6 +6,7 @@ import { POST_V1_BUNDLED } from '../specialists.js';
 import { APPLET_COLOR_TOKENS, APPLET_STYLED_SELECTORS } from '../host/tokens.js';
 import { UI_RUNTIME_PATH, UI_RUNTIME_RULE } from '../host/ui-runtime.js';
 import { ROLE_NOT_PIN_RULE } from '../model-roles.js';
+import { APPLET_DESIGN_PIPELINE } from '../tools/applet-planning.js';
 
 /**
  * What the original `.seeded-v1` pass shipped.
@@ -254,7 +255,26 @@ describe('the applet planners (#13)', () => {
       structuredOutput: boolean;
       systemPrompt: string;
       guidelines: string[];
+      pipeline?: string;
     };
+
+  /**
+   * Every stage is pipeline-only, and names the pipeline that owns it.
+   *
+   * The bypass this prevents was measured rather than imagined: the main
+   * agent dispatched three of these five by hand through `tool_wrapper_run`
+   * with prose briefs of its own, so `applet-interaction-designer` and
+   * `applet-microcopy` — the stages that choose variants and icons — had
+   * **zero** dispatches, ever, and the cross-stage checks never ran.
+   *
+   * Walked record-to-constant, which is the direction the mistake is made
+   * in: a sixth stage added without the mark is freely dispatchable, and a
+   * mark that does not match what `runPlanner` claims makes the stage
+   * unreachable by ANYTHING, including its own pipeline. Both fail here.
+   */
+  it.each(PLANNERS)('%s runs only as part of its pipeline', (name) => {
+    expect(load(name).pipeline).toBe(APPLET_DESIGN_PIPELINE);
+  });
 
   it.each(PLANNERS)('%s can reach the documentation it is told to read', (name) => {
     // `docs` is `audience: 'main'`, which sounds like it excludes a dispatched

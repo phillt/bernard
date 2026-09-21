@@ -159,11 +159,14 @@ export function assertCanEditSpecialist(id: string): void {
  * exactly this `(appId, action)` and refuses everyone else, where a tool
  * dispatch refuses any bound specialist.
  */
-export type InvocationVia = { kind: 'tool' } | { kind: 'app'; appId: string; action: string };
+export type InvocationVia =
+  | { kind: 'tool' }
+  | { kind: 'app'; appId: string; action: string }
+  | { kind: 'pipeline'; pipeline: string };
 
 /** A refusal reason, or `null` to proceed. */
 export interface InvocationRefusal {
-  code: 'disabled' | 'bound';
+  code: 'disabled' | 'bound' | 'pipeline';
   message: string;
 }
 
@@ -191,6 +194,7 @@ export function invocationRefusal(
     id: string;
     disabled?: boolean;
     boundTo?: { appId: string; action: string };
+    pipeline?: string;
   },
   via: InvocationVia,
 ): InvocationRefusal | null {
@@ -198,6 +202,37 @@ export function invocationRefusal(
     return {
       code: 'disabled',
       message: `Specialist "${specialist.id}" is disabled. Re-enable it from the /specialists menu before invoking it.`,
+    };
+  }
+  /**
+   * A stage of a pipeline is not a specialist anybody calls directly.
+   *
+   * This exists because the applet design pipeline was bypassed in exactly
+   * that way: three of its five stages are ordinary roster records, the main
+   * agent dispatched them by hand with prose briefs of its own, and the two
+   * stages that live ONLY inside the pipeline — the ones that choose button
+   * variants and icons — were never reached at all. Neither were the
+   * deterministic cross-stage checks, which are code. Zero dispatches, ever.
+   *
+   * Prose could not prevent that and a description could not either; the
+   * records read as invitations because that is what a roster entry is. So
+   * the refusal is structural, and it matches `boundTo`'s shape exactly: the
+   * record names the one caller that may reach it, and the caller has to say
+   * who it is.
+   *
+   * It carries the pipeline's NAME rather than a boolean so a second pipeline
+   * cannot invoke the first one's stages — the same reason `boundTo` matches
+   * on both `appId` and `action` rather than on "is bound".
+   */
+  const pipeline = specialist.pipeline;
+  if (pipeline) {
+    if (via.kind === 'pipeline' && via.pipeline === pipeline) return null;
+    return {
+      code: 'pipeline',
+      message:
+        `Specialist "${specialist.id}" is one stage of the "${pipeline}" pipeline and runs only ` +
+        'as part of it. Dispatching a stage by hand skips the stages you did not name and the ' +
+        'checks that run between them. Use the pipeline instead.',
     };
   }
   const bound = specialist.boundTo;

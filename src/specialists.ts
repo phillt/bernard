@@ -195,6 +195,33 @@ export interface Specialist extends ScopeSelection {
    * so a create-bound specialist could never be validated by execution.
    */
   boundTo?: { appId: string; action: string };
+
+  /**
+   * This record is one STAGE of a named pipeline, not a specialist anybody
+   * calls directly.
+   *
+   * The applet design pipeline was bypassed in exactly the way this prevents.
+   * Three of its five stages were ordinary roster records, so the main agent
+   * dispatched them by hand with prose briefs of its own — and the two stages
+   * that exist only inside the pipeline, the ones that choose button variants
+   * and icons, were never reached at all. Zero dispatches, ever. The
+   * cross-stage checks are code and never ran either, and nothing persisted
+   * the design, so the page writer had nothing to read.
+   *
+   * Two halves, and both are needed. `invocationRefusal` refuses a stage
+   * reached from anywhere but its own pipeline, and `getSummaries()` drops it
+   * from discovery — a record that is advertised and then refused invites one
+   * wasted dispatch per turn, which is the argument that function already
+   * makes for `boundTo`.
+   *
+   * Set by the bundled record on disk, like `boundTo`, and deliberately NOT
+   * settable through the `specialist` tool: a model marking its own record
+   * pipeline-only would hide it from the roster, and a model CLEARING the
+   * mark on a bundled stage would undo this. Bundled definitions carry
+   * `canEditDefinition: false` and `refreshBundledDefinitions` restores the
+   * shipped bytes, so the mark survives a hand edit.
+   */
+  pipeline?: string;
 }
 
 export interface SpecialistSummary {
@@ -815,7 +842,7 @@ export class SpecialistStore {
 
   getSummaries(): SpecialistSummary[] {
     return this.list()
-      .filter((s) => !s.disabled && !s.boundTo)
+      .filter((s) => !s.disabled && !s.boundTo && !s.pipeline)
       .map(({ id, name, description, provider, model, params, kind }) => ({
         id,
         name,

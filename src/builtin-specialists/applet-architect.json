@@ -3,6 +3,7 @@
   "name": "Applet Architect",
   "description": "Decides what an applet should be before it is built: the single job, what is out of scope, and whether it needs storage or an agent.",
   "kind": "tool-wrapper",
+  "pipeline": "applet-design",
   "targetTools": [
     "docs"
   ],

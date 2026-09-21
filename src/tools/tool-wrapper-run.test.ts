@@ -126,6 +126,7 @@ import {
   buildChildTools,
   createToolWrapperRunTool,
   renderWrapperParentView,
+  dispatchToolWrapper,
 } from './tool-wrapper-run.js';
 import { relabelStepLimit } from '../framework/agents/tool-wrapper.js';
 import { makeTestContext, makeMemoryDouble } from '../__tests__/agent-context.js';
@@ -680,6 +681,71 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     expect(parsed.status).toBe('error');
     expect(parsed.error).toBe('not_found');
     expect(vi.mocked(generateText)).not.toHaveBeenCalled();
+  });
+
+  // ── Guard: a pipeline stage, dispatched by hand ─────────────────────────────
+
+  /**
+   * The bypass this exists to stop, at the exact door it came through.
+   *
+   * The main agent called `tool_wrapper_run` with `specialistId:
+   * 'applet-architect'` and two of its siblings, writing its own prose briefs
+   * — so the two stages that live only inside the pipeline never ran at all,
+   * the cross-stage checks never ran, and nothing persisted the design. Every
+   * other test of this gate drives the pure function; this one drives the
+   * TOOL, because the tool is what the model actually holds.
+   */
+  it('refuses a pipeline stage dispatched as an ordinary tool call', async () => {
+    specialistStore.get.mockReturnValue(
+      makeToolWrapperSpecialist({ id: 'applet-architect', pipeline: 'applet-design' }),
+    );
+
+    const toolDef = createToolWrapperRunTool(
+      makeCtx(config, options, memoryStore, specialistStore, correctionStore),
+    );
+    const result = await toolDef.execute(
+      { specialistId: 'applet-architect', input: 'decide the scope' },
+      DEFAULT_EXEC_OPTIONS,
+    );
+
+    const parsed = JSON.parse(result);
+    expect(parsed.status).toBe('error');
+    expect(parsed.error).toBe('pipeline');
+    expect(parsed.result).toContain('applet-design');
+    // Refused before any model call — the point is that it costs nothing,
+    // not merely that the answer is discarded.
+    expect(vi.mocked(generateText)).not.toHaveBeenCalled();
+  });
+
+  /**
+   * And a model cannot talk its way past it.
+   *
+   * `via` rides the internal args interface, which the tool's zod schema does
+   * not declare — so an argument named `via` is stripped before `execute`
+   * ever sees it. **That stripping is the guard, not the `args.via` read**;
+   * measured, making the read reach for the caller's value leaves this green,
+   * because there is no caller value to reach. Written down because the
+   * obvious reading is the wrong one: what must never change is the SCHEMA,
+   * and adding `via` to it would open the gate however the read is spelled.
+   */
+  it('cannot be handed a via through the tool schema', async () => {
+    specialistStore.get.mockReturnValue(
+      makeToolWrapperSpecialist({ id: 'applet-architect', pipeline: 'applet-design' }),
+    );
+
+    const toolDef = createToolWrapperRunTool(
+      makeCtx(config, options, memoryStore, specialistStore, correctionStore),
+    );
+    const result = await toolDef.execute(
+      {
+        specialistId: 'applet-architect',
+        input: 'decide the scope',
+        via: { kind: 'pipeline', pipeline: 'applet-design' },
+      } as never,
+      DEFAULT_EXEC_OPTIONS,
+    );
+
+    expect(JSON.parse(result).error).toBe('pipeline');
   });
 
   // ── Guard: wrong kind (persona) ─────────────────────────────────────────────
@@ -1275,5 +1341,53 @@ describe('a wrapper stops delegating once the chain is deep enough', () => {
 
   it('offers none once the chain reaches the limit', async () => {
     expect(await toolNamesAtDepth(MAX_DISPATCH_DEPTH)).not.toContain('agent');
+  });
+});
+
+/**
+ * `dispatchToolWrapper` honours a via, which is what makes the pipeline work.
+ *
+ * Everything else about the lock-down is a refusal, and a refusal is easy to
+ * test. This is the permit, and nothing covered it: `applet-planning.test.ts`
+ * mocks the dispatch, so it can only assert that `via` was PASSED, and the
+ * tool-path tests above all go through `{kind: 'tool'}`. Measured — deleting
+ * the passthrough entirely left all 68 of them green while breaking every
+ * applet build in production.
+ */
+describe('dispatchToolWrapper honours an internal via', () => {
+  it('lets the owning pipeline past a gate that refuses everyone else', async () => {
+    const config = createMockConfig();
+    const options = createMockOptions();
+    const memoryStore = createMockMemoryStore();
+    const specialistStore = createMockSpecialistStore();
+    const correctionStore = createMockCorrectionStore();
+    vi.mocked(withSlot).mockImplementation((fn) => fn({ id: 1 }));
+    vi.mocked(resolveProviderAndModel).mockReturnValue({
+      ok: true,
+      provider: 'anthropic',
+      model: 'claude-test',
+    });
+    specialistStore.get.mockReturnValue(
+      makeToolWrapperSpecialist({ id: 'applet-architect', pipeline: 'applet-design' }),
+    );
+    const ctx = makeCtx(config, options, memoryStore, specialistStore, correctionStore);
+
+    const refused = await dispatchToolWrapper(
+      { specialistId: 'applet-architect', input: 'decide the scope' },
+      ctx,
+    );
+    expect(refused.error).toBe('pipeline');
+
+    const permitted = await dispatchToolWrapper(
+      {
+        specialistId: 'applet-architect',
+        input: 'decide the scope',
+        via: { kind: 'pipeline', pipeline: 'applet-design' },
+      },
+      ctx,
+    );
+    // Past the gate. What it does afterwards is every other test's business;
+    // all this asserts is that the refusal is no longer the answer.
+    expect(permitted.error).not.toBe('pipeline');
   });
 });

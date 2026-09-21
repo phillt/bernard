@@ -278,3 +278,41 @@ describe('the planning recursion guard', () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * The pipeline says who it is, or every stage refuses it (#610 follow-up).
+ *
+ * The five stage records are marked `pipeline`, so `invocationRefusal` turns
+ * away anything that does not claim the same name — that is the lock-down
+ * which stops the main agent hand-dispatching them, which is how the
+ * interaction and microcopy stages came to have zero dispatches ever.
+ *
+ * The cost of that is one line in `runPlanner`, and dropping it breaks the
+ * whole pipeline rather than one stage. Nothing else would catch it: every
+ * test in this file mocks the dispatch, so the real gate is never reached.
+ */
+describe('the pipeline identifies itself', () => {
+  it('claims its own pipeline on every stage dispatch', async () => {
+    const dispatch = okWith({});
+    const { makeAppletPlanner, APPLET_DESIGN_PIPELINE } = await load(dispatch);
+    await makeAppletPlanner(CTX)(TARGET);
+
+    expect(dispatch.mock.calls.length).toBeGreaterThan(0);
+    for (const [args] of dispatch.mock.calls) {
+      expect(args.via, `${args.specialistId} dispatched with no via`).toEqual({
+        kind: 'pipeline',
+        pipeline: APPLET_DESIGN_PIPELINE,
+      });
+    }
+  });
+
+  it('does not claim it on behalf of anything else', async () => {
+    // The mark carries a NAME so a second pipeline cannot drive these
+    // stages. A stage dispatched under the wrong name is refused, so this
+    // pins the exact string rather than "some pipeline".
+    const dispatch = okWith({});
+    const { makeAppletPlanner } = await load(dispatch);
+    await makeAppletPlanner(CTX)(TARGET);
+    expect(dispatch.mock.calls[0][0].via.pipeline).toBe('applet-design');
+  });
+});
