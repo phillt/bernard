@@ -590,3 +590,88 @@ describe('a <form> cannot work, so it is refused', () => {
     });
   });
 });
+
+/**
+ * Emphasis, now that the floor's bare button is the quiet one (#610 follow-up).
+ */
+describe('primary emphasis', () => {
+  const warnings = (html: string) =>
+    validateAppletPage(html, ['hello'])
+      .filter((i) => i.level === 'warn')
+      .map((i) => i.message);
+
+  const withBody = (body: string) => OK.replace('<main><button id="go">Go</button></main>', body);
+
+  it('says nothing about one primary in a region', () => {
+    const out = warnings(withBody('<main><button id="go" class="primary">Go</button></main>'));
+    expect(out.filter((m) => m.includes('primary'))).toEqual([]);
+  });
+
+  it('warns when a region marks two', () => {
+    // A second primary does not add emphasis, it removes it — which is what
+    // nine of them on one screen looked like.
+    const out = warnings(
+      withBody(
+        '<main><button id="go" class="primary">Go</button>' +
+          '<button class="primary">Also go</button></main>',
+      ),
+    );
+    expect(out.join(' ')).toContain('2 controls are marked');
+  });
+
+  it('counts per section rather than per page', () => {
+    // One primary in each of two sections is correct and must stay quiet —
+    // a page-wide count would make the common multi-section applet noisy.
+    const out = warnings(
+      withBody(
+        '<main><section><button id="go" class="primary">A</button></section>' +
+          '<section><button class="primary">B</button></section></main>',
+      ),
+    );
+    expect(out.filter((m) => m.includes('marked'))).toEqual([]);
+  });
+
+  it('matches the class among others, not only on its own', () => {
+    const out = warnings(
+      withBody(
+        '<main><button id="go" class="wide primary">A</button>' +
+          '<button class="primary tall">B</button></main>',
+      ),
+    );
+    expect(out.join(' ')).toContain('2 controls are marked');
+  });
+
+  it('warns rather than refuses', () => {
+    // Certainty, not severity: a genuinely two-verb region exists, and an
+    // over-emphasised page is visibly wrong rather than silently broken.
+    const html = withBody(
+      '<main><button id="go" class="primary">A</button>' +
+        '<button class="primary">B</button></main>',
+    );
+    expect(refusals(html)).toEqual([]);
+  });
+});
+
+/**
+ * The component spelling of an icon name, which is the only one a runtime
+ * page can use — so a typo there was the one unchecked spelling.
+ */
+describe('icon names via the component', () => {
+  it('catches an unknown name passed to bernard.Icon', () => {
+    const html = `${OK}\n<script>html\`<\${bernard.Icon} name="dustbin" />\`</script>`;
+    const out = validateAppletPage(html, ['hello'])
+      .filter((i) => i.level === 'warn')
+      .map((i) => i.message)
+      .join(' ');
+    expect(out).toContain('dustbin');
+  });
+
+  it('accepts a real one', () => {
+    const html = `${OK}\n<script>html\`<\${bernard.Icon} name="trash-2" />\`</script>`;
+    const out = validateAppletPage(html, ['hello'])
+      .filter((i) => i.level === 'warn')
+      .map((i) => i.message)
+      .join(' ');
+    expect(out).not.toContain('do not exist');
+  });
+});

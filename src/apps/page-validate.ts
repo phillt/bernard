@@ -261,6 +261,12 @@ export function validateAppletPage(
   const iconRefs = new Set<string>();
   for (const m of html.matchAll(/data-icon=["']([a-z0-9-]+)["']/g)) iconRefs.add(m[1]);
   for (const m of html.matchAll(/\bbernard\.icon\(\s*["']([a-z0-9-]+)["']/g)) iconRefs.add(m[1]);
+  // The component spelling, which a runtime page uses because neither of the
+  // other two survives a re-render. Scanned here or a typo in the one place
+  // runtime pages can use icons at all would be the only unchecked spelling.
+  for (const m of html.matchAll(/bernard\.Icon[^>]*?\bname=["']([a-z0-9-]+)["']/g)) {
+    iconRefs.add(m[1]);
+  }
   const unknownIcons = [...iconRefs].filter((n) => !isIconName(n));
   if (unknownIcons.length > 0) {
     warn(
@@ -269,7 +275,45 @@ export function validateAppletPage(
     );
   }
 
+  primaryEmphasisIssues(html, warn);
+
   return issues;
+}
+
+/**
+ * More than one primary action in a region.
+ *
+ * "Primary" means the one thing this part of the page is for, so a second
+ * one does not add emphasis — it removes it. The motivating applet had
+ * **nine** filled buttons on one screen with nothing marking which mattered.
+ *
+ * A warning, not a refusal, per this module's certainty rule: the count is
+ * decidable but a legitimate exception exists (a genuinely two-verb region),
+ * and an over-emphasised page is visibly wrong rather than silently broken.
+ *
+ * **It is the weaker half of the fix, and deliberately so.** On a runtime
+ * page the controls live in template literals, so a `.map()` over seven items
+ * renders seven buttons from ONE in the source — exactly the shape that
+ * prompted this — and a static count sees one. What actually holds there is
+ * the floor's inverted default, where the bare element is already the quiet
+ * one however many times a template renders. This catches the plain-HTML
+ * case, and nothing here should be read as covering the other.
+ */
+function primaryEmphasisIssues(html: string, warn: (m: string) => void): void {
+  // Split on the section boundary rather than parsing: everything before the
+  // first `<section>` is its own region, which is where a page with no
+  // sections at all still gets checked.
+  const regions = html.split(/<section\b/i);
+  for (const [i, region] of regions.entries()) {
+    const count = [...region.matchAll(/class=["'][^"']*\bprimary\b[^"']*["']/gi)].length;
+    if (count < 2) continue;
+    const where = i === 0 ? 'before the first <section>' : `in <section> ${i}`;
+    warn(
+      `${count} controls are marked \`primary\` ${where}. A region has one primary action — ` +
+        'a second does not add emphasis, it removes it. Leave the others as a bare `button`, ' +
+        'which is already the quiet default.',
+    );
+  }
 }
 
 /**

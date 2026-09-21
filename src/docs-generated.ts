@@ -333,7 +333,7 @@ client. It attaches one global, \`${UI_RUNTIME_GLOBAL}\`.
         <input id="t" value=\${text} onInput=\${(e) => setText(e.target.value)} />
       </div>
       <div class="actions">
-        <button onClick=\${add} disabled=\${!text}>Add</button>
+        <button class="primary" onClick=\${add} disabled=\${!text}>Add</button>
       </div>
       <ul class="cards">
         \${items.map((i) => html\`<li key=\${i.id}>\${i.text}</li>\`)}
@@ -361,6 +361,30 @@ There is no \`Fragment\` export. Return an array, or wrap in an element.
 That is Preact's API. Anything written for React hooks works, with two
 differences worth knowing: the DOM property is \`onInput\`, not \`onChange\`, and
 \`class\` works as well as \`className\`.
+
+## Icons
+
+Neither of the two spellings on a static page works here. \`bernard.icon()\`
+returns a string, and \`bernard.icons.hydrate()\` sets \`innerHTML\` on a node
+this runtime owns — so the next render throws the glyph away and nothing puts
+it back. Use the component:
+
+\`\`\`js
+html\`<button class="primary" onClick=\${add}>
+  <\${bernard.Icon} name="plus" size="md" /> Add item
+<//>\`
+\`\`\`
+
+It renders the \`<svg>\` itself, so the glyph is the flex item the button lays
+out and no wrapper gets in the way. An icon-only control needs \`title\`, or it
+announces nothing and shows no tooltip:
+
+\`\`\`js
+html\`<\${bernard.Icon} name="trash-2" size="sm" title="Delete item" />\`
+\`\`\`
+
+An unknown name renders nothing at all rather than erroring, so check the name
+against the \`applet-styling\` document rather than guessing.
 
 ## Styling stays the same
 

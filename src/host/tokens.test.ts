@@ -45,6 +45,103 @@ describe('applet design tokens (#424)', () => {
 });
 
 /**
+ * The two rules the floor gets wrong by DEFAULT, pinned.
+ *
+ * Neither is covered by the contrast table above, and the reason is worth
+ * stating: that table measures TOKEN PAIRS, so it says `--text` on
+ * `--surface` clears 4.5 and says nothing about which rule paints them. Both
+ * defects below were changes to a RULE using tokens that were already
+ * measured, so the whole suite stayed green through both of them.
+ */
+describe('the defaults point the right way', () => {
+  /**
+   * The body of one rule, by exact selector, from the served sheet.
+   *
+   * The selector is passed RAW and escaped here, so a caller cannot
+   * double-escape it — which is what the first cut of this did, matching
+   * nothing and reporting it as a missing rule.
+   */
+  const ruleFor = (selector: string): string => {
+    const css = tokensStylesheet();
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const at = css.search(new RegExp(`(^|\\n)${escaped}\\s*\\{`));
+    expect(at, `no rule for \`${selector}\``).toBeGreaterThanOrEqual(0);
+    return css.slice(at, css.indexOf('}', at));
+  };
+
+  /**
+   * Emphasis is opt-IN.
+   *
+   * The bare element used to be the filled accent, which made every button a
+   * model wrote without thinking maximum emphasis — nine of them on one real
+   * screen. The assertion is on the bare rule NOT being the accent as much as
+   * on `.primary` being it: a revert that added `button.primary` while leaving
+   * the base filled would satisfy a presence check and change nothing.
+   */
+  it('makes the bare button quiet and `.primary` the deliberate one', () => {
+    const base = ruleFor('button');
+    expect(base).toContain('background: var(--surface)');
+    expect(base).toContain('color: var(--text)');
+    expect(base).not.toContain('var(--accent)');
+
+    const primary = ruleFor('button.primary');
+    expect(primary).toContain('background: var(--accent)');
+    expect(primary).toContain('color: var(--accent-fg)');
+  });
+
+  /**
+   * A fill resets the border the base now draws.
+   *
+   * Only reachable since the base gained one — a filled button carrying an
+   * outline reads as two edges, and `button.danger` had no reset because it
+   * never needed one.
+   */
+  it('clears the base border on every filled variant', () => {
+    for (const variant of ['button.primary', 'button.danger']) {
+      expect(ruleFor(variant)).toContain('border-color: transparent');
+    }
+  });
+
+  /**
+   * Proximity, as arithmetic rather than as a string match.
+   *
+   * A label belongs to the control BELOW it, so the gap inside a field must be
+   * smaller than the gap between two fields. It was the other way round: the
+   * standalone `label` margin stacked on the field's own flex `gap` (12 + 8 =
+   * 20px inside) while two stacked fields had nothing at all between them.
+   * Measured on a real applet, ~36px inside a field against ~13px between.
+   *
+   * Comparing the resolved scale values rather than asserting the literal
+   * tokens is what makes this survive a rescale: swap `--space-4` for
+   * `--space-3` and the ratio still has to hold.
+   */
+  it('separates two fields by more than a label and its own input', () => {
+    const rem = (token: string): number => Number.parseFloat(APPLET_SCALE_TOKENS[token]);
+
+    expect(ruleFor('.field > label')).toContain('margin-bottom: 0');
+
+    const withinToken = /gap: var\((--space-\d)\)/.exec(ruleFor('.field'))?.[1];
+    const betweenToken = /margin-top: var\((--space-\d)\)/.exec(ruleFor('.field + .field'))?.[1];
+    expect(withinToken, 'a field declares its own gap').toBeDefined();
+    expect(betweenToken, 'stacked fields are separated').toBeDefined();
+
+    expect(rem(betweenToken!)).toBeGreaterThan(rem(withinToken!));
+  });
+
+  /**
+   * The row reset, which is required rather than defensive.
+   *
+   * Inside a `.row` the fields are flex items laid out horizontally, so a
+   * `margin-top` on the second pushes it out of alignment with the first —
+   * and a row already spaces its children with `gap`. Without this the fix to
+   * stacked fields silently breaks every side-by-side pair.
+   */
+  it('does not apply the stacked-field margin inside a row', () => {
+    expect(ruleFor('.row > .field + .field')).toContain('margin-top: 0');
+  });
+});
+
+/**
  * The floor meets WCAG AA, and a test says so (#465).
  *
  * Contrast is the one design property that is decidable — arithmetic over two
