@@ -33,6 +33,26 @@ import { handleStoreRequest } from './store-route.js';
  */
 
 /** Path the applet's page posts a capability handle to. */
+/**
+ * How many `invokeAction` calls are in flight across every applet this
+ * process serves.
+ *
+ * Module-level rather than per-server, following `providers/request-counter.ts`:
+ * the one consumer is the daemon deciding whether it may replace itself, and
+ * it is waiting on all of them at once, so a per-applet split would have to be
+ * summed back up at the only call site that reads it.
+ *
+ * An action can legitimately run for minutes (the manifest's own `timeoutMs`
+ * reaches 180 s here), so a self-restart that did not wait would kill work the
+ * user is watching a spinner for.
+ */
+let inFlight = 0;
+
+/** @see inFlight */
+export function inFlightInvocations(): number {
+  return inFlight;
+}
+
 export const INVOKE_PATH = '/__bernard/invoke';
 /** Liveness, used by the client instead of a bare PID check. */
 export const HEALTH_PATH = '/__bernard/health';
@@ -274,15 +294,24 @@ function createHandler(
         }
 
         const record = resolved.record;
-        const result: InvocationResult = await invokeAction({
-          appId: record.appId,
-          action: record.action,
-          // A frozen handle's values win over anything the page sends — the
-          // user approved those, not whatever arrived with the request.
-          args: record.frozenArgs ?? args ?? {},
-          log,
-          capabilityId: record.id,
-        });
+        // `finally`, because `invokeAction`'s contract is that it never throws
+        // and this must stay true even on the day that contract is broken
+        // again — a leaked count would stall every later restart forever.
+        inFlight += 1;
+        let result: InvocationResult;
+        try {
+          result = await invokeAction({
+            appId: record.appId,
+            action: record.action,
+            // A frozen handle's values win over anything the page sends — the
+            // user approved those, not whatever arrived with the request.
+            args: record.frozenArgs ?? args ?? {},
+            log,
+            capabilityId: record.id,
+          });
+        } finally {
+          inFlight -= 1;
+        }
         sendJson(result.ok ? 200 : 500, result);
         return;
       }
@@ -396,9 +425,25 @@ function createHandler(
       }
       send(200, fs.readFileSync(asset.absPath), { 'Content-Type': asset.contentType });
     })().catch((err: unknown) => {
-      log(`handler error: ${err instanceof Error ? err.message : String(err)}`);
+      const message = err instanceof Error ? err.message : String(err);
+      log(`handler error: ${message}`);
       try {
-        send(500, 'Internal Server Error');
+        // JSON, not the bare `Internal Server Error` text this used to send.
+        // Every `/__bernard/*` route answers JSON and the served client does
+        // `res.json()` on the reply, so a text body made the SDK throw its
+        // generic "malformed response (500)" — discarding the one sentence
+        // that said what went wrong and leaving the page with nothing to
+        // show. The diagnosis then existed only in this host's own log file,
+        // which nothing surfaces.
+        //
+        // The message is included deliberately. `guard.ts` stays terse
+        // because a per-cause 403 is an enumeration oracle; a 500 is our own
+        // crash on a loopback origin behind a token, so there is nothing to
+        // enumerate and the whole value is being able to read it.
+        sendJson(500, {
+          ok: false,
+          error: { code: 'internal_error', message },
+        });
       } catch {
         // response already sent
       }

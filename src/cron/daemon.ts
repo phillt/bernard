@@ -1,5 +1,7 @@
 import * as fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { CronStore } from './store.js';
+import { watchOwnBuild, respawnSelf } from '../build-stamp.js';
 import { Scheduler } from './scheduler.js';
 import { loadConfig } from '../config.js';
 
@@ -107,6 +109,46 @@ function main() {
     log('Daemon stopped');
     process.exit(0);
   };
+
+  /**
+   * Replace this process when Bernard is rebuilt underneath it.
+   *
+   * The applet host is where this was found (`src/build-stamp.ts` has the
+   * incident), but the exposure is identical here and quieter: a cron job
+   * reaches `createTools`, which loads nine tool modules through deferred
+   * `await import()`, so the first job to build a registry after a build
+   * links fresh code against this process's stale cache. With no operator
+   * watching, that is a job that simply stops working.
+   *
+   * Jobs are drained first, with a much longer budget than the applet host
+   * allows: a cron run's own ceiling is `BERNARD_CRON_JOB_TIMEOUT_MS` (30 min
+   * by default), nobody is waiting on a spinner, and killing a half-finished
+   * unattended job is the expensive outcome here rather than the cheap one.
+   */
+  const DRAIN_TIMEOUT_MS = 5 * 60_000;
+  const DRAIN_POLL_MS = 1_000;
+  const restartForNewBuild = async (): Promise<void> => {
+    const entry = fileURLToPath(import.meta.url);
+    if (!fs.existsSync(entry)) {
+      log(`Not restarting: own entry ${entry} is gone`);
+      return;
+    }
+    log('Bernard was rebuilt; restarting to pick up the new build');
+    const deadline = Date.now() + DRAIN_TIMEOUT_MS;
+    while (scheduler.inFlightCount > 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, DRAIN_POLL_MS));
+    }
+    if (scheduler.inFlightCount > 0) {
+      log(`Restarting with ${scheduler.inFlightCount} job(s) still running`);
+    }
+    scheduler.stopAll();
+    if (!respawnSelf({ entry, pidFile: CronStore.pidFile })) {
+      log('Respawn failed; exiting anyway so a later `cron start` is clean');
+    }
+    log('Daemon stopped for rebuild');
+    process.exit(0);
+  };
+  watchOwnBuild({ log, onStale: () => void restartForNewBuild() });
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));

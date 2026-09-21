@@ -617,4 +617,84 @@ describe('applet server', () => {
       expect(res.status).toBe(403);
     });
   });
+  /**
+   * What the page is handed when the host itself crashes.
+   *
+   * The catch-all sent the literal text `Internal Server Error`, and the
+   * served client does `res.json()` on every reply — so the SDK threw its
+   * generic "malformed response (500)" and discarded the one sentence that
+   * said what went wrong. During the incident that prompted this, the real
+   * diagnosis existed only in the host's own log file, which nothing
+   * surfaces, and the page could say nothing at all.
+   *
+   * Driven over a real socket: the failure was in what went ON THE WIRE, and
+   * a unit test of the handler would have asserted the shape we already
+   * believed we were sending.
+   */
+  describe('the catch-all 500', () => {
+    it('answers JSON carrying the reason, not bare text', async () => {
+      const m = await load();
+      writeApp(m);
+      const { app } = await start(m);
+      const boot = (await (
+        await fetch(`${app.origin}/__bernard/bootstrap.json`, { headers: hostHeaders(app.port) })
+      ).json()) as { handles: Record<string, string> };
+      const handle = boot.handles.ask;
+
+      // A throw from inside the route, which is exactly what a failed
+      // deferred `import()` produced against a stale daemon.
+      mockInvokeAction.mockRejectedValueOnce(
+        new Error("The requested module './paths.js' does not provide an export named 'X'"),
+      );
+
+      const res = await fetch(`${app.origin}/__bernard/invoke`, {
+        method: 'POST',
+        headers: {
+          ...hostHeaders(app.port),
+          'content-type': 'application/json',
+          'x-bernard-token': 'tok-1',
+        },
+        body: JSON.stringify({ handle, args: { q: 'hi' } }),
+      });
+
+      expect(res.status).toBe(500);
+      expect(res.headers.get('content-type')).toContain('application/json');
+      // `res.json()` is the assertion, not a convenience: it is the exact
+      // call the served client makes, and it is what used to throw.
+      const body = (await res.json()) as { ok: boolean; error: { code: string; message: string } };
+      expect(body.ok).toBe(false);
+      expect(body.error.code).toBe('internal_error');
+      // The reason survives to the page. Without this the user sees a dead
+      // button and the cause is only in a log file nobody reads.
+      expect(body.error.message).toContain('does not provide an export');
+    });
+
+    it('releases the in-flight count even when the invocation throws', async () => {
+      // The counter gates the daemon's self-restart. A leaked count is
+      // silent and permanent: every later rebuild would wait out the full
+      // drain budget and then restart anyway, reporting work that is not
+      // running. Hence `finally`, and hence this test, which is the only
+      // thing that can tell `finally` from `try`.
+      const m = await load();
+      writeApp(m);
+      const { app } = await start(m);
+      const boot = (await (
+        await fetch(`${app.origin}/__bernard/bootstrap.json`, { headers: hostHeaders(app.port) })
+      ).json()) as { handles: Record<string, string> };
+      const handle = boot.handles.ask;
+
+      expect(m.inFlightInvocations()).toBe(0);
+      mockInvokeAction.mockRejectedValueOnce(new Error('boom'));
+      await fetch(`${app.origin}/__bernard/invoke`, {
+        method: 'POST',
+        headers: {
+          ...hostHeaders(app.port),
+          'content-type': 'application/json',
+          'x-bernard-token': 'tok-1',
+        },
+        body: JSON.stringify({ handle, args: { q: 'hi' } }),
+      });
+      expect(m.inFlightInvocations()).toBe(0);
+    });
+  });
 });

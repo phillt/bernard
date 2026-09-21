@@ -345,6 +345,33 @@ export async function invokeAction(opts: InvokeActionOptions): Promise<Invocatio
   };
 
   /**
+   * A deferred `import()` that failed to LOAD, reported as an ordinary run
+   * failure rather than allowed to escape.
+   *
+   * This function's contract is that it never throws, and both its log row
+   * and the notice it puts in front of a running REPL hang off {@link fail}.
+   * The two `await import(...)` calls below sat outside every try, so a
+   * module-load failure escaped all of it: the caller got whatever its own
+   * catch-all produced, `bernard app logs` recorded nothing at all, and
+   * nobody was told. Observed against a nine-day-old applet host, where every
+   * button answered `500` and the invocation log showed only successes — see
+   * `src/build-stamp.ts` for why the load fails.
+   *
+   * `run_failed` rather than a new code: the work genuinely did not run, exit
+   * 1 ("retry might help") is the honest status for a stale process that a
+   * restart fixes, and it is one of the two codes {@link fail} classifies and
+   * therefore notifies on. A request-shaped code would be a lie about whose
+   * fault it is AND would silently skip the notification.
+   */
+  const failModuleLoad = (specifier: string, err: unknown): InvocationResult =>
+    fail(
+      'run_failed',
+      `Could not load ${specifier}: ${err instanceof Error ? err.message : String(err)}. ` +
+        'This usually means Bernard was rebuilt or upgraded while this process was running. ' +
+        'Restarting it picks up the new build.',
+    );
+
+  /**
    * The single success path, the sibling of {@link fail}.
    *
    * The two arms had hand-rolled this envelope and its log row, and had
@@ -416,7 +443,12 @@ export async function invokeAction(opts: InvokeActionOptions): Promise<Invocatio
   // because the whole value of this arm is that it costs nothing.
   if (dispatch.kind === 'tool') {
     logInvoke({ tool: dispatch.tool });
-    const { dispatchToolAction } = await import('./tool-dispatch.js');
+    let dispatchToolAction: typeof import('./tool-dispatch.js').dispatchToolAction;
+    try {
+      ({ dispatchToolAction } = await import('./tool-dispatch.js'));
+    } catch (err) {
+      return failModuleLoad('./tool-dispatch.js', err);
+    }
     const run = await dispatchToolAction({
       invocation,
       dispatch,
@@ -489,7 +521,12 @@ export async function invokeAction(opts: InvokeActionOptions): Promise<Invocatio
   // `bernard script` pay for the whole agent runtime BEFORE reaching the
   // `kind === 'tool'` branch that exists to avoid exactly that. Measured 168 ms
   // on `apps/invoke.js` against 76 for the worker path.
-  const { dispatchAction } = await import('./dispatch.js');
+  let dispatchAction: typeof import('./dispatch.js').dispatchAction;
+  try {
+    ({ dispatchAction } = await import('./dispatch.js'));
+  } catch (err) {
+    return failModuleLoad('./dispatch.js', err);
+  }
   const run: DispatchActionResult = await dispatchAction({
     invocation,
     specialist,

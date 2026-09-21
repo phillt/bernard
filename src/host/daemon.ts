@@ -1,12 +1,15 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { APPLET_HOST_PID_FILE, APPLET_HOST_LOG_FILE, APPS_DIR } from '../paths.js';
+import { watchOwnBuild, respawnSelf } from '../build-stamp.js';
+import { sendToSessions } from '../inbox/send.js';
 import { AppRegistry } from '../apps/registry.js';
 import { CapabilityTable } from '../apps/capabilities.js';
 import { recordCapabilityMint } from '../apps/capability-log.js';
 import { HostRegistry } from './registry.js';
-import { startApplet, type RunningApplet } from './server.js';
+import { startApplet, inFlightInvocations, type RunningApplet } from './server.js';
 import { closeAllAppletStores, closeAppletStore } from './store-route.js';
 
 /**
@@ -93,16 +96,99 @@ async function reconcile(): Promise<void> {
   }
 }
 
-async function shutdown(): Promise<void> {
-  log('shutting down');
+/**
+ * Releases every listening port and closes every SQLite handle.
+ *
+ * Shared by {@link shutdown} and {@link restartForNewBuild}: a replacement
+ * process binds the SAME hash-derived ports, so anything short of releasing
+ * them first makes the new host log "could not serve" and leave that applet
+ * dark until somebody restarts it by hand.
+ */
+async function closeAll(): Promise<void> {
   for (const applet of running.values()) await applet.close();
   // Closes each cached SQLite handle so WAL checkpoints, rather than leaving
   // it to `process.exit`.
   closeAllAppletStores();
+}
+
+async function shutdown(): Promise<void> {
+  log('shutting down');
+  await closeAll();
   try {
     fs.unlinkSync(APPLET_HOST_PID_FILE);
   } catch {
     /* already gone */
+  }
+  process.exit(0);
+}
+
+/**
+ * How long to let in-flight invocations finish before replacing this process.
+ *
+ * An applet action's own `timeoutMs` reaches 180 s, so this cannot wait for
+ * the worst case without leaving the host serving stale code for three
+ * minutes after a build. 30 s covers the ordinary agent-backed action —
+ * measured 7-18 s across every invocation this install has logged — and a run
+ * that outlives it is abandoned with a line saying so, which is a truthful
+ * report rather than a silent kill.
+ */
+const DRAIN_TIMEOUT_MS = 30_000;
+const DRAIN_POLL_MS = 250;
+
+async function drain(): Promise<boolean> {
+  const deadline = Date.now() + DRAIN_TIMEOUT_MS;
+  while (inFlightInvocations() > 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, DRAIN_POLL_MS));
+  }
+  return inFlightInvocations() === 0;
+}
+
+/**
+ * Replaces this process after Bernard was rebuilt or upgraded underneath it.
+ *
+ * Why this exists at all is in `src/build-stamp.ts`: a daemon holds its module
+ * graph for its whole life, and the deferred `await import()` calls scattered
+ * through the tree link fresh code against that stale cache the first time
+ * they run. The host is where it bites, because it sits idle for days and
+ * then loads half the graph on the first click.
+ *
+ * Automatic rather than a prompt, because the alternative is what shipped:
+ * nothing noticed, every applet answered `500`, the only evidence was a log
+ * file nothing surfaces, and the stylesheet the pages were being served was
+ * nine days old. Nobody is going to restart this by hand on a schedule they
+ * cannot see.
+ */
+async function restartForNewBuild(): Promise<void> {
+  const entry = fileURLToPath(import.meta.url);
+  if (!fs.existsSync(entry)) {
+    // Mid-upgrade, or a `dist/` that was removed rather than replaced. Staying
+    // up on stale code beats exiting into nothing.
+    log(`not restarting: own entry ${entry} is gone`);
+    return;
+  }
+
+  log('bernard was rebuilt; restarting to pick up the new build');
+  // Sent BEFORE the drain so it lands while the REPL is still the thing the
+  // user is looking at, rather than up to 30 s later.
+  try {
+    sendToSessions({
+      text: 'Bernard was rebuilt, so the applet host restarted to pick it up.',
+      source: { kind: 'applet', label: 'applet-host' },
+      hint: 'Reload any open applet tabs — a restart mints new tokens.',
+      target: { all: true },
+    });
+  } catch {
+    // Nothing about reporting a restart may prevent one.
+  }
+
+  const drained = await drain();
+  if (!drained) {
+    log(`restarting with ${inFlightInvocations()} invocation(s) still running`);
+  }
+
+  await closeAll();
+  if (!respawnSelf({ entry, pidFile: APPLET_HOST_PID_FILE })) {
+    log('respawn failed; exiting anyway so a later `applet-host start` is clean');
   }
   process.exit(0);
 }
@@ -130,6 +216,12 @@ async function main(): Promise<void> {
   } catch (err) {
     log(`could not watch ${APPS_DIR}: ${String(err)}`);
   }
+
+  // Notice when this process's own code stops matching what is on disk.
+  watchOwnBuild({
+    log,
+    onStale: () => void restartForNewBuild(),
+  });
 
   process.on('SIGTERM', () => void shutdown());
   process.on('SIGINT', () => void shutdown());

@@ -1510,7 +1510,7 @@ program
     },
   );
 
-const APP_ACTIONS = ['list', 'open', 'allow', 'csp', 'logs', 'delete', 'path'] as const;
+const APP_ACTIONS = ['list', 'open', 'check', 'allow', 'csp', 'logs', 'delete', 'path'] as const;
 
 program
   .command('app [action] [appId] [actionName]')
@@ -1528,6 +1528,8 @@ program
   .option('--sandbox <setting>', 'Link handling: links (open in a new window) | navigate')
   .option('--clear', 'Remove every external-access grant from this applet')
   .option('--last <n>', 'How many log rows to show for `logs` (default 20)')
+  .option('--action <name>', 'Action to invoke for `check`')
+  .option('--args <json>', 'JSON arguments for `check --action`')
   .action(
     async (
       action: string | undefined,
@@ -1547,6 +1549,8 @@ program
         sandbox?: string;
         clear?: boolean;
         last?: string;
+        action?: string;
+        args?: string;
       },
     ) => {
       try {
@@ -1614,6 +1618,18 @@ program
             cli.appAllow(appId, actionName, tools, {
               ...(options.write !== undefined ? { write: options.write } : {}),
               ...(options.confirm !== undefined ? { confirm: options.confirm } : {}),
+            });
+            return;
+          }
+          case 'check': {
+            if (!appId) {
+              throw new Error(
+                "Usage: bernard app check <appId> [--action <name> --args '<json>']",
+              );
+            }
+            await cli.appCheck(appId, {
+              ...(options.action ? { action: options.action } : {}),
+              ...(options.args !== undefined ? { args: options.args } : {}),
             });
             return;
           }

@@ -271,3 +271,53 @@ export function appLogs(appId: string, opts: { last?: number } = {}): void {
   }
   for (const line of lines) printInfo(line);
 }
+
+/**
+ * `bernard app check <id>` — does a button actually work?
+ *
+ * The one verification in the tree that goes through the browser's own door.
+ * `bernard script` and `applet-reviewer`'s source read between them could not
+ * answer this: a green CLI run and a dead button are compatible, and a static
+ * read cannot see a `500`. See `src/apps/check.ts` for the incident.
+ *
+ * Exits non-zero on any failed step, so it composes in a script and so the
+ * reviewer specialist can read a verdict rather than parse prose.
+ */
+export async function appCheck(
+  appId: string,
+  opts: { action?: string; args?: string } = {},
+): Promise<void> {
+  let parsedArgs: unknown;
+  if (opts.args !== undefined) {
+    try {
+      parsedArgs = JSON.parse(opts.args);
+    } catch (err) {
+      printError(`--args is not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+      process.exitCode = 2;
+      return;
+    }
+  }
+
+  const { checkApplet } = await import('./check.js');
+  const result = await checkApplet(appId, {
+    ...(opts.action ? { action: opts.action } : {}),
+    ...(parsedArgs === undefined ? {} : { args: parsedArgs }),
+  });
+
+  for (const step of result.steps) {
+    printInfo(`${step.ok ? '✓' : '✗'} ${step.name.padEnd(11)} ${step.detail}`);
+  }
+  if (result.ok) {
+    printInfo(
+      opts.action
+        ? `\n"${appId}" answered action "${opts.action}" over ${result.origin}.`
+        : `\n"${appId}" is reachable at ${result.origin}. Pass --action to press a button.`,
+    );
+    return;
+  }
+  // Named rather than implied: the commonest cause by far is a host process
+  // older than the build, and the remedy is one command.
+  printError(`\n"${appId}" did not pass. If Bernard was rebuilt or upgraded recently, try:`);
+  printError('  bernard applet-host stop && bernard applet-host start');
+  process.exitCode = 1;
+}
