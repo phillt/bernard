@@ -80,13 +80,35 @@ export function makeAppletReviewer(ctx: AgentContext): AppletReviewer {
         },
         ctx,
       );
+      /**
+       * A review that FOUND problems is a review that ran.
+       *
+       * The reviewer's whole job is to exercise an applet and report what
+       * failed, so it returns `status: 'error'` when the applet is broken —
+       * which is the correct thing for it to say and the opposite of "the
+       * review did not happen". Read as a dispatch failure, a working review
+       * came back as `Not reviewed (…) — run bernard app check yourself`,
+       * discarding a complete verdict.
+       *
+       * Measured on the first real run: it invoked all ten actions, found six
+       * failing for want of tool grants, completed all five named passes, and
+       * every word of that was thrown away.
+       *
+       * The discriminator is the SHAPE, not the status — `applet-reviewer`
+       * declares `structuredOutput`, so a verdict is an object carrying
+       * `checked` or `findings`. That is the same opt-in-by-shape rule
+       * `verifyWrapperClaims` uses, and it means a genuinely failed dispatch
+       * (pool exhausted, step limit, a parse failure) still reports as not
+       * reviewed, because none of those produce a verdict.
+       */
+      const verdict = isVerdict(wrapped.result) ? summarize(wrapped.result) : null;
       if (wrapped.status === 'ok') {
         return {
           reviewed: true,
-          summary:
-            typeof wrapped.result === 'string' ? wrapped.result.trim() : summarize(wrapped.result),
+          summary: typeof wrapped.result === 'string' ? wrapped.result.trim() : (verdict ?? ''),
         };
       }
+      if (verdict !== null) return { reviewed: true, summary: verdict };
       return { reviewed: false, reason: wrapped.error ?? String(wrapped.result ?? 'unknown') };
     } catch (err) {
       // A cancelled turn is not a review failure, and must not take the
@@ -100,6 +122,18 @@ export function makeAppletReviewer(ctx: AgentContext): AppletReviewer {
       return { reviewed: false, reason };
     }
   };
+}
+
+/**
+ * Did the reviewer produce a verdict, whatever it concluded?
+ *
+ * Presence of the structured fields, not the envelope's status: the status
+ * describes the APPLET and this question is about the REVIEW.
+ */
+function isVerdict(result: unknown): boolean {
+  if (!result || typeof result !== 'object') return false;
+  const r = result as { checked?: unknown; findings?: unknown };
+  return Array.isArray(r.checked) || Array.isArray(r.findings);
 }
 
 /**

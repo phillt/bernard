@@ -43,6 +43,7 @@ import {
 import { defineTool } from '../framework/tools/define-tool.js';
 import { claimDesign, peekPlan, stashDesign } from '../apps/design-stash.js';
 import { checkDesign } from '../apps/design-checks.js';
+import { checkPageAgainstDesign } from '../apps/design-page-check.js';
 import { PLAN_STAGES } from './applet-planning.js';
 import { debugLog } from '../logger.js';
 import type { AppletDesigner } from './applet-builder.js';
@@ -478,6 +479,16 @@ async function run(
         declaresLinkPermission: manifest.permissions?.sandbox !== undefined,
         files: args.files ?? {},
       });
+      /**
+       * Does the page agree with the plan it was built from?
+       *
+       * Peeked rather than claimed: the claim happens below and is
+       * destructive, so reading it here would leave the brief write with
+       * nothing. Warnings only — see `design-page-check.ts` for why none of
+       * this is decidable with certainty.
+       */
+      const plannedDesign = peekPlan(args.planId)?.design;
+      if (plannedDesign) issues.push(...checkPageAgainstDesign(page, plannedDesign));
       const refusal = refusalFor(issues);
       if (refusal) return refusal;
 
@@ -596,6 +607,12 @@ async function run(
             declaresLinkPermission: manifest.permissions?.sandbox !== undefined,
             files: shippedFiles,
           });
+          // The styler's own door, and where the contradiction was written on
+          // the first real run: the plan said `mark_bought` was secondary and
+          // the page marked it primary, inside a template that rendered it
+          // once per item.
+          const storedDesign = briefStore().read(id).design;
+          if (storedDesign) issues.push(...checkPageAgainstDesign(servedPage, storedDesign));
           const refusal = refusalFor(issues);
           if (refusal) return refusal;
         }

@@ -201,3 +201,71 @@ describe('the review recursion guard', () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * A review that FOUND problems is a review that ran.
+ *
+ * Measured on the first real pipeline run: the reviewer invoked all ten
+ * actions, found six failing for want of tool grants, completed all five
+ * named passes — and every word of it was discarded, because the dispatch
+ * came back `status: 'error'` and that was read as the REVIEW failing rather
+ * than the APPLET being broken. `create` duly said "Not reviewed … run
+ * `bernard app check` yourself" about a review that had just run it.
+ */
+describe('a failing applet is not a failed review', () => {
+  const load = async (wrapped: unknown) => {
+    vi.resetModules();
+    vi.doMock('./tool-wrapper-run.js', () => ({ dispatchToolWrapper: vi.fn(async () => wrapped) }));
+    const { makeAppletReviewer } = await import('./applet-review.js');
+    return makeAppletReviewer({} as never)({ id: 'x', name: 'X', actions: ['a'] });
+  };
+
+  const VERDICT = {
+    checked: [
+      { action: 'a', verdict: 'fail', detail: 'missing file tools' },
+      { action: 'b', verdict: 'pass', detail: '' },
+    ],
+    findings: [{ pass: 'usability', severity: 'low', detail: 'fine' }],
+  };
+
+  it('reports a verdict that found failures as reviewed', async () => {
+    const out = await load({ status: 'error', result: VERDICT });
+    expect(out.reviewed).toBe(true);
+    if (!out.reviewed) return;
+    expect(out.summary).toContain('1/2 action(s) ran');
+  });
+
+  it('still reports a genuinely failed dispatch as not reviewed', async () => {
+    // The discriminator is the SHAPE, not the status: a pool exhaustion, a
+    // step limit or a parse failure produces no verdict, so none of them can
+    // be laundered into a review that happened.
+    const out = await load({ status: 'error', result: 'pool full', error: 'pool_exhausted' });
+    expect(out.reviewed).toBe(false);
+    if (out.reviewed) return;
+    expect(out.reason).toContain('pool_exhausted');
+  });
+
+  it('does not accept an object that is not a verdict', async () => {
+    // The discriminator has to be the FIELDS, not "is it an object" — a
+    // wrapper parse failure returns an object too, and treating that as a
+    // completed review would report a dispatch that produced nothing as one
+    // that checked the applet. Measured: a `result: {}` slipped through an
+    // earlier cut of this test, because the failure fixture was a string.
+    const out = await load({
+      status: 'error',
+      result: { note: 'nothing usable' },
+      error: 'parse_failed',
+    });
+    expect(out.reviewed).toBe(false);
+    if (out.reviewed) return;
+    expect(out.reason).toContain('parse_failed');
+  });
+
+  it('reports a clean run as reviewed', async () => {
+    const out = await load({
+      status: 'ok',
+      result: { checked: [{ action: 'a', verdict: 'pass' }] },
+    });
+    expect(out.reviewed).toBe(true);
+  });
+});
