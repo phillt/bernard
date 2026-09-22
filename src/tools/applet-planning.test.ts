@@ -316,3 +316,84 @@ describe('the pipeline identifies itself', () => {
     expect(dispatch.mock.calls[0][0].via.pipeline).toBe('applet-design');
   });
 });
+
+/**
+ * A stage that answers in an unreadable shape must not go quiet.
+ *
+ * `parseStagePlan(...) ?? undefined` dropped the typed stage and said nothing,
+ * which is the quietest bug in the pipeline: the prose still lands in the
+ * spec, so the plan reads as complete, while `checkDesign` skips every rule
+ * whose stage is absent — so ONE bad payload takes the cross-stage checks down
+ * for the whole design.
+ *
+ * Measured before the fix, on an architect payload missing by one enum value:
+ * a design carrying a destructive control with no confirmation AND a control
+ * naming an action nothing declared produced **zero** issues.
+ */
+describe('a stage that does not parse', () => {
+  /** A near-miss: `intent` must be one of five verbs, and `remove` is not one. */
+  const NEAR_MISS = {
+    singleJob: 'track readings',
+    actions: [
+      {
+        id: 'delete',
+        intent: 'remove',
+        importance: 'secondary',
+        frequency: 'low',
+        risk: 'high',
+        reversible: false,
+      },
+    ],
+  };
+
+  it('says so in the spec rather than dropping it silently', async () => {
+    const { makeAppletPlanner } = await load(okWith({ 'applet-architect': NEAR_MISS }));
+    const out = await makeAppletPlanner(CTX)(TARGET);
+
+    expect(out.planned).toBe(true);
+    if (!out.planned) return;
+    expect(out.spec).toContain('could not be read');
+    expect(out.spec).toContain('scope');
+    // The prose is still there and still useful — this is the loss of the
+    // CHECKS, not a stage failure, and the two need different words.
+    expect(out.spec).toContain('## Scope');
+  });
+
+  it('leaves the typed stage out, which is what makes the notice necessary', async () => {
+    const { makeAppletPlanner } = await load(okWith({ 'applet-architect': NEAR_MISS }));
+    const out = await makeAppletPlanner(CTX)(TARGET);
+    if (!out.planned) return;
+    expect(out.design.architect).toBeUndefined();
+  });
+
+  it('says nothing when every stage parses', async () => {
+    // The guard that stops this becoming a caveat on every plan — and it
+    // needs EVERY stage supplied, because `okWith`'s fallback is a string,
+    // which is itself a contract violation for a `structuredOutput: true`
+    // record and is correctly flagged.
+    const { makeAppletPlanner } = await load(
+      okWith({
+        'applet-architect': { singleJob: 'track readings' },
+        'applet-ux-planner': { goal: 'log a reading' },
+        'applet-data-planner': { storeKeys: [{ key: 'reading' }] },
+        'applet-interaction-designer': { controls: [] },
+      }),
+    );
+    const out = await makeAppletPlanner(CTX)(TARGET);
+    if (!out.planned) return;
+    expect(out.spec).not.toContain('could not be read');
+  });
+
+  it('names each unreadable stage, not just the first', async () => {
+    const { makeAppletPlanner } = await load(
+      okWith({
+        'applet-architect': NEAR_MISS,
+        'applet-ux-planner': { rendering: 'react' }, // not one of the two values
+      }),
+    );
+    const out = await makeAppletPlanner(CTX)(TARGET);
+    if (!out.planned) return;
+    expect(out.spec).toContain('scope and interface');
+    expect(out.spec).toContain('stages');
+  });
+});

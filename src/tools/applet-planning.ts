@@ -1,3 +1,4 @@
+import type { z } from 'zod';
 import { dispatchToolWrapper } from './tool-wrapper-run.js';
 import { isDispatchCancellation } from '../error-taxonomy.js';
 import { capSubagentResult } from './result-cap.js';
@@ -278,6 +279,42 @@ function sectionBody(result: unknown): string {
   }
 }
 
+/**
+ * Parses one stage's payload, and makes a failure VISIBLE.
+ *
+ * `parseStagePlan(...) ?? undefined` was the whole of this, and it is the
+ * quietest bug in the pipeline. A stage can dispatch fine, return prose that
+ * lands in the spec, and miss its schema by one field — and the typed stage
+ * is then dropped with nothing said. `checkDesign` skips every rule whose
+ * stage is absent, by design, so the cross-stage checks do not merely lose
+ * that stage: they go silent for the whole design.
+ *
+ * Measured on a payload that misses by one enum value (`intent: "remove"`,
+ * which is not one of the five verbs): the architect is dropped, and a design
+ * carrying a destructive control with no confirmation AND a control naming an
+ * action nothing declared produces **zero** issues. The spec reads as a clean
+ * plan, because the prose is still there.
+ *
+ * So a drop is recorded rather than swallowed. It is not a stage FAILURE —
+ * the prose is real and the model can still build from it — it is the loss of
+ * the checks, which is a different fact and needs saying in its own words.
+ */
+function parseStage<S extends z.ZodTypeAny>(
+  label: string,
+  schema: S,
+  section: Section,
+  unparsed: string[],
+): z.output<S> | undefined {
+  if (!section.ok) return undefined;
+  const parsed = parseStagePlan(schema, section.result);
+  if (parsed === null) {
+    unparsed.push(label);
+    debugLog('applet:plan:unparsed', { stage: label });
+    return undefined;
+  }
+  return parsed;
+}
+
 async function runPlanner(
   ctx: AgentContext,
   specialistId: string,
@@ -375,6 +412,15 @@ export function needsMicrocopy(design: AppletDesign): boolean {
 export function makeAppletPlanner(ctx: AgentContext): AppletPlanner {
   return async (target, signal) => {
     const design: AppletDesign = {};
+    /**
+     * Stages that answered, but not in a shape the model could read.
+     *
+     * Tracked rather than inferred from `design`, because absent-and-ran and
+     * absent-and-failed look identical there — and they call for opposite
+     * things from the reader. A stage that never ran is already named in its
+     * own section; a stage that ran and did not parse looks complete.
+     */
+    const unparsed: string[] = [];
     try {
       const architect = await runPlanner(
         ctx,
@@ -391,7 +437,7 @@ export function makeAppletPlanner(ctx: AgentContext): AppletPlanner {
         });
         return { planned: false, reason: `scope could not be decided (${architect.reason})` };
       }
-      design.architect = parseStagePlan(ArchitectPlanSchema, architect.result) ?? undefined;
+      design.architect = parseStage('scope', ArchitectPlanSchema, architect, unparsed);
 
       const [ux, data] = await Promise.all([
         runPlanner(
@@ -414,8 +460,8 @@ export function makeAppletPlanner(ctx: AgentContext): AppletPlanner {
         debugLog('applet:plan:error', { name: target.name, stage: 'ux', reason: ux.reason });
       if (!data.ok)
         debugLog('applet:plan:error', { name: target.name, stage: 'data', reason: data.reason });
-      if (ux.ok) design.ux = parseStagePlan(UxPlanSchema, ux.result) ?? undefined;
-      if (data.ok) design.data = parseStagePlan(DataPlanSchema, data.result) ?? undefined;
+      design.ux = parseStage('interface', UxPlanSchema, ux, unparsed);
+      design.data = parseStage('data and actions', DataPlanSchema, data, unparsed);
 
       // The form each action takes, decided from what the action MEANS. Needs
       // the scope's semantics and the layout, so it cannot run beside them.
@@ -433,7 +479,7 @@ export function makeAppletPlanner(ctx: AgentContext): AppletPlanner {
           reason: interaction.reason,
         });
       if (interaction.ok) {
-        design.interaction = parseStagePlan(InteractionPlanSchema, interaction.result) ?? undefined;
+        design.interaction = parseStage('controls', InteractionPlanSchema, interaction, unparsed);
       }
 
       let microcopy: Section | null = null;
@@ -460,7 +506,7 @@ export function makeAppletPlanner(ctx: AgentContext): AppletPlanner {
             reason: microcopy.reason,
           });
         if (microcopy.ok) {
-          design.microcopy = parseStagePlan(MicrocopyPlanSchema, microcopy.result) ?? undefined;
+          design.microcopy = parseStage('wording', MicrocopyPlanSchema, microcopy, unparsed);
         }
       }
 
@@ -474,6 +520,7 @@ export function makeAppletPlanner(ctx: AgentContext): AppletPlanner {
         warnings: issues.filter((i) => i.level === 'warn').length,
         stages: Object.keys(design),
         microcopy: microcopy !== null,
+        unparsed,
       });
 
       const sections = [
@@ -484,6 +531,24 @@ export function makeAppletPlanner(ctx: AgentContext): AppletPlanner {
         ...(microcopy ? [renderSection('Wording', microcopy)] : []),
       ];
       const problems = renderDesignIssues(issues);
+      /**
+       * The checks that could not run, said in the spec rather than only in a
+       * debug log nobody has enabled.
+       *
+       * This reads as a caveat and is closer to a warning: `checkDesign`
+       * skips every rule whose stage is missing, so ONE unparsed stage can
+       * take the cross-stage rules down for the whole design — a control
+       * naming an action the scope never declared goes uncaught, which is the
+       * single thing this pipeline was rebuilt to catch. The reader needs to
+       * know the plan was not checked, not merely that a stage is thin.
+       */
+      const unchecked =
+        unparsed.length > 0
+          ? `The ${unparsed.join(' and ')} ${unparsed.length > 1 ? 'stages' : 'stage'} answered ` +
+            'in a shape that could not be read, so the automatic checks did not run against ' +
+            `${unparsed.length > 1 ? 'them' : 'it'}. Read the ${unparsed.length > 1 ? 'sections' : 'section'} ` +
+            'above yourself before building.'
+          : '';
 
       return {
         planned: true,
@@ -492,7 +557,15 @@ export function makeAppletPlanner(ctx: AgentContext): AppletPlanner {
           `# Build plan for "${target.name}"`,
           '',
           sections.join('\n\n'),
-          ...(problems ? ['', '## Problems found in this plan', '', problems] : []),
+          ...(problems || unchecked
+            ? [
+                '',
+                '## Problems found in this plan',
+                '',
+                ...(unchecked ? [unchecked, ...(problems ? [''] : [])] : []),
+                ...(problems ? [problems] : []),
+              ]
+            : []),
           '',
           '---',
           '',
