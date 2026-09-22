@@ -391,6 +391,22 @@ function briefStore(): AppletBriefStore {
  * {@link SMALLEST_THING_RULE} rather than retyped, so the doctrine cannot drift
  * between here and the playbook that also states it.
  */
+/**
+ * One nudge, applied to every stage a run will touch.
+ *
+ * A per-stage map would be more expressive and is not how anybody asks for
+ * this: "too many buttons, try the controls again" names one change and one
+ * stage. Lifted out of the spread so the narrowing is a local `const` rather
+ * than a non-null assertion on a field the closure cannot see through.
+ */
+function nudgesFor(
+  nudge: string | undefined,
+  stages: readonly string[] | undefined,
+): { nudges?: Record<string, string> } {
+  if (!nudge) return {};
+  return { nudges: Object.fromEntries((stages ?? PLAN_STAGES).map((x) => [x, nudge])) };
+}
+
 const buildDirectly = `Build directly, keeping it to ${SMALLEST_THING_RULE}.`;
 
 async function run(
@@ -721,9 +737,7 @@ async function run(
         // One nudge, applied to every stage being run. A per-stage map would
         // be more expressive and is not how anybody asks for this: "too many
         // buttons, try the controls again" names one change and one stage.
-        ...(args.nudge
-          ? { nudges: Object.fromEntries((stages ?? PLAN_STAGES).map((x) => [x, args.nudge!])) }
-          : {}),
+        ...nudgesFor(args.nudge, stages),
         ...(prior ? { prior } : {}),
       });
       if (!outcome.planned) {
