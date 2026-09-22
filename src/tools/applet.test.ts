@@ -1197,6 +1197,48 @@ describe('the intent interview', () => {
     expect(out).toContain('interview');
   });
 
+  /**
+   * The half `noIntent` never checked.
+   *
+   * It guards `intent`, and nothing guarded `design` — which is exactly why
+   * the applet that prompted this produced no warning at all: the agent
+   * hand-wrote an intent, so the one guard that existed was satisfied while
+   * the design that decides variants and icons was absent.
+   */
+  it('warns when no design was stored, even with an intent supplied', async () => {
+    const { tool } = await loadWithBrief();
+    const out = await tool.execute(
+      { ...CREATE, id: 'no-design', intent: { goal: 'send shifts' } },
+      {} as never,
+    );
+
+    expect(out).toContain('created');
+    expect(out).not.toContain('No design brief');
+    expect(out).toContain('No design was stored');
+    expect(out).toContain('plan');
+  });
+
+  /**
+   * A stale id is named, never refused.
+   *
+   * The stash holds eight entries in memory and `claimDesign` deletes on
+   * read, so an id from an earlier process, the ninth plan of a session, or a
+   * retried `create` is indistinguishable from a typo. Refusing would make
+   * the applet unbuildable over bookkeeping; saying nothing is what let a
+   * design go missing unnoticed.
+   */
+  it('names a planId that matched nothing, and still builds', async () => {
+    const { tool } = await loadWithBrief();
+    const out = await tool.execute(
+      { ...CREATE, id: 'stale-plan', intent: { goal: 'x' }, planId: 'plan-deadbeef' },
+      {} as never,
+    );
+
+    expect(out).toContain('created');
+    expect(out).toContain('plan-deadbeef');
+    expect(out).toContain('matched no stored plan');
+  });
+
   it('says nothing when the intent was supplied', async () => {
     const { tool } = await loadWithBrief();
     const out = await tool.execute(
@@ -1377,6 +1419,73 @@ describe('the plan action (#13)', () => {
     expect(planner).not.toHaveBeenCalled();
   });
 
+  /**
+   * A plan with refusals standing does not get an id.
+   *
+   * The enforcement is here rather than at `create` because the stash is
+   * immutable: by the time `create` runs the model holds a finished page and
+   * a design it cannot edit, so a refusal there leaves it two moves — re-plan
+   * and lose the page, or pass a force flag, which is one token and would
+   * become reflex. At plan time the plan is the only artifact.
+   */
+  describe('a plan that is already known to be wrong', () => {
+    /** Architect declares `fetch`; a control calls `mark-read`, which it does not. */
+    const BROKEN = {
+      architect: {
+        singleJob: 'show the latest articles',
+        actions: [
+          {
+            id: 'fetch',
+            intent: 'read' as const,
+            importance: 'primary' as const,
+            frequency: 'high' as const,
+            risk: 'low' as const,
+            reversible: true,
+          },
+        ],
+      },
+      interaction: {
+        controls: [{ actionId: 'mark-read', component: 'button', label: 'Mark read' }],
+      },
+    };
+
+    const planWith = async (design: unknown) => {
+      vi.resetModules();
+      vi.doMock('../config.js', () => ({ loadConfig: () => ({ appletPlanning: true }) }));
+      const { createAppletTool } = await import('./applet.js');
+      return (
+        createAppletTool(undefined, {
+          plan: async () => ({ planned: true as const, spec: '# Build plan for "X"', design }),
+        }).execute as (a: unknown, o: unknown) => Promise<string>
+      )({ action: 'plan', name: 'X', intent: { goal: 'z' } }, {});
+    };
+
+    it('withholds the planId and says why', async () => {
+      const out = await planWith(BROKEN);
+      expect(out).toContain('No `planId` was issued');
+      expect(out).not.toMatch(/planId: "plan-/);
+      // The spec still comes back — the model needs to see what to fix.
+      expect(out).toContain('# Build plan for "X"');
+    });
+
+    it('issues one when nothing is refused', async () => {
+      const out = await planWith({ architect: { singleJob: 'show the latest articles' } });
+      expect(out).toMatch(/planId: "plan-/);
+      expect(out).not.toContain('No `planId` was issued');
+    });
+
+    it('does not withhold on a warning', async () => {
+      // Certainty, not severity. An action with no control is a warning, and
+      // warnings must not block — otherwise this becomes unbuildable for
+      // anything the checks are merely unsure about.
+      const out = await planWith({
+        architect: { ...BROKEN.architect },
+        interaction: { controls: [] },
+      });
+      expect(out).toMatch(/planId: "plan-/);
+    });
+  });
+
   it('returns the spec, and names the reason when planning did not run', async () => {
     vi.resetModules();
     vi.doMock('../config.js', () => ({ loadConfig: () => ({ appletPlanning: true }) }));
@@ -1386,7 +1495,12 @@ describe('the plan action (#13)', () => {
         createAppletTool(undefined, {
           plan: async () =>
             planned
-              ? { planned: true as const, spec: '# Build plan for "X"' }
+              ? // `design` is REQUIRED on the planned arm and this fixture omitted
+                // it, which typechecked only because the whole tool is cast.
+                // `plan` now checks the design before issuing an id, so an
+                // absent one threw — a fixture lying about the contract, not a
+                // defensive gap.
+                { planned: true as const, spec: '# Build plan for "X"', design: {} }
               : { planned: false as const, reason: 'pool_exhausted' },
         }).execute as (a: unknown, o: unknown) => Promise<string>
       )({ action: 'plan', name: 'X', intent: { goal: 'z' } }, {});

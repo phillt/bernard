@@ -42,6 +42,7 @@ import {
 } from '../apps/manifest.js';
 import { defineTool } from '../framework/tools/define-tool.js';
 import { claimDesign, stashDesign } from '../apps/design-stash.js';
+import { checkDesign } from '../apps/design-checks.js';
 
 /**
  * `applet` — authoring the small local web apps Bernard serves.
@@ -189,7 +190,9 @@ const PARAMETERS = z.object({
     .describe(
       'The id `plan` returned. Pass it to `create` so the design the planners produced is ' +
         'stored with the applet, rather than being re-derived by whoever edits it next. ' +
-        'Nothing breaks without it; the record is simply not kept.',
+        'Without it the design pass has nothing to read, so the page is built and styled ' +
+        'from prose alone — which is how an applet ends up with no icons and every button ' +
+        'looking equally important.',
     ),
   note: z
     .string()
@@ -451,6 +454,29 @@ async function run(
         ? ''
         : ' No design brief — nothing records what this is for, so the next edit ' +
           'starts from the HTML. Use `interview` before building next time.';
+      /**
+       * The design half of the same warning.
+       *
+       * `noIntent` checks `intent`, and nothing checked `design` — which is
+       * why the applet that prompted all of this produced no warning at all.
+       * The agent hand-wrote an intent, so the one guard that existed was
+       * satisfied, while the design that decides variants and icons was
+       * absent and the styling pass had nothing to read.
+       *
+       * A stale or already-claimed `planId` is NAMED rather than refused. The
+       * stash holds eight entries in memory and `claimDesign` deletes on read,
+       * so an id from an earlier process, the ninth plan of a session, or a
+       * retried `create` is indistinguishable from a typo — and refusing would
+       * make the applet unbuildable over bookkeeping.
+       */
+      const noDesign = design
+        ? ''
+        : args.planId
+          ? ` The \`planId\` "${args.planId}" matched no stored plan — it may be from an earlier ` +
+            'session, or already claimed. The applet was built, but no design was kept: ' +
+            're-run `plan` if the styling pass needs one.'
+          : ' No design was stored, so the styling pass has only the page and the brief to work ' +
+            'from. Run `plan` first and pass its `planId` to keep one.';
       const consent = await askForPermissions(created.id, created.name, manifest, requestConsent);
       // BEFORE `openedNote`, which is what opens the browser: styling after
       // the open would show the scaffold and make the user refresh. The applet
@@ -471,6 +497,7 @@ async function run(
         consent +
         styled +
         noIntent +
+        noDesign +
         warningsFor(issues) +
         formatWarnings(dispatch.warnings) +
         opened +
@@ -658,6 +685,39 @@ async function run(
       const outcome = await planApplet(target, abortSignal);
       if (!outcome.planned) {
         return `Error: planning did not run (${outcome.reason}). ${buildDirectly}`;
+      }
+      /**
+       * A plan with refusals standing does not get an id, so it cannot be
+       * built from.
+       *
+       * The enforcement belongs HERE and not at `create`, and the reason is
+       * that the stash is immutable: by the time `create` runs, the model
+       * holds a finished page and a design it cannot edit, so a refusal there
+       * leaves it two moves — re-plan and lose the page, or pass a `force`
+       * flag, which is one token and would become reflex. At this point the
+       * plan is the only artifact and re-running a stage is the obvious fix.
+       *
+       * Refusals only, never warnings: the module's rule is that `refuse`
+       * means DECIDABLE, and everything decidable here is something the plan
+       * itself got wrong — a control calling an action the scope never
+       * declared, a destructive control that does not confirm, an icon name
+       * that renders as nothing. The spec already carries all of them under
+       * "Problems found in this plan", so nothing new has to be said.
+       *
+       * `checkDesign` is re-run rather than threaded out of `PlanOutcome`
+       * because it is pure arithmetic over the design with no model call, and
+       * running it wherever a design is held makes the rule a property of
+       * holding one rather than of the pipeline remembering to report it.
+       */
+      const blocking = checkDesign(outcome.design).filter((i) => i.level === 'refuse');
+      if (blocking.length > 0) {
+        return (
+          `${outcome.spec}\n\n` +
+          `**No \`planId\` was issued** — ${blocking.length} ` +
+          `${blocking.length === 1 ? 'problem' : 'problems'} above must be fixed first, or the ` +
+          'applet is built from a plan that is already known to be wrong. Re-run `plan` once ' +
+          'you have decided how to resolve them.'
+        );
       }
       // The id is how the design reaches `create` without the model retyping
       // it — see `stashDesign`.
