@@ -37,12 +37,35 @@ import type { AppletDesign } from './design-model.js';
  * most, and the cron daemon and applet host hold a process open for days.
  */
 const MAX_STASHED_DESIGNS = 8;
-const stashed = new Map<string, AppletDesign>();
 
-/** Stashes a design and returns the id `create` claims it with. */
-export function stashDesign(design: AppletDesign): string {
+/**
+ * A stashed plan: the typed design, and the prose each stage produced.
+ *
+ * **The bodies are not decoration, and re-running one stage is why.** A
+ * downstream brief splices the prior stage's body VERBATIM — that is
+ * deliberate, so a scope cannot be paraphrased away between hops — and the
+ * only other rendering of a design is `renderDesignLines`, which its own
+ * docstring calls a SUMMARY. So a re-run seeded from the typed design alone
+ * would hand the next stage a different, shorter input than the first run
+ * did, which is the paraphrase hazard the verbatim splice exists to prevent,
+ * reintroduced by the feature meant to improve the plan.
+ *
+ * They are kept here rather than persisted with the brief because they are
+ * scaffolding for re-planning, not a record of what the applet IS: the design
+ * is what outlives the turn, and `AppletBriefStore` holds that.
+ */
+export interface StashedPlan {
+  design: AppletDesign;
+  /** Stage label (`scope`, `interface`, …) to the body it produced. */
+  bodies: Record<string, string>;
+}
+
+const stashed = new Map<string, StashedPlan>();
+
+/** Stashes a plan and returns the id `create` claims it with. */
+export function stashDesign(design: AppletDesign, bodies: Record<string, string> = {}): string {
   const id = `plan-${Math.random().toString(36).slice(2, 10)}`;
-  stashed.set(id, design);
+  stashed.set(id, { design, bodies });
   // Oldest first: a `Map` iterates in insertion order, so this is a queue
   // without keeping a second structure to say which is oldest.
   while (stashed.size > MAX_STASHED_DESIGNS) {
@@ -62,9 +85,26 @@ export function stashDesign(design: AppletDesign): string {
  */
 export function claimDesign(planId: string | undefined): AppletDesign | undefined {
   if (!planId) return undefined;
-  const design = stashed.get(planId);
-  if (design) stashed.delete(planId);
-  return design;
+  const plan = stashed.get(planId);
+  if (plan) stashed.delete(planId);
+  return plan?.design;
+}
+
+/**
+ * Reads a stashed plan WITHOUT consuming it.
+ *
+ * `claimDesign` deletes on read, which is right for `create` — a design
+ * belongs to one applet — and wrong for a re-run, which reads the plan,
+ * replans one stage of it, and stashes the result. Claiming there would
+ * destroy the plan being revised, and the second re-run of a session would
+ * find nothing.
+ *
+ * Separate function rather than a flag on `claimDesign`, so the destructive
+ * one stays destructive at every call site that has always been.
+ */
+export function peekPlan(planId: string | undefined): StashedPlan | undefined {
+  if (!planId) return undefined;
+  return stashed.get(planId);
 }
 
 /** Test seam: forget everything stashed. */

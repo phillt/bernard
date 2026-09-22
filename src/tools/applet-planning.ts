@@ -16,6 +16,7 @@ import {
   type AppletDesign,
 } from '../apps/design-model.js';
 import { checkDesign, renderDesignIssues } from '../apps/design-checks.js';
+import type { StashedPlan } from '../apps/design-stash.js';
 import type { AgentContext } from '../framework/context.js';
 
 /**
@@ -102,6 +103,19 @@ export type PlanOutcome =
        * the way there.
        */
       design: AppletDesign;
+      /**
+       * Each stage's prose, keyed by its label.
+       *
+       * Carried out of the run so a later re-plan of ONE stage can splice the
+       * others in verbatim, exactly as the first run did. The typed design
+       * cannot stand in: the only rendering of it is a summary, so seeding a
+       * downstream brief from it hands that stage a shorter, different input
+       * than it saw the first time — the paraphrase hazard the verbatim
+       * splice exists to prevent.
+       */
+      bodies: Record<string, string>;
+      /** Stages reused from a prior plan rather than re-dispatched. */
+      reused: string[];
     }
   | { planned: false; reason: string };
 
@@ -120,7 +134,24 @@ export interface PlanTarget {
  * failure as a success — a caller folds the outcome into its own result.
  * Cancellation is the one thing that propagates.
  */
-export type AppletPlanner = (target: PlanTarget, signal?: AbortSignal) => Promise<PlanOutcome>;
+/** What a caller can vary about one planning run. */
+export interface PlanOptions {
+  signal?: AbortSignal;
+  /**
+   * Stage labels to actually run. Absent means all of them.
+   *
+   * Everything not named is taken from {@link prior}, which is what makes a
+   * re-plan of one stage cheap AND faithful — the stages that did not change
+   * contribute the same bytes they did the first time.
+   */
+  only?: string[];
+  /** Extra instruction per stage label, rendered as its own trailing section. */
+  nudges?: Record<string, string>;
+  /** A previous run's design and bodies, to build on. */
+  prior?: StashedPlan;
+}
+
+export type AppletPlanner = (target: PlanTarget, opts?: PlanOptions) => Promise<PlanOutcome>;
 
 /**
  * The name every stage record declares, and the name this module claims when
@@ -132,6 +163,22 @@ export type AppletPlanner = (target: PlanTarget, signal?: AbortSignal) => Promis
  * this is unreachable by anything, including its own pipeline.
  */
 export const APPLET_DESIGN_PIPELINE = 'applet-design';
+
+/**
+ * The stage labels, in the order they run.
+ *
+ * Exported because they are the vocabulary a caller re-runs with, so the tool
+ * description names them from here rather than restating a list that could
+ * drift from the one the pipeline actually dispatches.
+ */
+export const PLAN_STAGES = [
+  'scope',
+  'interface',
+  'data and actions',
+  'controls',
+  'wording',
+] as const;
+export type PlanStage = (typeof PLAN_STAGES)[number];
 
 /** The specialists this routes to. Bundled, so they are always present. */
 export const ARCHITECT_SPECIALIST_ID = 'applet-architect';
@@ -156,8 +203,23 @@ function renderIntent(intent: AppletBrief['intent']): string {
     : '(nothing recorded — say so rather than inventing one)';
 }
 
+/**
+ * A caller's extra instruction for one stage, as its own trailing section.
+ *
+ * Kept OUT of the body of the brief on purpose. Everything above it is either
+ * the applet's own facts or a prior stage's verbatim output, and splicing a
+ * nudge into those would make "the scope passed down unchanged" false — which
+ * is the one property the whole sequencing rests on. At the end, under its own
+ * heading, it reads as what it is: the person asking for this plan saying what
+ * they want different about it.
+ */
+function nudgeSection(nudge: string | undefined): string[] {
+  const text = nudge?.trim();
+  return text ? ['', '## What to change this time', '', text] : [];
+}
+
 /** The brief handed to the architect. Carries only the per-applet facts. */
-export function buildArchitectBrief(target: PlanTarget): string {
+export function buildArchitectBrief(target: PlanTarget, nudge?: string): string {
   return [
     `Decide the scope for an applet called "${target.name}".`,
     '',
@@ -165,6 +227,7 @@ export function buildArchitectBrief(target: PlanTarget): string {
     '',
     'What the person said:',
     renderIntent(target.intent),
+    ...nudgeSection(nudge),
   ].join('\n');
 }
 
@@ -185,7 +248,12 @@ export function buildArchitectBrief(target: PlanTarget): string {
  * the only thing making these two agree, so re-wording it per planner is the one
  * edit that would quietly reintroduce the divergence the sequencing prevents.
  */
-export function buildPlannerBrief(target: PlanTarget, scope: string, job: string): string {
+export function buildPlannerBrief(
+  target: PlanTarget,
+  scope: string,
+  job: string,
+  nudge?: string,
+): string {
   return [
     `${job} for the applet "${target.name}".`,
     '',
@@ -197,6 +265,7 @@ export function buildPlannerBrief(target: PlanTarget, scope: string, job: string
     '',
     'What the person said:',
     renderIntent(target.intent),
+    ...nudgeSection(nudge),
   ].join('\n');
 }
 
@@ -215,6 +284,7 @@ export function buildStageBrief(
   scope: string,
   priors: Array<[string, Section]>,
   job: string,
+  nudge?: string,
 ): string {
   return [
     `${job} for "${target.name}".`,
@@ -228,6 +298,7 @@ export function buildStageBrief(
       '',
       section.ok ? section.body : `(not planned — ${section.reason}. Work without it.)`,
     ]),
+    ...nudgeSection(nudge),
   ].join('\n');
 }
 
@@ -410,8 +481,12 @@ export function needsMicrocopy(design: AppletDesign): boolean {
  * reads what the one before it decided.
  */
 export function makeAppletPlanner(ctx: AgentContext): AppletPlanner {
-  return async (target, signal) => {
-    const design: AppletDesign = {};
+  return async (target, opts = {}) => {
+    const { signal, only, nudges, prior } = opts;
+    const design: AppletDesign = { ...prior?.design };
+    /** Each stage's prose, for the spec and for the next re-plan. */
+    const bodies: Record<string, string> = { ...prior?.bodies };
+    const reused: string[] = [];
     /**
      * Stages that answered, but not in a shape the model could read.
      *
@@ -421,93 +496,117 @@ export function makeAppletPlanner(ctx: AgentContext): AppletPlanner {
      * own section; a stage that ran and did not parse looks complete.
      */
     const unparsed: string[] = [];
+
+    /**
+     * Runs a stage, or hands back what the prior plan produced for it.
+     *
+     * Reuse needs BOTH halves — the body, which the next stage splices
+     * verbatim, and the typed entry, which the checks read. Re-parsing is not
+     * an option because the raw payload is not kept; carrying the prior
+     * design entry straight across is, and it is also the truthful thing,
+     * since that entry IS what that stage decided.
+     *
+     * A stage named in `only` always runs. A stage NOT named runs anyway when
+     * there is nothing to reuse — otherwise asking to re-plan the controls of
+     * a plan that never had a scope would produce a design with a hole in the
+     * middle and no way to say so.
+     */
+    const stage = async (
+      label: string,
+      specialistId: string,
+      brief: () => string,
+      key: keyof AppletDesign,
+      schema: Parameters<typeof parseStage>[1],
+    ): Promise<Section> => {
+      const carried = only && !only.includes(label) ? prior?.bodies[label] : undefined;
+      if (carried !== undefined) {
+        reused.push(label);
+        return { ok: true, body: carried, result: undefined };
+      }
+      const section = await runPlanner(ctx, specialistId, label, brief(), signal);
+      if (!section.ok) {
+        debugLog('applet:plan:error', { name: target.name, stage: label, reason: section.reason });
+        // A stage that failed contributes nothing, and must not leave the
+        // prior run's answer in place wearing this run's authority.
+        delete design[key];
+        return section;
+      }
+      bodies[label] = section.body;
+      design[key] = parseStage(label, schema, section, unparsed) as never;
+      return section;
+    };
+
     try {
-      const architect = await runPlanner(
-        ctx,
-        ARCHITECT_SPECIALIST_ID,
+      const architect = await stage(
         'scope',
-        buildArchitectBrief(target),
-        signal,
+        ARCHITECT_SPECIALIST_ID,
+        () => buildArchitectBrief(target, nudges?.scope),
+        'architect',
+        ArchitectPlanSchema,
       );
       if (!architect.ok) {
-        debugLog('applet:plan:error', {
-          name: target.name,
-          stage: 'architect',
-          reason: architect.reason,
-        });
         return { planned: false, reason: `scope could not be decided (${architect.reason})` };
       }
-      design.architect = parseStage('scope', ArchitectPlanSchema, architect, unparsed);
 
       const [ux, data] = await Promise.all([
-        runPlanner(
-          ctx,
-          UX_PLANNER_SPECIALIST_ID,
+        stage(
           'interface',
-          buildPlannerBrief(target, architect.body, 'Plan the interface'),
-          signal,
+          UX_PLANNER_SPECIALIST_ID,
+          () => buildPlannerBrief(target, architect.body, 'Plan the interface', nudges?.interface),
+          'ux',
+          UxPlanSchema,
         ),
-        runPlanner(
-          ctx,
+        stage(
+          'data and actions',
           DATA_PLANNER_SPECIALIST_ID,
+          () =>
+            buildPlannerBrief(
+              target,
+              architect.body,
+              'Plan the data and actions',
+              nudges?.['data and actions'],
+            ),
           'data',
-          buildPlannerBrief(target, architect.body, 'Plan the data and actions'),
-          signal,
+          DataPlanSchema,
         ),
       ]);
 
-      if (!ux.ok)
-        debugLog('applet:plan:error', { name: target.name, stage: 'ux', reason: ux.reason });
-      if (!data.ok)
-        debugLog('applet:plan:error', { name: target.name, stage: 'data', reason: data.reason });
-      design.ux = parseStage('interface', UxPlanSchema, ux, unparsed);
-      design.data = parseStage('data and actions', DataPlanSchema, data, unparsed);
-
       // The form each action takes, decided from what the action MEANS. Needs
       // the scope's semantics and the layout, so it cannot run beside them.
-      const interaction = await runPlanner(
-        ctx,
+      const interaction = await stage(
+        'controls',
         INTERACTION_SPECIALIST_ID,
-        'interaction',
-        buildStageBrief(target, architect.body, [['Interface', ux]], 'Decide the controls'),
-        signal,
-      );
-      if (!interaction.ok)
-        debugLog('applet:plan:error', {
-          name: target.name,
-          stage: 'interaction',
-          reason: interaction.reason,
-        });
-      if (interaction.ok) {
-        design.interaction = parseStage('controls', InteractionPlanSchema, interaction, unparsed);
-      }
-
-      let microcopy: Section | null = null;
-      if (needsMicrocopy(design)) {
-        microcopy = await runPlanner(
-          ctx,
-          MICROCOPY_SPECIALIST_ID,
-          'wording',
+        () =>
           buildStageBrief(
             target,
             architect.body,
-            [
-              ['Interface', ux],
-              ['Controls', interaction],
-            ],
-            'Write the words',
+            [['Interface', ux]],
+            'Decide the controls',
+            nudges?.controls,
           ),
-          signal,
+        'interaction',
+        InteractionPlanSchema,
+      );
+
+      let microcopy: Section | null = null;
+      if (needsMicrocopy(design)) {
+        microcopy = await stage(
+          'wording',
+          MICROCOPY_SPECIALIST_ID,
+          () =>
+            buildStageBrief(
+              target,
+              architect.body,
+              [
+                ['Interface', ux],
+                ['Controls', interaction],
+              ],
+              'Write the words',
+              nudges?.wording,
+            ),
+          'microcopy',
+          MicrocopyPlanSchema,
         );
-        if (!microcopy.ok)
-          debugLog('applet:plan:error', {
-            name: target.name,
-            stage: 'microcopy',
-            reason: microcopy.reason,
-          });
-        if (microcopy.ok) {
-          design.microcopy = parseStage('wording', MicrocopyPlanSchema, microcopy, unparsed);
-        }
       }
 
       // Everything decidable by arithmetic, before the model reads a word of
@@ -553,6 +652,8 @@ export function makeAppletPlanner(ctx: AgentContext): AppletPlanner {
       return {
         planned: true,
         design,
+        bodies,
+        reused,
         spec: [
           `# Build plan for "${target.name}"`,
           '',

@@ -41,8 +41,9 @@ import {
   type RawAppManifest,
 } from '../apps/manifest.js';
 import { defineTool } from '../framework/tools/define-tool.js';
-import { claimDesign, stashDesign } from '../apps/design-stash.js';
+import { claimDesign, peekPlan, stashDesign } from '../apps/design-stash.js';
 import { checkDesign } from '../apps/design-checks.js';
+import { PLAN_STAGES } from './applet-planning.js';
 
 /**
  * `applet` — authoring the small local web apps Bernard serves.
@@ -184,11 +185,30 @@ const PARAMETERS = z.object({
         '. Supply what you actually know; an empty string clears a field. Set on `create` and ' +
         'edit with `brief`.',
     ),
+  stages: z
+    .array(z.enum(PLAN_STAGES))
+    .optional()
+    .describe(
+      'For `plan` only: re-run just these stages and reuse the rest from the plan named by ' +
+        '`planId`. Omit to plan everything from scratch. Use this after reading a spec — ' +
+        '"too many primary buttons" is a `controls` re-run, not a whole new plan, and the ' +
+        'stages you keep contribute exactly the bytes they did the first time.',
+    ),
+  nudge: z
+    .string()
+    .max(600)
+    .optional()
+    .describe(
+      'For `plan` only: what to do differently, in your own words. Applied to every stage ' +
+        'being run, as its own section at the end of the brief — it never edits the scope or ' +
+        "a prior stage's output, both of which are passed down verbatim on purpose.",
+    ),
   planId: z
     .string()
     .optional()
     .describe(
-      'The id `plan` returned. Pass it to `create` so the design the planners produced is ' +
+      'On `plan`, the id of a plan to build on — the stages you do not re-run come from it. ' +
+        'On `create`, the id `plan` returned. Pass it to `create` so the design the planners produced is ' +
         'stored with the applet, rather than being re-derived by whoever edits it next. ' +
         'Without it the design pass has nothing to read, so the page is built and styled ' +
         'from prose alone — which is how an applet ends up with no icons and every button ' +
@@ -682,7 +702,30 @@ async function run(
         description: args.description ?? '',
         intent,
       };
-      const outcome = await planApplet(target, abortSignal);
+      /**
+       * A re-plan builds on the plan it was given.
+       *
+       * `peekPlan` rather than `claimDesign`: this reads the plan, replans
+       * part of it and stashes the result, so claiming would destroy the very
+       * plan being revised and the second re-run of a session would find
+       * nothing.
+       */
+      const prior = peekPlan(args.planId);
+      const stages = args.stages?.filter((x) => (PLAN_STAGES as readonly string[]).includes(x));
+      if (args.stages && stages?.length !== args.stages.length) {
+        return `Error: unknown stage. The stages are ${PLAN_STAGES.map((x) => `\`${x}\``).join(', ')}.`;
+      }
+      const outcome = await planApplet(target, {
+        ...(abortSignal ? { signal: abortSignal } : {}),
+        ...(stages?.length ? { only: stages } : {}),
+        // One nudge, applied to every stage being run. A per-stage map would
+        // be more expressive and is not how anybody asks for this: "too many
+        // buttons, try the controls again" names one change and one stage.
+        ...(args.nudge
+          ? { nudges: Object.fromEntries((stages ?? PLAN_STAGES).map((x) => [x, args.nudge!])) }
+          : {}),
+        ...(prior ? { prior } : {}),
+      });
       if (!outcome.planned) {
         return `Error: planning did not run (${outcome.reason}). ${buildDirectly}`;
       }
@@ -721,7 +764,7 @@ async function run(
       }
       // The id is how the design reaches `create` without the model retyping
       // it — see `stashDesign`.
-      const planId = stashDesign(outcome.design);
+      const planId = stashDesign(outcome.design, outcome.bodies);
       return `${outcome.spec}\n\nPass \`planId: "${planId}"\` to \`create\` so this plan is kept with the applet.`;
     }
     case 'style': {
