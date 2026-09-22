@@ -114,6 +114,26 @@ export async function verifyWrapperClaims(
   };
 }
 
+/**
+ * The tools that drive a named pipeline.
+ *
+ * A table rather than an inline `if`, so a second pipeline is one entry and
+ * the set of drivable pipelines is written down in one place rather than
+ * inferred from whichever records happen to declare `drives`. The import is
+ * deferred so the planner's graph does not reach every dispatch.
+ */
+async function buildPipelineTools(
+  pipeline: string,
+  ctx: AgentContext,
+): Promise<Record<string, Tool>> {
+  if (pipeline !== 'applet-design') {
+    debugLog('dispatch:unknown-pipeline', { pipeline });
+    return {};
+  }
+  const { createAppletDesignTool } = await import('./applet-design-tool.js');
+  return { applet_design: createAppletDesignTool(ctx) };
+}
+
 /** Per-call inputs to a tool-wrapper dispatch. */
 export interface DispatchToolWrapperArgs {
   specialistId: string;
@@ -363,8 +383,22 @@ export async function dispatchToolWrapper(
                 max: MAX_DISPATCH_DEPTH,
               });
             }
+            /**
+             * The tool a pipeline DRIVER holds, merged in for that record alone.
+             *
+             * Deliberately not added to `buildDispatchOverlay`: that function's
+             * guard is that it constructs no applet tool at all, and putting a
+             * key there then subtracting it in `main.ts` would restore exactly
+             * the "two lists differing by one key" premise its comment records
+             * removing.
+             *
+             * Declaration-driven and unforgeable — `create` copies an explicit
+             * field list, `update` has an explicit allowlist, and neither names
+             * `drives`.
+             */
             const fullRegistry: Record<string, Tool> = {
               ...baseTools,
+              ...(specialist.drives ? await buildPipelineTools(specialist.drives, ctx) : {}),
               ...(depth < MAX_DISPATCH_DEPTH ? buildDispatchOverlay(ctx) : {}),
             };
             const childTools = buildChildTools(specialist, fullRegistry, ctx.mcp.resolveAlias);

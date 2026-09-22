@@ -1391,3 +1391,86 @@ describe('dispatchToolWrapper honours an internal via', () => {
     expect(permitted.error).not.toBe('pipeline');
   });
 });
+
+/**
+ * A record that DRIVES a pipeline is handed the tool that runs it.
+ *
+ * The inverse of the stage lock-down, and the half that makes the pipeline
+ * usable by an agent at all. It is declaration-driven rather than added to
+ * `buildDispatchOverlay`, because that function's guard is that it constructs
+ * no applet tool — putting a key there and subtracting it in `main.ts` would
+ * restore exactly the premise its comment records removing.
+ */
+describe('a pipeline driver gets the pipeline tool', () => {
+  const setup = () => {
+    const config = createMockConfig();
+    const options = createMockOptions();
+    const memoryStore = createMockMemoryStore();
+    const specialistStore = createMockSpecialistStore();
+    const correctionStore = createMockCorrectionStore();
+    vi.mocked(withSlot).mockImplementation((fn) => fn({ id: 1 }));
+    vi.mocked(resolveProviderAndModel).mockReturnValue({
+      ok: true,
+      provider: 'anthropic',
+      model: 'claude-test',
+    });
+    vi.mocked(generateText)
+      .mockReset()
+      .mockResolvedValue({
+        text: '{"status":"ok","result":"done"}',
+        steps: [],
+        response: { messages: [] },
+        finishReason: 'stop',
+      } as never);
+    return { config, options, memoryStore, specialistStore, correctionStore };
+  };
+
+  it('is offered `applet_design` when it declares the pipeline it drives', async () => {
+    const d = setup();
+    d.specialistStore.get.mockReturnValue(
+      makeToolWrapperSpecialist({
+        id: 'applet-builder',
+        kind: 'meta',
+        drives: 'applet-design',
+        targetTools: ['applet_design'],
+      }),
+    );
+    await dispatchToolWrapper(
+      { specialistId: 'applet-builder', input: 'plan one' },
+      makeCtx(d.config, d.options, d.memoryStore, d.specialistStore, d.correctionStore),
+    );
+    const childTools = vi.mocked(generateText).mock.calls[0]?.[0]?.tools ?? {};
+    expect(Object.keys(childTools)).toContain('applet_design');
+  });
+
+  it('is not offered it when it declares nothing', async () => {
+    // The guard that stops this becoming "every dispatch carries the planner".
+    const d = setup();
+    d.specialistStore.get.mockReturnValue(
+      makeToolWrapperSpecialist({ id: 'shell-wrapper', targetTools: ['applet_design'] }),
+    );
+    await dispatchToolWrapper(
+      { specialistId: 'shell-wrapper', input: 'do something' },
+      makeCtx(d.config, d.options, d.memoryStore, d.specialistStore, d.correctionStore),
+    );
+    const childTools = vi.mocked(generateText).mock.calls[0]?.[0]?.tools ?? {};
+    expect(Object.keys(childTools)).not.toContain('applet_design');
+  });
+
+  it('is not offered it for a pipeline nothing implements', async () => {
+    const d = setup();
+    d.specialistStore.get.mockReturnValue(
+      makeToolWrapperSpecialist({
+        id: 'something',
+        drives: 'not-a-pipeline',
+        targetTools: ['applet_design'],
+      }),
+    );
+    await dispatchToolWrapper(
+      { specialistId: 'something', input: 'x' },
+      makeCtx(d.config, d.options, d.memoryStore, d.specialistStore, d.correctionStore),
+    );
+    const childTools = vi.mocked(generateText).mock.calls[0]?.[0]?.tools ?? {};
+    expect(Object.keys(childTools)).not.toContain('applet_design');
+  });
+});

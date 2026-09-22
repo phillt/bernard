@@ -425,3 +425,50 @@ describe('the applet planners (#13)', () => {
     }
   });
 });
+
+/**
+ * The driver of the applet design pipeline (#610 follow-up).
+ *
+ * The pair — a stage that runs only as part of a pipeline, and a record that
+ * drives it — is what lets the judgement live in a focused prompt while the
+ * sequence, the schemas and the cross-stage checks stay in code.
+ */
+describe('the applet design driver', () => {
+  const record = JSON.parse(
+    fs.readFileSync(path.join(DIR, 'applet-builder.json'), 'utf-8'),
+  ) as Record<string, unknown>;
+
+  it('drives the pipeline its stages declare', () => {
+    // Walked to the same constant the stages are, so a driver pointed at a
+    // pipeline that does not exist fails here rather than by being handed an
+    // empty tool set at dispatch time.
+    expect(record.drives).toBe(APPLET_DESIGN_PIPELINE);
+  });
+
+  it('is not itself a stage', () => {
+    // It would be refused from every channel, including its own pipeline.
+    expect(record.pipeline).toBeUndefined();
+  });
+
+  it('holds the pipeline tool and cannot reach the stages directly', () => {
+    // `targetTools` is the fence: naming `tool_wrapper_run` would let it
+    // dispatch by hand, which loses the schema parsing and every cross-stage
+    // check — the failure the whole lock-down exists to prevent.
+    expect(record.targetTools).toContain('applet_design');
+    expect(record.targetTools).not.toContain('tool_wrapper_run');
+    expect(record.targetTools).not.toContain('applet');
+  });
+
+  it('takes the wrapper path rather than the persona one', () => {
+    // `dispatchToolWrapper` rejects `kind: 'persona'`, and a persona would
+    // reach `specialist_run` instead, where the pipeline tool is not merged.
+    expect(record.kind).toBe('meta');
+  });
+
+  it('is given room for several rounds', () => {
+    // Plan, read, re-plan, read is four `applet_design` calls plus the
+    // answer. The default 0.5 ratio is 13 steps, which is tight enough that
+    // a normal loop would hit the limit and be relabelled a failure.
+    expect(record.stepRatio).toBeGreaterThanOrEqual(1);
+  });
+});

@@ -44,6 +44,8 @@ import { defineTool } from '../framework/tools/define-tool.js';
 import { claimDesign, peekPlan, stashDesign } from '../apps/design-stash.js';
 import { checkDesign } from '../apps/design-checks.js';
 import { PLAN_STAGES } from './applet-planning.js';
+import { debugLog } from '../logger.js';
+import type { AppletDesigner } from './applet-builder.js';
 
 /**
  * `applet` — authoring the small local web apps Bernard serves.
@@ -329,6 +331,15 @@ export interface AppletToolDeps {
   review?: AppletReviewer;
   /** The planning pass. Absent for the same reason, and it is the same guard. */
   plan?: AppletPlanner;
+  /**
+   * The agent that DRIVES the pipeline, when one is available.
+   *
+   * Preferred over `plan` because it reads the spec back and re-runs the one
+   * stage that got it wrong — which the pipeline alone cannot do, having no
+   * judgement in it. Falls back to `plan` when absent, so a context with no
+   * designer still plans rather than refusing.
+   */
+  design?: AppletDesigner;
 }
 
 export function createAppletTool(registry?: AppRegistry, deps: AppletToolDeps = {}) {
@@ -415,7 +426,13 @@ async function run(
   deps: AppletToolDeps,
   abortSignal?: AbortSignal,
 ): Promise<string> {
-  const { requestConsent, style: styleApplet, review: reviewApplet, plan: planApplet } = deps;
+  const {
+    requestConsent,
+    style: styleApplet,
+    review: reviewApplet,
+    plan: planApplet,
+    design: designApplet,
+  } = deps;
   switch (args.action) {
     case 'list': {
       const ids = store.listIds();
@@ -718,6 +735,38 @@ async function run(
         description: args.description ?? '',
         intent,
       };
+      // Validated before either path: the driver must not be dispatched with
+      // a stage name the pipeline does not have, or it spends a round trip to
+      // discover that.
+      const stages = args.stages?.filter((x) => (PLAN_STAGES as readonly string[]).includes(x));
+      if (args.stages && stages?.length !== args.stages.length) {
+        return `Error: unknown stage. The stages are ${PLAN_STAGES.map((x) => `\`${x}\``).join(', ')}.`;
+      }
+
+      /**
+       * The driver first, when there is one.
+       *
+       * It reads the spec back and re-runs the one stage that got it wrong,
+       * which the pipeline alone cannot do — there is no judgement in a
+       * sequence. Its answer already carries the spec, the problems and the
+       * `planId` line, so this passes it straight through rather than
+       * re-deriving any of them.
+       *
+       * Falls through to the pipeline when the driver is absent or its
+       * dispatch failed: a design is better than none, and a failed driver
+       * must not mean a failed plan.
+       */
+      if (designApplet) {
+        const designed = await designApplet(target, {
+          ...(stages?.length ? { stages } : {}),
+          ...(args.nudge ? { nudge: args.nudge } : {}),
+          ...(args.planId ? { planId: args.planId } : {}),
+          ...(abortSignal ? { signal: abortSignal } : {}),
+        });
+        if (designed.designed) return designed.text;
+        debugLog('applet:design:fallback', { name: target.name, reason: designed.reason });
+      }
+
       /**
        * A re-plan builds on the plan it was given.
        *
@@ -727,10 +776,6 @@ async function run(
        * nothing.
        */
       const prior = peekPlan(args.planId);
-      const stages = args.stages?.filter((x) => (PLAN_STAGES as readonly string[]).includes(x));
-      if (args.stages && stages?.length !== args.stages.length) {
-        return `Error: unknown stage. The stages are ${PLAN_STAGES.map((x) => `\`${x}\``).join(', ')}.`;
-      }
       const outcome = await planApplet(target, {
         ...(abortSignal ? { signal: abortSignal } : {}),
         ...(stages?.length ? { only: stages } : {}),

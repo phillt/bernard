@@ -222,6 +222,26 @@ export interface Specialist extends ScopeSelection {
    * shipped bytes, so the mark survives a hand edit.
    */
   pipeline?: string;
+
+  /**
+   * This record DRIVES the named pipeline: it is the agent that decides what
+   * to plan, what to re-run and when the plan is good enough.
+   *
+   * The inverse of {@link pipeline}, and the pair is the whole shape. A stage
+   * runs only as part of a pipeline; a driver is handed the one tool that
+   * runs it. Neither is settable through the `specialist` tool — `create`
+   * copies an explicit field list and `update` has an explicit allowlist, and
+   * neither names these — so a model can no more appoint itself the driver of
+   * a pipeline than it can un-mark a stage.
+   *
+   * Why an agent at all, rather than another `for` loop: the sequence is
+   * code and stays code, but *which* stage to re-run and with what nudge is
+   * judgement, and the main agent is the worst place for it — its prompt
+   * carries the whole product, which is how it came to improvise its own
+   * version of this pipeline in the first place. A record whose entire system
+   * prompt is how to build an applet well has a better chance.
+   */
+  drives?: string;
 }
 
 export interface SpecialistSummary {
@@ -349,6 +369,7 @@ export const POST_V1_BUNDLED = [
   'applet-data-planner.json',
   'applet-interaction-designer.json',
   'applet-microcopy.json',
+  'applet-builder.json',
 ];
 
 /**
