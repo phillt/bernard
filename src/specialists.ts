@@ -195,6 +195,53 @@ export interface Specialist extends ScopeSelection {
    * so a create-bound specialist could never be validated by execution.
    */
   boundTo?: { appId: string; action: string };
+
+  /**
+   * This record is one STAGE of a named pipeline, not a specialist anybody
+   * calls directly.
+   *
+   * The applet design pipeline was bypassed in exactly the way this prevents.
+   * Three of its five stages were ordinary roster records, so the main agent
+   * dispatched them by hand with prose briefs of its own — and the two stages
+   * that exist only inside the pipeline, the ones that choose button variants
+   * and icons, were never reached at all. Zero dispatches, ever. The
+   * cross-stage checks are code and never ran either, and nothing persisted
+   * the design, so the page writer had nothing to read.
+   *
+   * Two halves, and both are needed. `invocationRefusal` refuses a stage
+   * reached from anywhere but its own pipeline, and `getSummaries()` drops it
+   * from discovery — a record that is advertised and then refused invites one
+   * wasted dispatch per turn, which is the argument that function already
+   * makes for `boundTo`.
+   *
+   * Set by the bundled record on disk, like `boundTo`, and deliberately NOT
+   * settable through the `specialist` tool: a model marking its own record
+   * pipeline-only would hide it from the roster, and a model CLEARING the
+   * mark on a bundled stage would undo this. Bundled definitions carry
+   * `canEditDefinition: false` and `refreshBundledDefinitions` restores the
+   * shipped bytes, so the mark survives a hand edit.
+   */
+  pipeline?: string;
+
+  /**
+   * This record DRIVES the named pipeline: it is the agent that decides what
+   * to plan, what to re-run and when the plan is good enough.
+   *
+   * The inverse of {@link pipeline}, and the pair is the whole shape. A stage
+   * runs only as part of a pipeline; a driver is handed the one tool that
+   * runs it. Neither is settable through the `specialist` tool — `create`
+   * copies an explicit field list and `update` has an explicit allowlist, and
+   * neither names these — so a model can no more appoint itself the driver of
+   * a pipeline than it can un-mark a stage.
+   *
+   * Why an agent at all, rather than another `for` loop: the sequence is
+   * code and stays code, but *which* stage to re-run and with what nudge is
+   * judgement, and the main agent is the worst place for it — its prompt
+   * carries the whole product, which is how it came to improvise its own
+   * version of this pipeline in the first place. A record whose entire system
+   * prompt is how to build an applet well has a better chance.
+   */
+  drives?: string;
 }
 
 export interface SpecialistSummary {
@@ -320,6 +367,9 @@ export const POST_V1_BUNDLED = [
   'applet-architect.json',
   'applet-ux-planner.json',
   'applet-data-planner.json',
+  'applet-interaction-designer.json',
+  'applet-microcopy.json',
+  'applet-builder.json',
 ];
 
 /**
@@ -813,7 +863,7 @@ export class SpecialistStore {
 
   getSummaries(): SpecialistSummary[] {
     return this.list()
-      .filter((s) => !s.disabled && !s.boundTo)
+      .filter((s) => !s.disabled && !s.boundTo && !s.pipeline)
       .map(({ id, name, description, provider, model, params, kind }) => ({
         id,
         name,

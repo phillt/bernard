@@ -133,6 +133,7 @@ export const APPLET_STYLED_SELECTORS = [
   'textarea',
   'select',
   'button',
+  'button.primary',
   'button.secondary',
   'button.danger',
   'pre',
@@ -144,6 +145,7 @@ export const APPLET_STYLED_SELECTORS = [
   '.row',
   '.actions',
   '.hidden',
+  '.icon',
   '.muted',
   '.note',
   '.error',
@@ -264,22 +266,66 @@ input, textarea, select {
 }
 :focus:not(:focus-visible) { outline: none; }
 
+/* The bare element is the QUIET one, and that inversion is the point.
+
+   It used to be the filled accent, which made emphasis opt-OUT: every button
+   a model wrote without thinking about hierarchy was maximum emphasis, and
+   \`.secondary\` had to be remembered to climb back down. Measured on a real
+   applet, that produced NINE filled orange buttons on one screen — an Add, a
+   Status, and a "Bought" on each of seven cards — with nothing marking which
+   one the page was actually for.
+
+   A page has one primary action and many ordinary ones, so the common case
+   belongs in the default. \`button.primary\` is now the deliberate statement,
+   which is also what makes it countable: one \`.primary\` per region is a rule
+   a checker can hold, where "how many bare buttons are too many" was not.
+
+   Contrast is measured, not assumed: \`--text\` on \`--surface\` is 14.64:1, and
+   the border that now carries the button's edge is 3.77:1 on that fill —
+   over 1.4.11's 3:1 for a non-text boundary. See \`tokens.test.ts\`. */
 button {
   padding: var(--space-2) var(--space-4);
   /* 36px, over the 24px WCAG 2.2 SC 2.5.8 asks of a target. */
   min-height: 2.25rem;
-  background: var(--accent);
-  color: var(--accent-fg);
-  border: 1px solid transparent;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
   border-radius: var(--radius);
   font: inherit;
   cursor: pointer;
 }
 
+/* An icon inside a control (issue 610).
+
+   \`display: inline-flex\` with a gap is what makes \`icon + text\` the easy
+   thing to write: a button gets its label spaced from its glyph with no
+   author CSS, which is the shape the planners are told to prefer for
+   anything whose meaning is not universal. \`min-height\` already gives the
+   button a 36px target, so a 16-20px icon sits inside a hit area far larger
+   than itself without anyone sizing one.
+
+   \`vertical-align\` covers the other case — an icon in flowing text, where
+   there is no flex container to align it. -0.125em is the usual optical
+   correction for a 24-viewBox glyph on a text baseline.
+
+   \`flex: none\` so a long label never squashes the glyph: a compressed icon
+   is the one thing worse than no icon, and it happens silently. */
+.icon { vertical-align: -0.125em; flex: none; }
+button { display: inline-flex; align-items: center; gap: var(--space-2); }
+
 button:hover { filter: brightness(1.08); }
 button:disabled { opacity: 0.5; cursor: default; }
+/* The one deliberate statement of emphasis. \`border-color\` is reset because
+   the base now carries a visible one, and a filled button with an outline
+   reads as two edges. */
+button.primary { background: var(--accent); color: var(--accent-fg); border-color: transparent; }
+/* An ALIAS of the base, kept because three of the four applets that exist
+   already write it — ten times in one of them. Dropping it would make every
+   one of those pages wrong on the day the default flipped, for nothing: the
+   declaration is now redundant rather than incorrect, so it costs one rule
+   and buys back-compat. New pages should simply omit it. */
 button.secondary { background: var(--surface); color: var(--text); border-color: var(--border); }
-button.danger { background: var(--danger); color: var(--accent-fg); }
+button.danger { background: var(--danger); color: var(--accent-fg); border-color: transparent; }
 
 /* No border, deliberately — this is what pays for the heavier \`--border\`.
    A \`pre\` is delimited by its own fill, so 1.4.11 does not apply to it, and
@@ -368,6 +414,29 @@ a:hover { text-decoration-color: var(--accent); }
   min-width: 0;
   max-width: 34rem;
 }
+
+/* Proximity, and it was INVERTED — which is arithmetic rather than taste.
+
+   \`label\` carries \`margin-bottom: var(--space-3)\` for its standalone use,
+   and inside a \`.field\` that margin STACKS on the flex \`gap\`: 12px + 8px,
+   so 20px sat between a label and its own input. Two stacked fields, meanwhile,
+   had **nothing** between them — \`.field\` has no margin and a \`<section>\`
+   supplies no gap. So every label was closer to the field ABOVE it than to the
+   control it names, and a four-field form read as one undifferentiated block.
+   Measured on a real applet: ~13px between fields, ~36px inside one.
+
+   The fix is to let the field's own \`gap\` be the only spacing inside it, and
+   to give siblings a larger one. 8px inside, 16px between — the ratio the right
+   way round, and no author has to do anything, which matters because the
+   applets that already exist are already written.
+
+   The \`.row\` reset is required, not defensive: inside a row the fields are
+   flex items laid out horizontally, where \`margin-top\` on the second one
+   would push it out of alignment with the first. A row already spaces its own
+   children with \`gap\`. */
+.field > label { margin-bottom: 0; }
+.field + .field { margin-top: var(--space-4); }
+.row > .field + .field { margin-top: 0; }
 
 /* A raised item. \`li.story\` and \`.entry\` are this, twice. Applied to \`li\`
    only inside \`.cards\`, so ordinary lists keep their bullets. */

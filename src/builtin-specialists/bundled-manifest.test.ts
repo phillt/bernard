@@ -6,6 +6,7 @@ import { POST_V1_BUNDLED } from '../specialists.js';
 import { APPLET_COLOR_TOKENS, APPLET_STYLED_SELECTORS } from '../host/tokens.js';
 import { UI_RUNTIME_PATH, UI_RUNTIME_RULE } from '../host/ui-runtime.js';
 import { ROLE_NOT_PIN_RULE } from '../model-roles.js';
+import { APPLET_DESIGN_PIPELINE } from '../tools/applet-planning.js';
 
 /**
  * What the original `.seeded-v1` pass shipped.
@@ -152,6 +153,12 @@ describe('the applet specialists teach the client, not the protocol', () => {
     const p = String(load('applet-reviewer').systemPrompt);
     expect(p).toContain('does not touch the browser half');
     expect(p).not.toContain('This is the check that matters');
+    // The few-shot example is the copy a model imitates, and it shipped
+    // still calling `bernard script` under a rule that forbids it.
+    for (const example of load('applet-reviewer').goodExamples ?? []) {
+      expect(example.call).not.toContain('bernard script');
+      expect(example.call).toContain('bernard app check');
+    }
   });
 });
 
@@ -239,7 +246,13 @@ describe('the two-path rule is stated once (#466)', () => {
  * write path does not grant, fails as a WORSE PLAN rather than as an error.
  */
 describe('the applet planners (#13)', () => {
-  const PLANNERS = ['applet-architect', 'applet-ux-planner', 'applet-data-planner'];
+  const PLANNERS = [
+    'applet-architect',
+    'applet-ux-planner',
+    'applet-data-planner',
+    'applet-interaction-designer',
+    'applet-microcopy',
+  ];
 
   const load = (name: string) =>
     JSON.parse(fs.readFileSync(path.join(DIR, `${name}.json`), 'utf-8')) as {
@@ -248,7 +261,26 @@ describe('the applet planners (#13)', () => {
       structuredOutput: boolean;
       systemPrompt: string;
       guidelines: string[];
+      pipeline?: string;
     };
+
+  /**
+   * Every stage is pipeline-only, and names the pipeline that owns it.
+   *
+   * The bypass this prevents was measured rather than imagined: the main
+   * agent dispatched three of these five by hand through `tool_wrapper_run`
+   * with prose briefs of its own, so `applet-interaction-designer` and
+   * `applet-microcopy` — the stages that choose variants and icons — had
+   * **zero** dispatches, ever, and the cross-stage checks never ran.
+   *
+   * Walked record-to-constant, which is the direction the mistake is made
+   * in: a sixth stage added without the mark is freely dispatchable, and a
+   * mark that does not match what `runPlanner` claims makes the stage
+   * unreachable by ANYTHING, including its own pipeline. Both fail here.
+   */
+  it.each(PLANNERS)('%s runs only as part of its pipeline', (name) => {
+    expect(load(name).pipeline).toBe(APPLET_DESIGN_PIPELINE);
+  });
 
   it.each(PLANNERS)('%s can reach the documentation it is told to read', (name) => {
     // `docs` is `audience: 'main'`, which sounds like it excludes a dispatched
@@ -380,6 +412,9 @@ describe('the applet planners (#13)', () => {
     const { PLAIN_LANGUAGE_RULE, interviewPlaybook } = await import('../apps/interview.js');
     expect(interviewPlaybook()).toContain(PLAIN_LANGUAGE_RULE);
     expect(load('applet-ux-planner').systemPrompt).toContain(PLAIN_LANGUAGE_RULE);
+    // The wording specialist is the third surface, and the one whose whole
+    // job this rule is. A constant exists so none of them paraphrases it.
+    expect(load('applet-microcopy').systemPrompt).toContain(PLAIN_LANGUAGE_RULE);
   });
 
   it('no planner claims it can grant tools', () => {
@@ -394,5 +429,52 @@ describe('the applet planners (#13)', () => {
     for (const name of PLANNERS) {
       expect(load(name).systemPrompt).not.toMatch(/set `?toolAllowlist/i);
     }
+  });
+});
+
+/**
+ * The driver of the applet design pipeline (#610 follow-up).
+ *
+ * The pair — a stage that runs only as part of a pipeline, and a record that
+ * drives it — is what lets the judgement live in a focused prompt while the
+ * sequence, the schemas and the cross-stage checks stay in code.
+ */
+describe('the applet design driver', () => {
+  const record = JSON.parse(
+    fs.readFileSync(path.join(DIR, 'applet-builder.json'), 'utf-8'),
+  ) as Record<string, unknown>;
+
+  it('drives the pipeline its stages declare', () => {
+    // Walked to the same constant the stages are, so a driver pointed at a
+    // pipeline that does not exist fails here rather than by being handed an
+    // empty tool set at dispatch time.
+    expect(record.drives).toBe(APPLET_DESIGN_PIPELINE);
+  });
+
+  it('is not itself a stage', () => {
+    // It would be refused from every channel, including its own pipeline.
+    expect(record.pipeline).toBeUndefined();
+  });
+
+  it('holds the pipeline tool and cannot reach the stages directly', () => {
+    // `targetTools` is the fence: naming `tool_wrapper_run` would let it
+    // dispatch by hand, which loses the schema parsing and every cross-stage
+    // check — the failure the whole lock-down exists to prevent.
+    expect(record.targetTools).toContain('applet_design');
+    expect(record.targetTools).not.toContain('tool_wrapper_run');
+    expect(record.targetTools).not.toContain('applet');
+  });
+
+  it('takes the wrapper path rather than the persona one', () => {
+    // `dispatchToolWrapper` rejects `kind: 'persona'`, and a persona would
+    // reach `specialist_run` instead, where the pipeline tool is not merged.
+    expect(record.kind).toBe('meta');
+  });
+
+  it('is given room for several rounds', () => {
+    // Plan, read, re-plan, read is four `applet_design` calls plus the
+    // answer. The default 0.5 ratio is 13 steps, which is tight enough that
+    // a normal loop would hit the limit and be relabelled a failure.
+    expect(record.stepRatio).toBeGreaterThanOrEqual(1);
   });
 });

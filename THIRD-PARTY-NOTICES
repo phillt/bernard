@@ -13,6 +13,33 @@ Source: https://github.com/developit/htm
 License: Apache License 2.0
 Copyright: (c) Jason Miller
 
+Lucide
+------
+Source: https://github.com/lucide-icons/lucide
+License: ISC
+Copyright: (c) 2026 Lucide Icons and Contributors
+
+A curated subset of the icon path data is extracted at build time into
+`src/host/icon-data.ts` and served inside `/__bernard/applet.js`. The package
+itself is a devDependency and is not installed by users. The full ISC text
+follows.
+
+ISC License
+
+Copyright (c) 2026 Lucide Icons and Contributors
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.
+
 Served to applet pages at /__bernard/ui.js as the combined UMD bundle
 `htm/preact/standalone.umd.js`, resolved from the installed package rather
 than vendored into this repository. It is the rendering runtime an applet may

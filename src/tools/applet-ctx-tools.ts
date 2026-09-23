@@ -2,6 +2,8 @@ import { createAppletTool } from './applet.js';
 import { AppRegistry } from '../apps/registry.js';
 import { makeAppletStyler } from './applet-styling.js';
 import { makeAppletPlanner } from './applet-planning.js';
+import { makeAppletDesigner } from './applet-builder.js';
+import { makeAppletReviewer } from './applet-review.js';
 import type { AgentContext } from '../framework/context.js';
 
 /**
@@ -33,5 +35,10 @@ export function createMainAppletTool(ctx: AgentContext) {
     requestConsent: ctx.toolOptions.requestPermissionConsent,
     style: makeAppletStyler(ctx),
     plan: makeAppletPlanner(ctx),
+    // The driver is preferred over `plan`, which stays as the fallback: a
+    // design is better than none, and a failed driver must not mean a failed
+    // plan. Both are built because `applet.ts` chooses per call.
+    design: makeAppletDesigner(ctx),
+    review: makeAppletReviewer(ctx),
   });
 }

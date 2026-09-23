@@ -12,6 +12,7 @@ import {
   type BriefNote,
   type IntentField,
 } from './brief.js';
+import { AppletDesignSchema, type AppletDesign } from './design-model.js';
 
 /**
  * One design brief per applet, on disk (#463).
@@ -57,6 +58,13 @@ export class AppletBriefStore {
       // Re-normalized on the way out even though this store wrote it: the file
       // is plain JSON under `DATA_DIR` and hand-editable between runs, the same
       // time-of-check gap `registry.get` refuses to leave open.
+      // The design is re-validated on the way out for the same reason the
+      // intent is normalized here: this file is plain JSON under `DATA_DIR`
+      // and hand-editable between runs. A design that no longer parses is
+      // dropped rather than taking the brief down — it is context, not
+      // authority, and an applet with an unreadable design is still an
+      // applet.
+      const design = AppletDesignSchema.safeParse(parsed.design);
       return {
         intent: normalizeIntent(parsed.intent as Partial<Record<string, string>>),
         notes: Array.isArray(parsed.notes)
@@ -65,6 +73,7 @@ export class AppletBriefStore {
                 !!n && typeof n.text === 'string' && typeof n.timestamp === 'string',
             )
           : [],
+        ...(parsed.design !== undefined && design.success ? { design: design.data } : {}),
       };
     } catch (err) {
       // A missing brief is the normal case for every applet built before this
@@ -87,11 +96,20 @@ export class AppletBriefStore {
    */
   write(
     appId: string,
-    update: { intent?: Partial<Record<string, string>>; note?: string },
+    update: { intent?: Partial<Record<string, string>>; note?: string; design?: AppletDesign },
     now = new Date(),
   ): AppletBrief {
     const current = this.read(appId);
-    const next: AppletBrief = { intent: { ...current.intent }, notes: [...current.notes] };
+    const design = update.design ?? current.design;
+    const next: AppletBrief = {
+      intent: { ...current.intent },
+      notes: [...current.notes],
+      // Replaced wholesale, never merged. A design is one coherent set of
+      // decisions — merging a new scope into old controls produces a record
+      // that describes an applet nobody planned, which is the exact class of
+      // incoherence the model exists to make impossible.
+      ...(design ? { design } : {}),
+    };
 
     if (update.intent) {
       // One pass, not one per key: the caller's key set is what distinguishes

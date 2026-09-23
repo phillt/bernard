@@ -1,12 +1,15 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { APPLET_HOST_PID_FILE, APPLET_HOST_LOG_FILE, APPS_DIR } from '../paths.js';
+import { exitLoudlyOnFatal, restartOnRebuild } from '../build-stamp.js';
+import { sendToSessions } from '../inbox/send.js';
 import { AppRegistry } from '../apps/registry.js';
 import { CapabilityTable } from '../apps/capabilities.js';
 import { recordCapabilityMint } from '../apps/capability-log.js';
 import { HostRegistry } from './registry.js';
-import { startApplet, type RunningApplet } from './server.js';
+import { startApplet, inFlightInvocations, type RunningApplet } from './server.js';
 import { closeAllAppletStores, closeAppletStore } from './store-route.js';
 
 /**
@@ -93,12 +96,24 @@ async function reconcile(): Promise<void> {
   }
 }
 
-async function shutdown(): Promise<void> {
-  log('shutting down');
+/**
+ * Releases every listening port and closes every SQLite handle.
+ *
+ * Shared by {@link shutdown} and {@link restartForNewBuild}: a replacement
+ * process binds the SAME hash-derived ports, so anything short of releasing
+ * them first makes the new host log "could not serve" and leave that applet
+ * dark until somebody restarts it by hand.
+ */
+async function closeAll(): Promise<void> {
   for (const applet of running.values()) await applet.close();
   // Closes each cached SQLite handle so WAL checkpoints, rather than leaving
   // it to `process.exit`.
   closeAllAppletStores();
+}
+
+async function shutdown(): Promise<void> {
+  log('shutting down');
+  await closeAll();
   try {
     fs.unlinkSync(APPLET_HOST_PID_FILE);
   } catch {
@@ -106,6 +121,19 @@ async function shutdown(): Promise<void> {
   }
   process.exit(0);
 }
+
+/**
+ * How long to let in-flight invocations finish before replacing this process.
+ *
+ * An applet action's own `timeoutMs` reaches 180 s, so this cannot wait for
+ * the worst case without leaving the host serving stale code for three
+ * minutes after a build. 30 s covers the ordinary agent-backed action —
+ * measured 7-18 s across every invocation this install has logged — and a run
+ * that outlives it is abandoned with a line saying so, which is a truthful
+ * report rather than a silent kill.
+ */
+const DRAIN_TIMEOUT_MS = 30_000;
+const DRAIN_POLL_MS = 250;
 
 async function main(): Promise<void> {
   fs.mkdirSync(path.dirname(APPLET_HOST_PID_FILE), { recursive: true });
@@ -130,6 +158,31 @@ async function main(): Promise<void> {
   } catch (err) {
     log(`could not watch ${APPS_DIR}: ${String(err)}`);
   }
+
+  // Notice when this process's own code stops matching what is on disk, and
+  // replace it. The sequence is `build-stamp.ts`'s; what is this daemon's is
+  // the drain budget above and the two hooks.
+  restartOnRebuild({
+    entry: fileURLToPath(import.meta.url),
+    pidFile: APPLET_HOST_PID_FILE,
+    log,
+    inFlight: inFlightInvocations,
+    unit: 'invocation',
+    drainTimeoutMs: DRAIN_TIMEOUT_MS,
+    drainPollMs: DRAIN_POLL_MS,
+    // Sent BEFORE the drain so it lands while the REPL is still the thing the
+    // user is looking at, rather than up to 30 s later.
+    onRestarting: () =>
+      sendToSessions({
+        text: 'Bernard was rebuilt, so the applet host restarted to pick it up.',
+        source: { kind: 'applet', label: 'applet-host' },
+        hint: 'Reload any open applet tabs — a restart mints new tokens.',
+        target: { all: true },
+      }),
+    beforeExit: closeAll,
+  });
+
+  exitLoudlyOnFatal(log);
 
   process.on('SIGTERM', () => void shutdown());
   process.on('SIGINT', () => void shutdown());

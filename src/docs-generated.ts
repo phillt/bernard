@@ -5,6 +5,7 @@ import {
   TOKENS_PATH,
 } from './host/tokens.js';
 import { UI_RUNTIME_GLOBAL, UI_RUNTIME_PATH, UI_RUNTIME_RULE } from './host/ui-runtime.js';
+import { ICON_NAMES, ICON_SIZES, LUCIDE_VERSION } from './host/icons.js';
 import { INTENT_FIELDS, INTENT_FIELD_LABELS } from './apps/brief.js';
 import { SLASH_COMMANDS } from './ui/slash-commands.js';
 import { CONFIRM_MODES, TOOL_MODES } from './tool-modes.js';
@@ -53,6 +54,11 @@ function stylingDoc(): DocEntry {
     })
     .join('\n');
   const selectors = APPLET_STYLED_SELECTORS.map((s) => `\`${s}\``).join(', ');
+  // Generated from the served set, never retyped: the whole reason the icons
+  // live in one module is that a second copy of the list is a second thing to
+  // keep current, and a prompt naming an icon that does not exist produces a
+  // page with an invisible hole in it.
+  const icons = ICON_NAMES.map((n) => `\`${n}\``).join(', ');
   const scale = Object.entries(APPLET_SCALE_TOKENS)
     .map(([name, value]) => `| \`${name}\` | \`${value}\` |`)
     .join('\n');
@@ -107,6 +113,55 @@ The floor carries no width \`@media\` rule, by design: one layout that reflows,
 not a desktop one and a mobile one. Do not add a width breakpoint in an
 applet's CSS either — it is a second breakpoint nobody maintains, and the
 classes above already collapse on their own.
+
+## Icons
+
+The set is Lucide ${LUCIDE_VERSION}, served inside \`applet.js\` — so it is already
+on the page and needs no extra tag, no CDN and no permission grant. One
+family throughout: 24x24, two-pixel stroke, round caps. Do not paste SVG from
+anywhere else; a second family is obvious immediately and cannot be undone one
+icon at a time.
+
+Two ways to draw one, and the first needs no JavaScript of your own:
+
+    <span data-icon="search"></span>
+    <span data-icon="trash-2" data-icon-size="sm"></span>
+    <button><span data-icon="plus"></span> Add reading</button>
+
+    element.innerHTML = bernard.icon('search', { size: 'md' });
+
+Sizes are \`sm\` (${ICON_SIZES.sm}px, dense controls), \`md\` (${ICON_SIZES.md}px, ordinary
+buttons and navigation) and \`lg\` (${ICON_SIZES.lg}px, one prominent action). There is
+no free pixel value on purpose — that is how a set ends up with a 17px icon
+beside an 18px one. A \`button\` is already at least 36px tall, so the hit
+target is far larger than the glyph with nothing to size.
+
+An icon takes the colour of its text, so it themes for free. Never colour one
+directly.
+
+### When to use one
+
+- **Icon plus text** for anything whose meaning is not universal — navigation,
+  domain words, and every primary action. A word costs almost nothing and
+  removes the guess.
+- **Icon alone** only for the handful everybody already reads: close, search,
+  settings, delete, add. Give it \`data-icon-title\` so it is announced and so
+  the browser shows a tooltip on hover — an icon-only control with no label is
+  unusable to a screen reader.
+- **A destructive control does not sit quietly among the others.** Use
+  \`button.danger\`, separate it from the harmless buttons, and confirm before
+  acting.
+- **Never colour alone for state.** Pair it with the icon's own shape, a word,
+  or one of the message classes.
+- **Not on everything.** If every heading, card and button gets one, they stop
+  marking anything and become noise.
+
+### The names
+
+${icons}
+
+A name that is not on this list renders as nothing at all — no error, no gap.
+The page write path warns about the ones it can see.
 
 ## When you do need CSS, use these variables
 
@@ -278,7 +333,7 @@ client. It attaches one global, \`${UI_RUNTIME_GLOBAL}\`.
         <input id="t" value=\${text} onInput=\${(e) => setText(e.target.value)} />
       </div>
       <div class="actions">
-        <button onClick=\${add} disabled=\${!text}>Add</button>
+        <button class="primary" onClick=\${add} disabled=\${!text}>Add</button>
       </div>
       <ul class="cards">
         \${items.map((i) => html\`<li key=\${i.id}>\${i.text}</li>\`)}
@@ -306,6 +361,30 @@ There is no \`Fragment\` export. Return an array, or wrap in an element.
 That is Preact's API. Anything written for React hooks works, with two
 differences worth knowing: the DOM property is \`onInput\`, not \`onChange\`, and
 \`class\` works as well as \`className\`.
+
+## Icons
+
+Neither of the two spellings on a static page works here. \`bernard.icon()\`
+returns a string, and \`bernard.icons.hydrate()\` sets \`innerHTML\` on a node
+this runtime owns — so the next render throws the glyph away and nothing puts
+it back. Use the component:
+
+\`\`\`js
+html\`<button class="primary" onClick=\${add}>
+  <\${bernard.Icon} name="plus" size="md" /> Add item
+<//>\`
+\`\`\`
+
+It renders the \`<svg>\` itself, so the glyph is the flex item the button lays
+out and no wrapper gets in the way. An icon-only control needs \`title\`, or it
+announces nothing and shows no tooltip:
+
+\`\`\`js
+html\`<\${bernard.Icon} name="trash-2" size="sm" title="Delete item" />\`
+\`\`\`
+
+An unknown name renders nothing at all rather than erroring, so check the name
+against the \`applet-styling\` document rather than guessing.
 
 ## Styling stays the same
 

@@ -1,7 +1,8 @@
 import { MANIFEST_PATH } from '../host/webmanifest.js';
 import { SDK_PATH } from '../host/sdk.js';
 import { TOKENS_PATH, APPLET_COLOR_TOKENS } from '../host/tokens.js';
-import { nearestToken, HEX_LITERAL_RE } from '../color.js';
+import { nearestToken, contrastOver, HEX_LITERAL_RE } from '../color.js';
+import { isIconName, ICON_NAMES } from '../host/icons.js';
 
 /**
  * Refusing to write an applet page that cannot work.
@@ -242,7 +243,68 @@ export function validateAppletPage(
   colourIssues(html, 'the page', warn);
   cssIssues(html, opts.files ?? {}, refuse, warn);
 
+  /**
+   * An icon name the set does not have.
+   *
+   * WARN, not refuse, by this module's own certainty rule: the name may be
+   * built at runtime (`data-icon="${kind}"`), so a literal that matches
+   * nothing is strong evidence and not proof. It is worth reporting at all
+   * because the failure is INVISIBLE — `bernard.icon` returns '' for an
+   * unknown name and the hydrator skips the node, so a typo renders as
+   * nothing at all with no error in the console and no gap in the layout to
+   * notice.
+   *
+   * Both spellings are scanned: the declarative attribute, which is what a
+   * plain-HTML applet writes, and the call, which is what a runtime page
+   * writes. Only string literals — an expression is not decidable here.
+   */
+  const unknownIcons = [...iconRefsIn(html)].filter((n) => !isIconName(n));
+  if (unknownIcons.length > 0) {
+    warn(
+      `These icon names do not exist and will render as nothing: ${unknownIcons.join(', ')}. ` +
+        `The set has ${ICON_NAMES.length} icons; see the applet-styling document for the list.`,
+    );
+  }
+
+  primaryEmphasisIssues(html, warn);
+
   return issues;
+}
+
+/**
+ * More than one primary action in a region.
+ *
+ * "Primary" means the one thing this part of the page is for, so a second
+ * one does not add emphasis — it removes it. The motivating applet had
+ * **nine** filled buttons on one screen with nothing marking which mattered.
+ *
+ * A warning, not a refusal, per this module's certainty rule: the count is
+ * decidable but a legitimate exception exists (a genuinely two-verb region),
+ * and an over-emphasised page is visibly wrong rather than silently broken.
+ *
+ * **It is the weaker half of the fix, and deliberately so.** On a runtime
+ * page the controls live in template literals, so a `.map()` over seven items
+ * renders seven buttons from ONE in the source — exactly the shape that
+ * prompted this — and a static count sees one. What actually holds there is
+ * the floor's inverted default, where the bare element is already the quiet
+ * one however many times a template renders. This catches the plain-HTML
+ * case, and nothing here should be read as covering the other.
+ */
+function primaryEmphasisIssues(html: string, warn: (m: string) => void): void {
+  // Split on the section boundary rather than parsing: everything before the
+  // first `<section>` is its own region, which is where a page with no
+  // sections at all still gets checked.
+  const regions = html.split(/<section\b/i);
+  for (const [i, region] of regions.entries()) {
+    const count = classCount(region, 'primary');
+    if (count < 2) continue;
+    const where = i === 0 ? 'before the first <section>' : `in <section> ${i}`;
+    warn(
+      `${count} controls are marked \`primary\` ${where}. A region has one primary action — ` +
+        'a second does not add emphasis, it removes it. Leave the others as a bare `button`, ' +
+        'which is already the quiet default.',
+    );
+  }
 }
 
 /**
@@ -293,6 +355,65 @@ function colourIssues(source: string, where: string, warn: (m: string) => void):
 }
 
 /**
+ * Colours an applet paints that fail WCAG AA against the floor's own
+ * backgrounds.
+ *
+ * `color.ts` has computed real contrast ratios since #465 — and only for the
+ * SERVED floor, which `tokens.test.ts` pins at nineteen pairs. An applet's own
+ * `.css` got a nearest-token hint and no arithmetic at all, so the one design
+ * property that is genuinely decidable was being decided nowhere for the one
+ * file a person actually writes.
+ *
+ * ## What makes this sound without a CSS parser
+ *
+ * There is no parser here and there will not be one — the module says so. So
+ * this cannot know what a given colour is painted ON. What it can know is that
+ * the floor provides exactly two surfaces to paint on, `--bg` and `--surface`,
+ * and a foreground failing against BOTH fails wherever the floor put it. That
+ * is a real ratio rather than a resemblance, and it is the strongest claim
+ * available without parsing.
+ *
+ * WARN, not refuse, by this module's certainty rule: the applet may have
+ * painted its own background underneath, in which case the pairing is one
+ * nothing here can see. Strong evidence, not proof.
+ */
+/** WCAG 2.x AA for body text. The same number `tokens.test.ts` holds the floor to. */
+const WCAG_AA_TEXT = 4.5;
+
+function contrastIssues(css: string, where: string, warn: (m: string) => void): void {
+  const surfaces = [APPLET_COLOR_TOKENS['--bg'], APPLET_COLOR_TOKENS['--surface']].filter(
+    (v): v is string => typeof v === 'string',
+  );
+  if (surfaces.length === 0) return;
+
+  // `color:` only. A literal in `background:` is the other half of the pair
+  // and needs the foreground to say anything, which is the parse this refuses
+  // to do — so it stays with the existing "sets colours directly" warning.
+  const declarations = css.matchAll(/(^|[;{\s])color\s*:\s*([^;}]+)/gi);
+  const failing: string[] = [];
+  const seen = new Set<string>();
+  for (const m of declarations) {
+    const value = m[2].trim();
+    const hex = value.match(HEX_LITERAL_RE)?.[0];
+    if (!hex || seen.has(hex)) continue;
+    seen.add(hex);
+    const ratios = surfaces.map((bg) => contrastOver(hex, [bg]));
+    // A colour we cannot parse, or one over a translucent surface, is not a
+    // finding — `color.ts` answers `null` rather than guessing and so does this.
+    if (ratios.some((r) => r === null)) continue;
+    const best = Math.max(...ratios.map((r) => r ?? 0));
+    if (best < WCAG_AA_TEXT) failing.push(`${hex} (best ${best.toFixed(2)}:1)`);
+  }
+  if (failing.length === 0) return;
+  warn(
+    `${where} paints text that fails WCAG AA against every background the floor provides: ` +
+      `${failing.slice(0, 3).join(', ')}${failing.length > 3 ? `, and ${failing.length - 3} more` : ''}. ` +
+      `AA wants ${WCAG_AA_TEXT}:1 for body text. Use \`var(--text)\` or \`var(--muted)\`, which ` +
+      'are held to that by a test.',
+  );
+}
+
+/**
  * The files shipped beside `index.html`.
  *
  * These earn a refusal where a colour does not, and for the reason this module
@@ -331,6 +452,7 @@ function cssIssues(
       );
     }
     colourIssues(content, `\`${name}\``, warn);
+    contrastIssues(content, `\`${name}\``, warn);
   }
 }
 
@@ -363,4 +485,27 @@ export function formatWarnings(messages: string[]): string {
 
 function escapeForRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Every icon name a page refers to as a string literal, in all three
+ * spellings: the attribute a plain page writes, the component a runtime page
+ * renders, and the call. One scanner, because two were written and drifted
+ * on the day the second landed — a spelling added to one check and not the
+ * other lets a page be reported "unknown icon" and "icon rendered" for the
+ * same name. Only literals; an expression is not decidable here.
+ */
+export function iconRefsIn(html: string): Set<string> {
+  const refs = new Set<string>();
+  for (const m of html.matchAll(/data-icon=["']([a-z0-9-]+)["']/g)) refs.add(m[1]);
+  for (const m of html.matchAll(/\bbernard\.icon\(\s*["']([a-z0-9-]+)["']/g)) refs.add(m[1]);
+  for (const m of html.matchAll(/\bbernard\.Icon[^>]*?\bname=["']([a-z0-9-]+)["']/g))
+    refs.add(m[1]);
+  return refs;
+}
+
+/** Occurrences of a class name inside a `class="..."` attribute. */
+export function classCount(html: string, name: string): number {
+  const re = new RegExp(`class=["'][^"']*\\b${name}\\b[^"']*["']`, 'gi');
+  return [...html.matchAll(re)].length;
 }

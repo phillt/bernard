@@ -20,7 +20,8 @@
     "format": "prettier --write \"src/**/*.{ts,tsx,md}\" \"scripts/**/*.{ts,mjs}\" \"docs/**/*.{html,css,md}\" \"*.md\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,md}\" \"scripts/**/*.{ts,mjs}\" \"docs/**/*.{html,css,md}\" \"*.md\"",
     "refresh-catalog": "tsx scripts/refresh-catalog-fallback.ts",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "generate-icons": "node scripts/generate-icons.mjs"
   },
   "repository": {
     "type": "git",
@@ -89,6 +90,7 @@
     "eslint": "^9.39.2",
     "eslint-config-prettier": "^10.1.8",
     "ink-testing-library": "^4.0.0",
+    "lucide-static": "1.47.0",
     "prettier": "^3.8.1",
     "strip-ansi": "^7.2.0",
     "tsx": "^4.19.0",

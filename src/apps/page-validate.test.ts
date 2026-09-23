@@ -6,6 +6,8 @@ import { validateAppletPage, refusalFor, warningsFor } from './page-validate.js'
 import { defaultAppletPage } from './page-template.js';
 import { ARG_TYPES } from './arg-types.js';
 import type { RawAppAction } from './manifest.js';
+import { contrastOver } from '../color.js';
+import { APPLET_COLOR_TOKENS } from '../host/tokens.js';
 
 const OK = [
   '<title>T</title>',
@@ -503,5 +505,173 @@ describe('a <form> cannot work, so it is refused', () => {
         ),
       ),
     ).toHaveLength(0);
+  });
+  /**
+   * The one design property that is genuinely decidable, decided for the one
+   * file a person actually writes.
+   *
+   * `color.ts` has computed real ratios since #465 and only for the SERVED
+   * floor; an applet's own `.css` got a nearest-token hint and no arithmetic.
+   */
+  describe("contrast in an applet's own CSS", () => {
+    const page = [
+      '<link rel="stylesheet" href="/__bernard/tokens.css" />',
+      '<link rel="manifest" href="/__bernard/manifest.webmanifest" />',
+      '<link rel="stylesheet" href="app.css" />',
+      '<main>hi</main>',
+    ].join('\n');
+    const run = (css: string) =>
+      validateAppletPage(page, [], { files: { 'app.css': css } })
+        .filter((i) => i.level === 'warn')
+        .map((i) => i.message)
+        .join(' ');
+
+    it('warns about text that fails against every background the floor has', () => {
+      // #6a6a6a on #0d1117 and on #161b22 is under 4.5:1 either way, so it
+      // fails wherever the floor put it — which is what makes the claim sound
+      // without a CSS parser.
+      const out = run('.note { color: #6a6a6a; }');
+      expect(out).toContain('fails WCAG AA');
+      expect(out).toContain('#6a6a6a');
+      // A real ratio, not a resemblance.
+      expect(out).toMatch(/\d\.\d{2}:1/);
+      expect(out).toContain('var(--text)');
+    });
+
+    it('says nothing about a colour that passes', () => {
+      expect(run('.note { color: #ffffff; }')).not.toContain('fails WCAG AA');
+    });
+
+    it("takes the best of the floor's backgrounds — unobservable today, and that is asserted", () => {
+      // The rule is that a foreground fails only if it fails against BOTH,
+      // because checking one would flag a colour that is fine on the surface
+      // it is actually used on.
+      //
+      // It cannot currently be caught by a case, and mutating `Math.max(...)`
+      // to `ratios[0]` duly survives the whole file. The reason is a property
+      // of the palette, not a gap in the tests: both floor backgrounds are
+      // dark and close together, so for any light foreground `--bg` gives the
+      // higher ratio and `max` IS `ratios[0]`, while a foreground dark enough
+      // to invert that fails against both by a mile. For the two to straddle
+      // 4.5 a colour would need a luminance below zero.
+      //
+      // So the condition is asserted instead — the `argSpecsSince` precedent
+      // — and the day `tokens.test.ts`'s one-entry palette list gains a light
+      // mode, this fails and a real case becomes writable.
+      const fg = '#888888';
+      const a = contrastOver(fg, [APPLET_COLOR_TOKENS['--bg']]) ?? 0;
+      const b = contrastOver(fg, [APPLET_COLOR_TOKENS['--surface']]) ?? 0;
+      expect(a).toBeGreaterThan(b); // --bg is the darker of the two
+      // Both on the same side of the threshold, for every colour: that is
+      // what makes the max unobservable rather than merely untested.
+      expect(a >= 4.5).toBe(b >= 4.5);
+    });
+
+    it('ignores a value it cannot parse rather than inventing a ratio', () => {
+      // `#12345` is five digits: `HEX_LITERAL_RE` matches 3-8 so it gets this
+      // far, and `parseColor` rejects it because only 3, 4, 6 and 8 are real.
+      // Without the null guard it scores 0 and is reported as the worst
+      // failure on the page — a confident number about a colour nobody parsed,
+      // which is the one thing `color.ts` returns null to avoid.
+      expect(run('.note { color: #12345; }')).not.toContain('fails WCAG AA');
+      // A named colour and a var() never reach the ratio at all: no hex, so
+      // the scan skips them earlier.
+      expect(run('.a { color: var(--muted); } .b { color: rebeccapurple; }')).not.toContain(
+        'fails WCAG AA',
+      );
+    });
+
+    it('is a warning, because the applet may have painted its own background', () => {
+      // The module's certainty rule: strong evidence, not proof.
+      const issues = validateAppletPage(page, [], {
+        files: { 'app.css': '.note { color: #6a6a6a; }' },
+      });
+      expect(issues.some((i) => i.level === 'refuse' && i.message.includes('WCAG'))).toBe(false);
+    });
+  });
+});
+
+/**
+ * Emphasis, now that the floor's bare button is the quiet one (#610 follow-up).
+ */
+describe('primary emphasis', () => {
+  const warnings = (html: string) =>
+    validateAppletPage(html, ['hello'])
+      .filter((i) => i.level === 'warn')
+      .map((i) => i.message);
+
+  const withBody = (body: string) => OK.replace('<main><button id="go">Go</button></main>', body);
+
+  it('says nothing about one primary in a region', () => {
+    const out = warnings(withBody('<main><button id="go" class="primary">Go</button></main>'));
+    expect(out.filter((m) => m.includes('primary'))).toEqual([]);
+  });
+
+  it('warns when a region marks two', () => {
+    // A second primary does not add emphasis, it removes it — which is what
+    // nine of them on one screen looked like.
+    const out = warnings(
+      withBody(
+        '<main><button id="go" class="primary">Go</button>' +
+          '<button class="primary">Also go</button></main>',
+      ),
+    );
+    expect(out.join(' ')).toContain('2 controls are marked');
+  });
+
+  it('counts per section rather than per page', () => {
+    // One primary in each of two sections is correct and must stay quiet —
+    // a page-wide count would make the common multi-section applet noisy.
+    const out = warnings(
+      withBody(
+        '<main><section><button id="go" class="primary">A</button></section>' +
+          '<section><button class="primary">B</button></section></main>',
+      ),
+    );
+    expect(out.filter((m) => m.includes('marked'))).toEqual([]);
+  });
+
+  it('matches the class among others, not only on its own', () => {
+    const out = warnings(
+      withBody(
+        '<main><button id="go" class="wide primary">A</button>' +
+          '<button class="primary tall">B</button></main>',
+      ),
+    );
+    expect(out.join(' ')).toContain('2 controls are marked');
+  });
+
+  it('warns rather than refuses', () => {
+    // Certainty, not severity: a genuinely two-verb region exists, and an
+    // over-emphasised page is visibly wrong rather than silently broken.
+    const html = withBody(
+      '<main><button id="go" class="primary">A</button>' +
+        '<button class="primary">B</button></main>',
+    );
+    expect(refusals(html)).toEqual([]);
+  });
+});
+
+/**
+ * The component spelling of an icon name, which is the only one a runtime
+ * page can use — so a typo there was the one unchecked spelling.
+ */
+describe('icon names via the component', () => {
+  it('catches an unknown name passed to bernard.Icon', () => {
+    const html = `${OK}\n<script>html\`<\${bernard.Icon} name="dustbin" />\`</script>`;
+    const out = validateAppletPage(html, ['hello'])
+      .filter((i) => i.level === 'warn')
+      .map((i) => i.message)
+      .join(' ');
+    expect(out).toContain('dustbin');
+  });
+
+  it('accepts a real one', () => {
+    const html = `${OK}\n<script>html\`<\${bernard.Icon} name="trash-2" />\`</script>`;
+    const out = validateAppletPage(html, ['hello'])
+      .filter((i) => i.level === 'warn')
+      .map((i) => i.message)
+      .join(' ');
+    expect(out).not.toContain('do not exist');
   });
 });

@@ -1,5 +1,4 @@
-import { dispatchToolWrapper } from './tool-wrapper-run.js';
-import { isDispatchCancellation } from '../error-taxonomy.js';
+import { passFailureReason, runAppletPass } from './applet-pass.js';
 import { debugLog } from '../logger.js';
 import type { AgentContext } from '../framework/context.js';
 
@@ -123,43 +122,21 @@ export function buildStyleBrief(target: StyleTarget): string {
 export function makeAppletStyler(ctx: AgentContext): AppletStyler {
   return async (target, signal) => {
     try {
-      const wrapped = await dispatchToolWrapper(
-        {
-          specialistId: STYLER_SPECIALIST_ID,
-          input: buildStyleBrief(target),
-          runLabel: `[style] ${target.name}`,
-          skipCorrectionEnqueue: true,
-          // Per CALL, not per construction: the tool is built once a turn but
-          // the signal belongs to the invocation. Without it an Esc during
-          // `applet create` leaves a full sub-agent run — seconds of wall time
-          // and a paid completion — running to completion with its output
-          // discarded.
-          ...(signal ? { abortSignal: signal } : {}),
-        },
-        ctx,
-      );
-      if (wrapped.status === 'ok') {
-        // Empty is a legitimate summary — both render sites already test it
-        // for truthiness, so an absent field bought a second shape and no
-        // information.
-        return {
-          styled: true,
-          summary: typeof wrapped.result === 'string' ? wrapped.result.trim() : '',
-        };
-      }
-      // `error` is the taxonomy-ish code (`pool_exhausted`, `no_api_key`,
-      // `not_found`, `runtime_error`); `result` is the human message. The code
-      // is what a reader acts on, so it leads.
-      return { styled: false, reason: wrapped.error ?? String(wrapped.result ?? 'unknown') };
+      const pass = await runAppletPass(ctx, {
+        specialistId: STYLER_SPECIALIST_ID,
+        input: buildStyleBrief(target),
+        runLabel: `[style] ${target.name}`,
+        signal,
+      });
+      if (!pass.ok) return { styled: false, reason: pass.reason };
+      // Empty is a legitimate summary — both render sites already test it
+      // for truthiness, so an absent field bought a second shape and no
+      // information.
+      return { styled: true, summary: typeof pass.result === 'string' ? pass.result.trim() : '' };
     } catch (err) {
-      // A cancelled turn is not a styling failure and must not be reported as
-      // one — but it must not take the create down either, since the applet is
+      // A cancelled turn must not take the create down, since the applet is
       // already written. The caller renders "not styled" and moves on.
-      const reason = isDispatchCancellation(err)
-        ? 'cancelled'
-        : err instanceof Error
-          ? err.message
-          : String(err);
+      const reason = passFailureReason(err);
       debugLog('applet:style:error', { appId: target.id, reason });
       return { styled: false, reason };
     }

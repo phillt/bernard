@@ -29,10 +29,12 @@ const okWith = (bodies: Record<string, unknown>) =>
   }));
 
 describe('makeAppletPlanner', () => {
-  it('runs the architect first and the other two against its scope', async () => {
-    // The ordering IS the design: two planners given the same brief and no
-    // shared scope plan differently-sized applets, and the contradiction only
-    // surfaces for whoever has to write one page from both.
+  it('runs scope first, then the pair, then interaction against both', async () => {
+    // The ordering IS the design, and it runs large decisions before small
+    // ones. Two planners given the same brief and no shared scope plan
+    // differently-sized applets; and an interaction stage deciding "this
+    // needs a trash icon" before anything established that a destructive
+    // delete belongs here is the same mistake one level down.
     const order: string[] = [];
     const dispatch = vi.fn(async ({ specialistId, input }) => {
       order.push(specialistId);
@@ -49,7 +51,13 @@ describe('makeAppletPlanner', () => {
 
     expect(outcome.planned).toBe(true);
     expect(order[0]).toBe('applet-architect');
-    expect(order.slice(1).sort()).toEqual(['applet-data-planner', 'applet-ux-planner']);
+    expect(order.slice(1, 3).sort()).toEqual(['applet-data-planner', 'applet-ux-planner']);
+    // Interaction is strictly after the pair — it reads what they decided, so
+    // it cannot join the parallel arm even though that would be faster.
+    expect(order[3]).toBe('applet-interaction-designer');
+    // Wording did not run: this design has no controls and no destructive
+    // action, which is `needsMicrocopy` declining rather than a failure.
+    expect(order).toHaveLength(4);
   });
 
   it('runs the interface and data planners in parallel, not one after the other', async () => {
@@ -176,7 +184,7 @@ describe('makeAppletPlanner', () => {
     const { makeAppletPlanner } = await load(dispatch);
     const signal = new AbortController().signal;
 
-    await makeAppletPlanner(CTX)(TARGET, signal);
+    await makeAppletPlanner(CTX)(TARGET, { signal });
 
     for (const call of dispatch.mock.calls) expect(call[0].abortSignal).toBe(signal);
   });
@@ -191,7 +199,9 @@ describe('makeAppletPlanner', () => {
 
     await makeAppletPlanner(CTX)(TARGET);
 
-    expect(dispatch).toHaveBeenCalledTimes(3);
+    // Every stage, including the two added later — the property is about the
+    // dispatch shape, so a new stage that forgot the flag is what this catches.
+    expect(dispatch).toHaveBeenCalledTimes(4);
     for (const call of dispatch.mock.calls) expect(call[0].skipCorrectionEnqueue).toBe(true);
   });
 
@@ -266,5 +276,256 @@ describe('the planning recursion guard', () => {
     expect(out).toContain('not available here');
     expect(out).not.toContain('Build plan for');
     expect(dispatch).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The pipeline says who it is, or every stage refuses it (#610 follow-up).
+ *
+ * The five stage records are marked `pipeline`, so `invocationRefusal` turns
+ * away anything that does not claim the same name — that is the lock-down
+ * which stops the main agent hand-dispatching them, which is how the
+ * interaction and microcopy stages came to have zero dispatches ever.
+ *
+ * The cost of that is one line in `runPlanner`, and dropping it breaks the
+ * whole pipeline rather than one stage. Nothing else would catch it: every
+ * test in this file mocks the dispatch, so the real gate is never reached.
+ */
+describe('the pipeline identifies itself', () => {
+  it('claims its own pipeline on every stage dispatch', async () => {
+    const dispatch = okWith({});
+    const { makeAppletPlanner, APPLET_DESIGN_PIPELINE } = await load(dispatch);
+    await makeAppletPlanner(CTX)(TARGET);
+
+    expect(dispatch.mock.calls.length).toBeGreaterThan(0);
+    for (const [args] of dispatch.mock.calls) {
+      expect(args.via, `${args.specialistId} dispatched with no via`).toEqual({
+        kind: 'pipeline',
+        pipeline: APPLET_DESIGN_PIPELINE,
+      });
+    }
+  });
+
+  it('does not claim it on behalf of anything else', async () => {
+    // The mark carries a NAME so a second pipeline cannot drive these
+    // stages. A stage dispatched under the wrong name is refused, so this
+    // pins the exact string rather than "some pipeline".
+    const dispatch = okWith({});
+    const { makeAppletPlanner } = await load(dispatch);
+    await makeAppletPlanner(CTX)(TARGET);
+    expect(dispatch.mock.calls[0][0].via.pipeline).toBe('applet-design');
+  });
+});
+
+/**
+ * A stage that answers in an unreadable shape must not go quiet.
+ *
+ * `parseStagePlan(...) ?? undefined` dropped the typed stage and said nothing,
+ * which is the quietest bug in the pipeline: the prose still lands in the
+ * spec, so the plan reads as complete, while `checkDesign` skips every rule
+ * whose stage is absent — so ONE bad payload takes the cross-stage checks down
+ * for the whole design.
+ *
+ * Measured before the fix, on an architect payload missing by one enum value:
+ * a design carrying a destructive control with no confirmation AND a control
+ * naming an action nothing declared produced **zero** issues.
+ */
+describe('a stage that does not parse', () => {
+  /** A near-miss: `intent` must be one of five verbs, and `remove` is not one. */
+  const NEAR_MISS = {
+    singleJob: 'track readings',
+    actions: [
+      {
+        id: 'delete',
+        intent: 'remove',
+        importance: 'secondary',
+        frequency: 'low',
+        risk: 'high',
+        reversible: false,
+      },
+    ],
+  };
+
+  it('says so in the spec rather than dropping it silently', async () => {
+    const { makeAppletPlanner } = await load(okWith({ 'applet-architect': NEAR_MISS }));
+    const out = await makeAppletPlanner(CTX)(TARGET);
+
+    expect(out.planned).toBe(true);
+    if (!out.planned) return;
+    expect(out.spec).toContain('could not be read');
+    expect(out.spec).toContain('scope');
+    // The prose is still there and still useful — this is the loss of the
+    // CHECKS, not a stage failure, and the two need different words.
+    expect(out.spec).toContain('## Scope');
+  });
+
+  it('leaves the typed stage out, which is what makes the notice necessary', async () => {
+    const { makeAppletPlanner } = await load(okWith({ 'applet-architect': NEAR_MISS }));
+    const out = await makeAppletPlanner(CTX)(TARGET);
+    if (!out.planned) return;
+    expect(out.design.architect).toBeUndefined();
+  });
+
+  it('says nothing when every stage parses', async () => {
+    // The guard that stops this becoming a caveat on every plan — and it
+    // needs EVERY stage supplied, because `okWith`'s fallback is a string,
+    // which is itself a contract violation for a `structuredOutput: true`
+    // record and is correctly flagged.
+    const { makeAppletPlanner } = await load(
+      okWith({
+        'applet-architect': { singleJob: 'track readings' },
+        'applet-ux-planner': { goal: 'log a reading' },
+        'applet-data-planner': { storeKeys: [{ key: 'reading' }] },
+        'applet-interaction-designer': { controls: [] },
+      }),
+    );
+    const out = await makeAppletPlanner(CTX)(TARGET);
+    if (!out.planned) return;
+    expect(out.spec).not.toContain('could not be read');
+  });
+
+  it('names each unreadable stage, not just the first', async () => {
+    const { makeAppletPlanner } = await load(
+      okWith({
+        'applet-architect': NEAR_MISS,
+        'applet-ux-planner': { rendering: 'react' }, // not one of the two values
+      }),
+    );
+    const out = await makeAppletPlanner(CTX)(TARGET);
+    if (!out.planned) return;
+    expect(out.spec).toContain('scope and interface');
+    expect(out.spec).toContain('stages');
+  });
+});
+
+/**
+ * Re-planning one stage, which is what makes the pipeline nudgeable.
+ *
+ * The alternative shape — a fixed sequence you can only run whole — cannot
+ * express "too many buttons, try the controls again", so the only way to act
+ * on a spec was to throw it away and plan from scratch.
+ */
+describe('re-running one stage', () => {
+  const PRIOR = {
+    design: { architect: { singleJob: 'log a reading' } },
+    bodies: {
+      scope: 'SCOPE-FROM-BEFORE',
+      interface: 'INTERFACE-FROM-BEFORE',
+      'data and actions': 'DATA-FROM-BEFORE',
+      controls: 'CONTROLS-FROM-BEFORE',
+    },
+  };
+
+  it('dispatches only the named stage', async () => {
+    const dispatch = okWith({});
+    const { makeAppletPlanner } = await load(dispatch);
+
+    await makeAppletPlanner(CTX)(TARGET, { only: ['controls'], prior: PRIOR });
+
+    expect(dispatch.mock.calls.map((c) => c[0].specialistId)).toEqual([
+      'applet-interaction-designer',
+    ]);
+  });
+
+  /**
+   * The reason the bodies are stashed at all.
+   *
+   * A downstream brief splices the prior stage VERBATIM so a scope cannot be
+   * paraphrased away between hops. Seeding a re-run from the typed design
+   * instead would hand this stage a SUMMARY — shorter, different, and exactly
+   * the paraphrase the verbatim splice exists to prevent.
+   */
+  it('splices the reused bodies into the re-run brief verbatim', async () => {
+    const dispatch = okWith({});
+    const { makeAppletPlanner } = await load(dispatch);
+
+    await makeAppletPlanner(CTX)(TARGET, { only: ['controls'], prior: PRIOR });
+
+    const brief = dispatch.mock.calls[0][0].input;
+    expect(brief).toContain('SCOPE-FROM-BEFORE');
+    expect(brief).toContain('INTERFACE-FROM-BEFORE');
+  });
+
+  it('keeps the untouched sections in the assembled spec', async () => {
+    const { makeAppletPlanner } = await load(okWith({}));
+    const out = await makeAppletPlanner(CTX)(TARGET, { only: ['controls'], prior: PRIOR });
+
+    expect(out.planned).toBe(true);
+    if (!out.planned) return;
+    expect(out.spec).toContain('SCOPE-FROM-BEFORE');
+    expect(out.spec).toContain('DATA-FROM-BEFORE');
+    expect(out.reused).toContain('scope');
+    expect(out.reused).toContain('data and actions');
+    expect(out.reused).not.toContain('controls');
+  });
+
+  it('runs a stage it was told to skip when there is nothing to reuse', async () => {
+    // Otherwise re-planning the controls of a plan that never had a scope
+    // produces a design with a hole in the middle and no way to say so.
+    const dispatch = okWith({});
+    const { makeAppletPlanner } = await load(dispatch);
+
+    await makeAppletPlanner(CTX)(TARGET, {
+      only: ['controls'],
+      prior: { design: {}, bodies: { controls: 'x' } },
+    });
+
+    expect(dispatch.mock.calls.map((c) => c[0].specialistId)).toContain('applet-architect');
+  });
+
+  it('carries the bodies out so the NEXT re-run can splice them', async () => {
+    const { makeAppletPlanner } = await load(okWith({ 'applet-architect': 'FRESH-SCOPE' }));
+    const out = await makeAppletPlanner(CTX)(TARGET);
+
+    expect(out.planned).toBe(true);
+    if (!out.planned) return;
+    expect(out.bodies.scope).toContain('FRESH-SCOPE');
+  });
+});
+
+describe('a nudge', () => {
+  it('reaches the stage as its own trailing section', async () => {
+    const dispatch = okWith({});
+    const { makeAppletPlanner } = await load(dispatch);
+
+    await makeAppletPlanner(CTX)(TARGET, { nudge: 'keep it to one screen', only: ['scope'] });
+
+    const brief = dispatch.mock.calls[0][0].input;
+    expect(brief).toContain('## What to change this time');
+    expect(brief).toContain('keep it to one screen');
+  });
+
+  it('goes to the named stage and nowhere else', async () => {
+    const dispatch = okWith({});
+    const { makeAppletPlanner } = await load(dispatch);
+
+    await makeAppletPlanner(CTX)(TARGET, { nudge: 'fewer primary buttons', only: ['controls'] });
+
+    for (const [args] of dispatch.mock.calls) {
+      const named = args.specialistId === 'applet-interaction-designer';
+      expect(args.input.includes('fewer primary buttons')).toBe(named);
+    }
+  });
+
+  it('never edits the scope that is passed down', async () => {
+    // The scope travels verbatim, and a nudge spliced into it would make that
+    // false — which is the one property the sequencing rests on.
+    const dispatch = okWith({ 'applet-architect': 'SCOPE-MARKER' });
+    const { makeAppletPlanner } = await load(dispatch);
+
+    await makeAppletPlanner(CTX)(TARGET, { nudge: 'denser', only: ['interface'] });
+
+    const ux = dispatch.mock.calls.find((c) => c[0].specialistId === 'applet-ux-planner')![0];
+    expect(ux.input).toContain('SCOPE-MARKER');
+    expect(ux.input.indexOf('denser')).toBeGreaterThan(ux.input.indexOf('SCOPE-MARKER'));
+  });
+
+  it('adds nothing when absent', async () => {
+    const dispatch = okWith({});
+    const { makeAppletPlanner } = await load(dispatch);
+    await makeAppletPlanner(CTX)(TARGET);
+    for (const [args] of dispatch.mock.calls) {
+      expect(args.input).not.toContain('What to change this time');
+    }
   });
 });

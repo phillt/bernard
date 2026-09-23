@@ -110,6 +110,17 @@ export interface BernardConfig {
    */
   autoStyleApplets: boolean;
   /**
+   * Whether a newly created applet is reviewed once it is open.
+   *
+   * Default ON, the same inverse default as its neighbours. The defect it
+   * fixes is that `applet-reviewer` had **no code wiring at all**: `create`
+   * called the styler and nothing called the reviewer, so an applet was
+   * checked only when the main agent happened to choose to. It runs AFTER the
+   * open, because review changes nothing and making the browser wait on it
+   * costs the seconds the applet could already have been on screen.
+   */
+  autoReviewApplets: boolean;
+  /**
    * Whether `applet plan` dispatches the three planners.
    *
    * Default ON, and the same inverse default as its two neighbours for the same
@@ -554,6 +565,7 @@ export function savePreferences(prefs: {
   autoCreateApplets?: boolean;
   autoOpenApplets?: boolean;
   autoStyleApplets?: boolean;
+  autoReviewApplets?: boolean;
   appletPlanning?: boolean;
   autoCreateThreshold?: number;
   promptRewriter?: boolean;
@@ -614,6 +626,7 @@ export function loadPreferences(): {
   autoCreateApplets?: boolean;
   autoOpenApplets?: boolean;
   autoStyleApplets?: boolean;
+  autoReviewApplets?: boolean;
   appletPlanning?: boolean;
   autoCreateThreshold?: number;
   promptRewriter?: boolean;
@@ -670,6 +683,8 @@ export function loadPreferences(): {
       typeof parsed.autoOpenApplets === 'boolean' ? parsed.autoOpenApplets : undefined,
     autoStyleApplets:
       typeof parsed.autoStyleApplets === 'boolean' ? parsed.autoStyleApplets : undefined,
+    autoReviewApplets:
+      typeof parsed.autoReviewApplets === 'boolean' ? parsed.autoReviewApplets : undefined,
     appletPlanning: typeof parsed.appletPlanning === 'boolean' ? parsed.appletPlanning : undefined,
     autoCreateThreshold:
       typeof parsed.autoCreateThreshold === 'number' ? parsed.autoCreateThreshold : undefined,
@@ -1321,6 +1336,13 @@ export function loadConfig(overrides?: {
       process.env.BERNARD_AUTO_STYLE_APPLETS === 'false' ||
       process.env.BERNARD_AUTO_STYLE_APPLETS === '0'
     );
+  // Default ON, same shape as the two above.
+  const autoReviewApplets =
+    prefs.autoReviewApplets ??
+    !(
+      process.env.BERNARD_AUTO_REVIEW_APPLETS === 'false' ||
+      process.env.BERNARD_AUTO_REVIEW_APPLETS === '0'
+    );
 
   // Default ON, same shape as the two above.
   const appletPlanning =
@@ -1499,6 +1521,7 @@ export function loadConfig(overrides?: {
     autoCreateApplets,
     autoOpenApplets,
     autoStyleApplets,
+    autoReviewApplets,
     appletPlanning,
     autoCreateThreshold,
     correctionEnabled,

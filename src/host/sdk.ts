@@ -1,3 +1,6 @@
+import { ICON_PATHS } from './icon-data.js';
+import { ICON_SIZES } from './icons.js';
+
 /**
  * The client an applet page talks to Bernard through.
  *
@@ -69,6 +72,8 @@ function build(): string {
   var STORE = '/__bernard/store';
   var VIOLATION = '/__bernard/violation';
   var FORBIDDEN_HELP = ${JSON.stringify(FORBIDDEN_HELP)};
+  var ICON_PATHS = ${JSON.stringify(ICON_PATHS)};
+  var ICON_SIZES = ${JSON.stringify(ICON_SIZES)};
 
   function BernardError(message, code) {
     var err = new Error(message);
@@ -238,6 +243,14 @@ function build(): string {
     },
     invoke: invoke,
     showError: show,
+    icon: icon,
+    // Capitalised because it is a component, and htm only resolves a tag as
+    // a value when the name is. A lowercase one would be read as an unknown
+    // HTML element and render nothing. See the applet-ui-runtime document
+    // for the spelling; it cannot be written here, because an interpolation
+    // in this comment is still an interpolation of the string this file is.
+    Icon: Icon,
+    icons: { hydrate: hydrateIcons, names: Object.keys(ICON_PATHS).sort() },
     store: {
       get: function (key) { return storeOp('get', key); },
       set: function (key, value) { return storeOp('set', key, value); },
@@ -253,6 +266,149 @@ function build(): string {
       delete: function (key) { return storeOp('delete', key); },
     },
   };
+
+  /**
+   * Everything an icon is, before it is a string or a vnode.
+   *
+   * Two renderers need the same four decisions — does the name exist, what
+   * size, what class, and the a11y rule. That last one is the one that must
+   * never diverge: hidden from assistive tech unless the caller supplies a
+   * label, because the common case is an icon beside its own text where
+   * announcing it reads as a stutter, while an icon-ONLY control must pass a
+   * title or it is unreachable. Written twice, one copy loses that.
+   *
+   * Returns null for a name the set does not have; both callers degrade.
+   */
+  function iconParts(name, opts) {
+    var body = Object.prototype.hasOwnProperty.call(ICON_PATHS, name) ? ICON_PATHS[name] : null;
+    if (body === null) return null;
+    opts = opts || {};
+    return {
+      body: body,
+      px: ICON_SIZES[opts.size] || ICON_SIZES.md,
+      // Both spellings: className is what the string form documents and
+      // class is what an htm template naturally writes on a component.
+      cls: 'icon' + (opts.className || opts.class ? ' ' + (opts.className || opts.class) : ''),
+      title: opts.title || '',
+    };
+  }
+
+  /**
+   * One icon, as SVG markup.
+   *
+   * Returns '' for a name that does not exist rather than throwing: an icon
+   * is decoration on a control that already works, and a page that dies
+   * because of a typo'd icon name is a worse outcome than a missing glyph.
+   * page-validate catches the typo at authoring time, where it is cheap.
+   */
+  function icon(name, opts) {
+    var p = iconParts(name, opts);
+    if (!p) return '';
+    var a11y = p.title
+      ? 'role="img" aria-label="' + esc(p.title) + '"'
+      : 'aria-hidden="true" focusable="false"';
+    return (
+      '<svg class="' + esc(p.cls) + '" xmlns="http://www.w3.org/2000/svg" width="' + p.px +
+      '" height="' + p.px + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+      'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ' + a11y + '>' +
+      p.body + '</svg>'
+    );
+  }
+
+  /**
+   * The same icon, as a Preact vnode, for a page built on the UI runtime.
+   *
+   * **Neither existing spelling works there, which is why this exists.**
+   * bernard.icon() returns a STRING, and bernard.icons.hydrate() sets
+   * innerHTML on a node Preact owns — so the next render throws the glyph
+   * away and nothing re-hydrates. A page with a changing list and more than
+   * four controls is exactly the shape UI_RUNTIME_RULE sends to the runtime,
+   * and it was the one shape that could not use the icon set at all.
+   *
+   * There is no wrapper element: the markup rides dangerouslySetInnerHTML
+   * on the <svg> itself, so the glyph is the flex item a button lays out,
+   * exactly as the string spelling produces. A wrapping <span> would need
+   * display: contents to stay out of the way, which is a second rule and a
+   * second thing to get wrong.
+   *
+   * The runtime is resolved **at call time, not at load**. sdk.js and
+   * ui.js are two classic scripts with no guaranteed order, so a reference
+   * captured when this module evaluates may be undefined forever — but a
+   * component renders long after both have run. Returns null when the runtime
+   * is absent, which on a plain HTML page is the correct answer rather than
+   * an error.
+   */
+  function Icon(props) {
+    var rt = typeof window !== 'undefined' ? window.htmPreact : null;
+    if (!rt || typeof rt.h !== 'function') return null;
+    var p = iconParts(props && props.name, props);
+    if (!p) return null;
+    var attrs = {
+      class: p.cls,
+      xmlns: 'http://www.w3.org/2000/svg',
+      width: p.px,
+      height: p.px,
+      viewBox: '0 0 24 24',
+      fill: 'none',
+      stroke: 'currentColor',
+      'stroke-width': '2',
+      'stroke-linecap': 'round',
+      'stroke-linejoin': 'round',
+      dangerouslySetInnerHTML: { __html: p.body },
+    };
+    if (p.title) {
+      attrs.role = 'img';
+      attrs['aria-label'] = p.title;
+    } else {
+      attrs['aria-hidden'] = 'true';
+      attrs.focusable = 'false';
+    }
+    return rt.h('svg', attrs);
+  }
+
+  function esc(v) {
+    return String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  /**
+   * Replaces every <span data-icon="name"> under root with its markup.
+   *
+   * The declarative half, and the one that matters most: the default applet
+   * is plain HTML with no rendering code, so an icon API that could only be
+   * reached from JavaScript would go unused there. Writing
+   * <span data-icon="search"></span> needs no script of the author's own.
+   *
+   * Runs on DOMContentLoaded and is re-callable after any dynamic render.
+   * Marks what it has done, so calling it twice is free.
+   */
+  function hydrateIcons(root) {
+    var scope = root || (typeof document === 'undefined' ? null : document);
+    // Tolerant of a host with no queryable DOM. The SDK is a classic script
+    // that runs the moment it loads, so this fires before the page has said
+    // anything about itself — and it must not be able to take the whole
+    // client down with it. Every other member of bernard is unreachable if
+    // this throws at load.
+    if (!scope || typeof scope.querySelectorAll !== 'function') return 0;
+    var nodes = scope.querySelectorAll('[data-icon]:not([data-icon-done])');
+    for (var i = 0; i < nodes.length; i += 1) {
+      var el = nodes[i];
+      var markup = icon(el.getAttribute('data-icon'), {
+        size: el.getAttribute('data-icon-size') || undefined,
+        title: el.getAttribute('data-icon-title') || undefined,
+      });
+      if (!markup) continue;
+      el.innerHTML = markup;
+      el.setAttribute('data-icon-done', '');
+    }
+    return nodes.length;
+  }
+
+  if (typeof document !== 'undefined' && document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () { hydrateIcons(); });
+  } else {
+    hydrateIcons();
+  }
 
   window.bernard = bernard;
 })();

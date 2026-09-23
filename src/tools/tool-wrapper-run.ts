@@ -1,5 +1,5 @@
 import type { Tool } from '../framework/sdk.js';
-import { invocationRefusal } from '../specialist-authority.js';
+import { invocationRefusal, type InvocationVia } from '../specialist-authority.js';
 import { z } from 'zod';
 import { createTools } from './index.js';
 import { resolveProviderAndModel } from '../config.js';
@@ -10,6 +10,7 @@ import { captureToolCalls, captureLastToolCall, metaLookup } from './capture-too
 import { createSpecialistRunTool } from './specialist-run.js';
 import { printSpecialistStart, printSpecialistEnd } from '../output.js';
 import { debugLog } from '../logger.js';
+import { APPLET_DESIGN_PIPELINE } from '../apps/design-model.js';
 import {
   withSlot,
   getMaxConcurrentAgents,
@@ -114,6 +115,34 @@ export async function verifyWrapperClaims(
   };
 }
 
+/**
+ * The tools that drive a named pipeline, keyed on the name the pipeline's own
+ * records declare — so a second pipeline is one entry, the set of drivable
+ * pipelines is written down in one place, and renaming one cannot leave its
+ * driver silently tool-less. Each entry's import is deferred so the pipeline's
+ * graph does not reach every dispatch.
+ */
+const PIPELINE_TOOLS: Record<string, (ctx: AgentContext) => Promise<Record<string, Tool>>> = {
+  [APPLET_DESIGN_PIPELINE]: async (ctx) => {
+    const { createAppletDesignTool } = await import('./applet-design-tool.js');
+    return { applet_design: createAppletDesignTool(ctx) };
+  },
+};
+
+async function buildPipelineTools(
+  pipeline: string,
+  ctx: AgentContext,
+): Promise<Record<string, Tool>> {
+  const build = Object.prototype.hasOwnProperty.call(PIPELINE_TOOLS, pipeline)
+    ? PIPELINE_TOOLS[pipeline]
+    : undefined;
+  if (!build) {
+    debugLog('dispatch:unknown-pipeline', { pipeline });
+    return {};
+  }
+  return build(ctx);
+}
+
 /** Per-call inputs to a tool-wrapper dispatch. */
 export interface DispatchToolWrapperArgs {
   specialistId: string;
@@ -149,6 +178,19 @@ export interface DispatchToolWrapperArgs {
    * never made.
    */
   skipCorrectionEnqueue?: boolean;
+
+  /**
+   * Who is dispatching, for {@link invocationRefusal}. Defaults to a plain
+   * tool call, which is what every existing caller is.
+   *
+   * **This must never become a tool parameter.** It is the channel a pipeline
+   * uses to say it is the pipeline, and a record marked `pipeline` refuses
+   * everything else — so a model able to set it could name any pipeline and
+   * walk straight back through the gate. It lives on this TypeScript
+   * interface, which `tool_wrapper_run`'s zod schema does not reach;
+   * `skipCorrectionEnqueue` above is the same shape for the same reason.
+   */
+  via?: InvocationVia;
 }
 
 /**
@@ -230,7 +272,7 @@ export async function dispatchToolWrapper(
       error: 'not_found',
     };
   }
-  const refusal = invocationRefusal(specialist, { kind: 'tool' });
+  const refusal = invocationRefusal(specialist, args.via ?? { kind: 'tool' });
   if (refusal) {
     return { status: 'error', result: refusal.message, error: refusal.code };
   }
@@ -350,8 +392,22 @@ export async function dispatchToolWrapper(
                 max: MAX_DISPATCH_DEPTH,
               });
             }
+            /**
+             * The tool a pipeline DRIVER holds, merged in for that record alone.
+             *
+             * Deliberately not added to `buildDispatchOverlay`: that function's
+             * guard is that it constructs no applet tool at all, and putting a
+             * key there then subtracting it in `main.ts` would restore exactly
+             * the "two lists differing by one key" premise its comment records
+             * removing.
+             *
+             * Declaration-driven and unforgeable — `create` copies an explicit
+             * field list, `update` has an explicit allowlist, and neither names
+             * `drives`.
+             */
             const fullRegistry: Record<string, Tool> = {
               ...baseTools,
+              ...(specialist.drives ? await buildPipelineTools(specialist.drives, ctx) : {}),
               ...(depth < MAX_DISPATCH_DEPTH ? buildDispatchOverlay(ctx) : {}),
             };
             const childTools = buildChildTools(specialist, fullRegistry, ctx.mcp.resolveAlias);

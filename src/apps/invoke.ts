@@ -345,6 +345,33 @@ export async function invokeAction(opts: InvokeActionOptions): Promise<Invocatio
   };
 
   /**
+   * A deferred `import()` that failed to LOAD, reported as an ordinary run
+   * failure rather than allowed to escape.
+   *
+   * This function's contract is that it never throws, and both its log row
+   * and the notice it puts in front of a running REPL hang off {@link fail}.
+   * The two `await import(...)` calls below sat outside every try, so a
+   * module-load failure escaped all of it: the caller got whatever its own
+   * catch-all produced, `bernard app logs` recorded nothing at all, and
+   * nobody was told. Observed against a nine-day-old applet host, where every
+   * button answered `500` and the invocation log showed only successes — see
+   * `src/build-stamp.ts` for why the load fails.
+   *
+   * `run_failed` rather than a new code: the work genuinely did not run, exit
+   * 1 ("retry might help") is the honest status for a stale process that a
+   * restart fixes, and it is one of the two codes {@link fail} classifies and
+   * therefore notifies on. A request-shaped code would be a lie about whose
+   * fault it is AND would silently skip the notification.
+   */
+  const failModuleLoad = (specifier: string, err: unknown): InvocationResult =>
+    fail(
+      'run_failed',
+      `Could not load ${specifier}: ${err instanceof Error ? err.message : String(err)}. ` +
+        'This usually means Bernard was rebuilt or upgraded while this process was running. ' +
+        'Restarting it picks up the new build.',
+    );
+
+  /**
    * The single success path, the sibling of {@link fail}.
    *
    * The two arms had hand-rolled this envelope and its log row, and had
@@ -387,170 +414,197 @@ export async function invokeAction(opts: InvokeActionOptions): Promise<Invocatio
     };
   };
 
-  const registry = new AppRegistry();
-  const resolved = resolveFromManifest(registry, opts.appId, opts.action, opts.args);
-  if (!resolved.ok) return fail(resolved.failure.kind, resolved.failure.message);
+  /**
+   * "Never throws" is a property of the FUNCTION, not of the two `import()`
+   * lines that happen to be wrapped. Anything below that throws — a registry
+   * read, a store lookup, a dispatch that rejects instead of returning
+   * `{ok: false}` — would otherwise skip the invocation log and the session
+   * notice, which is exactly the shape the module-load incident had: the
+   * caller got a stack trace and `bernard app logs` got nothing. The two
+   * narrow tries stay because they know the specifier and can name the
+   * remedy; this one catches what they cannot see.
+   */
+  try {
+    const registry = new AppRegistry();
+    const resolved = resolveFromManifest(registry, opts.appId, opts.action, opts.args);
+    if (!resolved.ok) return fail(resolved.failure.kind, resolved.failure.message);
 
-  const { invocation } = resolved;
-  const argKeys = Object.keys(invocation.frozenArgs);
-  const timeoutMs = effectiveTimeoutMs(invocation.action.timeoutMs, opts.timeoutMs);
-  const dispatch = invocation.action.dispatch;
+    const { invocation } = resolved;
+    const argKeys = Object.keys(invocation.frozenArgs);
+    const timeoutMs = effectiveTimeoutMs(invocation.action.timeoutMs, opts.timeoutMs);
+    const dispatch = invocation.action.dispatch;
 
-  /** Everything both arms log, plus the one field that names which arm ran. */
-  const logInvoke = (arm: Record<string, string>): void =>
-    debugLog('script:invoke', {
-      invocationId,
-      appId: invocation.appId,
-      action: invocation.actionName,
-      // Names only, never values: args carry the caller's data and the debug
-      // log is not the place for it.
-      argKeys,
-      ...arm,
-      toolMode: invocation.action.toolMode,
-      timeoutMs,
-      capabilityId,
-    });
+    /** Everything both arms log, plus the one field that names which arm ran. */
+    const logInvoke = (arm: Record<string, string>): void =>
+      debugLog('script:invoke', {
+        invocationId,
+        appId: invocation.appId,
+        action: invocation.actionName,
+        // Names only, never values: args carry the caller's data and the debug
+        // log is not the place for it.
+        argKeys,
+        ...arm,
+        toolMode: invocation.action.toolMode,
+        timeoutMs,
+        capabilityId,
+      });
 
-  // The deterministic tier (#445). Branches before anything agent-shaped is
-  // touched — no specialist lookup, no MCP connect, no RAG store, no model —
-  // because the whole value of this arm is that it costs nothing.
-  if (dispatch.kind === 'tool') {
-    logInvoke({ tool: dispatch.tool });
-    const { dispatchToolAction } = await import('./tool-dispatch.js');
-    const run = await dispatchToolAction({
+    // The deterministic tier (#445). Branches before anything agent-shaped is
+    // touched — no specialist lookup, no MCP connect, no RAG store, no model —
+    // because the whole value of this arm is that it costs nothing.
+    if (dispatch.kind === 'tool') {
+      logInvoke({ tool: dispatch.tool });
+      let dispatchToolAction: typeof import('./tool-dispatch.js').dispatchToolAction;
+      try {
+        ({ dispatchToolAction } = await import('./tool-dispatch.js'));
+      } catch (err) {
+        return failModuleLoad('./tool-dispatch.js', err);
+      }
+      const run = await dispatchToolAction({
+        invocation,
+        dispatch,
+        timeoutMs,
+        abortSignal: opts.abortSignal,
+      });
+      const toolDispatched = { argKeys, tool: dispatch.tool, toolsGranted: [dispatch.tool] };
+      if (!run.ok) {
+        // `invalid` is a broken manifest — an ineligible tool, or a mapping the
+        // tool's own schema rejects — and must read as a request failure (exit
+        // 2) rather than a run that might succeed on retry.
+        return run.kind === 'invalid'
+          ? fail('invalid_manifest', run.message, toolDispatched)
+          : fail(run.timedOut ? 'timeout' : 'run_failed', run.message, toolDispatched);
+      }
+      return succeed(
+        invocation.appId,
+        invocation.actionName,
+        run.result,
+        { dispatch: 'tool', tool: dispatch.tool, stepLimitHit: false, mcpConnectMs: 0 },
+        toolDispatched,
+      );
+    }
+
+    // Pre-flight: an action naming a specialist that does not exist is a broken
+    // manifest, not a failed run — the caller should see a request-shaped
+    // failure, and no model call should be billed for it.
+    const specialist = new SpecialistStore().get(dispatch.specialistId);
+    // The INVERTED case: permits the specialist bound to exactly this
+    // (appId, action) and refuses everyone else. Shared with the two tool
+    // dispatches so the inversion is expressed once as data — an inverted
+    // duplicate of a rule is precisely where two copies drift apart.
+    //
+    // It also brings `disabled` to this path for the first time: an applet
+    // action dispatches through `runHeadless`, not `dispatchToolWrapper`, so a
+    // specialist the user disabled in `/specialists` was still running behind
+    // every applet button.
+    const refusal = specialist
+      ? invocationRefusal(specialist, {
+          kind: 'app',
+          appId: invocation.appId,
+          action: invocation.actionName,
+        })
+      : null;
+    if (refusal) {
+      return fail(
+        refusal.code === 'disabled' ? 'specialist_unavailable' : 'specialist_not_bound',
+        refusal.message,
+      );
+    }
+    if (!specialist) {
+      return fail(
+        'unknown_specialist',
+        `Action "${opts.action}" names specialist "${dispatch.specialistId}", which does not exist.`,
+      );
+    }
+
+    // What the action actually gets, not what it declared. Through the same
+    // function `buildActionTools` uses, because a log that overstates the grant
+    // is worse than no log — and this is the audit trail.
+    const toolsGranted = grantedToolNames(invocation.action, specialist.targetTools);
+
+    logInvoke({ specialistId: dispatch.specialistId });
+
+    // The same id `runHeadless` namespaces its debug lines with, so
+    // `script:mcp:ready` joins the invocation record rather than naming a run
+    // that appears nowhere else.
+    // Deferred for the same reason the tool arm above is (#452): `dispatch.ts`
+    // statically imports `createTools`, so importing it at module load made
+    // `bernard script` pay for the whole agent runtime BEFORE reaching the
+    // `kind === 'tool'` branch that exists to avoid exactly that. Measured 168 ms
+    // on `apps/invoke.js` against 76 for the worker path.
+    let dispatchAction: typeof import('./dispatch.js').dispatchAction;
+    try {
+      ({ dispatchAction } = await import('./dispatch.js'));
+    } catch (err) {
+      return failModuleLoad('./dispatch.js', err);
+    }
+    const run: DispatchActionResult = await dispatchAction({
       invocation,
-      dispatch,
+      specialist,
       timeoutMs,
+      log,
+      runId: invocationId,
       abortSignal: opts.abortSignal,
     });
-    const toolDispatched = { argKeys, tool: dispatch.tool, toolsGranted: [dispatch.tool] };
+
+    // Both halves of the intersection, deliberately (#461). `toolsGranted` alone
+    // is the load-bearing signal — the observed failure declared
+    // `toolAllowlist: ['datetime']` and got an EMPTY grant because the backing
+    // specialist targeted none of it, then answered "No datetime tool
+    // available". Logging only the declared list would have read as fine; only
+    // the pair makes the gap computable at read time.
+    const dispatched = {
+      argKeys,
+      specialistId: dispatch.specialistId,
+      toolAllowlist: invocation.action.toolAllowlist,
+      toolsGranted,
+    };
+
     if (!run.ok) {
-      // `invalid` is a broken manifest — an ineligible tool, or a mapping the
-      // tool's own schema rejects — and must read as a request failure (exit
-      // 2) rather than a run that might succeed on retry.
-      return run.kind === 'invalid'
-        ? fail('invalid_manifest', run.message, toolDispatched)
-        : fail(run.timedOut ? 'timeout' : 'run_failed', run.message, toolDispatched);
+      return fail(
+        run.timedOut ? 'timeout' : 'run_failed',
+        run.timedOut ? `Action timed out after ${run.timeoutMs} ms` : run.error,
+        { ...dispatched, mcpConnectMs: run.timings.mcpConnectMs },
+      );
     }
+
+    const wrapper = run.formatted;
+    if (wrapper.status !== 'ok') {
+      // `parse_failed` alone is unfalsifiable, and the answer was already here:
+      // `wrapWrapperResult` puts the text that would not parse into
+      // `reasoning[0]`, and this line used to read `error` and drop it. Same
+      // shape as #461 — the message computed and thrown away — one layer up.
+      const detail =
+        wrapper.error === 'parse_failed'
+          ? describeParseFailure(wrapper.reasoning)
+          : (wrapper.error ?? 'The action reported a failure with no message.');
+      return fail('run_failed', detail, {
+        ...dispatched,
+        mcpConnectMs: run.timings.mcpConnectMs,
+        stepLimitHit: run.stepLimitHit,
+      });
+    }
+
     return succeed(
       invocation.appId,
       invocation.actionName,
-      run.result,
-      { dispatch: 'tool', tool: dispatch.tool, stepLimitHit: false, mcpConnectMs: 0 },
-      toolDispatched,
+      wrapper.result,
+      {
+        dispatch: 'agent',
+        specialistId: dispatch.specialistId,
+        stepLimitHit: run.stepLimitHit,
+        mcpConnectMs: run.timings.mcpConnectMs,
+      },
+      // Deduped: one refused tool called six times is one missing capability,
+      // and the log row answers "what could this action not do", not "how often".
+      run.denied.length > 0
+        ? { ...dispatched, denied: [...new Set(run.denied.map((d) => d.permissionKey ?? d.tool))] }
+        : dispatched,
     );
-  }
-
-  // Pre-flight: an action naming a specialist that does not exist is a broken
-  // manifest, not a failed run — the caller should see a request-shaped
-  // failure, and no model call should be billed for it.
-  const specialist = new SpecialistStore().get(dispatch.specialistId);
-  // The INVERTED case: permits the specialist bound to exactly this
-  // (appId, action) and refuses everyone else. Shared with the two tool
-  // dispatches so the inversion is expressed once as data — an inverted
-  // duplicate of a rule is precisely where two copies drift apart.
-  //
-  // It also brings `disabled` to this path for the first time: an applet
-  // action dispatches through `runHeadless`, not `dispatchToolWrapper`, so a
-  // specialist the user disabled in `/specialists` was still running behind
-  // every applet button.
-  const refusal = specialist
-    ? invocationRefusal(specialist, {
-        kind: 'app',
-        appId: invocation.appId,
-        action: invocation.actionName,
-      })
-    : null;
-  if (refusal) {
+  } catch (err) {
     return fail(
-      refusal.code === 'disabled' ? 'specialist_unavailable' : 'specialist_not_bound',
-      refusal.message,
+      'run_failed',
+      `Unexpected failure: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
-  if (!specialist) {
-    return fail(
-      'unknown_specialist',
-      `Action "${opts.action}" names specialist "${dispatch.specialistId}", which does not exist.`,
-    );
-  }
-
-  // What the action actually gets, not what it declared. Through the same
-  // function `buildActionTools` uses, because a log that overstates the grant
-  // is worse than no log — and this is the audit trail.
-  const toolsGranted = grantedToolNames(invocation.action, specialist.targetTools);
-
-  logInvoke({ specialistId: dispatch.specialistId });
-
-  // The same id `runHeadless` namespaces its debug lines with, so
-  // `script:mcp:ready` joins the invocation record rather than naming a run
-  // that appears nowhere else.
-  // Deferred for the same reason the tool arm above is (#452): `dispatch.ts`
-  // statically imports `createTools`, so importing it at module load made
-  // `bernard script` pay for the whole agent runtime BEFORE reaching the
-  // `kind === 'tool'` branch that exists to avoid exactly that. Measured 168 ms
-  // on `apps/invoke.js` against 76 for the worker path.
-  const { dispatchAction } = await import('./dispatch.js');
-  const run: DispatchActionResult = await dispatchAction({
-    invocation,
-    specialist,
-    timeoutMs,
-    log,
-    runId: invocationId,
-    abortSignal: opts.abortSignal,
-  });
-
-  // Both halves of the intersection, deliberately (#461). `toolsGranted` alone
-  // is the load-bearing signal — the observed failure declared
-  // `toolAllowlist: ['datetime']` and got an EMPTY grant because the backing
-  // specialist targeted none of it, then answered "No datetime tool
-  // available". Logging only the declared list would have read as fine; only
-  // the pair makes the gap computable at read time.
-  const dispatched = {
-    argKeys,
-    specialistId: dispatch.specialistId,
-    toolAllowlist: invocation.action.toolAllowlist,
-    toolsGranted,
-  };
-
-  if (!run.ok) {
-    return fail(
-      run.timedOut ? 'timeout' : 'run_failed',
-      run.timedOut ? `Action timed out after ${run.timeoutMs} ms` : run.error,
-      { ...dispatched, mcpConnectMs: run.timings.mcpConnectMs },
-    );
-  }
-
-  const wrapper = run.formatted;
-  if (wrapper.status !== 'ok') {
-    // `parse_failed` alone is unfalsifiable, and the answer was already here:
-    // `wrapWrapperResult` puts the text that would not parse into
-    // `reasoning[0]`, and this line used to read `error` and drop it. Same
-    // shape as #461 — the message computed and thrown away — one layer up.
-    const detail =
-      wrapper.error === 'parse_failed'
-        ? describeParseFailure(wrapper.reasoning)
-        : (wrapper.error ?? 'The action reported a failure with no message.');
-    return fail('run_failed', detail, {
-      ...dispatched,
-      mcpConnectMs: run.timings.mcpConnectMs,
-      stepLimitHit: run.stepLimitHit,
-    });
-  }
-
-  return succeed(
-    invocation.appId,
-    invocation.actionName,
-    wrapper.result,
-    {
-      dispatch: 'agent',
-      specialistId: dispatch.specialistId,
-      stepLimitHit: run.stepLimitHit,
-      mcpConnectMs: run.timings.mcpConnectMs,
-    },
-    // Deduped: one refused tool called six times is one missing capability,
-    // and the log row answers "what could this action not do", not "how often".
-    run.denied.length > 0
-      ? { ...dispatched, denied: [...new Set(run.denied.map((d) => d.permissionKey ?? d.tool))] }
-      : dispatched,
-  );
 }

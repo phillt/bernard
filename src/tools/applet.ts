@@ -8,6 +8,7 @@ import { defaultAppletPage } from '../apps/page-template.js';
 import { SpecialistStore, type Specialist } from '../specialists.js';
 import { directInvocableRefusalByName, toolArgRefusal } from '../apps/direct-tool.js';
 import type { AppletStyler, StyleOutcome } from './applet-styling.js';
+import type { AppletReviewer, ReviewOutcome } from './applet-review.js';
 import type { AppletPlanner, PlanTarget } from './applet-planning.js';
 import { AppletBriefStore } from '../apps/brief-store.js';
 import {
@@ -40,6 +41,12 @@ import {
   type RawAppManifest,
 } from '../apps/manifest.js';
 import { defineTool } from '../framework/tools/define-tool.js';
+import { claimDesign, issuePlanId, peekPlan } from '../apps/design-stash.js';
+import { checkPageAgainstDesign } from '../apps/design-page-check.js';
+import { plural } from '../text.js';
+import { PLAN_STAGES } from '../apps/design-model.js';
+import { debugLog } from '../logger.js';
+import type { AppletDesigner } from './applet-builder.js';
 
 /**
  * `applet` — authoring the small local web apps Bernard serves.
@@ -181,6 +188,35 @@ const PARAMETERS = z.object({
         '. Supply what you actually know; an empty string clears a field. Set on `create` and ' +
         'edit with `brief`.',
     ),
+  stages: z
+    .array(z.enum(PLAN_STAGES))
+    .optional()
+    .describe(
+      'For `plan` only: re-run just these stages and reuse the rest from the plan named by ' +
+        '`planId`. Omit to plan everything from scratch. Use this after reading a spec — ' +
+        '"too many primary buttons" is a `controls` re-run, not a whole new plan, and the ' +
+        'stages you keep contribute exactly the bytes they did the first time.',
+    ),
+  nudge: z
+    .string()
+    .max(600)
+    .optional()
+    .describe(
+      'For `plan` only: what to do differently, in your own words. Applied to every stage ' +
+        'being run, as its own section at the end of the brief — it never edits the scope or ' +
+        "a prior stage's output, both of which are passed down verbatim on purpose.",
+    ),
+  planId: z
+    .string()
+    .optional()
+    .describe(
+      'On `plan`, the id of a plan to build on — the stages you do not re-run come from it. ' +
+        'On `create`, the id `plan` returned. Pass it to `create` so the design the planners produced is ' +
+        'stored with the applet, rather than being re-derived by whoever edits it next. ' +
+        'Without it the design pass has nothing to read, so the page is built and styled ' +
+        'from prose alone — which is how an applet ends up with no icons and every button ' +
+        'looking equally important.',
+    ),
   note: z
     .string()
     .max(MAX_NOTE_CHARS)
@@ -289,8 +325,22 @@ export interface AppletToolDeps {
   requestConsent?: ToolOptions['requestPermissionConsent'];
   /** The design pass. Absent on every instance `createTools` builds. */
   style?: AppletStyler;
+  /**
+   * The review pass. Absent from a dispatched specialist's registry, which is
+   * the recursion guard — see `applet-review.ts`.
+   */
+  review?: AppletReviewer;
   /** The planning pass. Absent for the same reason, and it is the same guard. */
   plan?: AppletPlanner;
+  /**
+   * The agent that DRIVES the pipeline, when one is available.
+   *
+   * Preferred over `plan` because it reads the spec back and re-runs the one
+   * stage that got it wrong — which the pipeline alone cannot do, having no
+   * judgement in it. Falls back to `plan` when absent, so a context with no
+   * designer still plans rather than refusing.
+   */
+  design?: AppletDesigner;
 }
 
 export function createAppletTool(registry?: AppRegistry, deps: AppletToolDeps = {}) {
@@ -361,7 +411,13 @@ async function run(
   deps: AppletToolDeps,
   abortSignal?: AbortSignal,
 ): Promise<string> {
-  const { requestConsent, style: styleApplet, plan: planApplet } = deps;
+  const {
+    requestConsent,
+    style: styleApplet,
+    review: reviewApplet,
+    plan: planApplet,
+    design: designApplet,
+  } = deps;
   switch (args.action) {
     case 'list': {
       const ids = store.listIds();
@@ -407,6 +463,16 @@ async function run(
         declaresLinkPermission: manifest.permissions?.sandbox !== undefined,
         files: args.files ?? {},
       });
+      /**
+       * Does the page agree with the plan it was built from?
+       *
+       * Peeked rather than claimed: the claim happens below and is
+       * destructive, so reading it here would leave the brief write with
+       * nothing. Warnings only — see `design-page-check.ts` for why none of
+       * this is decidable with certainty.
+       */
+      const plannedDesign = peekPlan(args.planId)?.design;
+      if (plannedDesign) issues.push(...checkPageAgainstDesign(page, plannedDesign));
       const refusal = refusalFor(issues);
       if (refusal) return refusal;
 
@@ -419,7 +485,16 @@ async function run(
       // one whose next editor re-derives intent from the page, which is the
       // defect. Before consent for the same reason the write is — nothing
       // below can turn a successful create into a failed tool call.
-      if (args.intent) briefStore().write(created.id, { intent: args.intent });
+      // The design and the intent land together: both are "what this applet is
+      // for", and an applet whose brief half-landed is one whose next editor
+      // trusts the half that did.
+      const design = claimDesign(args.planId);
+      if (args.intent || design) {
+        briefStore().write(created.id, {
+          ...(args.intent ? { intent: args.intent } : {}),
+          ...(design ? { design } : {}),
+        });
+      }
       // A warning, not a refusal: `create` has to stay usable from a test and
       // from someone who knows exactly what they want, and the failure is
       // visible — a thinner applet — rather than silent.
@@ -427,6 +502,29 @@ async function run(
         ? ''
         : ' No design brief — nothing records what this is for, so the next edit ' +
           'starts from the HTML. Use `interview` before building next time.';
+      /**
+       * The design half of the same warning.
+       *
+       * `noIntent` checks `intent`, and nothing checked `design` — which is
+       * why the applet that prompted all of this produced no warning at all.
+       * The agent hand-wrote an intent, so the one guard that existed was
+       * satisfied, while the design that decides variants and icons was
+       * absent and the styling pass had nothing to read.
+       *
+       * A stale or already-claimed `planId` is NAMED rather than refused. The
+       * stash holds eight entries in memory and `claimDesign` deletes on read,
+       * so an id from an earlier process, the ninth plan of a session, or a
+       * retried `create` is indistinguishable from a typo — and refusing would
+       * make the applet unbuildable over bookkeeping.
+       */
+      const noDesign = design
+        ? ''
+        : args.planId
+          ? ` The \`planId\` "${args.planId}" matched no stored plan — it may be from an earlier ` +
+            'session, or already claimed. The applet was built, but no design was kept: ' +
+            're-run `plan` if the styling pass needs one.'
+          : ' No design was stored, so the styling pass has only the page and the brief to work ' +
+            'from. Run `plan` first and pass its `planId` to keep one.';
       const consent = await askForPermissions(created.id, created.name, manifest, requestConsent);
       // BEFORE `openedNote`, which is what opens the browser: styling after
       // the open would show the scaffold and make the user refresh. The applet
@@ -434,6 +532,12 @@ async function run(
       // a failed tool call — the rule `askForPermissions` and `openedNote`
       // already follow.
       const styled = await styleNote(created, styleApplet, abortSignal);
+      // The open comes BEFORE the review, deliberately: review changes
+      // nothing, so making the browser wait on it costs the seconds the
+      // applet could already have been on screen. Styling is the opposite and
+      // runs above, or the user is shown a scaffold and has to refresh.
+      const opened = await openedNote(created.id);
+      const reviewed = await reviewNote(created, reviewApplet, abortSignal);
       return (
         `Applet "${created.name}" (${created.id}) created with ` +
         `${Object.keys(created.actions).length} action(s).` +
@@ -441,9 +545,11 @@ async function run(
         consent +
         styled +
         noIntent +
+        noDesign +
         warningsFor(issues) +
         formatWarnings(dispatch.warnings) +
-        (await openedNote(created.id))
+        opened +
+        reviewed
       );
     }
     case 'update': {
@@ -485,6 +591,12 @@ async function run(
             declaresLinkPermission: manifest.permissions?.sandbox !== undefined,
             files: shippedFiles,
           });
+          // The styler's own door, and where the contradiction was written on
+          // the first real run: the plan said `mark_bought` was secondary and
+          // the page marked it primary, inside a template that rendered it
+          // once per item.
+          const storedDesign = briefStore().read(id).design;
+          if (storedDesign) issues.push(...checkPageAgainstDesign(servedPage, storedDesign));
           const refusal = refusalFor(issues);
           if (refusal) return refusal;
         }
@@ -624,10 +736,78 @@ async function run(
         description: args.description ?? '',
         intent,
       };
-      const outcome = await planApplet(target, abortSignal);
-      return outcome.planned
-        ? outcome.spec
-        : `Error: planning did not run (${outcome.reason}). ${buildDirectly}`;
+      // The schema is `z.enum(PLAN_STAGES)`, so an unknown stage never
+      // reaches here; the driver cannot be handed a name the pipeline lacks.
+      const stages = args.stages;
+
+      /**
+       * The driver first, when there is one.
+       *
+       * It reads the spec back and re-runs the one stage that got it wrong,
+       * which the pipeline alone cannot do — there is no judgement in a
+       * sequence. Its answer already carries the spec, the problems and the
+       * `planId` line, so this passes it straight through rather than
+       * re-deriving any of them.
+       *
+       * Falls through to the pipeline when the driver is absent or its
+       * dispatch failed: a design is better than none, and a failed driver
+       * must not mean a failed plan.
+       */
+      if (designApplet) {
+        const designed = await designApplet(target, {
+          ...(stages?.length ? { stages } : {}),
+          ...(args.nudge ? { nudge: args.nudge } : {}),
+          ...(args.planId ? { planId: args.planId } : {}),
+          ...(abortSignal ? { signal: abortSignal } : {}),
+        });
+        if (designed.designed) return designed.text;
+        debugLog('applet:design:fallback', { name: target.name, reason: designed.reason });
+      }
+
+      /**
+       * A re-plan builds on the plan it was given.
+       *
+       * `peekPlan` rather than `claimDesign`: this reads the plan, replans
+       * part of it and stashes the result, so claiming would destroy the very
+       * plan being revised and the second re-run of a session would find
+       * nothing.
+       */
+      const prior = peekPlan(args.planId);
+      const outcome = await planApplet(target, {
+        ...(abortSignal ? { signal: abortSignal } : {}),
+        ...(stages?.length ? { only: [...stages] } : {}),
+        ...(args.nudge ? { nudge: args.nudge } : {}),
+        ...(prior ? { prior } : {}),
+      });
+      if (!outcome.planned) {
+        return `Error: planning did not run (${outcome.reason}). ${buildDirectly}`;
+      }
+      /**
+       * A plan with refusals standing does not get an id, so it cannot be
+       * built from — `issuePlanId` is the mint and owns that rule.
+       *
+       * The enforcement belongs at the mint and not at `create`, and the
+       * reason is that the stash is immutable: by the time `create` runs, the
+       * model holds a finished page and a design it cannot edit, so a refusal
+       * there leaves it two moves — re-plan and lose the page, or pass a
+       * `force` flag, which is one token and would become reflex. At this
+       * point the plan is the only artifact and re-running a stage is the
+       * obvious fix. The spec already lists every problem under "Problems
+       * found in this plan", so nothing new has to be said about them.
+       */
+      const issued = issuePlanId(outcome.design, outcome.bodies);
+      if (issued.blocked) {
+        return (
+          `${outcome.spec}\n\n` +
+          `**No \`planId\` was issued** — ${issued.blocked.length} ` +
+          `${plural(issued.blocked.length, 'problem', 'problems')} above must be fixed first, or the ` +
+          'applet is built from a plan that is already known to be wrong. Re-run `plan` once ' +
+          'you have decided how to resolve them.'
+        );
+      }
+      // The id is how the design reaches `create` without the model retyping
+      // it — see `stashDesign`.
+      return `${outcome.spec}\n\nPass \`planId: "${issued.planId}"\` to \`create\` so this plan is kept with the applet.`;
     }
     case 'style': {
       const id = need(args.id, 'id', 'style');
@@ -831,7 +1011,7 @@ function grantHint(appId: string, actions: string[]): string {
  * gets it wrong.
  */
 async function appletFlag(
-  key: 'autoOpenApplets' | 'autoStyleApplets' | 'appletPlanning',
+  key: 'autoOpenApplets' | 'autoStyleApplets' | 'autoReviewApplets' | 'appletPlanning',
 ): Promise<boolean | undefined> {
   try {
     const { loadConfig } = await import('../config.js');
@@ -923,6 +1103,42 @@ async function styleNote(
   // Named, not swallowed. "It looks unstyled" with no reason is the report
   // that costs someone an afternoon.
   return ` It has the default page — the design pass did not run (${outcome.reason}).`;
+}
+
+/**
+ * Runs the review pass and reports it, or says why it did not run.
+ *
+ * Gated by `autoReviewApplets`, read the way `styleNote` reads
+ * `autoStyleApplets` — lazily, inside a `try`, because `loadConfig` throws
+ * with no provider key, and with no key there is no model to dispatch anyway.
+ *
+ * Its own try for the reason `styleNote` has one: the applet is on disk and
+ * already open by this point, so a throw reaching `execute`'s catch would
+ * report a create that SUCCEEDED as `Error:`, telling the model to retry one
+ * that would then fail as "already exists".
+ */
+async function reviewNote(
+  manifest: AppManifest,
+  reviewApplet?: AppletReviewer,
+  signal?: AbortSignal,
+): Promise<string> {
+  if (!reviewApplet) return '';
+  if (!(await appletFlag('autoReviewApplets'))) return '';
+  let outcome: ReviewOutcome;
+  try {
+    outcome = await reviewApplet(
+      { id: manifest.id, name: manifest.name, actions: Object.keys(manifest.actions) },
+      signal,
+    );
+  } catch (err) {
+    outcome = { reviewed: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+  if (outcome.reviewed) {
+    return outcome.summary ? ` Reviewed: ${outcome.summary}.` : ' Reviewed, nothing to fix.';
+  }
+  // Named rather than swallowed. An applet reported as built and silently
+  // never checked is the state this whole wiring exists to end.
+  return ` Not reviewed (${outcome.reason}) — run \`bernard app check ${manifest.id}\` yourself.`;
 }
 
 /**

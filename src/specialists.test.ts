@@ -411,6 +411,39 @@ describe('SpecialistStore', () => {
       ]);
     });
 
+    /**
+     * A pipeline stage is out of discovery, and both halves matter.
+     *
+     * This function is the single chokepoint feeding `matchSpecialists` AND
+     * the `<specialists>` context block, so hiding a stage here removes the
+     * invitation that produced the bypass: the main agent saw
+     * `applet-architect` in the roster, read its description, and dispatched
+     * it by hand. A refusal alone would leave it advertised and refused —
+     * one wasted dispatch per turn, which is the argument this filter
+     * already makes for `boundTo`.
+     */
+    it('omits a pipeline stage, while `list` keeps it', () => {
+      const stage = {
+        id: 'applet-architect',
+        name: 'Applet Architect',
+        description: 'Decides what an applet should be before it is built.',
+        systemPrompt: 'prompt',
+        guidelines: [],
+        pipeline: 'applet-design',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readdirSync).mockReturnValue(['applet-architect.json'] as any);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(stage));
+
+      expect(store.getSummaries()).toEqual([]);
+      // Still on disk and still visible in `/specialists`: a user must be
+      // able to see what the pipeline is made of, and it still counts
+      // against MAX_SPECIALISTS.
+      expect(store.list().map((x) => x.id)).toEqual(['applet-architect']);
+    });
+
     it('includes provider and model when set', () => {
       const specialist = {
         id: 'code-review',

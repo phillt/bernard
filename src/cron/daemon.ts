@@ -1,5 +1,7 @@
 import * as fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { CronStore } from './store.js';
+import { exitLoudlyOnFatal, restartOnRebuild } from '../build-stamp.js';
 import { Scheduler } from './scheduler.js';
 import { loadConfig } from '../config.js';
 
@@ -107,6 +109,37 @@ function main() {
     log('Daemon stopped');
     process.exit(0);
   };
+
+  /**
+   * Replace this process when Bernard is rebuilt underneath it.
+   *
+   * The applet host is where this was found (`src/build-stamp.ts` has the
+   * incident), but the exposure is identical here and quieter: a cron job
+   * reaches `createTools`, which loads nine tool modules through deferred
+   * `await import()`, so the first job to build a registry after a build
+   * links fresh code against this process's stale cache. With no operator
+   * watching, that is a job that simply stops working.
+   *
+   * Jobs are drained first, with a much longer budget than the applet host
+   * allows: a cron run's own ceiling is `BERNARD_CRON_JOB_TIMEOUT_MS` (30 min
+   * by default), nobody is waiting on a spinner, and killing a half-finished
+   * unattended job is the expensive outcome here rather than the cheap one.
+   */
+  restartOnRebuild({
+    entry: fileURLToPath(import.meta.url),
+    pidFile: CronStore.pidFile,
+    log,
+    inFlight: () => scheduler.inFlightCount,
+    unit: 'job',
+    drainTimeoutMs: 5 * 60_000,
+    drainPollMs: 1_000,
+    beforeExit: () => scheduler.stopAll(),
+  });
+
+  // Same reason as the applet host: spawned `stdio: 'ignore'`, so without
+  // this a crash leaves nothing anywhere and has to be inferred from a job
+  // that simply stopped running.
+  exitLoudlyOnFatal(log);
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));

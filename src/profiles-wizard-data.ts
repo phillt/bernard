@@ -602,6 +602,14 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         envVar: 'BERNARD_AUTO_STYLE_APPLETS',
       },
       {
+        key: 'autoReviewApplets',
+        label: 'Check new applets work',
+        description:
+          'Presses every button on a new applet once it opens, through the real browser door, and tells you what it found. Costs one short call at build time. Without it an applet can look finished and have a dead button, because nothing pressed one.',
+        field: { kind: 'boolean' },
+        envVar: 'BERNARD_AUTO_REVIEW_APPLETS',
+      },
+      {
         key: 'appletPlanning',
         label: 'Plan applets before building',
         description:

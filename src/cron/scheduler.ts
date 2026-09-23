@@ -426,6 +426,15 @@ export class Scheduler {
   }
 
   /** Number of currently scheduled (not necessarily running) cron jobs. */
+  /**
+   * Jobs executing right now, as opposed to {@link activeCount}, which counts
+   * jobs SCHEDULED. Read by the daemon before it replaces itself after a
+   * rebuild — see `src/build-stamp.ts` for why it has to.
+   */
+  get inFlightCount(): number {
+    return this.runningCount;
+  }
+
   get activeCount(): number {
     return this.scheduled.size;
   }
