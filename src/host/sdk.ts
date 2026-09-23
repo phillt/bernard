@@ -286,7 +286,9 @@ function build(): string {
     return {
       body: body,
       px: ICON_SIZES[opts.size] || ICON_SIZES.md,
-      cls: 'icon' + (opts.className ? ' ' + opts.className : ''),
+      // Both spellings: className is what the string form documents and
+      // class is what an htm template naturally writes on a component.
+      cls: 'icon' + (opts.className || opts.class ? ' ' + (opts.className || opts.class) : ''),
       title: opts.title || '',
     };
   }

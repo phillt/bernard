@@ -24,8 +24,8 @@
   "goodExamples": [
     {
       "input": "Review the notes applet.",
-      "call": "1) shell `bernard app path notes` → 2) file_read_lines index.html → 3) shell `bernard script --app notes --action summarise --args '{\"text\":\"hello\"}'` → \"ok\":true → report pass.",
-      "note": "Source read for what is static, every action actually run for what is not."
+      "call": "1) shell `bernard app check notes` → every step ok → 2) shell `bernard app path notes` → 3) file_read_lines index.html → 4) shell `bernard app check notes --action summarise --args '{\"text\":\"hello\"}'` → \"ok\":true → report pass.",
+      "note": "The transport first and bare, so a host fault is not read as an action fault; then the source for what is static; then every action pressed through the real origin, never `bernard script`, which never reaches the server."
     }
   ],
   "badExamples": [

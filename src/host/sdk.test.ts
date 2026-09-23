@@ -148,6 +148,16 @@ describe('the applet client (#453 follow-up)', () => {
       expect(rt.calls[0].attrs.dangerouslySetInnerHTML).toBeDefined();
     });
 
+    it('takes `class` as well as `className`, since htm writes the former', async () => {
+      const rt = runtime();
+      const bernard = await load(rt as unknown as Record<string, unknown>);
+      const Icon = bernard.Icon as (p: unknown) => unknown;
+      Icon({ name: 'trash-2', class: 'danger' });
+      Icon({ name: 'trash-2', className: 'danger' });
+      expect(rt.calls[0].attrs.class).toBe('icon danger');
+      expect(rt.calls[1].attrs.class).toBe('icon danger');
+    });
+
     /**
      * The one decision that must not diverge between the two spellings.
      *

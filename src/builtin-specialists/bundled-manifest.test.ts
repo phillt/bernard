@@ -153,6 +153,12 @@ describe('the applet specialists teach the client, not the protocol', () => {
     const p = String(load('applet-reviewer').systemPrompt);
     expect(p).toContain('does not touch the browser half');
     expect(p).not.toContain('This is the check that matters');
+    // The few-shot example is the copy a model imitates, and it shipped
+    // still calling `bernard script` under a rule that forbids it.
+    for (const example of load('applet-reviewer').goodExamples ?? []) {
+      expect(example.call).not.toContain('bernard script');
+      expect(example.call).toContain('bernard app check');
+    }
   });
 });
 

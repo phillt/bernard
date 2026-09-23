@@ -1370,6 +1370,14 @@ describe('dispatchToolWrapper honours an internal via', () => {
     specialistStore.get.mockReturnValue(
       makeToolWrapperSpecialist({ id: 'applet-architect', pipeline: 'applet-design' }),
     );
+    // Its own model answer, not whatever the previous test left on the shared
+    // mock: `clearAllMocks` clears CALLS and not implementations, so under a
+    // shuffled order this inherited the cancellation test's rejected promise
+    // and the permitted dispatch threw an AbortError (seed 5 in CI).
+    vi.mocked(generateText).mockResolvedValue({
+      text: '{"status":"ok","result":"a scope"}',
+      steps: [],
+    } as any);
     const ctx = makeCtx(config, options, memoryStore, specialistStore, correctionStore);
 
     const refused = await dispatchToolWrapper(

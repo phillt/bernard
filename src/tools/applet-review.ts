@@ -155,5 +155,7 @@ function summarizeVerdict(result: unknown): string | null {
   // its own design is the failure this pipeline was rebuilt to catch, and it
   // reads as a nit if it is folded in with the rest.
   if (mismatches > 0) parts.push(`${mismatches} place(s) where it disagrees with its plan`);
-  return parts.join('. ');
+  // A verdict that checked nothing and found nothing is still a verdict, and
+  // a blank line after "Reviewed:" reads as the review having been lost.
+  return parts.length > 0 ? parts.join('. ') : 'nothing to report';
 }

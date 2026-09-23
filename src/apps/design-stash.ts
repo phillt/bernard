@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { AppletDesign } from './design-model.js';
 import { checkDesign, type DesignIssue } from './design-checks.js';
 
@@ -63,9 +64,17 @@ export interface StashedPlan {
 
 const stashed = new Map<string, StashedPlan>();
 
-/** Stashes a plan and returns the id `create` claims it with. */
+/**
+ * Stashes a plan and returns the id `create` claims it with.
+ *
+ * A UUID rather than `Math.random`: the stash is per process and the model
+ * holding an id already holds the plan's text, so the id is not a secret —
+ * but a collision would silently overwrite another plan's entry, and a
+ * cryptographic id costs nothing to make that impossible rather than merely
+ * unlikely.
+ */
 export function stashDesign(design: AppletDesign, bodies: Record<string, string> = {}): string {
-  const id = `plan-${Math.random().toString(36).slice(2, 10)}`;
+  const id = `plan-${randomUUID().slice(0, 8)}`;
   stashed.set(id, { design, bodies });
   // Oldest first: a `Map` iterates in insertion order, so this is a queue
   // without keeping a second structure to say which is oldest.
