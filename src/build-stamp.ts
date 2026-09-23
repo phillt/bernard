@@ -215,3 +215,100 @@ export function respawnSelf(opts: { entry: string; pidFile?: string }): boolean 
   }
   return true;
 }
+
+export interface RestartOnRebuildOptions {
+  /** This process's own entry, `fileURLToPath(import.meta.url)`. */
+  entry: string;
+  pidFile: string;
+  log: (msg: string) => void;
+  /** How much work is still running; the drain waits for it to reach zero. */
+  inFlight: () => number;
+  /** What one unit of that work is called in the log line — `invocation`, `job`. */
+  unit: string;
+  drainTimeoutMs: number;
+  drainPollMs: number;
+  /** Runs BEFORE the drain — a notice that should land while somebody is looking. */
+  onRestarting?: () => void;
+  /** Runs after the drain and before the respawn — close servers, stop schedulers. */
+  beforeExit: () => void | Promise<void>;
+}
+
+/**
+ * Replaces this process after Bernard was rebuilt or upgraded underneath it.
+ *
+ * Why at all: a daemon holds its module graph for its whole life, and the
+ * deferred `await import()` calls scattered through the tree link fresh code
+ * against that stale cache the first time they run. The applet host is where
+ * it bites — it sits idle for days and then loads half the graph on the first
+ * click — and the cron daemon has the same shape one job later.
+ *
+ * Automatic rather than a prompt, because the alternative is what shipped:
+ * nothing noticed, every applet answered `500`, the only evidence was a log
+ * file nothing surfaces, and the stylesheet the pages were being served was
+ * nine days old. Nobody restarts a daemon by hand on a schedule they cannot
+ * see.
+ *
+ * One sequence for both daemons rather than one each, because what differs
+ * between them is two numbers, the in-flight reader and the close step, and
+ * a fix to the drain landing in one and not the other is the drift this
+ * repo keeps paying for. What is deliberately NOT shared is how each daemon
+ * is STARTED — `startHost` and cron's client differ in how they ask whether
+ * one is already up, and CLAUDE.md records that decision.
+ *
+ * Returns the watcher's `stop`.
+ */
+export function restartOnRebuild(opts: RestartOnRebuildOptions): () => void {
+  const restart = async (): Promise<void> => {
+    if (!fs.existsSync(opts.entry)) {
+      // Mid-upgrade, or a `dist/` that was removed rather than replaced.
+      // Staying up on stale code beats exiting into nothing.
+      opts.log(`not restarting: own entry ${opts.entry} is gone`);
+      return;
+    }
+    opts.log('bernard was rebuilt; restarting to pick up the new build');
+    try {
+      opts.onRestarting?.();
+    } catch {
+      // Nothing about reporting a restart may prevent one.
+    }
+    const deadline = Date.now() + opts.drainTimeoutMs;
+    while (opts.inFlight() > 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, opts.drainPollMs));
+    }
+    const left = opts.inFlight();
+    if (left > 0) opts.log(`restarting with ${left} ${opts.unit}(s) still running`);
+    await opts.beforeExit();
+    if (!respawnSelf({ entry: opts.entry, pidFile: opts.pidFile })) {
+      opts.log('respawn failed; exiting anyway so a later start is clean');
+    }
+    process.exit(0);
+  };
+  return watchOwnBuild({ log: opts.log, onStale: () => void restart() });
+}
+
+/**
+ * A crash must leave a trace.
+ *
+ * Both daemons are spawned `stdio: 'ignore'`, so anything Node writes to
+ * stderr on the way down goes nowhere — and the daemon's own log is the only
+ * place a person can look. That gap cost real debugging time: an unhandled
+ * `'error'` event from a recursive `fs.watch` ended the host mid-session with
+ * no restart line, no shutdown line, and nothing on disk to say it had
+ * happened at all.
+ *
+ * It exits rather than swallowing. A process that keeps running after an
+ * unhandled exception is in a state nobody designed, and the pid file would
+ * still name it while it served nothing.
+ */
+export function exitLoudlyOnFatal(log: (msg: string) => void): void {
+  const describe = (err: unknown): string =>
+    err instanceof Error ? (err.stack ?? err.message) : String(err);
+  process.on('uncaughtException', (err: unknown) => {
+    log(`fatal: ${describe(err)}`);
+    process.exit(1);
+  });
+  process.on('unhandledRejection', (reason: unknown) => {
+    log(`fatal (unhandled rejection): ${describe(reason)}`);
+    process.exit(1);
+  });
+}

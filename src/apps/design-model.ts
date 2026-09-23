@@ -1,6 +1,37 @@
 import { z } from 'zod';
 
 /**
+ * The name every stage record declares, and the name the pipeline claims when
+ * it dispatches one.
+ *
+ * Lives in this leaf rather than beside the pipeline because THREE modules
+ * need it and one of them cannot import the pipeline: `tool-wrapper-run.ts`
+ * builds the driver's tool through a deferred import precisely so the
+ * planner's graph does not reach every dispatch, and a literal `'applet-design'`
+ * there was a second spelling of a name that renaming the pipeline would not
+ * have reached — the driver would silently have received no tool.
+ * `bundled-manifest.test.ts` walks the five records to it, the
+ * record-to-constant direction.
+ */
+export const APPLET_DESIGN_PIPELINE = 'applet-design';
+
+/**
+ * The stage labels, in the order they run.
+ *
+ * The vocabulary a caller re-runs with, so every tool description names them
+ * from here rather than restating a list that could drift from the one the
+ * pipeline actually dispatches.
+ */
+export const PLAN_STAGES = [
+  'scope',
+  'interface',
+  'data and actions',
+  'controls',
+  'wording',
+] as const;
+export type PlanStage = (typeof PLAN_STAGES)[number];
+
+/**
  * The shared design model the applet planners hand between each other.
  *
  * Before this, every stage's output shape existed **only as prose inside its
@@ -47,14 +78,10 @@ import { z } from 'zod';
  */
 
 /** What an action IS, as opposed to how it is presented. The architect's call. */
-export const ActionIntentSchema = z.enum(['create', 'read', 'update', 'execute', 'destroy']);
-export const ImportanceSchema = z.enum(['primary', 'secondary', 'tertiary']);
-export const FrequencySchema = z.enum(['high', 'medium', 'low']);
-export const RiskSchema = z.enum(['low', 'medium', 'high']);
-
-export type ActionIntent = z.infer<typeof ActionIntentSchema>;
-export type Importance = z.infer<typeof ImportanceSchema>;
-export type Risk = z.infer<typeof RiskSchema>;
+const ActionIntentSchema = z.enum(['create', 'read', 'update', 'execute', 'destroy']);
+const ImportanceSchema = z.enum(['primary', 'secondary', 'tertiary']);
+const FrequencySchema = z.enum(['high', 'medium', 'low']);
+const RiskSchema = z.enum(['low', 'medium', 'high']);
 
 /**
  * The semantic role of one thing the applet can do.
@@ -77,7 +104,7 @@ export const ActionSemanticsSchema = z.object({
 export type ActionSemantics = z.infer<typeof ActionSemanticsSchema>;
 
 /** Rendering approach. Two values, which is what `UI_RUNTIME_RULE` decides between. */
-export const RenderingSchema = z.enum(['plain', 'runtime']);
+const RenderingSchema = z.enum(['plain', 'runtime']);
 
 /**
  * One control on the page, after the interaction stage has decided its form.
@@ -121,7 +148,6 @@ export const ArchitectPlanSchema = z.object({
   needsStore: z.boolean().optional(),
   needsAgent: z.boolean().optional(),
 });
-export type ArchitectPlan = z.infer<typeof ArchitectPlanSchema>;
 
 /** What the UX planner decides: shape and sequence, not affordance. */
 export const UxPlanSchema = z.object({
@@ -157,7 +183,6 @@ export const UxPlanSchema = z.object({
     )
     .optional(),
 });
-export type UxPlan = z.infer<typeof UxPlanSchema>;
 
 /** What the data planner decides. */
 export const DataPlanSchema = z.object({
@@ -176,7 +201,6 @@ export const DataPlanSchema = z.object({
     .optional(),
   pageOnly: z.array(z.object({ what: z.string(), why: z.string().optional() })).optional(),
 });
-export type DataPlan = z.infer<typeof DataPlanSchema>;
 
 /** What the interaction stage decides: the form every action takes. */
 export const InteractionPlanSchema = z.object({
@@ -184,7 +208,6 @@ export const InteractionPlanSchema = z.object({
   /** Why a control got the variant it did. One line each, for the critic. */
   rationale: z.array(z.string()).optional(),
 });
-export type InteractionPlan = z.infer<typeof InteractionPlanSchema>;
 
 /** What the microcopy stage decides: the words, everywhere they appear. */
 export const MicrocopyPlanSchema = z.object({
@@ -214,7 +237,6 @@ export const MicrocopyPlanSchema = z.object({
     )
     .optional(),
 });
-export type MicrocopyPlan = z.infer<typeof MicrocopyPlanSchema>;
 
 /**
  * The assembled design, as persisted alongside the applet.

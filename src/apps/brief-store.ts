@@ -100,6 +100,7 @@ export class AppletBriefStore {
     now = new Date(),
   ): AppletBrief {
     const current = this.read(appId);
+    const design = update.design ?? current.design;
     const next: AppletBrief = {
       intent: { ...current.intent },
       notes: [...current.notes],
@@ -107,7 +108,7 @@ export class AppletBriefStore {
       // decisions — merging a new scope into old controls produces a record
       // that describes an applet nobody planned, which is the exact class of
       // incoherence the model exists to make impossible.
-      ...((update.design ?? current.design) ? { design: update.design ?? current.design } : {}),
+      ...(design ? { design } : {}),
     };
 
     if (update.intent) {

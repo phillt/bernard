@@ -1,5 +1,5 @@
 import { controlsOf, type AppletDesign } from './design-model.js';
-import type { PageIssue } from './page-validate.js';
+import { classCount, iconRefsIn, type PageIssue } from './page-validate.js';
 
 /**
  * Does the page agree with the design it was built from?
@@ -26,12 +26,6 @@ import type { PageIssue } from './page-validate.js';
  * planned. What IS reliable is the direction: the page claiming MORE emphasis
  * than the plan allowed, or dropping something the plan named.
  */
-
-/** Occurrences of a class name in a `class="..."` attribute. */
-function classCount(html: string, name: string): number {
-  const re = new RegExp(`class=["'][^"']*\\b${name}\\b[^"']*["']`, 'gi');
-  return [...html.matchAll(re)].length;
-}
 
 export function checkPageAgainstDesign(html: string, design: AppletDesign): PageIssue[] {
   const controls = controlsOf(design);
@@ -78,15 +72,10 @@ export function checkPageAgainstDesign(html: string, design: AppletDesign): Page
    * Icons the plan chose and the page did not render.
    *
    * Named individually, because "some icons are missing" is not actionable and
-   * the remedy is per control. Both spellings are scanned — the attribute a
-   * plain page writes and the component a runtime page uses.
+   * the remedy is per control. `iconRefsIn` is the one scanner, shared with
+   * the unknown-icon check so the two cannot disagree about what a page names.
    */
-  const rendered = new Set<string>();
-  for (const m of html.matchAll(/data-icon=["']([a-z0-9-]+)["']/g)) rendered.add(m[1]);
-  for (const m of html.matchAll(/bernard\.[Ii]con[^>]*?\bname=["']([a-z0-9-]+)["']/g)) {
-    rendered.add(m[1]);
-  }
-  for (const m of html.matchAll(/bernard\.icon\(\s*["']([a-z0-9-]+)["']/g)) rendered.add(m[1]);
+  const rendered = iconRefsIn(html);
   const missing = [
     ...new Set(
       controls

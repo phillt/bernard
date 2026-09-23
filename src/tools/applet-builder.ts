@@ -1,5 +1,4 @@
-import { dispatchToolWrapper } from './tool-wrapper-run.js';
-import { isDispatchCancellation } from '../error-taxonomy.js';
+import { passFailureReason, runAppletPass } from './applet-pass.js';
 import { debugLog } from '../logger.js';
 import { renderIntentLines } from '../apps/brief.js';
 import type { PlanTarget, PlanStage } from './applet-planning.js';
@@ -25,7 +24,7 @@ import type { AgentContext } from '../framework/context.js';
  * guard for free.
  */
 
-export const BUILDER_SPECIALIST_ID = 'applet-builder';
+const BUILDER_SPECIALIST_ID = 'applet-builder';
 
 /** Returns the driver's answer — the spec, the problems and the planId. */
 export type AppletDesigner = (
@@ -42,7 +41,7 @@ export type AppletDesigner = (
  * sentence rather than as parameters, because the driver decides which stage
  * that actually means — which is the whole reason it exists.
  */
-export function buildDesignerBrief(
+function buildDesignerBrief(
   target: PlanTarget,
   opts: { stages?: readonly PlanStage[]; nudge?: string; planId?: string } = {},
 ): string {
@@ -65,37 +64,20 @@ export function buildDesignerBrief(
 export function makeAppletDesigner(ctx: AgentContext): AppletDesigner {
   return async (target, opts = {}) => {
     try {
-      const wrapped = await dispatchToolWrapper(
-        {
-          specialistId: BUILDER_SPECIALIST_ID,
-          input: buildDesignerBrief(target, opts),
-          runLabel: `[design] ${target.name}`,
-          // A driver that lost a pool slot is not a call-shape mistake, and
-          // `permissionsFor` grants bundled records `canAppendExamples: true`
-          // — so the correction queue really can reach and teach this record.
-          skipCorrectionEnqueue: true,
-          ...(opts.signal ? { abortSignal: opts.signal } : {}),
-        },
-        ctx,
-      );
-      if (wrapped.status === 'ok') {
-        const text = typeof wrapped.result === 'string' ? wrapped.result.trim() : '';
-        return text
-          ? { designed: true, text }
-          : { designed: false, reason: 'the designer returned nothing' };
-      }
-      return {
-        designed: false,
-        reason: wrapped.error ?? String(wrapped.result ?? 'unknown'),
-      };
+      const pass = await runAppletPass(ctx, {
+        specialistId: BUILDER_SPECIALIST_ID,
+        input: buildDesignerBrief(target, opts),
+        runLabel: `[design] ${target.name}`,
+        signal: opts.signal,
+      });
+      if (!pass.ok) return { designed: false, reason: pass.reason };
+      const text = typeof pass.result === 'string' ? pass.result.trim() : '';
+      return text
+        ? { designed: true, text }
+        : { designed: false, reason: 'the designer returned nothing' };
     } catch (err) {
-      // A cancelled turn is not a design failure and must not be reported as
-      // one — the caller decides what an abort means.
-      const reason = isDispatchCancellation(err)
-        ? 'cancelled'
-        : err instanceof Error
-          ? err.message
-          : String(err);
+      // The caller decides what an abort means; here it is only named.
+      const reason = passFailureReason(err);
       debugLog('applet:design:error', { name: target.name, reason });
       return { designed: false, reason };
     }

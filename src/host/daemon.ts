@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { APPLET_HOST_PID_FILE, APPLET_HOST_LOG_FILE, APPS_DIR } from '../paths.js';
-import { watchOwnBuild, respawnSelf } from '../build-stamp.js';
+import { exitLoudlyOnFatal, restartOnRebuild } from '../build-stamp.js';
 import { sendToSessions } from '../inbox/send.js';
 import { AppRegistry } from '../apps/registry.js';
 import { CapabilityTable } from '../apps/capabilities.js';
@@ -135,64 +135,6 @@ async function shutdown(): Promise<void> {
 const DRAIN_TIMEOUT_MS = 30_000;
 const DRAIN_POLL_MS = 250;
 
-async function drain(): Promise<boolean> {
-  const deadline = Date.now() + DRAIN_TIMEOUT_MS;
-  while (inFlightInvocations() > 0 && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, DRAIN_POLL_MS));
-  }
-  return inFlightInvocations() === 0;
-}
-
-/**
- * Replaces this process after Bernard was rebuilt or upgraded underneath it.
- *
- * Why this exists at all is in `src/build-stamp.ts`: a daemon holds its module
- * graph for its whole life, and the deferred `await import()` calls scattered
- * through the tree link fresh code against that stale cache the first time
- * they run. The host is where it bites, because it sits idle for days and
- * then loads half the graph on the first click.
- *
- * Automatic rather than a prompt, because the alternative is what shipped:
- * nothing noticed, every applet answered `500`, the only evidence was a log
- * file nothing surfaces, and the stylesheet the pages were being served was
- * nine days old. Nobody is going to restart this by hand on a schedule they
- * cannot see.
- */
-async function restartForNewBuild(): Promise<void> {
-  const entry = fileURLToPath(import.meta.url);
-  if (!fs.existsSync(entry)) {
-    // Mid-upgrade, or a `dist/` that was removed rather than replaced. Staying
-    // up on stale code beats exiting into nothing.
-    log(`not restarting: own entry ${entry} is gone`);
-    return;
-  }
-
-  log('bernard was rebuilt; restarting to pick up the new build');
-  // Sent BEFORE the drain so it lands while the REPL is still the thing the
-  // user is looking at, rather than up to 30 s later.
-  try {
-    sendToSessions({
-      text: 'Bernard was rebuilt, so the applet host restarted to pick it up.',
-      source: { kind: 'applet', label: 'applet-host' },
-      hint: 'Reload any open applet tabs — a restart mints new tokens.',
-      target: { all: true },
-    });
-  } catch {
-    // Nothing about reporting a restart may prevent one.
-  }
-
-  const drained = await drain();
-  if (!drained) {
-    log(`restarting with ${inFlightInvocations()} invocation(s) still running`);
-  }
-
-  await closeAll();
-  if (!respawnSelf({ entry, pidFile: APPLET_HOST_PID_FILE })) {
-    log('respawn failed; exiting anyway so a later `applet-host start` is clean');
-  }
-  process.exit(0);
-}
-
 async function main(): Promise<void> {
   fs.mkdirSync(path.dirname(APPLET_HOST_PID_FILE), { recursive: true });
   fs.writeFileSync(APPLET_HOST_PID_FILE, String(process.pid), 'utf-8');
@@ -217,37 +159,30 @@ async function main(): Promise<void> {
     log(`could not watch ${APPS_DIR}: ${String(err)}`);
   }
 
-  // Notice when this process's own code stops matching what is on disk.
-  watchOwnBuild({
+  // Notice when this process's own code stops matching what is on disk, and
+  // replace it. The sequence is `build-stamp.ts`'s; what is this daemon's is
+  // the drain budget above and the two hooks.
+  restartOnRebuild({
+    entry: fileURLToPath(import.meta.url),
+    pidFile: APPLET_HOST_PID_FILE,
     log,
-    onStale: () => void restartForNewBuild(),
+    inFlight: inFlightInvocations,
+    unit: 'invocation',
+    drainTimeoutMs: DRAIN_TIMEOUT_MS,
+    drainPollMs: DRAIN_POLL_MS,
+    // Sent BEFORE the drain so it lands while the REPL is still the thing the
+    // user is looking at, rather than up to 30 s later.
+    onRestarting: () =>
+      sendToSessions({
+        text: 'Bernard was rebuilt, so the applet host restarted to pick it up.',
+        source: { kind: 'applet', label: 'applet-host' },
+        hint: 'Reload any open applet tabs — a restart mints new tokens.',
+        target: { all: true },
+      }),
+    beforeExit: closeAll,
   });
 
-  /**
-   * A crash must leave a trace.
-   *
-   * The daemon is spawned `stdio: 'ignore'`, so anything Node writes to
-   * stderr on the way down goes nowhere — and this file's log is the only
-   * place a person can look. That gap cost real debugging time: an unhandled
-   * `'error'` event from a recursive `fs.watch` ended the host mid-session
-   * with no restart line, no shutdown line, and nothing on disk to say it had
-   * happened at all. The watch is gone, but the next silent death should not
-   * have to be reconstructed from its absence.
-   *
-   * It re-throws rather than swallowing. A process that keeps running after
-   * an unhandled exception is in a state nobody designed, and the pid file
-   * would still name it while it served nothing.
-   */
-  process.on('uncaughtException', (err: unknown) => {
-    log(`fatal: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
-    process.exit(1);
-  });
-  process.on('unhandledRejection', (reason: unknown) => {
-    log(
-      `fatal (unhandled rejection): ${reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)}`,
-    );
-    process.exit(1);
-  });
+  exitLoudlyOnFatal(log);
 
   process.on('SIGTERM', () => void shutdown());
   process.on('SIGINT', () => void shutdown());

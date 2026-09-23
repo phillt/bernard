@@ -41,10 +41,10 @@ import {
   type RawAppManifest,
 } from '../apps/manifest.js';
 import { defineTool } from '../framework/tools/define-tool.js';
-import { claimDesign, peekPlan, stashDesign } from '../apps/design-stash.js';
-import { checkDesign } from '../apps/design-checks.js';
+import { claimDesign, issuePlanId, peekPlan } from '../apps/design-stash.js';
 import { checkPageAgainstDesign } from '../apps/design-page-check.js';
-import { PLAN_STAGES } from './applet-planning.js';
+import { plural } from '../text.js';
+import { PLAN_STAGES } from '../apps/design-model.js';
 import { debugLog } from '../logger.js';
 import type { AppletDesigner } from './applet-builder.js';
 
@@ -403,22 +403,6 @@ function briefStore(): AppletBriefStore {
  * {@link SMALLEST_THING_RULE} rather than retyped, so the doctrine cannot drift
  * between here and the playbook that also states it.
  */
-/**
- * One nudge, applied to every stage a run will touch.
- *
- * A per-stage map would be more expressive and is not how anybody asks for
- * this: "too many buttons, try the controls again" names one change and one
- * stage. Lifted out of the spread so the narrowing is a local `const` rather
- * than a non-null assertion on a field the closure cannot see through.
- */
-function nudgesFor(
-  nudge: string | undefined,
-  stages: readonly string[] | undefined,
-): { nudges?: Record<string, string> } {
-  if (!nudge) return {};
-  return { nudges: Object.fromEntries((stages ?? PLAN_STAGES).map((x) => [x, nudge])) };
-}
-
 const buildDirectly = `Build directly, keeping it to ${SMALLEST_THING_RULE}.`;
 
 async function run(
@@ -752,13 +736,9 @@ async function run(
         description: args.description ?? '',
         intent,
       };
-      // Validated before either path: the driver must not be dispatched with
-      // a stage name the pipeline does not have, or it spends a round trip to
-      // discover that.
-      const stages = args.stages?.filter((x) => (PLAN_STAGES as readonly string[]).includes(x));
-      if (args.stages && stages?.length !== args.stages.length) {
-        return `Error: unknown stage. The stages are ${PLAN_STAGES.map((x) => `\`${x}\``).join(', ')}.`;
-      }
+      // The schema is `z.enum(PLAN_STAGES)`, so an unknown stage never
+      // reaches here; the driver cannot be handed a name the pipeline lacks.
+      const stages = args.stages;
 
       /**
        * The driver first, when there is one.
@@ -795,11 +775,8 @@ async function run(
       const prior = peekPlan(args.planId);
       const outcome = await planApplet(target, {
         ...(abortSignal ? { signal: abortSignal } : {}),
-        ...(stages?.length ? { only: stages } : {}),
-        // One nudge, applied to every stage being run. A per-stage map would
-        // be more expressive and is not how anybody asks for this: "too many
-        // buttons, try the controls again" names one change and one stage.
-        ...nudgesFor(args.nudge, stages),
+        ...(stages?.length ? { only: [...stages] } : {}),
+        ...(args.nudge ? { nudge: args.nudge } : {}),
         ...(prior ? { prior } : {}),
       });
       if (!outcome.planned) {
@@ -807,41 +784,30 @@ async function run(
       }
       /**
        * A plan with refusals standing does not get an id, so it cannot be
-       * built from.
+       * built from — `issuePlanId` is the mint and owns that rule.
        *
-       * The enforcement belongs HERE and not at `create`, and the reason is
-       * that the stash is immutable: by the time `create` runs, the model
-       * holds a finished page and a design it cannot edit, so a refusal there
-       * leaves it two moves — re-plan and lose the page, or pass a `force`
-       * flag, which is one token and would become reflex. At this point the
-       * plan is the only artifact and re-running a stage is the obvious fix.
-       *
-       * Refusals only, never warnings: the module's rule is that `refuse`
-       * means DECIDABLE, and everything decidable here is something the plan
-       * itself got wrong — a control calling an action the scope never
-       * declared, a destructive control that does not confirm, an icon name
-       * that renders as nothing. The spec already carries all of them under
-       * "Problems found in this plan", so nothing new has to be said.
-       *
-       * `checkDesign` is re-run rather than threaded out of `PlanOutcome`
-       * because it is pure arithmetic over the design with no model call, and
-       * running it wherever a design is held makes the rule a property of
-       * holding one rather than of the pipeline remembering to report it.
+       * The enforcement belongs at the mint and not at `create`, and the
+       * reason is that the stash is immutable: by the time `create` runs, the
+       * model holds a finished page and a design it cannot edit, so a refusal
+       * there leaves it two moves — re-plan and lose the page, or pass a
+       * `force` flag, which is one token and would become reflex. At this
+       * point the plan is the only artifact and re-running a stage is the
+       * obvious fix. The spec already lists every problem under "Problems
+       * found in this plan", so nothing new has to be said about them.
        */
-      const blocking = checkDesign(outcome.design).filter((i) => i.level === 'refuse');
-      if (blocking.length > 0) {
+      const issued = issuePlanId(outcome.design, outcome.bodies);
+      if (issued.blocked) {
         return (
           `${outcome.spec}\n\n` +
-          `**No \`planId\` was issued** — ${blocking.length} ` +
-          `${blocking.length === 1 ? 'problem' : 'problems'} above must be fixed first, or the ` +
+          `**No \`planId\` was issued** — ${issued.blocked.length} ` +
+          `${plural(issued.blocked.length, 'problem', 'problems')} above must be fixed first, or the ` +
           'applet is built from a plan that is already known to be wrong. Re-run `plan` once ' +
           'you have decided how to resolve them.'
         );
       }
       // The id is how the design reaches `create` without the model retyping
       // it — see `stashDesign`.
-      const planId = stashDesign(outcome.design, outcome.bodies);
-      return `${outcome.spec}\n\nPass \`planId: "${planId}"\` to \`create\` so this plan is kept with the applet.`;
+      return `${outcome.spec}\n\nPass \`planId: "${issued.planId}"\` to \`create\` so this plan is kept with the applet.`;
     }
     case 'style': {
       const id = need(args.id, 'id', 'style');

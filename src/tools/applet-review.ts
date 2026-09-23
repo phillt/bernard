@@ -1,5 +1,4 @@
-import { dispatchToolWrapper } from './tool-wrapper-run.js';
-import { isDispatchCancellation } from '../error-taxonomy.js';
+import { passFailureReason, runAppletPass } from './applet-pass.js';
 import { debugLog } from '../logger.js';
 import type { AgentContext } from '../framework/context.js';
 
@@ -49,7 +48,7 @@ export interface ReviewTarget {
 
 export type AppletReviewer = (target: ReviewTarget, signal?: AbortSignal) => Promise<ReviewOutcome>;
 
-export const REVIEWER_SPECIALIST_ID = 'applet-reviewer';
+const REVIEWER_SPECIALIST_ID = 'applet-reviewer';
 
 /** What the reviewer is asked. Deliberately short: its prompt is the method. */
 export function buildReviewBrief(target: ReviewTarget): string {
@@ -67,19 +66,12 @@ export function buildReviewBrief(target: ReviewTarget): string {
 export function makeAppletReviewer(ctx: AgentContext): AppletReviewer {
   return async (target, signal) => {
     try {
-      const wrapped = await dispatchToolWrapper(
-        {
-          specialistId: REVIEWER_SPECIALIST_ID,
-          input: buildReviewBrief(target),
-          runLabel: `[review] ${target.name}`,
-          // A review that lost a pool slot is not a call-shape mistake, and
-          // `permissionsFor` grants bundled records `canAppendExamples: true`
-          // — so the correction queue really can reach and teach this record.
-          skipCorrectionEnqueue: true,
-          ...(signal ? { abortSignal: signal } : {}),
-        },
-        ctx,
-      );
+      const pass = await runAppletPass(ctx, {
+        specialistId: REVIEWER_SPECIALIST_ID,
+        input: buildReviewBrief(target),
+        runLabel: `[review] ${target.name}`,
+        signal,
+      });
       /**
        * A review that FOUND problems is a review that ran.
        *
@@ -101,23 +93,19 @@ export function makeAppletReviewer(ctx: AgentContext): AppletReviewer {
        * (pool exhausted, step limit, a parse failure) still reports as not
        * reviewed, because none of those produce a verdict.
        */
-      const verdict = isVerdict(wrapped.result) ? summarize(wrapped.result) : null;
-      if (wrapped.status === 'ok') {
+      const verdict = summarizeVerdict(pass.result);
+      if (pass.ok) {
         return {
           reviewed: true,
-          summary: typeof wrapped.result === 'string' ? wrapped.result.trim() : (verdict ?? ''),
+          summary: typeof pass.result === 'string' ? pass.result.trim() : (verdict ?? ''),
         };
       }
       if (verdict !== null) return { reviewed: true, summary: verdict };
-      return { reviewed: false, reason: wrapped.error ?? String(wrapped.result ?? 'unknown') };
+      return { reviewed: false, reason: pass.reason };
     } catch (err) {
       // A cancelled turn is not a review failure, and must not take the
       // create down either — the applet is already written and already open.
-      const reason = isDispatchCancellation(err)
-        ? 'cancelled'
-        : err instanceof Error
-          ? err.message
-          : String(err);
+      const reason = passFailureReason(err);
       debugLog('applet:review:error', { appId: target.id, reason });
       return { reviewed: false, reason };
     }
@@ -125,32 +113,26 @@ export function makeAppletReviewer(ctx: AgentContext): AppletReviewer {
 }
 
 /**
- * Did the reviewer produce a verdict, whatever it concluded?
+ * The structured verdict as one line, or `null` when there is no verdict.
  *
- * Presence of the structured fields, not the envelope's status: the status
- * describes the APPLET and this question is about the REVIEW.
- */
-function isVerdict(result: unknown): boolean {
-  if (!result || typeof result !== 'object') return false;
-  const r = result as { checked?: unknown; findings?: unknown };
-  return Array.isArray(r.checked) || Array.isArray(r.findings);
-}
-
-/**
- * The structured verdict, as one line.
+ * Whether a verdict EXISTS is decided by the presence of the structured
+ * fields, never by the envelope's status: the status describes the APPLET and
+ * this question is about the REVIEW. The reviewer declares
+ * `structuredOutput`, so a verdict is an object carrying `checked` or
+ * `findings`; anything else — a string, a bare error object — is not one.
  *
- * The reviewer declares `structuredOutput`, so `result` is an object. What a
- * create's result has room for is the headline: how many actions passed, and
- * whether anything blocking was found. The full report stays in the reasoning
- * log, and `bernard app logs` is the door onto it.
+ * What a create's result has room for is the headline: how many actions
+ * passed, and whether anything blocking was found. The full report stays in
+ * the reasoning log, and `bernard app logs` is the door onto it.
  */
-function summarize(result: unknown): string {
-  if (!result || typeof result !== 'object') return '';
+function summarizeVerdict(result: unknown): string | null {
+  if (!result || typeof result !== 'object') return null;
   const r = result as {
     checked?: Array<{ verdict?: string }>;
     findings?: Array<{ severity?: string; detail?: string }>;
     planMismatches?: unknown[];
   };
+  if (!Array.isArray(r.checked) && !Array.isArray(r.findings)) return null;
   const parts: string[] = [];
   const checked = Array.isArray(r.checked) ? r.checked : [];
   if (checked.length > 0) {

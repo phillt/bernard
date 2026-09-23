@@ -268,14 +268,6 @@ function build(): string {
   };
 
   /**
-   * One icon, as SVG markup.
-   *
-   * Returns '' for a name that does not exist rather than throwing: an icon
-   * is decoration on a control that already works, and a page that dies
-   * because of a typo'd icon name is a worse outcome than a missing glyph.
-   * page-validate catches the typo at authoring time, where it is cheap.
-   */
-  /**
    * Everything an icon is, before it is a string or a vnode.
    *
    * Two renderers need the same four decisions — does the name exist, what

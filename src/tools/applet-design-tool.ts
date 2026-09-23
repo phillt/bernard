@@ -1,9 +1,10 @@
 import { z } from 'zod';
 import { defineTool } from '../framework/tools/define-tool.js';
 import { attachMeta } from '../framework/tools/adapter.js';
-import { stashDesign, peekPlan } from '../apps/design-stash.js';
-import { checkDesign } from '../apps/design-checks.js';
-import { makeAppletPlanner, PLAN_STAGES } from './applet-planning.js';
+import { issuePlanId, peekPlan } from '../apps/design-stash.js';
+import { PLAN_STAGES } from '../apps/design-model.js';
+import { plural } from '../text.js';
+import { makeAppletPlanner } from './applet-planning.js';
 import type { PlanTarget } from './applet-planning.js';
 import type { AgentContext } from '../framework/context.js';
 
@@ -84,34 +85,27 @@ export function createAppletDesignTool(ctx: AgentContext) {
         };
         const prior = peekPlan(args.planId);
         const outcome = await plan(target, {
-          ...(args.stages?.length ? { only: args.stages } : {}),
-          ...(args.nudge
-            ? {
-                nudges: Object.fromEntries(
-                  (args.stages ?? PLAN_STAGES).map((s) => [s, args.nudge as string]),
-                ),
-              }
-            : {}),
+          ...(args.stages?.length ? { only: [...args.stages] } : {}),
+          ...(args.nudge ? { nudge: args.nudge } : {}),
           ...(prior ? { prior } : {}),
         });
         if (!outcome.planned) return `Error: planning did not run (${outcome.reason}).`;
 
-        // The same gate `applet plan` applies, and for the same reason: a plan
-        // with refusals standing must not become buildable. Here it also tells
-        // the driver exactly what its next re-run is for.
-        const blocking = checkDesign(outcome.design).filter((i) => i.level === 'refuse');
-        if (blocking.length > 0) {
+        // `issuePlanId` is the gate `applet plan` goes through too: a plan
+        // with refusals standing must not become buildable. Here the sentence
+        // after it tells the driver exactly what its next re-run is for.
+        const issued = issuePlanId(outcome.design, outcome.bodies);
+        if (issued.blocked) {
           return (
-            `${outcome.spec}\n\n**No planId issued** — ${blocking.length} ` +
-            `${blocking.length === 1 ? 'problem' : 'problems'} above must be fixed first. ` +
+            `${outcome.spec}\n\n**No planId issued** — ${issued.blocked.length} ` +
+            `${plural(issued.blocked.length, 'problem', 'problems')} above must be fixed first. ` +
             'Call this again naming the stage that got it wrong and what to change.'
           );
         }
-        const planId = stashDesign(outcome.design, outcome.bodies);
         const reused = outcome.reused.length
           ? ` Reused unchanged: ${outcome.reused.join(', ')}.`
           : '';
-        return `${outcome.spec}\n\nplanId: "${planId}"${reused}`;
+        return `${outcome.spec}\n\nplanId: "${issued.planId}"${reused}`;
       },
     }),
     {

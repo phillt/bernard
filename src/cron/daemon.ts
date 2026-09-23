@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { CronStore } from './store.js';
-import { watchOwnBuild, respawnSelf } from '../build-stamp.js';
+import { exitLoudlyOnFatal, restartOnRebuild } from '../build-stamp.js';
 import { Scheduler } from './scheduler.js';
 import { loadConfig } from '../config.js';
 
@@ -125,44 +125,21 @@ function main() {
    * by default), nobody is waiting on a spinner, and killing a half-finished
    * unattended job is the expensive outcome here rather than the cheap one.
    */
-  const DRAIN_TIMEOUT_MS = 5 * 60_000;
-  const DRAIN_POLL_MS = 1_000;
-  const restartForNewBuild = async (): Promise<void> => {
-    const entry = fileURLToPath(import.meta.url);
-    if (!fs.existsSync(entry)) {
-      log(`Not restarting: own entry ${entry} is gone`);
-      return;
-    }
-    log('Bernard was rebuilt; restarting to pick up the new build');
-    const deadline = Date.now() + DRAIN_TIMEOUT_MS;
-    while (scheduler.inFlightCount > 0 && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, DRAIN_POLL_MS));
-    }
-    if (scheduler.inFlightCount > 0) {
-      log(`Restarting with ${scheduler.inFlightCount} job(s) still running`);
-    }
-    scheduler.stopAll();
-    if (!respawnSelf({ entry, pidFile: CronStore.pidFile })) {
-      log('Respawn failed; exiting anyway so a later `cron start` is clean');
-    }
-    log('Daemon stopped for rebuild');
-    process.exit(0);
-  };
-  watchOwnBuild({ log, onStale: () => void restartForNewBuild() });
+  restartOnRebuild({
+    entry: fileURLToPath(import.meta.url),
+    pidFile: CronStore.pidFile,
+    log,
+    inFlight: () => scheduler.inFlightCount,
+    unit: 'job',
+    drainTimeoutMs: 5 * 60_000,
+    drainPollMs: 1_000,
+    beforeExit: () => scheduler.stopAll(),
+  });
 
   // Same reason as the applet host: spawned `stdio: 'ignore'`, so without
   // this a crash leaves nothing anywhere and has to be inferred from a job
   // that simply stopped running.
-  process.on('uncaughtException', (err: unknown) => {
-    log(`Fatal: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
-    process.exit(1);
-  });
-  process.on('unhandledRejection', (reason: unknown) => {
-    log(
-      `Fatal (unhandled rejection): ${reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)}`,
-    );
-    process.exit(1);
-  });
+  exitLoudlyOnFatal(log);
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));

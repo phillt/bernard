@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createRequire } from 'node:module';
-import { ICON_NAMES, ICON_SIZES, iconSvg, isIconName, LUCIDE_VERSION } from './icons.js';
+import * as vm from 'node:vm';
+import { ICON_NAMES, ICON_SIZES, isIconName, LUCIDE_VERSION } from './icons.js';
 import { ICON_PATHS } from './icon-data.js';
 import { appletSdkScript } from './sdk.js';
 import { APPLET_STYLED_SELECTORS, tokensStylesheet } from './tokens.js';
@@ -15,13 +16,30 @@ import { APPLET_STYLED_SELECTORS, tokensStylesheet } from './tokens.js';
  * and every applet shipped as unadorned text. Nobody had to decide against
  * icons for that to happen.
  */
+/**
+ * The renderer a page actually runs, loaded from the served client. There is
+ * no TypeScript twin to test against — one was written and it held the a11y
+ * rule in a second place — so these assert against the bytes that ship.
+ */
+const icon = ((): ((name: string, opts?: unknown) => string) => {
+  const ctx: Record<string, unknown> = {
+    window: {},
+    addEventListener() {},
+    document: { getElementById: () => null },
+    fetch: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+  };
+  vm.createContext(ctx);
+  new vm.Script(appletSdkScript()).runInContext(ctx);
+  return (ctx.window as { bernard: { icon: (n: string, o?: unknown) => string } }).bernard.icon;
+})();
+
 describe('the served icon set', () => {
   it('is one family at one weight, with the wrapper owning every dimension', () => {
     // The property the whole set is chosen for. Mixed stroke weights or a
     // stray viewBox is not a thing a reader reports as a bug — it just looks
     // unfinished — so it is asserted rather than eyeballed.
     for (const name of ICON_NAMES) {
-      const svg = iconSvg(name)!;
+      const svg = icon(name);
       expect(svg).toContain('viewBox="0 0 24 24"');
       expect(svg).toContain('stroke-width="2"');
       expect(svg).toContain('stroke="currentColor"');
@@ -43,20 +61,20 @@ describe('the served icon set', () => {
     // A free pixel value is how a set ends up with a 17px icon beside an
     // 18px one, which is the drift the named scale exists to prevent.
     expect(ICON_SIZES).toEqual({ sm: 16, md: 20, lg: 24 });
-    expect(iconSvg('search', { size: 'sm' })).toContain('width="16"');
-    expect(iconSvg('search', { size: 'lg' })).toContain('width="24"');
+    expect(icon('search', { size: 'sm' })).toContain('width="16"');
+    expect(icon('search', { size: 'lg' })).toContain('width="24"');
     // Unrecognised falls back rather than throwing: an icon is decoration on
     // a control that already works.
-    expect(iconSvg('search', { size: 'enormous' as never })).toContain('width="20"');
+    expect(icon('search', { size: 'enormous' })).toContain('width="20"');
   });
 
   it('hides itself from assistive tech unless it is given a label', () => {
     // The common case is an icon beside its own text, where announcing it
     // reads as a stutter. An icon-ONLY control must pass a title, and the
     // planners are told to demand one there.
-    expect(iconSvg('search')).toContain('aria-hidden="true"');
-    expect(iconSvg('search')).not.toContain('role="img"');
-    const titled = iconSvg('search', { title: 'Search readings' })!;
+    expect(icon('search')).toContain('aria-hidden="true"');
+    expect(icon('search')).not.toContain('role="img"');
+    const titled = icon('search', { title: 'Search readings' });
     expect(titled).toContain('role="img"');
     expect(titled).toContain('aria-label="Search readings"');
     expect(titled).not.toContain('aria-hidden');
@@ -65,19 +83,19 @@ describe('the served icon set', () => {
   it('escapes a caller-supplied title', () => {
     // `title` is the one input here that is not ours — it comes from a page
     // attribute, and this markup is written straight into the DOM.
-    const svg = iconSvg('search', { title: '"><script>x</script>' })!;
+    const svg = icon('search', { title: '"><script>x</script>' });
     expect(svg).not.toContain('<script>');
     expect(svg).toContain('&quot;&gt;&lt;script&gt;');
   });
 
-  it('answers null for a name it does not have', () => {
-    expect(iconSvg('definitely-not-an-icon')).toBeNull();
+  it('renders nothing for a name it does not have, rather than throwing', () => {
+    expect(icon('definitely-not-an-icon')).toBe('');
     expect(isIconName('definitely-not-an-icon')).toBe(false);
     expect(isIconName('search')).toBe(true);
     // `hasOwnProperty`, not `in`: a bare `ICON_PATHS[name]` lookup would
     // answer for `constructor` and `toString` and emit prototype junk.
     expect(isIconName('constructor')).toBe(false);
-    expect(iconSvg('toString')).toBeNull();
+    expect(icon('toString')).toBe('');
   });
 
   it('covers the actions an applet actually has', () => {

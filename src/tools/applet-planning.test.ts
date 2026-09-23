@@ -488,7 +488,7 @@ describe('a nudge', () => {
     const dispatch = okWith({});
     const { makeAppletPlanner } = await load(dispatch);
 
-    await makeAppletPlanner(CTX)(TARGET, { nudges: { scope: 'keep it to one screen' } });
+    await makeAppletPlanner(CTX)(TARGET, { nudge: 'keep it to one screen', only: ['scope'] });
 
     const brief = dispatch.mock.calls[0][0].input;
     expect(brief).toContain('## What to change this time');
@@ -499,7 +499,7 @@ describe('a nudge', () => {
     const dispatch = okWith({});
     const { makeAppletPlanner } = await load(dispatch);
 
-    await makeAppletPlanner(CTX)(TARGET, { nudges: { controls: 'fewer primary buttons' } });
+    await makeAppletPlanner(CTX)(TARGET, { nudge: 'fewer primary buttons', only: ['controls'] });
 
     for (const [args] of dispatch.mock.calls) {
       const named = args.specialistId === 'applet-interaction-designer';
@@ -513,7 +513,7 @@ describe('a nudge', () => {
     const dispatch = okWith({ 'applet-architect': 'SCOPE-MARKER' });
     const { makeAppletPlanner } = await load(dispatch);
 
-    await makeAppletPlanner(CTX)(TARGET, { nudges: { interface: 'denser' } });
+    await makeAppletPlanner(CTX)(TARGET, { nudge: 'denser', only: ['interface'] });
 
     const ux = dispatch.mock.calls.find((c) => c[0].specialistId === 'applet-ux-planner')![0];
     expect(ux.input).toContain('SCOPE-MARKER');

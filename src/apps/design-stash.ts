@@ -1,4 +1,5 @@
 import type { AppletDesign } from './design-model.js';
+import { checkDesign, type DesignIssue } from './design-checks.js';
 
 /**
  * Designs waiting to be attached to an applet that does not exist yet.
@@ -110,4 +111,30 @@ export function peekPlan(planId: string | undefined): StashedPlan | undefined {
 /** Test seam: forget everything stashed. */
 export function resetStashedDesigns(): void {
   stashed.clear();
+}
+
+/**
+ * The one place a `planId` is minted, and the rule that a plan already known
+ * to be wrong does not get one.
+ *
+ * The gate belongs at the MINT rather than at each caller, and it was at two
+ * callers: `applet plan` and the driver's `applet_design` each re-ran
+ * `checkDesign`, each filtered for refusals, and each carried its own
+ * wording of "no id was issued" — which is the state in which a third
+ * minting site issues an id for a refused plan with every test green but its
+ * own. Here, holding an id is the same fact as having passed the checks.
+ *
+ * Refusals only, never warnings: `refuse` means DECIDABLE, and everything
+ * decidable is something the plan itself got wrong. The spec the caller
+ * renders already lists them, so a blocked result names how many and leaves
+ * the sentence about what to do next to the caller, which knows who it is
+ * talking to.
+ */
+export function issuePlanId(
+  design: AppletDesign,
+  bodies: Record<string, string>,
+): { planId: string; blocked?: undefined } | { planId?: undefined; blocked: DesignIssue[] } {
+  const blocked = checkDesign(design).filter((i) => i.level === 'refuse');
+  if (blocked.length > 0) return { blocked };
+  return { planId: stashDesign(design, bodies) };
 }

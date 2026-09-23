@@ -10,6 +10,7 @@ import { captureToolCalls, captureLastToolCall, metaLookup } from './capture-too
 import { createSpecialistRunTool } from './specialist-run.js';
 import { printSpecialistStart, printSpecialistEnd } from '../output.js';
 import { debugLog } from '../logger.js';
+import { APPLET_DESIGN_PIPELINE } from '../apps/design-model.js';
 import {
   withSlot,
   getMaxConcurrentAgents,
@@ -115,23 +116,31 @@ export async function verifyWrapperClaims(
 }
 
 /**
- * The tools that drive a named pipeline.
- *
- * A table rather than an inline `if`, so a second pipeline is one entry and
- * the set of drivable pipelines is written down in one place rather than
- * inferred from whichever records happen to declare `drives`. The import is
- * deferred so the planner's graph does not reach every dispatch.
+ * The tools that drive a named pipeline, keyed on the name the pipeline's own
+ * records declare — so a second pipeline is one entry, the set of drivable
+ * pipelines is written down in one place, and renaming one cannot leave its
+ * driver silently tool-less. Each entry's import is deferred so the pipeline's
+ * graph does not reach every dispatch.
  */
+const PIPELINE_TOOLS: Record<string, (ctx: AgentContext) => Promise<Record<string, Tool>>> = {
+  [APPLET_DESIGN_PIPELINE]: async (ctx) => {
+    const { createAppletDesignTool } = await import('./applet-design-tool.js');
+    return { applet_design: createAppletDesignTool(ctx) };
+  },
+};
+
 async function buildPipelineTools(
   pipeline: string,
   ctx: AgentContext,
 ): Promise<Record<string, Tool>> {
-  if (pipeline !== 'applet-design') {
+  const build = Object.prototype.hasOwnProperty.call(PIPELINE_TOOLS, pipeline)
+    ? PIPELINE_TOOLS[pipeline]
+    : undefined;
+  if (!build) {
     debugLog('dispatch:unknown-pipeline', { pipeline });
     return {};
   }
-  const { createAppletDesignTool } = await import('./applet-design-tool.js');
-  return { applet_design: createAppletDesignTool(ctx) };
+  return build(ctx);
 }
 
 /** Per-call inputs to a tool-wrapper dispatch. */

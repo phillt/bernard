@@ -1,8 +1,8 @@
 import type { z } from 'zod';
-import { dispatchToolWrapper } from './tool-wrapper-run.js';
-import { isDispatchCancellation } from '../error-taxonomy.js';
+import { passFailureReason, runAppletPass } from './applet-pass.js';
 import { capSubagentResult } from './result-cap.js';
 import { debugLog } from '../logger.js';
+import { plural } from '../text.js';
 import { renderIntentLines } from '../apps/brief.js';
 import type { AppletBrief } from '../apps/brief.js';
 import {
@@ -145,40 +145,26 @@ export interface PlanOptions {
    * contribute the same bytes they did the first time.
    */
   only?: string[];
-  /** Extra instruction per stage label, rendered as its own trailing section. */
-  nudges?: Record<string, string>;
+  /**
+   * What to do differently, rendered as its own trailing section of every
+   * stage this run dispatches — a stage carried over from {@link prior}
+   * never sees it. One string, not a per-stage map: "too many buttons, try
+   * the controls again" names one change and one stage, and `only` is what
+   * names the stage.
+   */
+  nudge?: string;
   /** A previous run's design and bodies, to build on. */
   prior?: StashedPlan;
 }
 
 export type AppletPlanner = (target: PlanTarget, opts?: PlanOptions) => Promise<PlanOutcome>;
 
-/**
- * The name every stage record declares, and the name this module claims when
- * it dispatches one.
- *
- * Exported so `bundled-manifest.test.ts` can walk the five records to it
- * rather than restating the string — the record-to-constant direction, which
- * is the one the mistake is made in. A stage whose `pipeline` does not match
- * this is unreachable by anything, including its own pipeline.
- */
-export const APPLET_DESIGN_PIPELINE = 'applet-design';
-
-/**
- * The stage labels, in the order they run.
- *
- * Exported because they are the vocabulary a caller re-runs with, so the tool
- * description names them from here rather than restating a list that could
- * drift from the one the pipeline actually dispatches.
- */
-export const PLAN_STAGES = [
-  'scope',
-  'interface',
-  'data and actions',
-  'controls',
-  'wording',
-] as const;
-export type PlanStage = (typeof PLAN_STAGES)[number];
+// Re-exported from the leaf that owns them, so a reader of the pipeline finds
+// its vocabulary here and a module that must not import the pipeline finds it
+// there.
+import { APPLET_DESIGN_PIPELINE } from '../apps/design-model.js';
+export { APPLET_DESIGN_PIPELINE, PLAN_STAGES } from '../apps/design-model.js';
+export type { PlanStage } from '../apps/design-model.js';
 
 /** The specialists this routes to. Bundled, so they are always present. */
 export const ARCHITECT_SPECIALIST_ID = 'applet-architect';
@@ -393,41 +379,24 @@ async function runPlanner(
   input: string,
   signal?: AbortSignal,
 ): Promise<Section> {
-  const wrapped = await dispatchToolWrapper(
-    {
-      specialistId,
-      input,
-      runLabel: `[plan] ${label}`,
-      // Not optional. These are `kind: 'tool-wrapper'`, which is exactly the
-      // shape `dispatchToolWrapper` enqueues a correction candidate for, and
-      // `permissionsFor` grants bundled records `canAppendExamples: true` — so
-      // the queue really can reach and teach a frozen record. A planner that
-      // lost a pool slot is not a call-shape mistake.
-      skipCorrectionEnqueue: true,
-      // The channel that says this IS the pipeline. Every stage record is
-      // marked `pipeline`, so `invocationRefusal` refuses it from anywhere
-      // else — which is the whole lock-down, and this one line is what keeps
-      // the legitimate caller working. It rides the internal args interface
-      // rather than the tool's schema precisely so a model cannot claim it.
-      via: { kind: 'pipeline', pipeline: APPLET_DESIGN_PIPELINE },
-      // Per CALL, not per construction: the tool is built once a turn but the
-      // signal belongs to the invocation.
-      ...(signal ? { abortSignal: signal } : {}),
-    },
-    ctx,
-  );
-  if (wrapped.status === 'ok') {
-    const body = sectionBody(wrapped.result);
-    // An empty body is a failure wearing a success's clothes. The dispatch
-    // returned, so nothing downstream would notice, and the assembled spec
-    // would carry a heading with nothing under it.
-    return body
-      ? { ok: true, body, result: wrapped.result }
-      : { ok: false, reason: 'returned no plan' };
-  }
-  // `error` is the code (`pool_exhausted`, `no_api_key`, `step_limit`);
-  // `result` is the human message. The code is what a reader acts on.
-  return { ok: false, reason: wrapped.error ?? String(wrapped.result ?? 'unknown') };
+  const pass = await runAppletPass(ctx, {
+    specialistId,
+    input,
+    runLabel: `[plan] ${label}`,
+    // The channel that says this IS the pipeline. Every stage record is
+    // marked `pipeline`, so `invocationRefusal` refuses it from anywhere
+    // else — which is the whole lock-down, and this one line is what keeps
+    // the legitimate caller working. It rides the internal args interface
+    // rather than the tool's schema precisely so a model cannot claim it.
+    via: { kind: 'pipeline', pipeline: APPLET_DESIGN_PIPELINE },
+    signal,
+  });
+  if (!pass.ok) return { ok: false, reason: pass.reason };
+  const body = sectionBody(pass.result);
+  // An empty body is a failure wearing a success's clothes. The dispatch
+  // returned, so nothing downstream would notice, and the assembled spec
+  // would carry a heading with nothing under it.
+  return body ? { ok: true, body, result: pass.result } : { ok: false, reason: 'returned no plan' };
 }
 
 /** One section of the assembled spec, present or accounted for. */
@@ -482,7 +451,7 @@ export function needsMicrocopy(design: AppletDesign): boolean {
  */
 export function makeAppletPlanner(ctx: AgentContext): AppletPlanner {
   return async (target, opts = {}) => {
-    const { signal, only, nudges, prior } = opts;
+    const { signal, only, nudge, prior } = opts;
     const design: AppletDesign = { ...prior?.design };
     /** Each stage's prose, for the spec and for the next re-plan. */
     const bodies: Record<string, string> = { ...prior?.bodies };
@@ -514,7 +483,7 @@ export function makeAppletPlanner(ctx: AgentContext): AppletPlanner {
     const stage = async (
       label: string,
       specialistId: string,
-      brief: () => string,
+      brief: (nudge?: string) => string,
       key: keyof AppletDesign,
       schema: Parameters<typeof parseStage>[1],
     ): Promise<Section> => {
@@ -523,7 +492,12 @@ export function makeAppletPlanner(ctx: AgentContext): AppletPlanner {
         reused.push(label);
         return { ok: true, body: carried, result: undefined };
       }
-      const section = await runPlanner(ctx, specialistId, label, brief(), signal);
+      // The nudge reaches a stage the caller ASKED to run, and not one that is
+      // running only because there was nothing to carry over: the person
+      // said what to change about the controls, not about a scope that has
+      // never been planned.
+      const nudged = !only || only.includes(label) ? nudge : undefined;
+      const section = await runPlanner(ctx, specialistId, label, brief(nudged), signal);
       if (!section.ok) {
         debugLog('applet:plan:error', { name: target.name, stage: label, reason: section.reason });
         // A stage that failed contributes nothing, and must not leave the
@@ -540,7 +514,7 @@ export function makeAppletPlanner(ctx: AgentContext): AppletPlanner {
       const architect = await stage(
         'scope',
         ARCHITECT_SPECIALIST_ID,
-        () => buildArchitectBrief(target, nudges?.scope),
+        (n) => buildArchitectBrief(target, n),
         'architect',
         ArchitectPlanSchema,
       );
@@ -552,20 +526,14 @@ export function makeAppletPlanner(ctx: AgentContext): AppletPlanner {
         stage(
           'interface',
           UX_PLANNER_SPECIALIST_ID,
-          () => buildPlannerBrief(target, architect.body, 'Plan the interface', nudges?.interface),
+          (n) => buildPlannerBrief(target, architect.body, 'Plan the interface', n),
           'ux',
           UxPlanSchema,
         ),
         stage(
           'data and actions',
           DATA_PLANNER_SPECIALIST_ID,
-          () =>
-            buildPlannerBrief(
-              target,
-              architect.body,
-              'Plan the data and actions',
-              nudges?.['data and actions'],
-            ),
+          (n) => buildPlannerBrief(target, architect.body, 'Plan the data and actions', n),
           'data',
           DataPlanSchema,
         ),
@@ -576,14 +544,8 @@ export function makeAppletPlanner(ctx: AgentContext): AppletPlanner {
       const interaction = await stage(
         'controls',
         INTERACTION_SPECIALIST_ID,
-        () =>
-          buildStageBrief(
-            target,
-            architect.body,
-            [['Interface', ux]],
-            'Decide the controls',
-            nudges?.controls,
-          ),
+        (n) =>
+          buildStageBrief(target, architect.body, [['Interface', ux]], 'Decide the controls', n),
         'interaction',
         InteractionPlanSchema,
       );
@@ -593,7 +555,7 @@ export function makeAppletPlanner(ctx: AgentContext): AppletPlanner {
         microcopy = await stage(
           'wording',
           MICROCOPY_SPECIALIST_ID,
-          () =>
+          (n) =>
             buildStageBrief(
               target,
               architect.body,
@@ -602,7 +564,7 @@ export function makeAppletPlanner(ctx: AgentContext): AppletPlanner {
                 ['Controls', interaction],
               ],
               'Write the words',
-              nudges?.wording,
+              n,
             ),
           'microcopy',
           MicrocopyPlanSchema,
@@ -643,9 +605,9 @@ export function makeAppletPlanner(ctx: AgentContext): AppletPlanner {
        */
       const unchecked =
         unparsed.length > 0
-          ? `The ${unparsed.join(' and ')} ${unparsed.length > 1 ? 'stages' : 'stage'} answered ` +
+          ? `The ${unparsed.join(' and ')} ${plural(unparsed.length, 'stage', 'stages')} answered ` +
             'in a shape that could not be read, so the automatic checks did not run against ' +
-            `${unparsed.length > 1 ? 'them' : 'it'}. Read the ${unparsed.length > 1 ? 'sections' : 'section'} ` +
+            `${plural(unparsed.length, 'it', 'them')}. Read the ${plural(unparsed.length, 'section', 'sections')} ` +
             'above yourself before building.'
           : '';
 
@@ -680,11 +642,7 @@ export function makeAppletPlanner(ctx: AgentContext): AppletPlanner {
     } catch (err) {
       // A cancelled turn is not a planning failure and must not be reported as
       // one. The caller says "not planned" and the build is still available.
-      const reason = isDispatchCancellation(err)
-        ? 'cancelled'
-        : err instanceof Error
-          ? err.message
-          : String(err);
+      const reason = passFailureReason(err);
       debugLog('applet:plan:error', { name: target.name, stage: 'dispatch', reason });
       return { planned: false, reason };
     }

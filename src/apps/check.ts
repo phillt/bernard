@@ -54,6 +54,7 @@ function request(
 ): Promise<Reply> {
   return new Promise((resolve, reject) => {
     const payload = opts.body;
+    const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const req = http.request(
       {
         host: '127.0.0.1',
@@ -61,7 +62,7 @@ function request(
         path,
         method: opts.method ?? 'GET',
         agent: false,
-        timeout: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        timeout: timeoutMs,
         headers: {
           // The guard accepts `127.0.0.1:<port>` and rejects `localhost`,
           // because `localhost` goes through the system resolver, which is
@@ -81,7 +82,7 @@ function request(
     );
     req.on('timeout', () => {
       req.destroy();
-      reject(new Error(`timed out after ${opts.timeoutMs ?? DEFAULT_TIMEOUT_MS} ms`));
+      reject(new Error(`timed out after ${timeoutMs} ms`));
     });
     req.on('error', reject);
     if (payload) req.write(payload);
@@ -113,17 +114,24 @@ export async function checkApplet(
     return { appId, origin: null, steps: [{ name: 'manifest', ok: false, detail }], ok: false };
   }
   const actionNames = Object.keys(parsed.manifest.actions);
-  const record = new HostRegistry().recordFor(appId);
-  const origin = `http://127.0.0.1:${record.port}`;
+  const { port } = new HostRegistry().recordFor(appId);
+  const origin = `http://127.0.0.1:${port}`;
 
+  // The target's own port first. `startHost` answers "is a host up" by
+  // probing every registered applet in turn until one replies, which on a
+  // healthy install is a second loopback probe and on an install with a
+  // dead applet listed first is 1.5 s spent on the wrong port — paid once
+  // per action by the reviewer, which runs one check per action.
   let hostErr: string | undefined;
-  try {
-    await startHost();
-  } catch (err) {
-    hostErr = `Could not start the applet host: ${say(err)}`;
-  }
-  if (!hostErr && !(await probeApplet(record.port, PROBE_TIMEOUT_MS))) {
-    hostErr = `Nothing answering on ${origin}. Try \`bernard applet-host start\`.`;
+  if (!(await probeApplet(port, PROBE_TIMEOUT_MS))) {
+    try {
+      await startHost();
+    } catch (err) {
+      hostErr = `Could not start the applet host: ${say(err)}`;
+    }
+    if (!hostErr && !(await probeApplet(port, PROBE_TIMEOUT_MS))) {
+      hostErr = `Nothing answering on ${origin}. Try \`bernard applet-host start\`.`;
+    }
   }
 
   const manifestStep: CheckStep = {
@@ -140,7 +148,7 @@ export async function checkApplet(
     };
   }
 
-  const served = await checkServedApplet(record.port, actionNames, opts);
+  const served = await checkServedApplet(port, actionNames, opts);
   const steps = [
     manifestStep,
     { name: 'host', ok: true, detail: `serving at ${origin}` },
@@ -167,8 +175,6 @@ export async function checkServedApplet(
   const add = (name: string, ok: boolean, detail: string): void => {
     steps.push({ name, ok, detail });
   };
-  const record = { port };
-
   // The page and the served client. A page that 404s, or a client the page
   // cannot load, is a dead applet no amount of source reading reveals.
   for (const [name, path] of [
@@ -177,7 +183,7 @@ export async function checkServedApplet(
     ['stylesheet', '/__bernard/tokens.css'],
   ] as const) {
     try {
-      const res = await request(record.port, path);
+      const res = await request(port, path);
       add(name, res.status === 200, `GET ${path} -> ${res.status}`);
     } catch (err) {
       add(name, false, `GET ${path} failed: ${say(err)}`);
@@ -187,7 +193,7 @@ export async function checkServedApplet(
   let token: string | undefined;
   let handles: Record<string, string> = {};
   try {
-    const res = await request(record.port, '/__bernard/bootstrap.json');
+    const res = await request(port, '/__bernard/bootstrap.json');
     if (res.status !== 200) {
       add('bootstrap', false, `GET /__bernard/bootstrap.json -> ${res.status}`);
     } else {
@@ -216,7 +222,7 @@ export async function checkServedApplet(
     return steps;
   }
   try {
-    const res = await request(record.port, '/__bernard/invoke', {
+    const res = await request(port, '/__bernard/invoke', {
       method: 'POST',
       token,
       body: JSON.stringify({ handle, args: opts.args ?? {} }),

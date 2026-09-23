@@ -258,16 +258,7 @@ export function validateAppletPage(
    * plain-HTML applet writes, and the call, which is what a runtime page
    * writes. Only string literals — an expression is not decidable here.
    */
-  const iconRefs = new Set<string>();
-  for (const m of html.matchAll(/data-icon=["']([a-z0-9-]+)["']/g)) iconRefs.add(m[1]);
-  for (const m of html.matchAll(/\bbernard\.icon\(\s*["']([a-z0-9-]+)["']/g)) iconRefs.add(m[1]);
-  // The component spelling, which a runtime page uses because neither of the
-  // other two survives a re-render. Scanned here or a typo in the one place
-  // runtime pages can use icons at all would be the only unchecked spelling.
-  for (const m of html.matchAll(/bernard\.Icon[^>]*?\bname=["']([a-z0-9-]+)["']/g)) {
-    iconRefs.add(m[1]);
-  }
-  const unknownIcons = [...iconRefs].filter((n) => !isIconName(n));
+  const unknownIcons = [...iconRefsIn(html)].filter((n) => !isIconName(n));
   if (unknownIcons.length > 0) {
     warn(
       `These icon names do not exist and will render as nothing: ${unknownIcons.join(', ')}. ` +
@@ -305,7 +296,7 @@ function primaryEmphasisIssues(html: string, warn: (m: string) => void): void {
   // sections at all still gets checked.
   const regions = html.split(/<section\b/i);
   for (const [i, region] of regions.entries()) {
-    const count = [...region.matchAll(/class=["'][^"']*\bprimary\b[^"']*["']/gi)].length;
+    const count = classCount(region, 'primary');
     if (count < 2) continue;
     const where = i === 0 ? 'before the first <section>' : `in <section> ${i}`;
     warn(
@@ -494,4 +485,27 @@ export function formatWarnings(messages: string[]): string {
 
 function escapeForRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Every icon name a page refers to as a string literal, in all three
+ * spellings: the attribute a plain page writes, the component a runtime page
+ * renders, and the call. One scanner, because two were written and drifted
+ * on the day the second landed — a spelling added to one check and not the
+ * other lets a page be reported "unknown icon" and "icon rendered" for the
+ * same name. Only literals; an expression is not decidable here.
+ */
+export function iconRefsIn(html: string): Set<string> {
+  const refs = new Set<string>();
+  for (const m of html.matchAll(/data-icon=["']([a-z0-9-]+)["']/g)) refs.add(m[1]);
+  for (const m of html.matchAll(/\bbernard\.icon\(\s*["']([a-z0-9-]+)["']/g)) refs.add(m[1]);
+  for (const m of html.matchAll(/\bbernard\.Icon[^>]*?\bname=["']([a-z0-9-]+)["']/g))
+    refs.add(m[1]);
+  return refs;
+}
+
+/** Occurrences of a class name inside a `class="..."` attribute. */
+export function classCount(html: string, name: string): number {
+  const re = new RegExp(`class=["'][^"']*\\b${name}\\b[^"']*["']`, 'gi');
+  return [...html.matchAll(re)].length;
 }

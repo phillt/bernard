@@ -65,41 +65,9 @@ export function isIconName(name: string): boolean {
   return Object.prototype.hasOwnProperty.call(ICON_PATHS, name);
 }
 
-/**
- * One icon's markup.
- *
- * `aria-hidden` by default, because the overwhelmingly common case is an icon
- * beside its own label and a screen reader announcing "search search" is
- * worse than silence. A caller that passes `title` gets `role="img"` and a
- * `<title>` instead — which is what an icon-ONLY control must do, and the
- * planners are told to demand it there.
- */
-export function iconSvg(
-  name: string,
-  opts: { size?: IconSize; title?: string; className?: string } = {},
-): string | null {
-  const body = Object.prototype.hasOwnProperty.call(ICON_PATHS, name)
-    ? ICON_PATHS[name]
-    : undefined;
-  if (body === undefined) return null;
-  const px = ICON_SIZES[opts.size ?? 'md'] ?? ICON_SIZES.md;
-  const cls = `icon${opts.className ? ` ${opts.className}` : ''}`;
-  const labelled = opts.title
-    ? `role="img" aria-label="${escapeAttr(opts.title)}"`
-    : 'aria-hidden="true" focusable="false"';
-  return (
-    `<svg class="${escapeAttr(cls)}" xmlns="http://www.w3.org/2000/svg" ` +
-    `width="${px}" height="${px}" viewBox="0 0 24 24" fill="none" ` +
-    `stroke="currentColor" stroke-width="2" stroke-linecap="round" ` +
-    `stroke-linejoin="round" ${labelled}>${body}</svg>`
-  );
-}
-
-/** Minimal attribute escaping. The inputs are ours, bar `title`, which is not. */
-function escapeAttr(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
+// There is deliberately no server-side renderer here. The one renderer of an
+// icon's markup is `icon()` inside the served `applet.js` (`sdk.ts`), which is
+// what a page actually runs; a TypeScript twin of it was written once, had no
+// production caller, and held the a11y rule — hidden from assistive tech
+// unless titled — in a second place that could drift from the one that ships.
+// `icons.test.ts` asserts against the served bytes instead.
