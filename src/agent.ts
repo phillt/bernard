@@ -179,7 +179,6 @@ export class Agent {
   private interjectionInbox: { text: string; message: CoreMessage }[] = [];
   /** How many interjections the current turn delivered. */
   private interjectionsDelivered = 0;
-  private interjectionListener: ((message: CoreMessage) => void) | undefined;
   private lastPromptTokens: number = 0;
   /**
    * Wire size of the main agent's tool block, in characters (#323).
@@ -380,15 +379,6 @@ export class Agent {
   }
 
   /**
-   * Told each time an interjection is sent to the model, with the exact message
-   * object that will sit in history — so the transcript can show it landing in
-   * position, and can recognise it again by identity.
-   */
-  setInterjectionListener(listener: ((message: CoreMessage) => void) | undefined): void {
-    this.interjectionListener = listener;
-  }
-
-  /**
    * The words of every interjection the turn never sent, in the order they were
    * typed, removing them. Called once when the turn is over: a message that
    * arrived after the model's last step has no request left to ride, and
@@ -398,18 +388,15 @@ export class Agent {
     return this.interjectionInbox.splice(0).map((e) => e.text);
   }
 
-  /** The runner's drain, consulted before every model request of a turn. */
+  /**
+   * The runner's drain, consulted before every model request of a turn.
+   * Showing the message and keeping it on abort are `runDefinition`'s — it
+   * appends to the output sink and tells the partial observer below.
+   */
   private drainInterjections = (): CoreMessage[] => {
-    if (this.interjectionInbox.length === 0) return [];
     const messages = this.interjectionInbox.splice(0).map((e) => e.message);
     this.interjectionsDelivered += messages.length;
-    // The partial snapshot is only refreshed when a step FINISHES, and these
-    // are about to ride a step that has not. Without this, an Esc during that
-    // step would flush a history missing a message the user watched land.
-    // The next finished step replaces the snapshot with one that includes them.
-    this.partialStepMessages = [...this.partialStepMessages, ...messages];
-    debugLog('turn:interjection', { count: messages.length });
-    for (const message of messages) this.interjectionListener?.(message);
+    if (messages.length > 0) debugLog('turn:interjection', { count: messages.length });
     return messages;
   };
 
@@ -1192,6 +1179,13 @@ export class Agent {
           },
           onTextDelta: (delta) => {
             this.partialText += delta;
+          },
+          // The snapshot only refreshes when a step FINISHES, and these are
+          // about to ride a step that has not. Without this an Esc during that
+          // step would flush a history missing a message the user watched land;
+          // the next finished step's snapshot includes them and replaces this.
+          onInterjections: (msgs) => {
+            this.partialStepMessages = [...this.partialStepMessages, ...msgs];
           },
         },
       });

@@ -94,7 +94,7 @@ import { noPromptCacheHint } from '../cost-guardrail.js';
 import { memoryCapNotice } from '../memory-notice.js';
 import { clearDispatchContextStore } from '../dispatch-context-history.js';
 import { makeUsageRecorder, makeOutOfTurnUsageRecorder } from '../framework/hooks/token-stats.js';
-import { truncate, scopeList } from '../text.js';
+import { truncate, scopeList, plural } from '../text.js';
 import { listSpecialistRagIds, specialistFactsNotice } from '../specialist-rag.js';
 import { SCOPE_AXES } from '../framework/agents/dispatch-profile.js';
 import { WIZARD_CATEGORIES_DATA, type WizardFieldData } from '../profiles-wizard-data.js';
@@ -197,7 +197,7 @@ import { useDimensionsCtx } from './DimensionsContext.js';
 import { formatAgentError, type ErrorPanelData } from './error-format.js';
 import { Prompt } from './Prompt.js';
 import type { SlashCommand } from './SlashHints.js';
-import type { DispatchedCommand } from './slash-commands.js';
+import { DISPATCHED_COMMANDS, type DispatchedCommand } from './slash-commands.js';
 import { Spinner } from './Spinner.js';
 import { StatusBar } from './StatusBar.js';
 import { HintBar } from './HintBar.js';
@@ -898,14 +898,6 @@ const startsWithCmd = (text: string, command: DispatchedCommand): boolean =>
 const QUEUE_PREFIX_RE = /^\+(?:\s+|$)/;
 
 /**
- * A slash command, as opposed to text that merely starts with a slash (#200).
- * Mid-turn, the first is refused and the second is sent to the running turn,
- * so `/home/me/notes.md is the file` must not read as a command. The name ends
- * at whitespace or the end of the line, which a path's second `/` never does.
- */
-const SLASH_COMMAND_RE = /^\/[a-z][\w-]*(?:\s|$)/i;
-
-/**
  * Which slash commands the prompt accepts while a turn is in flight (#202).
  * Bare text is not governed here: mid-turn it goes to the running turn (#200).
  *
@@ -1428,17 +1420,6 @@ export function App({
     return () => setOutputSink(null);
   }, [messageStore]);
 
-  // A message typed mid-turn is shown the moment it reaches the model (#200),
-  // in the live stream between the blocks around it. At turn end the commit
-  // renders the same message from history in the same position, so nothing
-  // here marks it as already on screen.
-  useEffect(() => {
-    agent.setInterjectionListener((message) =>
-      messageStore.append({ kind: 'user-interjection', message }),
-    );
-    return () => agent.setInterjectionListener(undefined);
-  }, [agent, messageStore]);
-
   /**
    * External messages (#462).
    *
@@ -1853,6 +1834,22 @@ export function App({
     setActiveOverlay('info');
   };
 
+  /**
+   * Whether the idle dispatch chain would run `text` as a command rather than
+   * hand it to the agent (#200): a dispatched command (the legacy pointers are
+   * members of that list) or a saved routine. The mid-turn gate asks this
+   * rather than judging by shape, so `/tmp is full` means the same thing
+   * whether or not Bernard is busy.
+   */
+  const isSlashCommand = (text: string): boolean => {
+    if (!text.startsWith('/')) return false;
+    const name = text.split(/\s+/, 1)[0];
+    return (
+      (DISPATCHED_COMMANDS as readonly string[]).includes(name) ||
+      stores.routines.get(name.slice(1)) !== undefined
+    );
+  };
+
   const handleSubmit = async (text: string) => {
     // Clear any prior toast on the next submit so flashes don't accumulate.
     if (toast) setToast(null);
@@ -1898,20 +1895,18 @@ export function App({
 
     // ── While a turn is in flight: text steers it, commands wait (#200) ──
     //
-    // Bare text goes to the turn that is running, and reaches the model before
-    // its next request — never inside a tool call, because tools run within a
-    // step and the runner only drains between steps. Anything that turn never
-    // reaches comes back in `runAgentTurn`'s `finally` and runs next, so
-    // nothing typed here is dropped.
+    // Bare text goes to the turn that is running — see `Agent.interject` for
+    // when it lands. Anything that turn never reaches comes back in
+    // `runAgentTurn`'s `finally` and runs next, so nothing typed here is lost.
     //
     // A slash command is still refused. Every branch of the dispatch chain was
     // written against an idle REPL, and several mutate `agent.history` or swap
     // the model under a running loop. `Prompt` calls `onRecordInput` BEFORE
     // `onSubmit`, so the command is one `↑` away — which is what makes naming
-    // the remedy enough. A path such as `/home/…` is not a command: the name
-    // has to end at whitespace or the end of the line.
+    // the remedy enough. What counts as a command is what the idle chain would
+    // dispatch; anything else it hands to the agent, and so does this.
     if (submittingRef.current && !BUSY_ALLOWED_COMMANDS.some((c) => is(text, c))) {
-      if (SLASH_COMMAND_RE.test(text)) {
+      if (isSlashCommand(text)) {
         flashToast(
           'Commands wait until Bernard finishes — press ↑ to run it then, or esc to interrupt.',
           'error',
@@ -5495,7 +5490,7 @@ export function App({
             : '';
         const undeliveredNote =
           undelivered.length > 0
-            ? `\n${undelivered.length === 1 ? 'A message you sent was' : `${undelivered.length} messages you sent were`} not delivered — press ↑ to recall.`
+            ? `\n${plural(undelivered.length, 'A message you sent was', `${undelivered.length} messages you sent were`)} not delivered — press ↑ to recall.`
             : '';
         pushAssistantNotice(
           `⏹ Turn interrupted after ${formatDuration(endedAt - turnStartedAt)}.` +
@@ -5527,9 +5522,11 @@ export function App({
       if (undelivered.length > 0 && !controller.signal.aborted) {
         for (const text of undelivered) requestTurn({ text, source: { kind: 'user' } });
         flashToast(
-          undelivered.length === 1
-            ? 'Your message arrived after Bernard finished — running it now.'
-            : `${undelivered.length} messages arrived after Bernard finished — running them now.`,
+          plural(
+            undelivered.length,
+            'Your message arrived after Bernard finished — running it now.',
+            `${undelivered.length} messages arrived after Bernard finished — running them now.`,
+          ),
           'success',
         );
       }

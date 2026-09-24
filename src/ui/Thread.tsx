@@ -225,8 +225,8 @@ export function StreamingAssistantMessage({
         // A message the user sent mid-turn sits between the blocks around it,
         // exactly where it reached the model (#200). Rendered by the same
         // component the committed transcript uses, from the same message.
-        if (group.interjection) {
-          return <UserMessage key={idx} message={group.interjection as CoreUserMessage} />;
+        if (group.kind === 'interjection') {
+          return <UserMessage key={idx} message={group.message as CoreUserMessage} />;
         }
         // Sub-agent groups (label set) keep the labeled header above the
         // body. Main-agent groups (no label) inline the chevron with the
@@ -259,12 +259,12 @@ export function StreamingAssistantMessage({
   );
 }
 
-interface EventGroup {
-  label: string | undefined;
-  events: StreamEvent[];
-  /** Set on a group that is one mid-turn user message and nothing else. */
-  interjection?: CoreMessage;
-}
+/** Everything a group body renders — a mid-turn message is its own group. */
+type BodyEvent = Exclude<StreamEvent, { kind: 'user-interjection' }>;
+
+type EventGroup =
+  | { kind: 'events'; label: string | undefined; events: BodyEvent[] }
+  | { kind: 'interjection'; message: CoreMessage };
 
 /**
  * Bucket events by `agentLabel` while preserving order. Sub-agent output
@@ -279,15 +279,15 @@ function groupByLabel(events: readonly StreamEvent[]): EventGroup[] {
     // Its own group, always: it ends the text run before it, and whatever the
     // model says next opens a fresh block with its own chevron.
     if (ev.kind === 'user-interjection') {
-      out.push({ label: undefined, events: [], interjection: ev.message });
+      out.push({ kind: 'interjection', message: ev.message });
       continue;
     }
     const label = ev.agentLabel;
     const tail = out[out.length - 1];
-    if (tail && tail.label === label && !tail.interjection) {
+    if (tail?.kind === 'events' && tail.label === label) {
       tail.events.push(ev);
     } else {
-      out.push({ label, events: [ev] });
+      out.push({ kind: 'events', label, events: [ev] });
     }
   }
   return out;
@@ -393,7 +393,7 @@ function StreamGroupBody({
   toolDetails,
   inlineChevron = false,
 }: {
-  events: StreamEvent[];
+  events: BodyEvent[];
   toolDetails: boolean;
   /** When true, prepend `<❮ >` inline with the first emitted element. */
   inlineChevron?: boolean;
@@ -473,10 +473,6 @@ function StreamGroupBody({
       );
       continue;
     }
-    // Never inside a group — `groupByLabel` gives each its own — but the union
-    // has to be narrowed here, and silently rendering one as a tool result
-    // would be worse than skipping it.
-    if (ev.kind === 'user-interjection') continue;
     // tool-result handled inline above; skip if it has a matching call.
     // If a result arrived without its call (shouldn't happen, but defensive),
     // render it as a standalone row so the user still sees it.
@@ -868,15 +864,11 @@ export function parseUserMessage(raw: string): {
     if (text.endsWith('\n</user_request>')) text = text.slice(0, -'\n</user_request>'.length);
   }
   const m = text.match(/^\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2})\] /);
+  const parsed = m ? new Date(m[1]) : null;
   // The mid-turn notice follows the timestamp: it is the part addressed to the
   // model, and the reader sees the words and a footer saying when they landed.
-  if (m) {
-    const parsed = new Date(m[1]);
-    const { body, interjected } = stripInterjectionNotice(text.slice(m[0].length));
-    return { body, timestamp: isNaN(parsed.getTime()) ? null : parsed, interjected };
-  }
-  const { body, interjected } = stripInterjectionNotice(text);
-  return { body, timestamp: null, interjected };
+  const { body, interjected } = stripInterjectionNotice(m ? text.slice(m[0].length) : text);
+  return { body, timestamp: parsed && !isNaN(parsed.getTime()) ? parsed : null, interjected };
 }
 
 /**

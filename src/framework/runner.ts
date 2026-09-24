@@ -942,22 +942,20 @@ async function runNonStreaming(
  * anything the user typed while it worked, and appends it to the conversation
  * the request carries.
  *
- * `ai@4.3.19` offers no such point on its own loop, and every alternative was
- * checked against the installed bundle rather than its docs.
- * `experimental_continueSteps` is a boolean that gates auto-continue on
- * `finishReason: 'length'` and steers nothing. `experimental_prepareStep` is
- * absent from `streamText`, and on `generateText` it returns
- * `{model, toolChoice, experimental_activeTools}` and cannot touch `messages`.
- * `onStepFinish` runs inside a transform piped onto the CONSUMER stream while
- * the recursion (`await streamStep(...)`) happens producer-side, so awaiting
- * there gates our read, not the next HTTP request. SDK 5's `prepareStep` can
- * rewrite messages and would replace this loop; until then, this is the seam.
+ * `ai@4.3.19` offers no such point on its own loop — CLAUDE.md's #200 entry
+ * records the three candidates checked against the installed bundle and why
+ * each fails. SDK 5's `prepareStep` can rewrite messages and would replace this
+ * loop; until then, this is the seam.
  *
- * **It costs nothing in tokens and nothing in bytes.** The SDK re-sends the
- * whole conversation on every step anyway, as `initialPrompt.messages` plus the
- * accumulated response messages (`streamStep`'s `stepInputMessages`) — which is
- * exactly what each call here is handed. `runner.owned-loop.test.ts` drives the
- * real `streamText` both ways and asserts every recorded prompt is identical.
+ * **It costs nothing in tokens or bytes, and a little CPU.** The SDK re-sends
+ * the whole conversation on every step anyway, as the initial messages plus
+ * the accumulated response messages — exactly what each call is handed, and
+ * `runner.owned-loop.test.ts` asserts every provider prompt is identical. What
+ * is new is `standardizePrompt`: the SDK validates the prompt against its
+ * message schema once per `streamText` call, which was once per turn and is
+ * now once per step. Measured at ~0.12 ms per message — about 130 ms over a
+ * typical ten-step turn, and a 30-70 ms pause before each late step of a
+ * 150-step one. Small beside the round trips, and gone with SDK 5.
  *
  * **The continuation rule is the SDK's, copied rather than approximated**: the
  * next step runs iff this one made tool calls, every call produced a result,
@@ -998,34 +996,25 @@ async function runStreaming(
   // Everything generated after `spec.messages`, in order: each step's response
   // messages and any interjection drained between them.
   const accumulated: CoreMessage[] = [];
-  const steps: StreamedStep[] = [];
+  const steps: unknown[] = [];
   const sources: unknown[] = [];
   let fullText = '';
   // Summed exactly as the SDK's `addLanguageModelUsage` sums them: raw, so a
   // provider that reports no count still yields `NaN` rather than a plausible 0.
   let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
-  let last: StreamedCall | undefined;
+  let last: Awaited<ReturnType<typeof streamOneStep>> | undefined;
 
   for (let stepIndex = 0; stepIndex < maxSteps; stepIndex++) {
-    const drained = spec.takeInterjections?.() ?? [];
-    if (drained.length > 0) accumulated.push(...drained);
-    // The SDK's step results carry a CUMULATIVE `response.messages`, and
-    // `partialObserver.onStepMessages` (agents/run.ts) keeps partial work on
-    // abort by that contract. A one-step call only knows its own, so the
-    // prefix is put back here — the same rewrite for the hook payload and for
-    // the step recorded in `steps`, so the two cannot disagree.
-    const prior = accumulated.slice();
+    accumulated.push(...(spec.takeInterjections?.() ?? []));
     const stepType = stepIndex === 0 ? 'initial' : 'tool-result';
-    const asCumulative = <T extends { response?: { messages?: CoreMessage[] } }>(s: T): T =>
-      ({
-        ...s,
-        stepType,
-        response: { ...s.response, messages: [...prior, ...(s.response?.messages ?? [])] },
-      }) as T;
+    // `accumulated` does not change while the call runs, so the hook payload
+    // and the recorded step get the same prefix.
     const call = await streamOneStep(
       spec,
       [...spec.messages, ...accumulated],
-      onStepFinish ? (payload) => onStepFinish(asCumulative(payload)) : undefined,
+      onStepFinish
+        ? (payload) => onStepFinish(withPrefix(payload, accumulated, stepType))
+        : undefined,
       progress,
       raceAbort,
     );
@@ -1037,8 +1026,9 @@ async function runStreaming(
       completionTokens: usage.completionTokens + call.usage.completionTokens,
       totalTokens: usage.totalTokens + call.usage.totalTokens,
     };
-    steps.push(...call.steps.map(asCumulative));
-    accumulated.push(...((call.response.messages ?? []) as CoreMessage[]));
+    // `maxSteps: 1`, so each call is exactly one step.
+    steps.push(withPrefix(call.steps[0], accumulated, stepType));
+    accumulated.push(...(call.response.messages as CoreMessage[]));
 
     const allCallsAnswered =
       call.toolCalls.length > 0 && call.toolResults.length === call.toolCalls.length;
@@ -1048,46 +1038,46 @@ async function runStreaming(
   // What `streamText` itself says to `maxSteps: 0`: the loop above would issue
   // no request at all, and there is no step to build a result from.
   if (!last) throw new Error('maxSteps must be at least 1');
-  const final = last;
   return {
     text: fullText,
     steps,
-    finishReason: final.finishReason,
+    finishReason: last.finishReason,
     usage,
-    warnings: final.warnings,
-    toolCalls: final.toolCalls,
-    toolResults: final.toolResults,
-    reasoning: final.reasoning,
-    reasoningDetails: final.reasoningDetails,
-    providerMetadata: final.providerMetadata,
-    experimental_providerMetadata: final.providerMetadata,
-    request: final.request,
-    response: { ...final.response, messages: accumulated },
-    files: final.files,
+    warnings: last.warnings,
+    toolCalls: last.toolCalls,
+    toolResults: last.toolResults,
+    reasoning: last.reasoning,
+    reasoningDetails: last.reasoningDetails,
+    providerMetadata: last.providerMetadata,
+    experimental_providerMetadata: last.providerMetadata,
+    request: last.request,
+    response: { ...last.response, messages: accumulated },
+    files: last.files,
     sources,
     experimental_output: undefined as never,
   } as unknown as AgentResult;
 }
 
-/** One step's settled `streamText` promises. */
-interface StreamedCall {
-  text: string;
-  steps: StreamedStep[];
-  finishReason: string;
-  usage: { promptTokens: number; completionTokens: number; totalTokens: number };
-  warnings: unknown;
-  toolCalls: unknown[];
-  toolResults: unknown[];
-  reasoning: unknown;
-  reasoningDetails: unknown;
-  providerMetadata: unknown;
-  request: unknown;
-  response: { messages?: CoreMessage[] } & Record<string, unknown>;
-  files: unknown;
-  sources: unknown[];
+/**
+ * A one-step call's step, as the SDK's own loop would have reported it.
+ *
+ * The SDK's step results carry a CUMULATIVE `response.messages`, and
+ * `partialObserver.onStepMessages` (agents/run.ts) keeps partial work on abort
+ * by that contract; a one-step call only knows its own messages, so the prefix
+ * goes back on. `stepType` is restored for the same reason — every one-step
+ * call calls itself `initial`.
+ */
+function withPrefix<T extends { response?: { messages?: CoreMessage[] } }>(
+  step: T,
+  prefix: CoreMessage[],
+  stepType: 'initial' | 'tool-result',
+): T {
+  return {
+    ...step,
+    stepType,
+    response: { ...step.response, messages: [...prefix, ...(step.response?.messages ?? [])] },
+  } as T;
 }
-
-type StreamedStep = StepFinishPayload & Record<string, unknown>;
 
 /**
  * One `streamText({maxSteps: 1})` call: drain its `fullStream` into the
@@ -1099,7 +1089,7 @@ async function streamOneStep(
   onStepFinish: ((payload: StepFinishPayload) => Promise<void>) | undefined,
   progress: StreamProgress | undefined,
   raceAbort: <T>(p: Promise<T>) => Promise<T>,
-): Promise<StreamedCall> {
+) {
   const abortSignal = spec.abortSignal;
   const stream = streamText({
     model: spec.model,
@@ -1217,23 +1207,19 @@ async function streamOneStep(
     ]),
   );
   return {
-    text: text ?? '',
-    steps: (steps ?? []) as unknown as StreamedStep[],
-    finishReason: finishReason as string,
-    usage: {
-      promptTokens: usage?.promptTokens ?? NaN,
-      completionTokens: usage?.completionTokens ?? NaN,
-      totalTokens: usage?.totalTokens ?? NaN,
-    },
+    text,
+    steps,
+    finishReason,
+    usage,
     warnings,
-    toolCalls: (toolCalls ?? []) as unknown[],
-    toolResults: (toolResults ?? []) as unknown[],
+    toolCalls,
+    toolResults,
     reasoning,
     reasoningDetails,
     providerMetadata,
     request,
-    response: (response ?? {}) as StreamedCall['response'],
+    response,
     files,
-    sources: (sources ?? []) as unknown[],
+    sources,
   };
 }

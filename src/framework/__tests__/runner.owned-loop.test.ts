@@ -15,53 +15,20 @@
  */
 import { describe, it, expect } from 'vitest';
 import { streamText, tool } from 'ai';
-import { MockLanguageModelV1 } from 'ai/test';
 import { z } from 'zod';
-import type { LanguageModelV1StreamPart } from '@ai-sdk/provider';
 import { runAgent } from '../runner.js';
 import type { CoreMessage } from '../sdk.js';
 import type { StepFinishPayload } from '../hooks/types.js';
+import {
+  scriptedModel,
+  toolStep,
+  TEXT_STEP,
+  type ScriptedStep,
+} from '../../__tests__/scripted-model.js';
 
-type Script = LanguageModelV1StreamPart[][];
+type Script = ScriptedStep[];
 
-const TOOL_STEP: LanguageModelV1StreamPart[] = [
-  { type: 'text-delta', textDelta: 'Checking. ' },
-  {
-    type: 'tool-call',
-    toolCallType: 'function',
-    toolCallId: 'call-1',
-    toolName: 'lookup',
-    args: JSON.stringify({ q: 'deploy' }),
-  },
-  { type: 'finish', finishReason: 'tool-calls', usage: { promptTokens: 10, completionTokens: 5 } },
-];
-const TEXT_STEP: LanguageModelV1StreamPart[] = [
-  { type: 'text-delta', textDelta: 'Done.' },
-  { type: 'finish', finishReason: 'stop', usage: { promptTokens: 20, completionTokens: 3 } },
-];
-
-/** A model that plays `script` one step per call and records every prompt. */
-function scriptedModel(script: Script, onCall?: (index: number) => void) {
-  const prompts: string[] = [];
-  const model = new MockLanguageModelV1({
-    doStream: async (options) => {
-      const index = prompts.length;
-      prompts.push(JSON.stringify(options.prompt));
-      onCall?.(index);
-      const parts = script[index] ?? TEXT_STEP;
-      return {
-        stream: new ReadableStream<LanguageModelV1StreamPart>({
-          start(controller) {
-            for (const part of parts) controller.enqueue(part);
-            controller.close();
-          },
-        }),
-        rawCall: { rawPrompt: null, rawSettings: {} },
-      };
-    },
-  });
-  return { model, prompts };
-}
+const TOOL_STEP = toolStep('lookup', { q: 'deploy' }, 'Checking. ');
 
 function lookupTool(onExecute?: () => void) {
   return tool({
@@ -114,11 +81,11 @@ async function viaRunner(
   extra: {
     takeInterjections?: () => CoreMessage[];
     onExecute?: () => void;
-    onCall?: (index: number) => void;
+    during?: (index: number) => void;
     onStep?: (p: StepFinishPayload) => void;
   } = {},
 ) {
-  const { model, prompts } = scriptedModel(script, extra.onCall);
+  const { model, prompts } = scriptedModel(script, extra.during);
   const result = await runAgent({
     model,
     tools: { lookup: lookupTool(extra.onExecute) },
@@ -183,10 +150,10 @@ describe('runStreaming owns the step loop (#200)', () => {
 
     // Step 1's request is untouched; step 2's ends with the tool result and
     // then the user's message, which is the only order a provider accepts.
-    const second = JSON.parse(prompts[1]) as { role: string; content: unknown }[];
+    const second = prompts[1];
     expect(second.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'tool', 'user']);
     expect(JSON.stringify(second.at(-1))).toContain('use the staging cluster');
-    expect(JSON.parse(prompts[0])).toHaveLength(2);
+    expect(prompts[0]).toHaveLength(2);
 
     // It rides `response.messages` in position, which is how it reaches history.
     expect(result.response.messages.map((m) => m.role)).toEqual([
@@ -206,8 +173,7 @@ describe('runStreaming owns the step loop (#200)', () => {
     const { prompts, result } = await viaRunner([TEXT_STEP], 3, {
       takeInterjections: () => inbox.splice(0),
     });
-    const first = JSON.parse(prompts[0]) as { role: string }[];
-    expect(first.map((m) => m.role)).toEqual(['system', 'user', 'user']);
+    expect(prompts[0].map((m) => m.role)).toEqual(['system', 'user', 'user']);
     expect(result.response.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
   });
 
@@ -218,7 +184,7 @@ describe('runStreaming owns the step loop (#200)', () => {
     const late: CoreMessage = { role: 'user', content: 'one more thing' };
     const { prompts, result } = await viaRunner([TOOL_STEP, TEXT_STEP], 3, {
       takeInterjections: () => inbox.splice(0),
-      onCall: (i) => {
+      during: (i) => {
         if (i === 1) inbox.push(late);
       },
     });

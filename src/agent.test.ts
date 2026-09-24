@@ -26,6 +26,12 @@ import { assembleContext } from './framework/context.js';
 import * as modelPolicy from './model-policy.js';
 import { setOutputSink } from './framework/hooks/output-sink.js';
 import { PLAN_ENFORCEMENT_PREFIX } from './session-markers.js';
+import {
+  scriptedModel,
+  toolStep,
+  TEXT_STEP,
+  type ScriptedStep,
+} from './__tests__/scripted-model.js';
 
 vi.mock('node:fs', () => ({
   // `statSync` backs `MemoryStore`'s stat-validated read cache (#513): a
@@ -2561,32 +2567,16 @@ describe('messages sent mid-turn (#200)', () => {
   let store: MemoryStore;
   const toolOptions = { shellTimeout: 30000, confirmDangerous: vi.fn() };
 
-  const THINK_STEP = [
-    {
-      type: 'tool-call',
-      toolCallType: 'function',
-      toolCallId: 'call-1',
-      toolName: 'probe',
-      args: JSON.stringify({ q: 'which cluster?' }),
-    },
-    {
-      type: 'finish',
-      finishReason: 'tool-calls',
-      usage: { promptTokens: 10, completionTokens: 5 },
-    },
-  ];
-  const TEXT_STEP = [
-    { type: 'text-delta', textDelta: 'Done.' },
-    { type: 'finish', finishReason: 'stop', usage: { promptTokens: 20, completionTokens: 3 } },
-  ];
+  const TOOL_STEP = toolStep('probe', { q: 'which cluster?' });
 
   /**
-   * Routes the mocked `streamText` to the real one with a model that plays one
-   * scripted step per request. `during(i)` runs as request `i` is issued, which
-   * is while the step before it has already finished — the window a user types
-   * into. Returning `'hang'` leaves that step's stream open.
+   * Routes the mocked `streamText` to the real one, driven by a scripted model.
+   * The registry is a stand-in: this file mocks modules the real tools are
+   * built from, and the real SDK serialises every schema and runs every call,
+   * so the main agent's own tools would fail here for the mocks' reasons
+   * rather than the feature's. What is under test is the loop, not a tool.
    */
-  async function scripted(steps: unknown[][], during?: (i: number) => void | 'hang') {
+  async function scripted(steps: ScriptedStep[], during?: (i: number) => void | 'hang') {
     const { streamText: realStreamText, tool } = await vi.importActual<typeof import('ai')>('ai');
     const { z } = await import('zod');
     const probe = tool({
@@ -2594,29 +2584,7 @@ describe('messages sent mid-turn (#200)', () => {
       parameters: z.object({ q: z.string() }),
       execute: async () => 'staging and prod',
     });
-    const { MockLanguageModelV1 } = await import('ai/test');
-    const prompts: any[] = [];
-    const model = new MockLanguageModelV1({
-      doStream: async (options: any) => {
-        const i = prompts.length;
-        prompts.push(options.prompt);
-        const hang = during?.(i) === 'hang';
-        return {
-          stream: new ReadableStream({
-            start(controller) {
-              if (hang) return;
-              for (const part of steps[i] ?? TEXT_STEP) controller.enqueue(part);
-              controller.close();
-            },
-          }),
-          rawCall: { rawPrompt: null, rawSettings: {} },
-        };
-      },
-    });
-    // A stand-in registry: this file mocks modules the real tools are built
-    // from, and the real SDK serialises every schema and runs every call, so
-    // the main agent's own tools would fail here for the mocks' reasons rather
-    // than the feature's. What is under test is the loop, not a tool.
+    const { model, prompts } = scriptedModel(steps, during);
     mockStreamText.mockImplementation((opts: any) =>
       realStreamText({ ...opts, model, tools: { probe } }),
     );
@@ -2638,8 +2606,12 @@ describe('messages sent mid-turn (#200)', () => {
   it('lands a message typed during a step before the next request, in history order', async () => {
     const agent = makeAgent(makeConfig(), toolOptions, store);
     const landed: any[] = [];
-    agent.setInterjectionListener((m) => landed.push(m));
-    const prompts = await scripted([THINK_STEP, TEXT_STEP], (i) => {
+    setOutputSink({
+      append: (ev) => {
+        if (ev.kind === 'user-interjection') landed.push(ev.message);
+      },
+    });
+    const prompts = await scripted([TOOL_STEP, TEXT_STEP], (i) => {
       if (i === 0) agent.interject('use the staging cluster');
     });
 
@@ -2650,8 +2622,8 @@ describe('messages sent mid-turn (#200)', () => {
     const note = history[3];
     expect(String(note.content)).toContain('use the staging cluster');
     expect(String(note.content)).toContain('Sent while you were working');
-    // The listener is handed the very object history holds, which is what lets
-    // the transcript render it once, in position.
+    // The live transcript is handed the very object history holds, which is
+    // what lets the commit render it once, in position.
     expect(landed).toEqual([note]);
     // And the model's second request carried it after the tool result.
     const second = prompts[1].map((m: any) => m.role);
@@ -2661,7 +2633,7 @@ describe('messages sent mid-turn (#200)', () => {
 
   it('hands back a message that arrived during the final step', async () => {
     const agent = makeAgent(makeConfig(), toolOptions, store);
-    await scripted([THINK_STEP, TEXT_STEP], (i) => {
+    await scripted([TOOL_STEP, TEXT_STEP], (i) => {
       if (i === 1) agent.interject('one more thing');
     });
 
@@ -2676,7 +2648,7 @@ describe('messages sent mid-turn (#200)', () => {
     // finished after the drain, so only the drain itself can have put it in
     // the partial snapshot the abort path flushes.
     const agent = makeAgent(makeConfig(), toolOptions, store);
-    await scripted([THINK_STEP, TEXT_STEP], (i) => {
+    await scripted([TOOL_STEP, TEXT_STEP], (i) => {
       if (i === 0) agent.interject('stop after this one');
       if (i === 1) {
         setTimeout(() => agent.abort(), 10);

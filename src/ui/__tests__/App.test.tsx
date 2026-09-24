@@ -141,6 +141,7 @@ import { WIZARD_FIELDS } from '../../profiles-wizard-data.js';
 import { resolveReferences, shouldSkipResolver } from '../../reference-resolver.js';
 import { INTERRUPT_CANCEL_NOTE } from '../../react.js';
 import { INTERRUPTED_MARKER, INTERJECTION_NOTICE } from '../../session-markers.js';
+import { getOutputSink } from '../../framework/hooks/output-sink.js';
 import { DimensionsProvider } from '../DimensionsContext.js';
 import { REWRITE_ICON } from '../Thread.js';
 import type { CoreMessage } from '../../framework/sdk.js';
@@ -218,9 +219,6 @@ function makeAgent(
 ): Agent {
   const box = holder ?? { current: history };
   const interjectionInbox: string[] = [];
-  const interjectionListener: { current: ((m: CoreMessage) => void) | undefined } = {
-    current: undefined,
-  };
   const stubs: AgentSpy = {
     processInput: vi.fn(async () => {}),
     clearHistory: vi.fn(() => {
@@ -248,17 +246,12 @@ function makeAgent(
     // A working inbox rather than no-ops (#200): the App's side of the feature
     // is what it does with `interject` and with what comes back undelivered,
     // and a stub that drops the text would let a test pass that never looked.
-    // `interjectionInbox` is exposed so a test can read or seed it; a test that
-    // needs a delivery calls the listener captured here.
+    // `interjectionInbox` is exposed so a test can read or seed it.
     interjectionInbox,
     interject: vi.fn((text: string) => {
       interjectionInbox.push(text);
     }),
     takeUndeliveredInterjections: vi.fn(() => interjectionInbox.splice(0)),
-    setInterjectionListener: vi.fn((l: ((m: CoreMessage) => void) | undefined) => {
-      interjectionListener.current = l;
-    }),
-    interjectionListener,
     clearHistory: stubs.clearHistory,
     compactHistory: stubs.compactHistory,
     processInput: stubs.processInput,
@@ -2106,11 +2099,13 @@ describe('<App> plain-text turn', () => {
     await tick();
     await submit(stdin, 'the first question');
     await submit(stdin, 'use the staging cluster');
-    // What the runner does before the next request: take it, hand it over.
+    // What `runDefinition` does when the runner drains it before the next
+    // request: take it from the inbox and append it to the live output sink.
     (agent.interjectionInbox as string[]).splice(0);
-    (agent.interjectionListener as { current?: (m: CoreMessage) => void }).current?.(
-      deliveredMessage('use the staging cluster'),
-    );
+    getOutputSink()?.append({
+      kind: 'user-interjection',
+      message: deliveredMessage('use the staging cluster'),
+    });
     await tick(40);
     const frame = stripAnsi(lastFrame() ?? '');
     // The user's own words, with the model-facing notice stripped off.
@@ -2152,6 +2147,20 @@ describe('<App> plain-text turn', () => {
     const frame = stripAnsi(lastFrame() ?? '');
     expect(frame).toContain('Turn interrupted');
     expect(frame).toContain('not delivered');
+    unmount();
+  });
+
+  it('sends a slash word that is not a command, as the idle chain would', async () => {
+    // Idle, an unknown `/word` falls through the dispatch chain to the agent;
+    // mid-turn it must mean the same thing rather than be refused by shape.
+    const { stdin, agent, release, unmount } = heldTurn();
+    await tick();
+    await submit(stdin, 'the first question');
+    await submit(stdin, '/tmp is full');
+    await tick(40);
+    expect(agent.interject).toHaveBeenCalledWith('/tmp is full');
+    release();
+    await tick(200);
     unmount();
   });
 
