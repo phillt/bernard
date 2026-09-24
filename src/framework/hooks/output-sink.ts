@@ -17,6 +17,8 @@
  * for the few unit tests that import `outputHook` without mounting `<App>`.
  */
 
+import type { CoreMessage } from '../sdk.js';
+
 /** Per-step events the framework pushes to a registered sink. */
 export type StreamEvent =
   | {
@@ -39,6 +41,18 @@ export type StreamEvent =
       result: unknown;
       isError: boolean;
       agentLabel?: string;
+    }
+  | {
+      /**
+       * Something the user typed mid-turn, at the moment it was sent to the
+       * model (#200). Carries the EXACT message that sits in history, so the
+       * live view renders it with the component the committed transcript uses
+       * and the two cannot disagree about what it says or where it went.
+       * Main-agent only, so never labelled.
+       */
+      kind: 'user-interjection';
+      message: CoreMessage;
+      agentLabel?: undefined;
     };
 
 /**

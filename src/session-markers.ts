@@ -55,6 +55,39 @@ export const CONTEXT_SUMMARY_ACK =
 /** Assistant acknowledgement paired with an emergency truncation notice. */
 export const TRUNCATION_ACK = 'Understood. Continuing with limited context.';
 
+/**
+ * Opening line of a message the user typed while a turn was running (#200).
+ *
+ * **Not scaffolding, and deliberately absent from {@link BOUNDARY_PREFIXES}.**
+ * The text after this line is the user's own words and must render as theirs,
+ * feed the RAG query and survive resume like any other request. The line itself
+ * is the part addressed to the model: it says the message arrived mid-work, so
+ * the model reads it as a correction to the task in hand rather than a new one,
+ * and it asks for the one thing a late correction owes the user — what can and
+ * cannot still change, since some of the work may already be done.
+ *
+ * Every reader that shows or embeds the user's words strips it through
+ * {@link stripInterjectionNotice}, so the sentence has one spelling.
+ */
+export const INTERJECTION_NOTICE =
+  '[Sent while you were working. Take this into account from here on; if it conflicts with something you have already done, say what you can and cannot still change.]';
+
+/** The model-facing form of a mid-turn message: the notice, then the user's words. */
+export function renderInterjection(text: string): string {
+  return `${INTERJECTION_NOTICE}\n${text}`;
+}
+
+/**
+ * The user's words out of a mid-turn message, and whether it was one.
+ * Expects the timestamp already removed — the notice follows it.
+ */
+export function stripInterjectionNotice(text: string): { body: string; interjected: boolean } {
+  const head = `${INTERJECTION_NOTICE}\n`;
+  return text.startsWith(head)
+    ? { body: text.slice(head.length), interjected: true }
+    : { body: text, interjected: false };
+}
+
 /** Prefixes of every user-role scaffolding notice. */
 export const BOUNDARY_PREFIXES = [
   CONTEXT_SUMMARY_PREFIX,

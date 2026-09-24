@@ -66,12 +66,14 @@ function pickHints(state: HintBarProps): KeyHint[] {
     return [HINT_CLOSE];
   }
   if (state.busy) {
-    // The prompt is live during a turn now (#202), and this row is the only
-    // thing on screen that says what typing into it will do. `+` first,
-    // because it is the new affordance and the cheaper of the two: interrupt
-    // throws away the work already done, which is the cost #200/#202 exist to
-    // stop the user paying to say one sentence.
+    // The prompt is live during a turn (#202), and this row is the only thing
+    // on screen that says what typing into it will do. Plain Enter first: it
+    // steers the work in flight (#200), which is the common case and the one
+    // the plain keystroke is for. `+` waits until the turn is over. Interrupt
+    // last, because it throws away the work already done — the cost both
+    // exist to stop the user paying to say one sentence.
     return [
+      { key: KEY.enter, label: 'tell bernard now' },
       { key: '+', label: 'queue for after' },
       { key: KEY.esc, label: 'interrupt' },
     ];

@@ -56,7 +56,7 @@ import { computeTurnUsageReport } from './usage-report.js';
 // `recordInterruptedInput` — so the marker has one owner, and it lives in
 // `session-markers.ts` because the transcript must also skip it. Re-exported
 // because callers import it from './agent.js'.
-import { CONTINUATION_PREFIX, INTERRUPTED_MARKER } from './session-markers.js';
+import { CONTINUATION_PREFIX, INTERRUPTED_MARKER, renderInterjection } from './session-markers.js';
 export { INTERRUPTED_MARKER } from './session-markers.js';
 import { DefaultPolicyEngine, isReactEffective } from './policy/index.js';
 import type { PolicyDecision, PolicyEngine, PolicyResult } from './policy/index.js';
@@ -164,6 +164,22 @@ export class Agent {
   // only on user abort.
   private partialStepMessages: CoreMessage[] = [];
   private partialText: string = '';
+  /**
+   * Messages the user typed while a turn was running, not yet sent (#200).
+   *
+   * Each is built into its model-facing message the moment it is typed, so the
+   * timestamp it carries is when the user said it rather than when the next
+   * step happened to start. The text rides beside it for the one reader that
+   * needs the words back: a message the turn never reached.
+   *
+   * Not cleared at turn start, deliberately: `App` accepts a message while the
+   * pre-turn pipeline is still running, before `processInput` is entered, and
+   * the first request of the turn is exactly where that one belongs.
+   */
+  private interjectionInbox: { text: string; message: CoreMessage }[] = [];
+  /** How many interjections the current turn delivered. */
+  private interjectionsDelivered = 0;
+  private interjectionListener: ((message: CoreMessage) => void) | undefined;
   private lastPromptTokens: number = 0;
   /**
    * Wire size of the main agent's tool block, in characters (#323).
@@ -347,6 +363,55 @@ export class Agent {
   getLastUserMessage(): CoreMessage | null {
     return this.lastUserMessage;
   }
+
+  /**
+   * Hand the turn in flight something the user just typed (#200).
+   *
+   * It reaches the model before the NEXT request the turn makes — never in the
+   * middle of a tool call, because tools run inside a step and the runner only
+   * drains between steps. Whatever the turn never reaches is handed back by
+   * {@link takeUndeliveredInterjections}.
+   */
+  interject(text: string): void {
+    this.interjectionInbox.push({
+      text,
+      message: { role: 'user', content: timestampUserMessage(renderInterjection(text)) },
+    });
+  }
+
+  /**
+   * Told each time an interjection is sent to the model, with the exact message
+   * object that will sit in history — so the transcript can show it landing in
+   * position, and can recognise it again by identity.
+   */
+  setInterjectionListener(listener: ((message: CoreMessage) => void) | undefined): void {
+    this.interjectionListener = listener;
+  }
+
+  /**
+   * The words of every interjection the turn never sent, in the order they were
+   * typed, removing them. Called once when the turn is over: a message that
+   * arrived after the model's last step has no request left to ride, and
+   * dropping it silently is the one outcome #200 rules out.
+   */
+  takeUndeliveredInterjections(): string[] {
+    return this.interjectionInbox.splice(0).map((e) => e.text);
+  }
+
+  /** The runner's drain, consulted before every model request of a turn. */
+  private drainInterjections = (): CoreMessage[] => {
+    if (this.interjectionInbox.length === 0) return [];
+    const messages = this.interjectionInbox.splice(0).map((e) => e.message);
+    this.interjectionsDelivered += messages.length;
+    // The partial snapshot is only refreshed when a step FINISHES, and these
+    // are about to ride a step that has not. Without this, an Esc during that
+    // step would flush a history missing a message the user watched land.
+    // The next finished step replaces the snapshot with one that includes them.
+    this.partialStepMessages = [...this.partialStepMessages, ...messages];
+    debugLog('turn:interjection', { count: messages.length });
+    for (const message of messages) this.interjectionListener?.(message);
+    return messages;
+  };
 
   /** Reference-resolver entries from the most recent turn. Issue #140. */
   getLastResolvedReferences(): ResolvedEntry[] {
@@ -621,6 +686,7 @@ export class Agent {
     const userMessage = attachTo(withData, images);
     this.lastUserMessage = userMessage;
     this.history.push(userMessage);
+    this.interjectionsDelivered = 0;
 
     // Snapshot the conversation turn position NOW, before the run — the
     // maxTokens-continuation and empty-answer-retry loops in `wrapIterate` push
@@ -1109,6 +1175,7 @@ export class Agent {
       const runOut = await runDefinition(this.ctx, mainAgentDefinition, input, {
         abortSignal: this.abortController!.signal,
         seedMessages: () => this.history,
+        takeInterjections: this.drainInterjections,
         planStore: this.planStore,
         wrapIterate,
         partialObserver: {
@@ -1143,7 +1210,14 @@ export class Agent {
       // Q&A turns that took NO tool actions, so a future near-duplicate ask can
       // be answered without a model call. Gated identically to the lookup above.
       const usedTools = (result.steps ?? []).some((s) => (s.toolCalls?.length ?? 0) > 0);
-      if (semanticEligible && !usedTools && result.text?.trim()) {
+      // A turn the user steered mid-run answered more than the question it
+      // started from, so its answer is not a reply to a near-duplicate ask.
+      if (
+        semanticEligible &&
+        !usedTools &&
+        this.interjectionsDelivered === 0 &&
+        result.text?.trim()
+      ) {
         void this.semanticCache.put(userInput, result.text);
       }
 
@@ -1392,6 +1466,7 @@ export class Agent {
   /** Resets conversation history, scratch notes, and RAG tracking state for a fresh session. */
   clearHistory(): void {
     this.history = [];
+    this.interjectionInbox = [];
     this.memoryStore.clearScratch();
     this.previousRAGFacts = new Set();
     this.lastRAGResults = [];

@@ -898,7 +898,16 @@ const startsWithCmd = (text: string, command: DispatchedCommand): boolean =>
 const QUEUE_PREFIX_RE = /^\+(?:\s+|$)/;
 
 /**
- * What the prompt accepts while a turn is in flight (#202).
+ * A slash command, as opposed to text that merely starts with a slash (#200).
+ * Mid-turn, the first is refused and the second is sent to the running turn,
+ * so `/home/me/notes.md is the file` must not read as a command. The name ends
+ * at whitespace or the end of the line, which a path's second `/` never does.
+ */
+const SLASH_COMMAND_RE = /^\/[a-z][\w-]*(?:\s|$)/i;
+
+/**
+ * Which slash commands the prompt accepts while a turn is in flight (#202).
+ * Bare text is not governed here: mid-turn it goes to the running turn (#200).
  *
  * The Prompt is live mid-turn now, which reaches every slash command in the
  * dispatch chain — and every one of them was written against an idle REPL.
@@ -915,12 +924,12 @@ const QUEUE_PREFIX_RE = /^\+(?:\s+|$)/;
  * the point rather than an oversight.** Enter on an EMPTY buffer never reaches
  * `handleSubmit` at all — `Prompt` routes it to `onEmptySubmit`, i.e. to
  * `actOnPendingMessage` — so acting on a delivered message queues silently
- * mid-turn where typed text is refused. Two reasons, and both are about what
- * the keystroke MEANS. It is not text: it reaches `requestTurn` and nothing
- * else, so none of the ~45 idle-REPL branches this list is guarding is
- * reachable from it. And the refusal above exists to keep #200's reading of
- * bare TYPED text open, while a message already on screen has no #200 reading
- * — CLAUDE.md records it as #202's answer, which is exactly what it gets.
+ * mid-turn where a typed command is refused. Two reasons, and both are about
+ * what the keystroke MEANS. It is not text: it reaches `requestTurn` and
+ * nothing else, so none of the ~45 idle-REPL branches this list is guarding is
+ * reachable from it. And it is a new request from somewhere else rather than a
+ * correction the user is typing into their own turn, so it takes #202's
+ * meaning — run after — and not #200's, which bare typed text now has.
  */
 const BUSY_ALLOWED_COMMANDS: readonly DispatchedCommand[] = ['/queue'];
 
@@ -1419,6 +1428,17 @@ export function App({
     return () => setOutputSink(null);
   }, [messageStore]);
 
+  // A message typed mid-turn is shown the moment it reaches the model (#200),
+  // in the live stream between the blocks around it. At turn end the commit
+  // renders the same message from history in the same position, so nothing
+  // here marks it as already on screen.
+  useEffect(() => {
+    agent.setInterjectionListener((message) =>
+      messageStore.append({ kind: 'user-interjection', message }),
+    );
+    return () => agent.setInterjectionListener(undefined);
+  }, [agent, messageStore]);
+
   /**
    * External messages (#462).
    *
@@ -1876,19 +1896,30 @@ export function App({
       return;
     }
 
-    // ── Everything else is refused while a turn is in flight (#202) ──
+    // ── While a turn is in flight: text steers it, commands wait (#200) ──
     //
-    // The silent `submittingRef` return inside `runAgentTurn` is right for the
-    // double-Enter it was written for and wrong the moment the prompt is live:
-    // a message typed deliberately, accepted by the input line, and then
-    // discarded with nothing on screen is worse than the disabled prompt this
-    // replaces. `Prompt` calls `onRecordInput` BEFORE `onSubmit`, so the text
-    // is one `↑` away — which is what makes naming the remedy enough.
+    // Bare text goes to the turn that is running, and reaches the model before
+    // its next request — never inside a tool call, because tools run within a
+    // step and the runner only drains between steps. Anything that turn never
+    // reaches comes back in `runAgentTurn`'s `finally` and runs next, so
+    // nothing typed here is dropped.
+    //
+    // A slash command is still refused. Every branch of the dispatch chain was
+    // written against an idle REPL, and several mutate `agent.history` or swap
+    // the model under a running loop. `Prompt` calls `onRecordInput` BEFORE
+    // `onSubmit`, so the command is one `↑` away — which is what makes naming
+    // the remedy enough. A path such as `/home/…` is not a command: the name
+    // has to end at whitespace or the end of the line.
     if (submittingRef.current && !BUSY_ALLOWED_COMMANDS.some((c) => is(text, c))) {
-      flashToast(
-        'Bernard is working. Press ↑ and prefix it with "+ " to run it after this turn, or esc to interrupt.',
-        'error',
-      );
+      if (SLASH_COMMAND_RE.test(text)) {
+        flashToast(
+          'Commands wait until Bernard finishes — press ↑ to run it then, or esc to interrupt.',
+          'error',
+        );
+        return;
+      }
+      agent.interject(text);
+      flashToast('Sent — Bernard will see it before the next step.', 'success');
       return;
     }
 
@@ -4978,15 +5009,26 @@ export function App({
     // after the last user message is the still-uncommitted turn output (the
     // user message itself was already committed at turn start). Guard on a
     // non-null prior ref so the first-ever commit still emits initial history.
+    //
+    // Anchored on the message that OPENED the turn, by identity, rather than on
+    // the last `role:'user'` message. The two used to coincide; they do not
+    // once a turn can hold user messages of its own — a message typed mid-turn
+    // (#200), or the auto-continue notice after a cut-off response — and
+    // anchoring on the later one would skip every block the turn produced
+    // before it. The last-user scan survives as the fallback for a history
+    // that no longer holds the opening message at all.
     if (historyRef.current !== null && historyRef.current !== history) {
-      let lastUserIdx = -1;
-      for (let i = history.length - 1; i >= 0; i--) {
-        if (history[i].role === 'user') {
-          lastUserIdx = i;
-          break;
+      const opening = agent.getLastUserMessage();
+      let anchorIdx = opening ? history.indexOf(opening) : -1;
+      if (anchorIdx === -1) {
+        for (let i = history.length - 1; i >= 0; i--) {
+          if (history[i].role === 'user') {
+            anchorIdx = i;
+            break;
+          }
         }
       }
-      committedLenRef.current = lastUserIdx + 1;
+      committedLenRef.current = anchorIdx + 1;
     }
     historyRef.current = history;
     const start = committedLenRef.current;
@@ -5341,6 +5383,9 @@ export function App({
         const interruptedMessage = agent.recordInterruptedInput(input);
         if (interruptedMessage) alreadyOnScreenRef.current.add(interruptedMessage);
       }
+      // Taken once, here, because two places below report on it: the
+      // interrupt notice, and the requeue before the drain.
+      const undelivered = agent.takeUndeliveredInterjections();
       persistAgentState({ agent, historyStore, provenanceHistoryStore, turnContextStore });
       submittingRef.current = false;
       turnAbortRef.current = null;
@@ -5448,12 +5493,17 @@ export function App({
             ? `\nPlan stopped at: ${stopped[0].description}` +
               (stopped.length > 1 ? ` (+${stopped.length - 1} more unresolved)` : '')
             : '';
+        const undeliveredNote =
+          undelivered.length > 0
+            ? `\n${undelivered.length === 1 ? 'A message you sent was' : `${undelivered.length} messages you sent were`} not delivered — press ↑ to recall.`
+            : '';
         pushAssistantNotice(
           `⏹ Turn interrupted after ${formatDuration(endedAt - turnStartedAt)}.` +
             (inFlight > 0
               ? ` ${inFlight} sub-dispatch${inFlight === 1 ? '' : 'es'} cancelled with it.`
               : '') +
-            planNote,
+            planNote +
+            undeliveredNote,
         );
       }
       // Append the error panel after the turn's committed output so it reads
@@ -5467,6 +5517,21 @@ export function App({
             error: errorPanel!,
           },
         ]);
+      }
+      // Messages typed mid-turn that never reached the model (#200). One that
+      // arrived after the last step had no request left to ride, and #200's
+      // rule is that it is not lost: it runs next, as the user's own request,
+      // and says so. After an interrupt it does NOT run — Esc means stop, and
+      // starting a turn off a correction to the work just stopped would undo
+      // that. The words are one ↑ away either way, since `Prompt` recorded them.
+      if (undelivered.length > 0 && !controller.signal.aborted) {
+        for (const text of undelivered) requestTurn({ text, source: { kind: 'user' } });
+        flashToast(
+          undelivered.length === 1
+            ? 'Your message arrived after Bernard finished — running it now.'
+            : `${undelivered.length} messages arrived after Bernard finished — running them now.`,
+          'success',
+        );
       }
       // Drain one queued turn (#202/#479). LAST in the finally, after
       // `submittingRef` is released and the transcript is committed, or the

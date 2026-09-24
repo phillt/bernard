@@ -87,6 +87,15 @@ export interface RunDefinitionOpts {
    * snapshot after each completed step. `onTextDelta` receives streamed text
    * of the in-flight step (streaming branch only).
    */
+  /**
+   * Messages the user sent mid-turn (#200), drained by the runner before every
+   * model request. Forwarded unchanged onto the spec every iterate builds, so a
+   * turn's plan-enforcement re-prompts and continuations drain the same inbox.
+   *
+   * Only the main agent supplies one, and it only reaches the model on the
+   * streaming branch — see {@link AgentSpec.takeInterjections}.
+   */
+  takeInterjections?: () => CoreMessage[];
   partialObserver?: {
     onIterateStart?(): void;
     onStepMessages?(cumulativeMessages: CoreMessage[]): void;
@@ -574,6 +583,7 @@ export async function runDefinition<TInput, TFormatted>(
     onTextDelta,
     onToolCallStart,
     onToolResult,
+    takeInterjections: opts.takeInterjections,
   };
 
   let stepLimitHit = false;
