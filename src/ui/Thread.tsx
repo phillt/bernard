@@ -14,6 +14,7 @@ import type {
 type ReasoningPart = { type: 'reasoning'; text: string };
 type RedactedReasoningPart = { type: 'redacted-reasoning'; data: string };
 import { unwrapToolResultOutput } from '../tool-result-output.js';
+import { stripInterjectionNotice } from '../session-markers.js';
 import { toolFailureFor, type ToolFailure } from '../tool-failure.js';
 import { getThemeColors } from '../theme.js';
 import { truncate } from '../text.js';
@@ -221,6 +222,12 @@ export function StreamingAssistantMessage({
   return (
     <Box flexDirection="column" marginTop={1}>
       {groups.map((group, idx) => {
+        // A message the user sent mid-turn sits between the blocks around it,
+        // exactly where it reached the model (#200). Rendered by the same
+        // component the committed transcript uses, from the same message.
+        if (group.kind === 'interjection') {
+          return <UserMessage key={idx} message={group.message as CoreUserMessage} />;
+        }
         // Sub-agent groups (label set) keep the labeled header above the
         // body. Main-agent groups (no label) inline the chevron with the
         // first line of body content, mirroring the static AssistantMessage.
@@ -252,10 +259,12 @@ export function StreamingAssistantMessage({
   );
 }
 
-interface EventGroup {
-  label: string | undefined;
-  events: StreamEvent[];
-}
+/** Everything a group body renders — a mid-turn message is its own group. */
+type BodyEvent = Exclude<StreamEvent, { kind: 'user-interjection' }>;
+
+type EventGroup =
+  | { kind: 'events'; label: string | undefined; events: BodyEvent[] }
+  | { kind: 'interjection'; message: CoreMessage };
 
 /**
  * Bucket events by `agentLabel` while preserving order. Sub-agent output
@@ -267,12 +276,18 @@ interface EventGroup {
 function groupByLabel(events: readonly StreamEvent[]): EventGroup[] {
   const out: EventGroup[] = [];
   for (const ev of events) {
+    // Its own group, always: it ends the text run before it, and whatever the
+    // model says next opens a fresh block with its own chevron.
+    if (ev.kind === 'user-interjection') {
+      out.push({ kind: 'interjection', message: ev.message });
+      continue;
+    }
     const label = ev.agentLabel;
     const tail = out[out.length - 1];
-    if (tail && tail.label === label) {
+    if (tail?.kind === 'events' && tail.label === label) {
       tail.events.push(ev);
     } else {
-      out.push({ label, events: [ev] });
+      out.push({ kind: 'events', label, events: [ev] });
     }
   }
   return out;
@@ -378,7 +393,7 @@ function StreamGroupBody({
   toolDetails,
   inlineChevron = false,
 }: {
-  events: StreamEvent[];
+  events: BodyEvent[];
   toolDetails: boolean;
   /** When true, prepend `<❮ >` inline with the first emitted element. */
   inlineChevron?: boolean;
@@ -616,7 +631,7 @@ function UserMessage({
 }) {
   const colors = getThemeColors();
   const raw = extractUserText(message);
-  const { body, timestamp } = parseUserMessage(raw);
+  const { body, timestamp, interjected } = parseUserMessage(raw);
   // When the prompt-rewriter replaced the user's text before dispatch we want
   // to surface the original to the user (the rewrite is an LLM-only detail).
   // `rewriteOriginal` is plain text — strip the timestamp wrapper from `body`
@@ -632,6 +647,7 @@ function UserMessage({
       </Box>
       <Box>
         {rewriteOriginal !== undefined && <Text dimColor>{REWRITE_ICON} </Text>}
+        {interjected && <Text dimColor>sent while working{timestamp ? ' · ' : ''}</Text>}
         {timestamp && <Text dimColor>{formatFriendlyTimestamp(timestamp)}</Text>}
       </Box>
     </Box>
@@ -834,7 +850,12 @@ function ToolResultMessage({ message }: { message: CoreToolMessage }) {
  * so without it the frame renders `<user_request>` inside its border. Exporting
  * beats adding a FOURTH wrapper-stripper to the tree.
  */
-export function parseUserMessage(raw: string): { body: string; timestamp: Date | null } {
+export function parseUserMessage(raw: string): {
+  body: string;
+  timestamp: Date | null;
+  /** The user sent this while a turn was running (#200). */
+  interjected: boolean;
+} {
   let text = raw;
   if (text.startsWith('# Request\n')) {
     text = text.slice('# Request\n'.length);
@@ -843,14 +864,11 @@ export function parseUserMessage(raw: string): { body: string; timestamp: Date |
     if (text.endsWith('\n</user_request>')) text = text.slice(0, -'\n</user_request>'.length);
   }
   const m = text.match(/^\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2})\] /);
-  if (m) {
-    const parsed = new Date(m[1]);
-    return {
-      body: text.slice(m[0].length),
-      timestamp: isNaN(parsed.getTime()) ? null : parsed,
-    };
-  }
-  return { body: text, timestamp: null };
+  const parsed = m ? new Date(m[1]) : null;
+  // The mid-turn notice follows the timestamp: it is the part addressed to the
+  // model, and the reader sees the words and a footer saying when they landed.
+  const { body, interjected } = stripInterjectionNotice(m ? text.slice(m[0].length) : text);
+  return { body, timestamp: parsed && !isNaN(parsed.getTime()) ? parsed : null, interjected };
 }
 
 /**

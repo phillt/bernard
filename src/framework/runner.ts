@@ -348,6 +348,21 @@ export interface AgentSpec {
    * Omitted by every other caller, which mints one here as before.
    */
   dispatchId?: string;
+  /**
+   * Messages the user sent while this run was working (#200), drained by the
+   * runner before every model request on the streaming branch.
+   *
+   * A drain rather than a list, so the runner holds nothing: whatever it takes
+   * is appended to the conversation the next request carries and to
+   * `response.messages`, and whatever it never takes stays with the caller —
+   * which is what lets a message that arrives after the model's last step be
+   * handed back and run as the next turn instead of being lost.
+   *
+   * Consulted only by `runStreaming`, which is the main agent alone. Nothing
+   * else takes user input mid-run, so the non-streaming branch keeps the SDK's
+   * own loop.
+   */
+  takeInterjections?: () => CoreMessage[];
 }
 
 /** Result type re-exported so callers needn't depend on `ai` directly. */
@@ -914,51 +929,58 @@ async function runNonStreaming(
 
 /**
  * `streamText` branch (Phase C, #214). Pushes deltas to `spec.onTextDelta` as
- * they arrive, then assembles a `GenerateTextResult`-shaped object from the
- * `StreamTextResult` promises so callers downstream — strategies, plan
- * enforcement, provenance, format hooks — see no shape difference. The
- * `onStepFinish` hook still fires per step exactly as in the non-streaming
- * path, so tool-call / tool-result events route through `outputHook` to the
- * sink alongside the per-token deltas.
+ * they arrive, then assembles a `GenerateTextResult`-shaped object so callers
+ * downstream — strategies, plan enforcement, provenance, format hooks — see no
+ * shape difference. The `onStepFinish` hook still fires per step exactly as in
+ * the non-streaming path, so tool-call / tool-result events route through
+ * `outputHook` to the sink alongside the per-token deltas.
+ *
+ * **Bernard owns the step loop on this branch (#200).** Each step is its own
+ * `streamText({maxSteps: 1})` call, and the next one is issued here rather than
+ * inside the SDK. That is what gives the main agent a yield point: before every
+ * model request the runner asks {@link AgentSpec.takeInterjections} for
+ * anything the user typed while it worked, and appends it to the conversation
+ * the request carries.
+ *
+ * `ai@4.3.19` offers no such point on its own loop — CLAUDE.md's #200 entry
+ * records the three candidates checked against the installed bundle and why
+ * each fails. SDK 5's `prepareStep` can rewrite messages and would replace this
+ * loop; until then, this is the seam.
+ *
+ * **It costs nothing in tokens or bytes, and a little CPU.** The SDK re-sends
+ * the whole conversation on every step anyway, as the initial messages plus
+ * the accumulated response messages — exactly what each call is handed, and
+ * `runner.owned-loop.test.ts` asserts every provider prompt is identical. What
+ * is new is `standardizePrompt`: the SDK validates the prompt against its
+ * message schema once per `streamText` call, which was once per turn and is
+ * now once per step. Measured at ~0.12 ms per message — about 130 ms over a
+ * typical ten-step turn, and a 30-70 ms pause before each late step of a
+ * 150-step one. Small beside the round trips, and gone with SDK 5.
+ *
+ * **The continuation rule is the SDK's, copied rather than approximated**: the
+ * next step runs iff this one made tool calls, every call produced a result,
+ * and the step budget has room. `experimental_continueSteps` is not used here,
+ * so its `length` branch never applies.
+ *
+ * **The safe point is "before a request", and that is what makes it safe.**
+ * Tools execute inside a step, so a drain between steps cannot land in the
+ * middle of a tool call. It runs before step 0 as well, so a message typed
+ * during the pre-turn pipeline reaches the first request.
+ *
+ * **The aggregate reproduces `streamText`'s own, which differs from
+ * `generateText`'s in two fields**: `text` is every step's text concatenated
+ * (`recordedFullText`), and `sources` accumulate across steps. Everything else
+ * that is per-step comes from the last step, `usage` is summed, and
+ * `response.messages` is cumulative — interjections included, in the position
+ * they were sent, which is how they reach persistent history with no plumbing
+ * of their own.
  */
 async function runStreaming(
   spec: AgentSpec,
   onStepFinish: ((payload: StepFinishPayload) => Promise<void>) | undefined,
   progress?: StreamProgress,
 ): Promise<AgentResult> {
-  // `streamText` accepts a subset of `generateText` settings — no
-  // `experimental_prepareStep`. The main agent (the only `streaming: true`
-  // definition) doesn't use prepareStep, so this is sound.
-  //
-  // The sentence that used to follow this one was FALSE, and #200 was filed on
-  // it: it said `experimental_continueSteps` is "the equivalent steering on
-  // this path". That option is a boolean whose documented meaning is "perform
-  // additional steps if the finish reason is 'length'" — it steers nothing and
-  // rewrites nothing.
-  //
-  // Nor would `experimental_prepareStep` have helped if it were accepted here.
-  // In ai@4.3.19 it returns `{model, toolChoice, experimental_activeTools}`
-  // and cannot touch `messages`, so there is no hook on EITHER branch that
-  // rewrites a request mid-run. `onStepFinish` cannot stand in for one: it
-  // runs inside `eventProcessor`, a transform piped onto the consumer-facing
-  // stream, while the step recursion (`await streamStep(...)`) happens on the
-  // producer side with no user hook in between — so awaiting there gates our
-  // read and not the next HTTP request. There is no yield point in this SDK
-  // version; CLAUDE.md's `+ <request>` entry records what that leaves #200.
-  const stream = streamText({
-    model: spec.model,
-    providerOptions: spec.providerOptions,
-    tools: spec.tools,
-    maxSteps: spec.maxSteps,
-    maxTokens: spec.maxTokens,
-    system: spec.system,
-    messages: spec.messages,
-    abortSignal: spec.abortSignal,
-    experimental_repairToolCall: spec.repair,
-    onStepFinish,
-    // Per-slot params last so they override the defaults above (issue #286).
-    ...spec.params,
-  });
+  const maxSteps = spec.maxSteps ?? 1;
   // Defensive: race every await against the parent abort signal. The AI SDK
   // is supposed to settle `textStream` and the result promises when its own
   // `abortSignal` fires, but in practice some providers leave the stream
@@ -970,6 +992,119 @@ async function runStreaming(
   const abortPromise = abortSignal ? makeAbortPromise(abortSignal) : null;
   const raceAbort = async <T>(p: Promise<T>): Promise<T> =>
     abortPromise ? (Promise.race([p, abortPromise]) as Promise<T>) : p;
+
+  // Everything generated after `spec.messages`, in order: each step's response
+  // messages and any interjection drained between them.
+  const accumulated: CoreMessage[] = [];
+  const steps: unknown[] = [];
+  const sources: unknown[] = [];
+  let fullText = '';
+  // Summed exactly as the SDK's `addLanguageModelUsage` sums them: raw, so a
+  // provider that reports no count still yields `NaN` rather than a plausible 0.
+  let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+  let last: Awaited<ReturnType<typeof streamOneStep>> | undefined;
+
+  for (let stepIndex = 0; stepIndex < maxSteps; stepIndex++) {
+    accumulated.push(...(spec.takeInterjections?.() ?? []));
+    const stepType = stepIndex === 0 ? 'initial' : 'tool-result';
+    // `accumulated` does not change while the call runs, so the hook payload
+    // and the recorded step get the same prefix.
+    const call = await streamOneStep(
+      spec,
+      [...spec.messages, ...accumulated],
+      onStepFinish
+        ? (payload) => onStepFinish(withPrefix(payload, accumulated, stepType))
+        : undefined,
+      progress,
+      raceAbort,
+    );
+    last = call;
+    fullText += call.text;
+    sources.push(...call.sources);
+    usage = {
+      promptTokens: usage.promptTokens + call.usage.promptTokens,
+      completionTokens: usage.completionTokens + call.usage.completionTokens,
+      totalTokens: usage.totalTokens + call.usage.totalTokens,
+    };
+    // `maxSteps: 1`, so each call is exactly one step.
+    steps.push(withPrefix(call.steps[0], accumulated, stepType));
+    accumulated.push(...(call.response.messages as CoreMessage[]));
+
+    const allCallsAnswered =
+      call.toolCalls.length > 0 && call.toolResults.length === call.toolCalls.length;
+    if (!allCallsAnswered) break;
+  }
+
+  // What `streamText` itself says to `maxSteps: 0`: the loop above would issue
+  // no request at all, and there is no step to build a result from.
+  if (!last) throw new Error('maxSteps must be at least 1');
+  return {
+    text: fullText,
+    steps,
+    finishReason: last.finishReason,
+    usage,
+    warnings: last.warnings,
+    toolCalls: last.toolCalls,
+    toolResults: last.toolResults,
+    reasoning: last.reasoning,
+    reasoningDetails: last.reasoningDetails,
+    providerMetadata: last.providerMetadata,
+    experimental_providerMetadata: last.providerMetadata,
+    request: last.request,
+    response: { ...last.response, messages: accumulated },
+    files: last.files,
+    sources,
+    experimental_output: undefined as never,
+  } as unknown as AgentResult;
+}
+
+/**
+ * A one-step call's step, as the SDK's own loop would have reported it.
+ *
+ * The SDK's step results carry a CUMULATIVE `response.messages`, and
+ * `partialObserver.onStepMessages` (agents/run.ts) keeps partial work on abort
+ * by that contract; a one-step call only knows its own messages, so the prefix
+ * goes back on. `stepType` is restored for the same reason — every one-step
+ * call calls itself `initial`.
+ */
+function withPrefix<T extends { response?: { messages?: CoreMessage[] } }>(
+  step: T,
+  prefix: CoreMessage[],
+  stepType: 'initial' | 'tool-result',
+): T {
+  return {
+    ...step,
+    stepType,
+    response: { ...step.response, messages: [...prefix, ...(step.response?.messages ?? [])] },
+  } as T;
+}
+
+/**
+ * One `streamText({maxSteps: 1})` call: drain its `fullStream` into the
+ * caller's callbacks, then settle the result promises.
+ */
+async function streamOneStep(
+  spec: AgentSpec,
+  messages: CoreMessage[],
+  onStepFinish: ((payload: StepFinishPayload) => Promise<void>) | undefined,
+  progress: StreamProgress | undefined,
+  raceAbort: <T>(p: Promise<T>) => Promise<T>,
+) {
+  const abortSignal = spec.abortSignal;
+  const stream = streamText({
+    model: spec.model,
+    providerOptions: spec.providerOptions,
+    tools: spec.tools,
+    maxSteps: 1,
+    maxTokens: spec.maxTokens,
+    system: spec.system,
+    messages,
+    abortSignal,
+    experimental_repairToolCall: spec.repair,
+    onStepFinish,
+    // Per-slot params last so they override the defaults above (issue #286).
+    ...spec.params,
+  });
 
   // Drain the full stream. `fullStream` (vs `textStream`) emits tool-call /
   // tool-result events as they arrive, so the renderer can show `⚙ toolName`
@@ -1037,7 +1172,7 @@ async function runStreaming(
     if (!isUserAbort) throw err;
   }
   // The other promises (toolCalls, toolResults, steps, etc.) are already
-  // resolved once textStream completes — awaiting them is cheap.
+  // resolved once the stream completes — awaiting them is cheap.
   const [
     text,
     steps,
@@ -1082,11 +1217,9 @@ async function runStreaming(
     reasoning,
     reasoningDetails,
     providerMetadata,
-    experimental_providerMetadata: providerMetadata,
     request,
     response,
     files,
     sources,
-    experimental_output: undefined as never,
-  } as unknown as AgentResult;
+  };
 }

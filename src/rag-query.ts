@@ -3,7 +3,7 @@ import { extractText } from './context.js';
 import type { RAGSearchResult } from './rag.js';
 import { DEFAULT_TOP_K_PER_DOMAIN, DEFAULT_MAX_RESULTS } from './rag.js';
 import { stripTimestamp } from './tools/datetime.js';
-import { isBoundaryNotice } from './session-markers.js';
+import { isBoundaryNotice, stripInterjectionNotice } from './session-markers.js';
 import { splitObservationBlock } from './watchers/wake.js';
 
 /** Number of recent user messages (beyond the current input) to include in the RAG query. */
@@ -63,7 +63,9 @@ export function extractRecentUserTexts(
     // signal — retrieving against a JSON dump of a chat thread is close to
     // retrieving against noise.
     const body = splitObservationBlock(text)?.instruction ?? text;
-    texts.push(stripTimestamp(stripProfileWrapper(body)));
+    // A mid-turn message (#200) carries a model-facing notice after its
+    // timestamp; the query should retrieve for the user's words alone.
+    texts.push(stripInterjectionNotice(stripTimestamp(stripProfileWrapper(body))).body);
   }
 
   // Reverse to chronological order (oldest first)

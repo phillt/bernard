@@ -140,7 +140,8 @@ import {
 import { WIZARD_FIELDS } from '../../profiles-wizard-data.js';
 import { resolveReferences, shouldSkipResolver } from '../../reference-resolver.js';
 import { INTERRUPT_CANCEL_NOTE } from '../../react.js';
-import { INTERRUPTED_MARKER } from '../../session-markers.js';
+import { INTERRUPTED_MARKER, INTERJECTION_NOTICE } from '../../session-markers.js';
+import { getOutputSink } from '../../framework/hooks/output-sink.js';
 import { DimensionsProvider } from '../DimensionsContext.js';
 import { REWRITE_ICON } from '../Thread.js';
 import type { CoreMessage } from '../../framework/sdk.js';
@@ -217,6 +218,7 @@ function makeAgent(
   holder?: { current: CoreMessage[] },
 ): Agent {
   const box = holder ?? { current: history };
+  const interjectionInbox: string[] = [];
   const stubs: AgentSpy = {
     processInput: vi.fn(async () => {}),
     clearHistory: vi.fn(() => {
@@ -241,6 +243,15 @@ function makeAgent(
       box.current.push(msg, { role: 'assistant', content: '[interrupted by user]' });
       return msg;
     }),
+    // A working inbox rather than no-ops (#200): the App's side of the feature
+    // is what it does with `interject` and with what comes back undelivered,
+    // and a stub that drops the text would let a test pass that never looked.
+    // `interjectionInbox` is exposed so a test can read or seed it.
+    interjectionInbox,
+    interject: vi.fn((text: string) => {
+      interjectionInbox.push(text);
+    }),
+    takeUndeliveredInterjections: vi.fn(() => interjectionInbox.splice(0)),
     clearHistory: stubs.clearHistory,
     compactHistory: stubs.compactHistory,
     processInput: stubs.processInput,
@@ -1626,6 +1637,46 @@ describe('<App> Static transcript (#232)', () => {
     expect(lastFrame() ?? '').toContain('answer survives compression');
     unmount();
   });
+
+  it('keeps output from before a mid-turn message when compression replaces history (#200)', async () => {
+    // The re-anchor used to land on the LAST user message, which was the turn's
+    // opening message until a turn could hold user messages of its own. With a
+    // message typed mid-turn it lands on that one instead, and every block the
+    // turn produced before it is skipped. Anchored on the opening message by
+    // identity, which compression keeps by reference.
+    const prior: CoreMessage[] = Array.from({ length: 12 }, (_, i) => ({
+      role: i % 2 === 0 ? 'user' : 'assistant',
+      content: `prior ${i}`,
+    }));
+    const holder = { current: [...prior] };
+    let opening: CoreMessage | null = null;
+    const processInput = vi.fn(async (text: string) => {
+      opening = { role: 'user', content: `[2026-01-01T00:00:00+00:00] ${text}` };
+      holder.current.push(opening);
+      await Promise.resolve();
+      holder.current = [
+        { role: 'assistant', content: 'context summary' },
+        opening,
+        { role: 'assistant', content: 'work before your note' },
+        {
+          role: 'user',
+          content: `[2026-01-01T00:00:05+00:00] ${INTERJECTION_NOTICE}\nonly do two`,
+        },
+        { role: 'assistant', content: 'work after your note' },
+      ];
+    });
+    const { stdin, lastFrame, unmount } = renderApp({
+      holder,
+      agent: { processInput, getLastUserMessage: () => opening },
+    });
+    await tick();
+    await submit(stdin, 'summarise three files');
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toContain('work before your note');
+    expect(frame).toContain('only do two');
+    expect(frame).toContain('work after your note');
+    unmount();
+  });
 });
 
 describe('<App> plain-text turn', () => {
@@ -2016,25 +2067,112 @@ describe('<App> plain-text turn', () => {
     unmount();
   });
 
-  it('refuses a bare mid-turn submit out loud rather than swallowing it', async () => {
-    // `runAgentTurn`'s `submittingRef` guard returns SILENTLY — right for the
-    // double-Enter it was written for, and fatal now that the prompt is live:
-    // a sentence typed deliberately, accepted by the input line and then
-    // discarded with nothing on screen is worse than the disabled prompt this
-    // replaces. Refusing keeps #200's design space open; queueing it here would
-    // pre-empt that issue's semantics and flip under anyone who learned them.
+  // ── Talking to the turn in flight (#200) ─────────────────────────────
+  //
+  // Bare text mid-turn goes to the running turn instead of being refused. The
+  // runner delivers it before the next model request; these drive the App's
+  // half — what it sends, what it shows when the message lands, and what it
+  // does with one the turn never reached.
+
+  /** The message the runner hands the listener: the notice, then the words. */
+  function deliveredMessage(text: string): CoreMessage {
+    return { role: 'user', content: `[2026-09-23T22:00:00-07:00] ${INTERJECTION_NOTICE}\n${text}` };
+  }
+
+  it('sends bare mid-turn text to the turn in flight instead of refusing it', async () => {
+    const { stdin, lastFrame, agent, agentSpy, release, unmount } = heldTurn();
+    await tick();
+    await submit(stdin, 'the first question');
+    await submit(stdin, 'use the staging cluster');
+    await tick(40);
+    expect(agent.interject).toHaveBeenCalledWith('use the staging cluster');
+    // Not a new turn, and not an interrupt: the one in flight is untouched.
+    expect(agentSpy.processInput).toHaveBeenCalledTimes(1);
+    expect(stripAnsi(lastFrame() ?? '')).toContain('Sent');
+    release();
+    await tick(200);
+    unmount();
+  });
+
+  it('shows the message in the live transcript when it reaches the model', async () => {
+    const { stdin, lastFrame, agent, release, unmount } = heldTurn();
+    await tick();
+    await submit(stdin, 'the first question');
+    await submit(stdin, 'use the staging cluster');
+    // What `runDefinition` does when the runner drains it before the next
+    // request: take it from the inbox and append it to the live output sink.
+    (agent.interjectionInbox as string[]).splice(0);
+    getOutputSink()?.append({
+      kind: 'user-interjection',
+      message: deliveredMessage('use the staging cluster'),
+    });
+    await tick(40);
+    const frame = stripAnsi(lastFrame() ?? '');
+    // The user's own words, with the model-facing notice stripped off.
+    expect(frame).toContain('use the staging cluster');
+    expect(frame).toContain('sent while working');
+    expect(frame).not.toContain('Sent while you were working');
+    release();
+    await tick(200);
+    unmount();
+  });
+
+  it('runs a message the turn never reached as the next turn, and says so', async () => {
+    // The model had already finished its last step, so there was no request
+    // left to carry it. #200's rule is that it is not lost.
     const { stdin, lastFrame, agentSpy, release, unmount } = heldTurn();
     await tick();
     await submit(stdin, 'the first question');
-    await submit(stdin, 'a second thing entirely');
-    await tick(40);
-    expect(agentSpy.processInput).toHaveBeenCalledTimes(1);
-    expect(stripAnsi(lastFrame() ?? '')).toContain('Bernard is working');
+    await submit(stdin, 'one more thing');
+    release();
+    await tick(250);
+    expect(agentSpy.processInput).toHaveBeenCalledTimes(2);
+    expect(agentSpy.processInput.mock.calls[1]?.[0]).toBe('one more thing');
+    expect(stripAnsi(lastFrame() ?? '')).toContain('arrived after Bernard finished');
+    unmount();
+  });
 
+  it('does not run an undelivered message after an interrupt, and names it', async () => {
+    // Esc means stop. Starting a turn off a correction to the work that was
+    // just stopped would undo that.
+    const { stdin, lastFrame, agentSpy, release, unmount } = heldTurn();
+    await tick();
+    await submit(stdin, 'the first question');
+    await submit(stdin, 'one more thing');
+    stdin.write(ESC);
+    await tick(40);
+    release();
+    await tick(250);
+    expect(agentSpy.processInput).toHaveBeenCalledTimes(1);
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toContain('Turn interrupted');
+    expect(frame).toContain('not delivered');
+    unmount();
+  });
+
+  it('sends a slash word that is not a command, as the idle chain would', async () => {
+    // Idle, an unknown `/word` falls through the dispatch chain to the agent;
+    // mid-turn it must mean the same thing rather than be refused by shape.
+    const { stdin, agent, release, unmount } = heldTurn();
+    await tick();
+    await submit(stdin, 'the first question');
+    await submit(stdin, '/tmp is full');
+    await tick(40);
+    expect(agent.interject).toHaveBeenCalledWith('/tmp is full');
     release();
     await tick(200);
-    // Refused, not quietly queued: nothing runs it afterwards either.
-    expect(agentSpy.processInput).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+
+  it('sends a path that starts with a slash, because it is not a command', async () => {
+    const { stdin, agent, release, unmount } = heldTurn();
+    await tick();
+    await submit(stdin, 'the first question');
+    await submit(stdin, '/home/me/notes.md is the file');
+    await tick(40);
+    expect(agent.interject).toHaveBeenCalledWith('/home/me/notes.md is the file');
+    release();
+    await tick(200);
     unmount();
   });
 
@@ -2047,8 +2185,10 @@ describe('<App> plain-text turn', () => {
     await submit(stdin, 'the first question');
     await submit(stdin, '/clear');
     await tick(40);
-    expect(stripAnsi(lastFrame() ?? '')).toContain('Bernard is working');
+    expect(stripAnsi(lastFrame() ?? '')).toContain('Commands wait until Bernard finishes');
     expect(agent.clearHistory).not.toHaveBeenCalled();
+    // Refused, not sent to the model as though it were a sentence.
+    expect(agent.interject).not.toHaveBeenCalled();
     release();
     await tick(100);
     unmount();

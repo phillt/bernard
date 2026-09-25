@@ -91,7 +91,24 @@ export interface RunDefinitionOpts {
     onIterateStart?(): void;
     onStepMessages?(cumulativeMessages: CoreMessage[]): void;
     onTextDelta?(delta: string): void;
+    /**
+     * Mid-turn messages the runner just sent to the model (#200). The step
+     * they ride has not finished, so no `onStepMessages` snapshot includes
+     * them yet — an observer that flushes partial work on abort must add them
+     * here or lose a message the user watched land.
+     */
+    onInterjections?(messages: CoreMessage[]): void;
   };
+  /**
+   * Messages the user sent mid-turn (#200), drained by the runner before every
+   * model request. Forwarded onto the spec every iterate builds, so a turn's
+   * plan-enforcement re-prompts and continuations drain the same inbox.
+   *
+   * Only reaches the model on the streaming branch — see
+   * {@link AgentSpec.takeInterjections} — and is only forwarded there, so on
+   * any other dispatch the caller keeps everything it queued.
+   */
+  takeInterjections?: () => CoreMessage[];
   /**
    * Per-dispatch telemetry-site override (#299). Wins over `def.telemetrySite`
    * and the resolved site so a single caller can label an otherwise-shared
@@ -554,6 +571,21 @@ export async function runDefinition<TInput, TFormatted>(
         });
       }
     : undefined;
+  // The drain gets the treatment the three callbacks above get: whatever it
+  // hands the model is appended to the sink, so the live transcript shows it
+  // where it landed, and reported to the partial observer, since the step it
+  // rides has not finished and no snapshot includes it yet.
+  const drain = opts.takeInterjections;
+  const takeInterjections =
+    useStreaming && drain
+      ? (): CoreMessage[] => {
+          const messages = drain();
+          if (messages.length === 0) return messages;
+          for (const message of messages) sink.append({ kind: 'user-interjection', message });
+          partialObserver?.onInterjections?.(messages);
+          return messages;
+        }
+      : undefined;
 
   // `messages` here is a placeholder — `innerIterate` rebuilds the messages
   // array on every call, so the seed alone is sufficient for the baseSpec.
@@ -574,6 +606,7 @@ export async function runDefinition<TInput, TFormatted>(
     onTextDelta,
     onToolCallStart,
     onToolResult,
+    takeInterjections,
   };
 
   let stepLimitHit = false;

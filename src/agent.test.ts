@@ -26,6 +26,12 @@ import { assembleContext } from './framework/context.js';
 import * as modelPolicy from './model-policy.js';
 import { setOutputSink } from './framework/hooks/output-sink.js';
 import { PLAN_ENFORCEMENT_PREFIX } from './session-markers.js';
+import {
+  scriptedModel,
+  toolStep,
+  TEXT_STEP,
+  type ScriptedStep,
+} from './__tests__/scripted-model.js';
 
 vi.mock('node:fs', () => ({
   // `statSync` backs `MemoryStore`'s stat-validated read cache (#513): a
@@ -2548,5 +2554,114 @@ describe('partial history preserved on abort (Esc)', () => {
 
     // No step reported usage — don't clobber the prior turn's value with 0.
     expect(internals.lastPromptTokens).toBe(42_000);
+  });
+});
+
+/**
+ * #200 end to end through the Agent: `processInput` → `runDefinition` → the
+ * runner's owned loop → the REAL `streamText`, driven by a scripted model. The
+ * only double is the model, so what is asserted is what actually reaches
+ * history, the listener and the model's second request.
+ */
+describe('messages sent mid-turn (#200)', () => {
+  let store: MemoryStore;
+  const toolOptions = { shellTimeout: 30000, confirmDangerous: vi.fn() };
+
+  const TOOL_STEP = toolStep('probe', { q: 'which cluster?' });
+
+  /**
+   * Routes the mocked `streamText` to the real one, driven by a scripted model.
+   * The registry is a stand-in: this file mocks modules the real tools are
+   * built from, and the real SDK serialises every schema and runs every call,
+   * so the main agent's own tools would fail here for the mocks' reasons
+   * rather than the feature's. What is under test is the loop, not a tool.
+   */
+  async function scripted(steps: ScriptedStep[], during?: (i: number) => void | 'hang') {
+    const { streamText: realStreamText, tool } = await vi.importActual<typeof import('ai')>('ai');
+    const { z } = await import('zod');
+    const probe = tool({
+      description: 'a stand-in tool call',
+      parameters: z.object({ q: z.string() }),
+      execute: async () => 'staging and prod',
+    });
+    const { model, prompts } = scriptedModel(steps, during);
+    mockStreamText.mockImplementation((opts: any) =>
+      realStreamText({ ...opts, model, tools: { probe } }),
+    );
+    return prompts;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    store = new MemoryStore();
+    // A sink is what puts the main agent on the streaming branch — the only
+    // branch that takes mid-turn messages.
+    setOutputSink({ append: vi.fn() });
+  });
+
+  afterEach(() => {
+    setOutputSink(null);
+  });
+
+  it('lands a message typed during a step before the next request, in history order', async () => {
+    const agent = makeAgent(makeConfig(), toolOptions, store);
+    const landed: any[] = [];
+    setOutputSink({
+      append: (ev) => {
+        if (ev.kind === 'user-interjection') landed.push(ev.message);
+      },
+    });
+    const prompts = await scripted([TOOL_STEP, TEXT_STEP], (i) => {
+      if (i === 0) agent.interject('use the staging cluster');
+    });
+
+    await agent.processInput('deploy it');
+
+    const history = agent.getHistory();
+    expect(history.map((m) => m.role)).toEqual(['user', 'assistant', 'tool', 'user', 'assistant']);
+    const note = history[3];
+    expect(String(note.content)).toContain('use the staging cluster');
+    expect(String(note.content)).toContain('Sent while you were working');
+    // The live transcript is handed the very object history holds, which is
+    // what lets the commit render it once, in position.
+    expect(landed).toEqual([note]);
+    // And the model's second request carried it after the tool result.
+    const second = prompts[1].map((m: any) => m.role);
+    expect(second.slice(-2)).toEqual(['tool', 'user']);
+    expect(agent.takeUndeliveredInterjections()).toEqual([]);
+  });
+
+  it('hands back a message that arrived during the final step', async () => {
+    const agent = makeAgent(makeConfig(), toolOptions, store);
+    await scripted([TOOL_STEP, TEXT_STEP], (i) => {
+      if (i === 1) agent.interject('one more thing');
+    });
+
+    await agent.processInput('deploy it');
+
+    expect(agent.takeUndeliveredInterjections()).toEqual(['one more thing']);
+    expect(JSON.stringify(agent.getHistory())).not.toContain('one more thing');
+  });
+
+  it('keeps a delivered message when the user interrupts the step it rode', async () => {
+    // Delivered before step 2, then Esc while step 2 is in flight. No step
+    // finished after the drain, so only the drain itself can have put it in
+    // the partial snapshot the abort path flushes.
+    const agent = makeAgent(makeConfig(), toolOptions, store);
+    await scripted([TOOL_STEP, TEXT_STEP], (i) => {
+      if (i === 0) agent.interject('stop after this one');
+      if (i === 1) {
+        setTimeout(() => agent.abort(), 10);
+        return 'hang';
+      }
+    });
+
+    await agent.processInput('deploy it');
+
+    const history = agent.getHistory();
+    const roles = history.map((m) => m.role);
+    expect(roles).toEqual(['user', 'assistant', 'tool', 'user', 'assistant']);
+    expect(String(history[3].content)).toContain('stop after this one');
+    expect(history[4].content).toBe('[interrupted by user]');
   });
 });
