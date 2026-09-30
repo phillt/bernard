@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   classifyError,
+  providerErrorDetail,
   isDispatchCancellation,
   DISPATCH_ABORT_NAME,
   failureMarker,
@@ -614,5 +615,31 @@ describe('AUTHORITATIVE_LABELS completeness is derived, not declared (#565)', ()
     // `not_found` is at least narrowed to a shell context.
     expect(correctable('not_found')).toBe(true);
     expect(correctable('invalid_args')).toBe(true);
+  });
+});
+
+describe('providerErrorDetail', () => {
+  const apiErr = (body: unknown) => Object.assign(new Error('Bad Request'), { responseBody: body });
+
+  it('pulls the message out of a JSON error body', () => {
+    expect(providerErrorDetail(apiErr('{"code":"x","error":"invalid utf-8 in request"}'))).toBe(
+      'invalid utf-8 in request',
+    );
+    expect(providerErrorDetail(apiErr('{"error":{"message":"context too long"}}'))).toBe(
+      'context too long',
+    );
+  });
+
+  it('falls back to raw text and bounds it', () => {
+    expect(providerErrorDetail(apiErr('plain  text\nbody'))).toBe('plain text body');
+    const long = providerErrorDetail(apiErr('z'.repeat(1000)))!;
+    expect(long.length).toBeLessThanOrEqual(301);
+  });
+
+  it('returns null when there is nothing beyond the status text', () => {
+    expect(providerErrorDetail(new Error('Bad Request'))).toBeNull();
+    expect(providerErrorDetail(apiErr(''))).toBeNull();
+    expect(providerErrorDetail(apiErr('Bad Request'))).toBeNull();
+    expect(providerErrorDetail('nope')).toBeNull();
   });
 });

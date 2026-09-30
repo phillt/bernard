@@ -22,6 +22,7 @@ import {
 } from '../error-taxonomy.js';
 import { withStallBudget, DEFAULT_STALL_TIMEOUT_MS } from '../providers/stall-guard.js';
 import { inFlightForDispatch } from '../tools/in-flight.js';
+import { toWellFormedValue } from './well-formed.js';
 
 /**
  * A tool set concrete enough for the SDK's own `TextStreamPart` union to stay
@@ -913,7 +914,8 @@ async function runNonStreaming(
     maxSteps: spec.maxSteps,
     maxTokens: spec.maxTokens,
     system: spec.system,
-    messages: spec.messages,
+    // A lone surrogate 400s the request and, once persisted, every later one.
+    messages: toWellFormedValue(spec.messages),
     abortSignal: spec.abortSignal,
     experimental_prepareStep: spec.prepareStep,
     experimental_repairToolCall: spec.repair,
@@ -1098,7 +1100,8 @@ async function streamOneStep(
     maxSteps: 1,
     maxTokens: spec.maxTokens,
     system: spec.system,
-    messages,
+    // A lone surrogate 400s the request and, once persisted, every later one.
+    messages: toWellFormedValue(messages),
     abortSignal,
     experimental_repairToolCall: spec.repair,
     onStepFinish,

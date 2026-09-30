@@ -250,3 +250,14 @@ describe('summariseObservation', () => {
     expect(summariseObservation('😀').bytes).toBe(4);
   });
 });
+
+describe('renderObservation surrogate safety', () => {
+  it('never cuts an observation through an emoji', () => {
+    // JSON.stringify adds a leading quote, so the pair lands on the cap: a naive
+    // slice keeps its high half and drops the low one.
+    const big = 'x'.repeat(MAX_OBSERVATION_CHARS - 2) + '\u{1F3A9}' + 'y'.repeat(100);
+    const out = renderObservation(big);
+    expect(out.truncated).toBe(true);
+    expect(out.text).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/);
+  });
+});

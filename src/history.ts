@@ -3,6 +3,7 @@ import type { CoreMessage } from './framework/sdk.js';
 import { STATE_DIR, HISTORY_FILE } from './paths.js';
 import { stripImagesFromHistory } from './image.js';
 import { normalizeToolResultPart } from './tool-result-output.js';
+import { toWellFormedValue } from './framework/well-formed.js';
 
 /**
  * Puts one stored message into the shape the installed SDK requires.
@@ -76,7 +77,7 @@ export class HistoryStore {
         parsed.filter(
           (entry: unknown) => typeof entry === 'object' && entry !== null && 'role' in entry,
         ) as CoreMessage[]
-      ).map(normalizeStoredMessage);
+      ).map((m) => toWellFormedValue(normalizeStoredMessage(m)));
     } catch {
       return [];
     }

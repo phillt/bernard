@@ -68,6 +68,7 @@ import { isPureQuestion } from './policy/tool-mode.js';
 import type { Step } from './plan-store.js';
 import type { VerificationEntry } from './agent-status.js';
 import { verdictOf, renderRubricLine, type Check, type Rubric } from './rubric.js';
+import { providerErrorDetail } from './error-taxonomy.js';
 
 // `buildSystemPrompt` lives in agent-prompt.ts (extracted to avoid a circular
 // import with framework/agents/main.ts). Re-exported here so existing imports
@@ -1399,7 +1400,9 @@ export class Agent {
         return;
       }
 
-      const message = err instanceof Error ? err.message : String(err);
+      const detail = providerErrorDetail(err);
+      const message =
+        (err instanceof Error ? err.message : String(err)) + (detail ? `: ${detail}` : '');
       debugLog('error:turn', {
         message,
         stack: err instanceof Error ? err.stack : undefined,
