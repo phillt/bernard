@@ -537,6 +537,23 @@ describe('ToolProfileStore', () => {
       expect(saved.badExamples[0].fix).toBe('(awaiting successful retry)');
     });
 
+    it('never cuts an emoji in half — the example is persisted and re-sent every turn', () => {
+      vi.mocked(fs.readFileSync).mockImplementation(() => {
+        throw new Error('ENOENT');
+      });
+      // The emoji straddles both cuts: units 79-80 and 199-200.
+      const args = 'a'.repeat(79) + '\u{1F600}' + 'b'.repeat(118) + '\u{1F600}' + 'c';
+      store.recordBadExample('shell.git', args, 'x');
+      const saved = JSON.parse(
+        vi.mocked(fsUtils.atomicWriteFileSync).mock.calls.at(-1)![1] as string,
+      );
+      const loneSurrogate =
+        /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+      expect(saved.badExamples[0].summary).not.toMatch(loneSurrogate);
+      expect(saved.badExamples[0].args).not.toMatch(loneSurrogate);
+      expect(saved.badExamples[0].args.length).toBe(199);
+    });
+
     it('increments errorCount', () => {
       const profile = makeProfile({ toolName: 'shell.git', errorCount: 2 });
       vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(profile));

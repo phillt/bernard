@@ -94,6 +94,15 @@ describe('runAgent', () => {
    * What the tests are really protecting is that the runner does not disturb a
    * caller's hooks, which is asserted directly below and is unchanged.
    */
+  it('repairs a lone surrogate in the system prompt, and passes a clean one by identity', async () => {
+    await runAgent(makeSpec({ system: 'Failed: react \ud83d' }));
+    const gen = generateText as unknown as ReturnType<typeof vi.fn>;
+    expect(gen.mock.calls[0][0].system).toBe('Failed: react \ufffd');
+    const clean = 'Failed: react \ud83d\ude00';
+    await runAgent(makeSpec({ system: clean }));
+    expect(gen.mock.calls[1][0].system).toBe(clean);
+  });
+
   it('always attaches a step counter, even with no caller hooks (critic shape)', async () => {
     await runAgent(makeSpec());
     const args = (generateText as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
