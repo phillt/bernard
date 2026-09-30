@@ -22,6 +22,7 @@ import {
 } from '../error-taxonomy.js';
 import { withStallBudget, DEFAULT_STALL_TIMEOUT_MS } from '../providers/stall-guard.js';
 import { inFlightForDispatch } from '../tools/in-flight.js';
+import { toWellFormedString, toWellFormedValue } from './well-formed.js';
 
 /**
  * A tool set concrete enough for the SDK's own `TextStreamPart` union to stay
@@ -912,8 +913,12 @@ async function runNonStreaming(
     tools: spec.tools,
     maxSteps: spec.maxSteps,
     maxTokens: spec.maxTokens,
-    system: spec.system,
-    messages: spec.messages,
+    // The system prompt carries persisted text too (tool-profile bad examples
+    // are cut from failed calls' args), so it gets the same repair: a half
+    // emoji there poisons every turn and survives a restart.
+    system: spec.system === undefined ? undefined : toWellFormedString(spec.system),
+    // A lone surrogate 400s the request and, once persisted, every later one.
+    messages: toWellFormedValue(spec.messages),
     abortSignal: spec.abortSignal,
     experimental_prepareStep: spec.prepareStep,
     experimental_repairToolCall: spec.repair,
@@ -1097,8 +1102,12 @@ async function streamOneStep(
     tools: spec.tools,
     maxSteps: 1,
     maxTokens: spec.maxTokens,
-    system: spec.system,
-    messages,
+    // The system prompt carries persisted text too (tool-profile bad examples
+    // are cut from failed calls' args), so it gets the same repair: a half
+    // emoji there poisons every turn and survives a restart.
+    system: spec.system === undefined ? undefined : toWellFormedString(spec.system),
+    // A lone surrogate 400s the request and, once persisted, every later one.
+    messages: toWellFormedValue(messages),
     abortSignal,
     experimental_repairToolCall: spec.repair,
     onStepFinish,

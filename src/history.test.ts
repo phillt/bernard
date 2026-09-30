@@ -52,6 +52,16 @@ describe('HistoryStore', () => {
       expect(result[1]).toEqual({ role: 'assistant', content: 'hi' });
     });
 
+    it('heals a lone surrogate written by an older build', () => {
+      // A mid-emoji cut persisted to disk 400s every later request until repaired.
+      // Written as the escape JSON.stringify emits for a lone surrogate.
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        '[{"role":"user","content":"reactionKey \\ud83d... (truncated)"}]',
+      );
+      const [msg] = store.load();
+      expect(msg.content).toBe('reactionKey \ufffd... (truncated)');
+    });
+
     it('returns valid messages from well-formed file', () => {
       const messages = [
         { role: 'user', content: 'hello' },

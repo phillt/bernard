@@ -1,4 +1,5 @@
 import type { ToolErrorType } from './framework/tools/types.js';
+import { safeCutIndex } from './text.js';
 
 /**
  * Result of classifying a tool error. `correctable` gates the existing
@@ -686,4 +687,46 @@ export function providerStallInfo(err: unknown): ProviderStallInfo | null {
     err,
     (e) => (e as { [PROVIDER_STALL]?: ProviderStallInfo })[PROVIDER_STALL] ?? null,
   );
+}
+
+/** How much of a provider's explanation is kept on the turn error. */
+const PROVIDER_DETAIL_MAX = 300;
+
+/**
+ * The provider's own explanation of a rejected request, when it sent one.
+ *
+ * The AI SDK's `APICallError` carries the HTTP status text as its `message`
+ * ("Bad Request") and the body the provider actually wrote on `responseBody`.
+ * Only the first reached the screen or the log, so a 400 that said exactly
+ * what was wrong read as a bare "Bad Request" eight times in a row with
+ * nothing to act on. Read structurally rather than by `instanceof`, so this
+ * leaf keeps no edge to `ai`. Prefers the JSON `error` / `error.message` field
+ * and falls back to the raw text; bounded, since a body is untrusted and
+ * unbounded. `null` when there is nothing beyond the status text.
+ */
+export function providerErrorDetail(err: unknown): string | null {
+  if (!(err instanceof Error)) return null;
+  const body = (err as { responseBody?: unknown }).responseBody;
+  if (typeof body !== 'string' || body.trim() === '') return null;
+  let detail = body.trim();
+  try {
+    const parsed = JSON.parse(detail) as { error?: unknown; message?: unknown; code?: unknown };
+    const e = parsed?.error;
+    const picked =
+      typeof e === 'string'
+        ? e
+        : e && typeof e === 'object' && typeof (e as { message?: unknown }).message === 'string'
+          ? (e as { message: string }).message
+          : typeof parsed?.message === 'string'
+            ? parsed.message
+            : null;
+    if (picked) detail = picked;
+  } catch {
+    // Not JSON — keep the raw text.
+  }
+  detail = detail.replace(/\s+/g, ' ').trim();
+  if (detail === err.message) return null;
+  return detail.length > PROVIDER_DETAIL_MAX
+    ? `${detail.slice(0, safeCutIndex(detail, PROVIDER_DETAIL_MAX))}…`
+    : detail;
 }

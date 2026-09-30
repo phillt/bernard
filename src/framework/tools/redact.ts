@@ -1,3 +1,5 @@
+import { safeCutIndex } from '../../text.js';
+
 /**
  * Returns a shallow copy of `args` with any keys listed in `sensitiveArgs`
  * replaced by the string `'[REDACTED]'`. Used to scrub sensitive values out
@@ -69,7 +71,7 @@ export function boundedStringify(
           budget -= v.length;
           if (v.length > maxLen) {
             bounded = true;
-            return v.slice(0, maxLen) + '…';
+            return v.slice(0, safeCutIndex(v, maxLen)) + '…';
           }
           return v;
         }

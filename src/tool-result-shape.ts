@@ -35,6 +35,7 @@
  */
 
 import { parseFailureMarker } from './error-taxonomy.js';
+import { clipSafe } from './text.js';
 
 /** Max length of a returned error snippet, matching the historical cap. */
 export const ERROR_SNIPPET_MAX = 200;
@@ -149,7 +150,7 @@ export function detectResultFailure(result: unknown): string | undefined {
     // The edge is affordable: `error-taxonomy.ts` imports one type and nothing
     // else, so this module stays free of the `node:fs` graph it was carved out
     // of `tool-profiles.ts` to avoid.
-    if (result.startsWith('Error')) return result.slice(0, ERROR_SNIPPET_MAX);
+    if (result.startsWith('Error')) return clipSafe(result, ERROR_SNIPPET_MAX);
     // The marker is matched against the SNIPPET, not the whole string. A tool
     // result can be megabytes (`shell` runs at a 10 MB `maxBuffer`) and this
     // runs on every call, so an unanchored regex over the whole value would be
@@ -157,7 +158,7 @@ export function detectResultFailure(result: unknown): string | undefined {
     // put the marker at the front: `appendActivitySummary` on line 1, and
     // `formatWrappedResult`'s `Error (<marker> …)` never reaches here because
     // the prefix test above catches it first.
-    const snippet = result.slice(0, ERROR_SNIPPET_MAX);
+    const snippet = clipSafe(result, ERROR_SNIPPET_MAX);
     return parseFailureMarker(snippet) !== null ? snippet : undefined;
   }
 
@@ -172,15 +173,15 @@ export function detectResultFailure(result: unknown): string | undefined {
       mcpFailureText(result.content, ERROR_SNIPPET_MAX) ||
       nonEmptyString(result.preview) ||
       'MCP tool reported isError';
-    return snippet.slice(0, ERROR_SNIPPET_MAX);
+    return clipSafe(snippet, ERROR_SNIPPET_MAX);
   }
 
   if (result.is_error === true) {
-    return String(result.output ?? '').slice(0, ERROR_SNIPPET_MAX);
+    return clipSafe(String(result.output ?? ''), ERROR_SNIPPET_MAX);
   }
 
   const err = nonEmptyString(result.error);
-  if (err) return err.slice(0, ERROR_SNIPPET_MAX);
+  if (err) return clipSafe(err, ERROR_SNIPPET_MAX);
 
   return undefined;
 }

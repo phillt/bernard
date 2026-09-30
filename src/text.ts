@@ -34,6 +34,11 @@ export function safeCutIndex(text: string, n: number): number {
   return last >= 0xd800 && last <= 0xdbff ? n - 1 : n;
 }
 
+/** `s` cut to at most `n` UTF-16 units without splitting a surrogate pair. */
+export function clipSafe(s: string, n: number): string {
+  return s.slice(0, safeCutIndex(s, n));
+}
+
 /**
  * `n === 1 ? one : many`. Trivial, but it was being written inline in 14+
  * renderers with three different spellings, and two more copies landed in a

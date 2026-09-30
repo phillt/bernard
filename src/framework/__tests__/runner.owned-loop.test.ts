@@ -177,6 +177,22 @@ describe('runStreaming owns the step loop (#200)', () => {
     expect(result.response.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
   });
 
+  it('repairs a lone surrogate in the system prompt before it reaches the provider', async () => {
+    // Half an emoji in a persisted tool-profile example lands in the system
+    // prompt every turn; unrepaired it 400s every request and survives restart.
+    const { model, prompts } = scriptedModel([TEXT_STEP]);
+    await runAgent({
+      model,
+      maxSteps: 1,
+      system: 'profile: Failed: react \ud83d',
+      messages: MESSAGES,
+      useStreaming: true,
+    });
+    const sys = prompts[0][0] as { role: string; content: string };
+    expect(sys.role).toBe('system');
+    expect(sys.content).toBe('profile: Failed: react \ufffd');
+  });
+
   it('leaves a message sent during the final step with its sender', async () => {
     // The model has already decided to stop, so there is no next request to
     // carry it. It must stay in the inbox — the caller runs it as the next turn.

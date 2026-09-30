@@ -5,6 +5,7 @@ import { atomicWriteFileSync, seedOnce } from './fs-utils.js';
 import type { ToolErrorType } from './framework/tools/types.js';
 import { detectResultFailure } from './tool-result-shape.js';
 import { serverFromCategory, toolNameFromProfileKey } from './mcp-names.js';
+import { clipSafe } from './text.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -323,8 +324,8 @@ export class ToolProfileStore {
   ): void {
     const profile = this.getOrCreate(toolKey);
     const bad: ToolProfileBadExample = {
-      summary: `Failed: ${args.slice(0, 80)}`,
-      args: args.slice(0, 200),
+      summary: `Failed: ${clipSafe(args, 80)}`,
+      args: clipSafe(args, 200),
       errorSnippet,
       fix: '(awaiting successful retry)',
       ...(category ? { category } : {}),
@@ -361,7 +362,7 @@ export class ToolProfileStore {
     const profile = this.getOrCreate(toolKey);
     const good: ToolProfileExample = {
       summary: 'Successful call',
-      args: args.slice(0, 200),
+      args: clipSafe(args, 200),
       note,
     };
     const updated = [...profile.goodExamples, good].slice(-MAX_PROFILE_EXAMPLES);
@@ -379,7 +380,7 @@ export class ToolProfileStore {
     const bads = [...profile.badExamples];
     const last = bads[bads.length - 1];
     if (last.fix === '(awaiting successful retry)') {
-      bads[bads.length - 1] = { ...last, fix: `Use instead: ${workingArgs.slice(0, 200)}` };
+      bads[bads.length - 1] = { ...last, fix: `Use instead: ${clipSafe(workingArgs, 200)}` };
       this.save({ ...profile, badExamples: bads });
     }
   }

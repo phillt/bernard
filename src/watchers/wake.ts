@@ -118,7 +118,7 @@ export function renderObservation(value: unknown): { text: string; truncated: bo
   // pairing `tool:execute:end` uses, and for the same reason.
   if (!bounded && text.length <= MAX_OBSERVATION_CHARS) return { text, truncated: false };
   return {
-    text: markTruncated(text.slice(0, MAX_OBSERVATION_CHARS), text.length),
+    text: markTruncated(text.slice(0, safeCutIndex(text, MAX_OBSERVATION_CHARS)), text.length),
     truncated: true,
   };
 }
