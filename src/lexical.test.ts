@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  rankByTermOverlap,
   lexicalTokens,
   LexicalIndex,
   namesASymbol,
@@ -151,5 +152,27 @@ describe('reciprocalRankFusion', () => {
     // it "was fixed during a pilot investigation and not altered during
     // subsequent validation".
     expect(RRF_K).toBe(60);
+  });
+});
+
+describe('rankByTermOverlap', () => {
+  const notes: [string, string][] = [
+    ['grocery-applet', 'Shopping list applet with seven aisles.'],
+    ['daily-blaze-format', 'FleetIQ and salt work, category headers, bullets.'],
+    ['never-email-client', 'Never email the client directly.'],
+    ['blaze-recipients', 'The daily blaze goes to Brian.'],
+  ];
+
+  it('ranks by shared words, counting the key, and leaves non-matches OUT', () => {
+    // Leaving them out is what lets a packer order the rest by its own rule
+    // (smallest first) instead of by store order.
+    expect(rankByTermOverlap(notes, 'send the daily blaze to Brian')).toEqual([
+      'blaze-recipients',
+      'daily-blaze-format',
+    ]);
+  });
+
+  it('ranks nothing for a request made only of stop words', () => {
+    expect(rankByTermOverlap(notes, 'can you do it for me')).toEqual([]);
   });
 });

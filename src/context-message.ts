@@ -6,10 +6,11 @@ import type { SpecialistSummary } from './specialists.js';
 import type { SpecialistMatch } from './specialist-matcher.js';
 import { renderResolvedBlock, RAG_SOURCE_KEY, type ResolvedEntry } from './reference-resolver.js';
 import { sanitizeKey } from './memory.js';
-import { escapeXml, plural } from './text.js';
+import { escapeXml, factDatePrefix, plural } from './text.js';
 import { getDomain } from './domains.js';
 import type { ProvenanceStore } from './provenance.js';
 import { debugLog } from './logger.js';
+import { rankByTermOverlap } from './lexical.js';
 
 /**
  * Inputs for {@link buildContextMessage}. Mirrors the dynamic per-turn data
@@ -33,6 +34,18 @@ export interface ContextMessageInputs {
   recallReconciliation?: string;
   /** Memory keys, most- to least-relevant. See {@link orderForPacking}. */
   memoryPriority?: string[];
+  /**
+   * What this assembly is FOR, used to rank memory when it will not all fit and
+   * nobody supplied a `memoryPriority`.
+   *
+   * Only the main agent's turn gets a curator ranking; every dispatch packed
+   * smallest-first, so the note most specific to the task — usually the longest
+   * — was the first one dropped. Observed: the Daily Blaze specialist ran with
+   * `daily-blaze-format-brian` cut, on every run, because it was the biggest
+   * note in the store. Consulted only when something would be dropped, so
+   * under budget the section is byte-identical to before.
+   */
+  memoryRelevanceQuery?: string;
   includeScratch?: boolean;
   mcpServerNames?: string[];
   routineSummaries?: RoutineSummary[];
@@ -99,6 +112,25 @@ type SectionRenderer = () => string | null;
  * reference data and gives the model a clear marker to disregard embedded
  * directives.
  */
+/**
+ * The ranking `packMemory` should use: the caller's if it gave one, otherwise —
+ * and only when the store is over budget — the entries that share words with
+ * `memoryRelevanceQuery`.
+ *
+ * Main never supplies a query, so `Agent`'s second pack — the one that records
+ * what was injected — stays in step with this one without consulting it.
+ */
+export function memoryPriorityFor(
+  memories: Map<string, string>,
+  inputs: Pick<ContextMessageInputs, 'memoryPriority' | 'memoryRelevanceQuery'>,
+): string[] | undefined {
+  if (inputs.memoryPriority) return inputs.memoryPriority;
+  const query = inputs.memoryRelevanceQuery?.trim();
+  if (!query || packMemory(memories).dropped.length === 0) return undefined;
+  const ranked = rankByTermOverlap(memories, query);
+  return ranked.length > 0 ? ranked : undefined;
+}
+
 export function buildContextMessage(inputs: ContextMessageInputs): CoreMessage | null {
   const sections: { tag: string; body: string }[] = [];
   // Packed here rather than inside the renderer so the DECISION is available to
@@ -106,7 +138,9 @@ export function buildContextMessage(inputs: ContextMessageInputs): CoreMessage |
   // only thing that ever knew which keys were dropped, and it throws that set
   // away. Same number of store reads as before: one.
   const memoryEntries = inputs.memoryStore?.getAllMemoryContents();
-  const pack = memoryEntries ? packMemory(memoryEntries, inputs.memoryPriority) : undefined;
+  const pack = memoryEntries
+    ? packMemory(memoryEntries, memoryPriorityFor(memoryEntries, inputs))
+    : undefined;
 
   const renderers: { tag: string; render: SectionRenderer }[] = [
     { tag: 'current_datetime', render: () => renderCurrentDateTime(inputs.currentDateTime) },
@@ -348,8 +382,11 @@ function renderRecalledContext(
   reconciliation?: string,
 ): string | null {
   if (!ragResults || ragResults.length === 0) return null;
+  // The dating rules are stated here, beside the dates, because this is the
+  // only place both are in front of the model at once. "May be outdated" with
+  // no date to check against was advice nobody could follow.
   const intro =
-    'Auto-recalled observations from past sessions. Hints, not rules — they were matched by similarity and may be outdated or from a different context.';
+    'Auto-recalled observations from past sessions. Hints, not rules — they were matched by similarity and may be outdated or from a different context. Each is prefixed with the date it was learned: when two disagree the newer one wins, and an observation about what happened on a particular day describes that day, not today.';
   const byDomain = new Map<string, RAGSearchResult[]>();
   for (const r of ragResults) {
     const d = r.domain;
@@ -361,7 +398,7 @@ function renderRecalledContext(
     const domain = getDomain(domainId);
     blocks.push(`### ${escapeXml(domain.name)}`);
     for (const r of results) {
-      blocks.push(`- ${escapeXml(r.fact)}`);
+      blocks.push(`- ${factDatePrefix(r.createdAt)}${escapeXml(r.fact)}`);
     }
   }
   if (reconciliation) {

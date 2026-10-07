@@ -7,6 +7,8 @@ import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
 import { getCachedLLM, setCachedLLM, type LLMCacheKey } from './llm-cache.js';
 import { usageRecordFromSite, type UsageRecorder } from './framework/hooks/token-stats.js';
+import { rankByTermOverlap } from './lexical.js';
+import { factDatePrefix } from './text.js';
 
 /** Sentinel sourceKey used for resolutions drawn from the RAG knowledge base. */
 export const RAG_SOURCE_KEY = 'rag';
@@ -51,10 +53,13 @@ Given the user's input, a list of available memory entries, and (optionally) rel
 
 For each phrase:
 - If exactly ONE memory entry unambiguously matches the reference, include it in \`entries\` with its memory key as \`sourceKey\`.
-- If no memory entry matches but a fact in "## Relevant known facts" unambiguously identifies the person or thing, include it in \`entries\` with \`sourceKey: "rag"\`. Draw \`resolvedTo\` from the fact text.
+- If no memory entry matches but a fact in "## Relevant known facts" unambiguously identifies the person or thing, include it in \`entries\` with \`sourceKey: "rag"\`. Draw \`resolvedTo\` from the fact text. Facts are dated; when two disagree, the newer one wins.
 - Prefer a memory entry over a RAG fact when both match the same phrase.
-- If MULTIPLE memory entries plausibly match, stop and return status \`ambiguous\` for the FIRST ambiguous reference with 2-4 candidates. Do not guess.
-- If the phrase clearly names a specific person, organization, or concrete thing (e.g. "my brother", "my dentist", "the car", "aaron") AND neither memory nor known facts match AND the reference was NOT already introduced in "## Recent conversation" AND resolving it is necessary to complete the request, stop and return status \`unknown\` for the FIRST such reference. The caller will prompt the user.
+- ONE SOURCE PER ENTRY. \`resolvedTo\` comes from the single source named in \`sourceKey\` and nothing else. Never blend a memory entry with a knowledge-base fact, and never fill in detail the source does not state.
+- \`resolvedTo\` NAMES the thing; it does not describe it. "my daughter" → "Sarah, my daughter". "our daily blaze" → "the Daily Blaze report". How something is done, what format it takes, who it goes to — that stays in the source, which the downstream agent reads in full. Keep it under about a dozen words.
+- Resolve EVERY phrase you can. A phrase you cannot place must not stop you resolving the others: if anything resolved, return \`resolved\` with all of those entries and simply omit the rest.
+- Return \`ambiguous\` only when nothing resolved and MULTIPLE memory entries plausibly match one reference — give 2-4 candidates. Do not guess.
+- Return \`unknown\` only when nothing resolved AND the phrase clearly names a specific person, organization, or concrete thing (e.g. "my brother", "my dentist", "the car", "aaron") AND neither memory nor known facts match AND it was NOT already introduced in "## Recent conversation" AND resolving it is necessary to complete the request.
 - If the reference was already introduced or clarified in "## Recent conversation" (e.g. the user or assistant named the person/thing earlier in this session), return \`noop\` for that phrase. The downstream agent has full history access and can resolve it without our help.
 - Generic words ("the file", "this code", "the bug", "the PR", "my response", "my email") that don't point at a stored entity are NOT references — omit and prefer \`noop\`.
 - Tool-resolvable identifiers (URLs like \`https://github.com/...\`, PR/issue numbers like \`#3802\` or \`PR 3802\`, file paths like \`/home/user/foo.md\`, commit hashes, package names, API endpoints) are NOT references — the downstream agent will fetch them with \`shell\`, \`gh\`, \`web_read\`, or similar tools. Omit them and prefer \`noop\`. Example: for "review PR https://github.com/foo/bar/pull/123", return \`{"status":"noop"}\`.
@@ -67,9 +72,9 @@ Output strict JSON matching one of these shapes and nothing else:
 
 Rules:
 - Be conservative. Prefer \`noop\` over guessing.
-- Only one \`unknown\` or \`ambiguous\` per turn — pick the most important reference.
+- At most one \`unknown\` or \`ambiguous\` per turn, and never when anything else resolved.
 - For memory-sourced entries, use only keys from the provided memory list. For knowledge-base-sourced entries, use the literal string \`"rag"\`.
-- \`resolvedTo\` is a short human-readable expansion drawn from the source content (not a raw dump).
+- \`resolvedTo\` is a short name drawn from its one source — never a summary, never a dump.
 - \`preview\` in candidates is a short one-line summary (~60 chars) distinguishing candidates.`;
 
 const POSSESSIVE_PRESCAN = /\b(my|our|her|his|their)\s+\w+/i;
@@ -112,8 +117,27 @@ function buildHintsBlock(hints?: Map<string, string>): string {
   return lines.join('\n');
 }
 
-const MAX_MEMORY_ENTRIES_IN_PROMPT = 40;
-const MAX_MEMORY_PREVIEW_CHARS = 140;
+/**
+ * How many memory entries are shown with their content; every other live entry
+ * is still listed, by key alone.
+ *
+ * This used to be the first 40 entries in `readdir` order, each cut at 140
+ * characters — so on a store of 120 notes anything filed after roughly "d" was
+ * invisible, and the notes that were shown were cut mid-sentence. The resolver
+ * then filled the gap from whatever knowledge-base fact sounded closest, which
+ * is how a stale description reached the rewritten prompt under a memory
+ * key's name. Listing every key keeps every entity findable; previewing the
+ * ones the request actually mentions puts the text where it is needed.
+ */
+const MAX_PREVIEWED_MEMORY_ENTRIES = 12;
+/** Matches `recall-filter`'s per-entry cap, so the two passes see the same text. */
+const MAX_MEMORY_PREVIEW_CHARS = 400;
+/**
+ * A `resolvedTo` longer than this is a description, not a name, and is dropped.
+ * The rewriter inlines `resolvedTo` into the user's own words, so a paraphrase
+ * here becomes something the user appears to have said.
+ */
+export const MAX_RESOLVED_TO_CHARS = 120;
 const MAX_RAG_FACTS_IN_PROMPT = 12;
 const MAX_RAG_FACT_CHARS = 240;
 const RECENT_TURNS_IN_PROMPT = 4;
@@ -159,26 +183,27 @@ function buildRagBlock(facts: RAGSearchResult[]): string {
     const trimmed = f.fact.trim().replace(/\s+/g, ' ');
     const preview =
       trimmed.length > MAX_RAG_FACT_CHARS ? trimmed.slice(0, MAX_RAG_FACT_CHARS) + '…' : trimmed;
-    lines.push(`- ${preview}`);
+    lines.push(`- ${factDatePrefix(f.createdAt)}${preview}`);
   }
   return lines.join('\n');
 }
 
-function buildMemoryBlock(contents: Map<string, string>): string {
+export function buildMemoryBlock(contents: Map<string, string>, request: string): string {
   const lines: string[] = ['## Available memory entries'];
-  const entries = Array.from(contents.entries());
-  const selected = entries.slice(0, MAX_MEMORY_ENTRIES_IN_PROMPT);
-  for (const [key, content] of selected) {
-    const trimmed = content.trim().replace(/\s+/g, ' ');
-    const preview =
-      trimmed.length > MAX_MEMORY_PREVIEW_CHARS
-        ? trimmed.slice(0, MAX_MEMORY_PREVIEW_CHARS) + '…'
-        : trimmed;
-    lines.push(`- ${key}: ${preview}`);
+  const previewed = rankByTermOverlap(contents, request).slice(0, MAX_PREVIEWED_MEMORY_ENTRIES);
+  for (const key of previewed) {
+    lines.push(`- ${key}: ${oneLine(contents.get(key) ?? '', MAX_MEMORY_PREVIEW_CHARS)}`);
   }
-  const omitted = entries.length - selected.length;
-  if (omitted > 0) {
-    lines.push(`- … ${omitted} more entr${omitted === 1 ? 'y' : 'ies'} omitted for brevity`);
+  const shown = new Set(previewed);
+  const rest = [...contents.keys()].filter((k) => !shown.has(k));
+  if (rest.length > 0) {
+    // Key alone: enough to name an entity, too little to be quoted as one.
+    lines.push(
+      previewed.length > 0
+        ? '- Other entries (key only — content not shown):'
+        : '- Entries (key only — content not shown):',
+    );
+    for (const key of rest) lines.push(`  - ${key}`);
   }
   return lines.join('\n');
 }
@@ -198,6 +223,15 @@ function parseResolverResponse(text: string): ResolveResult | null {
             typeof e.resolvedTo === 'string' &&
             typeof e.sourceKey === 'string',
         )
+        .filter((e: any) => {
+          if (e.resolvedTo.trim().length <= MAX_RESOLVED_TO_CHARS) return true;
+          debugLog('reference-resolver:dropped-description', {
+            phrase: e.phrase,
+            sourceKey: e.sourceKey,
+            chars: e.resolvedTo.length,
+          });
+          return false;
+        })
         .map((e: any) => ({ phrase: e.phrase, resolvedTo: e.resolvedTo, sourceKey: e.sourceKey }));
       if (entries.length === 0) return { status: 'noop' };
       return { status: 'resolved', entries };
@@ -291,7 +325,7 @@ export async function resolveReferences(
   const userMessage = [
     `## User request\n${userInput}`,
     historyBlock,
-    buildMemoryBlock(contents),
+    buildMemoryBlock(contents, userInput),
     buildRagBlock(ragFacts),
     buildHintsBlock(hints),
   ]

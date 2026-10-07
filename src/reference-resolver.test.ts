@@ -45,6 +45,8 @@ import {
   buildRecentTurnsBlock,
   stripToolResolvableTokens,
   RAG_SOURCE_KEY,
+  MAX_RESOLVED_TO_CHARS,
+  buildMemoryBlock,
   type ResolvedEntry,
 } from './reference-resolver.js';
 import { MemoryStore } from './memory.js';
@@ -716,5 +718,78 @@ describe('resolveReferences short-circuits tool-resolvable input', () => {
     const store = makeStore({});
     await resolveReferences('did my brother email me', store, makeConfig());
     expect(generateTextMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('buildMemoryBlock', () => {
+  it('lists every entry — not the first 40 by filename — and previews the ones the request names', () => {
+    const contents = new Map<string, string>();
+    for (let i = 0; i < 60; i++)
+      contents.set(`aaa-filler-${String(i).padStart(2, '0')}`, 'unrelated');
+    contents.set('zzz-priorities-doc', 'The priorities document is the Google Doc 1lIA…');
+    const block = buildMemoryBlock(contents, 'add it to the priorities document');
+    // Ranked to the top with its content, though it sorts last by name.
+    expect(block.split('\n')[1]).toBe(
+      '- zzz-priorities-doc: The priorities document is the Google Doc 1lIA…',
+    );
+    // And nothing is hidden: the filler is still there by key.
+    expect(block).toContain('  - aaa-filler-59');
+    expect(block).not.toContain('omitted');
+  });
+});
+
+describe('resolver resolutions stay names, from one source', () => {
+  beforeEach(() => {
+    generateTextMock.mockReset();
+    clearLLMCache();
+  });
+
+  it('drops a resolvedTo long enough to be a description rather than a name', async () => {
+    const description =
+      'the daily report summarizing GitHub activity in TheNextDialer/CRM with a casual Primary/Secondary narrative sent to John every evening';
+    expect(description.length).toBeGreaterThan(MAX_RESOLVED_TO_CHARS);
+    generateTextMock.mockResolvedValue({
+      text: JSON.stringify({
+        status: 'resolved',
+        entries: [
+          { phrase: 'our daily blaze', resolvedTo: description, sourceKey: 'daily-blaze' },
+          { phrase: 'my boss', resolvedTo: 'Brian, my manager', sourceKey: 'boss' },
+        ],
+      }),
+    });
+    const result = await resolveReferences(
+      'start our daily blaze for my boss',
+      makeStore({ 'daily-blaze': 'FleetIQ + salt', boss: 'Brian' }),
+      makeConfig(),
+    );
+    expect(result).toEqual({
+      status: 'resolved',
+      entries: [{ phrase: 'my boss', resolvedTo: 'Brian, my manager', sourceKey: 'boss' }],
+    });
+  });
+
+  it('shows the model each knowledge-base fact with its date', async () => {
+    generateTextMock.mockResolvedValue({ text: '{"status":"noop"}' });
+    const learned = new Date(2026, 4, 2, 12).toISOString();
+    await resolveReferences(
+      'email my accountant',
+      makeStore({}),
+      makeConfig(),
+      undefined,
+      undefined,
+      makeRagStore(() => [
+        { fact: 'Accountant is Dana', similarity: 0.7, domain: 'general', createdAt: learned },
+      ]),
+    );
+    const sent = generateTextMock.mock.calls[0][0].messages[0].content as string;
+    expect(sent).toContain('- [2026-05-02] Accountant is Dana');
+  });
+
+  it('tells the model an unplaceable phrase must not stop the others resolving', async () => {
+    generateTextMock.mockResolvedValue({ text: '{"status":"noop"}' });
+    await resolveReferences('email my accountant', makeStore({}), makeConfig());
+    const system = generateTextMock.mock.calls[0][0].system as string;
+    expect(system).toContain('Resolve EVERY phrase you can');
+    expect(system).toContain('ONE SOURCE PER ENTRY');
   });
 });

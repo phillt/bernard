@@ -11,7 +11,7 @@ import { buildRAGQuery, extractRecentUserTexts, extractRecentToolContext } from 
 import { getDomain } from './domains.js';
 import { REWRITER_HINTS_KEY, type MemoryStore } from './memory.js';
 import { MAX_PERSISTENT_MEMORY_CHARS, packMemory } from './context-message.js';
-import { plural } from './text.js';
+import { factDatePrefix, localDay, plural } from './text.js';
 
 /**
  * RAG Recall Filter — a pre-turn LLM pass that decides which recalled memories
@@ -79,6 +79,10 @@ Rules:
 - Judge relevance to the CURRENT request in the context of the recent conversation, not general interestingness.
 - When a fact is clearly useful, keep it. When it is clearly irrelevant, drop it. When genuinely unsure, lean toward keeping it (a borderline-useful fact is cheaper than a lost one).
 - Do NOT rewrite, merge, summarize, or invent facts. Only select from the numbered candidates by their number.
+- Each candidate is prefixed with the date it was learned, and today's date is given. Age matters:
+  - When two candidates disagree, keep the newer one and drop the older.
+  - A candidate narrating a past session ("User requested…", "Assistant sent…") describes what happened THAT day. Drop it unless the request is actually about that occasion — it is not a description of how things stand now, and it is not today's work.
+  - If curated memory replaces a candidate outright, drop the candidate. If it only overrides one clause, keep it and reconcile (below).
 - It is valid to keep all of them, or to keep none.
 
 You may also be given "## Curated memory" — notes the user explicitly asked the assistant to remember. These are authoritative in a way candidate facts are not: candidates were auto-extracted from past sessions by similarity, memory was written down on purpose.
@@ -113,7 +117,8 @@ function buildCandidateBlock(candidates: RAGSearchResultWithId[]): string {
   return [
     '## Candidate facts',
     ...candidates.map(
-      (c, i) => `${i + 1}. [${getDomain(c.domain).name}] ${oneLine(c.fact, MAX_FACT_CHARS)}`,
+      (c, i) =>
+        `${i + 1}. ${factDatePrefix(c.createdAt)}[${getDomain(c.domain).name}] ${oneLine(c.fact, MAX_FACT_CHARS)}`,
     ),
   ].join('\n');
 }
@@ -290,6 +295,8 @@ export async function recallFilter(
     memoryStore?: MemoryStore;
     abortSignal?: AbortSignal;
     onUsage?: UsageRecorder;
+    /** The clock, injectable for tests. */
+    now?: Date;
   } = {},
 ): Promise<RecallFilterResult> {
   const { memoryStore, abortSignal, onUsage } = opts;
@@ -333,6 +340,9 @@ export async function recallFilter(
     : RECALL_FILTER_SYSTEM_PROMPT;
   const userMessage = [
     `## User request\n${agentInput}`,
+    // The candidates carry the date each was learned; without today's date
+    // beside them that is a column of numbers with nothing to subtract from.
+    `## Today\n${localDay(opts.now ?? new Date())}`,
     historyBlock,
     memoryBlock,
     buildCandidateBlock(candidates),
@@ -419,10 +429,15 @@ export async function recallFilter(
     // genuinely-relevant memories rather than every topical match.
     ragStore.recordAccess(kept.map((c) => c.id));
 
-    const facts: RAGSearchResult[] = kept.map(({ fact, similarity, domain }) => ({
+    // `id` and `createdAt` ride along: the id is the provenance address (#549)
+    // and the date is what lets the agent tell a stale episode from a current
+    // fact. Dropping either here re-creates the defect one layer down.
+    const facts: RAGSearchResult[] = kept.map(({ id, fact, similarity, domain, createdAt }) => ({
+      id,
       fact,
       similarity,
       domain,
+      createdAt,
     }));
     if (reconciliation) debugLog('recall-filter:reconciliation', { note: reconciliation });
     return { status: 'filtered', facts, reconciliation, memoryPriority };

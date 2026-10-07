@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
+  factDatePrefix,
+  localDay,
   truncate,
   normalizeToolText,
   normalizeToolResult,
@@ -421,5 +423,21 @@ describe('foldTypography', () => {
     expect((out.nested as { list: unknown[] }).list[0]).toBe('a - b');
     expect((out.nested as { list: unknown[] }).list[1]).toBe(42);
     expect(out.when).toBe(when);
+  });
+});
+
+describe('factDatePrefix', () => {
+  it('dates a fact by the LOCAL day it was learned, not the UTC one', () => {
+    // 10pm local: the UTC stamp is the next day anywhere west of Greenwich,
+    // which is the "yesterday read as today" confusion the date exists to fix.
+    const evening = new Date(2026, 9, 5, 22, 0, 0);
+    expect(factDatePrefix(evening.toISOString())).toBe('[2026-10-05] ');
+    expect(localDay(evening)).toBe('2026-10-05');
+  });
+
+  it('renders nothing for a missing or unreadable date rather than a wrong one', () => {
+    expect(factDatePrefix(undefined)).toBe('');
+    expect(factDatePrefix('')).toBe('');
+    expect(factDatePrefix('not a date')).toBe('');
   });
 });

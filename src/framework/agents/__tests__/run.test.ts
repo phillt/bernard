@@ -182,6 +182,24 @@ describe('runDefinition records what each dispatch was given (#512)', () => {
     });
   });
 
+  it('hands the dispatch its own retrieval query to rank memory by', async () => {
+    // A dispatch packs memory with no curator ranking, so without this the
+    // biggest note — usually the one most specific to the task — is the first
+    // dropped. The query is what the dispatch is FOR.
+    const seen: unknown[] = [];
+    (buildContextMessage as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (inputs: any) => {
+        seen.push(inputs.memoryRelevanceQuery);
+        return { role: 'user', content: 'CTX' };
+      },
+    );
+    const ctx = makeCtx();
+    (ctx as any).rag = { search: async () => [] };
+    const def = fakeDefinition({ retrievalQuery: (i: FakeInput) => i.text });
+    await runDefinition(ctx, def, { text: 'send the daily blaze' });
+    expect(seen[0]).toBe('send the daily blaze');
+  });
+
   it('records the retrieval query, which is otherwise only a debug log', async () => {
     clearDispatchContexts();
     enableDispatchContextRecording();

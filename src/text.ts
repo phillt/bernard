@@ -536,3 +536,31 @@ export function normalizeToolResult(v: unknown): unknown {
 export function escapeXml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
+
+/**
+ * The `[YYYY-MM-DD] ` prefix a recalled fact is rendered with, or `''` when its
+ * date is absent or unreadable.
+ *
+ * An absolute date rather than an age: this module is a pure function of its
+ * inputs, and `<current_datetime>` already tells the reader what today is. The
+ * recall curator renders its candidates through the same function so the two
+ * readers of a fact cannot disagree about how old it is.
+ */
+export function factDatePrefix(createdAt?: string): string {
+  if (!createdAt) return '';
+  const when = new Date(createdAt);
+  return Number.isNaN(when.getTime()) ? '' : `[${localDay(when)}] `;
+}
+
+/**
+ * `YYYY-MM-DD` in LOCAL time, not `toISOString().slice(0, 10)`.
+ *
+ * Facts are stamped in UTC, so slicing the stamp dates an evening fact west of
+ * Greenwich to the NEXT day — which is precisely the "yesterday's work read as
+ * today's" confusion the dates exist to remove. Every date a reader compares
+ * must be on the same clock, so the curator's "today" goes through here too.
+ */
+export function localDay(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}

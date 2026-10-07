@@ -189,6 +189,18 @@ export interface RAGSearchResult {
    * nothing could be looked back up in the store it came from.
    */
   id?: string;
+  /**
+   * When the fact was learned (ISO 8601), so a reader can tell March from
+   * yesterday.
+   *
+   * Without it a recalled fact carried no age at all, and every consumer — the
+   * recall curator choosing among candidates, and the agent reading
+   * `<recalled_context>` — saw a five-month-old episode ("the user asked for the
+   * Daily Blaze to go to john@…") exactly as it saw one from this morning. The
+   * renderer's own caveat said facts "may be outdated" and then withheld the one
+   * field that would let anyone check. Optional for the reason `id` is.
+   */
+  createdAt?: string;
 }
 
 /** Extended search result that includes the memory ID and lifecycle metadata. */
@@ -843,6 +855,7 @@ export class RAGStore {
       fact: s.memory.fact,
       similarity: s.similarity,
       domain: s.memory.domain,
+      createdAt: s.memory.createdAt,
     }));
     if (cacheOn) this.turnSearchCache.set(query, results);
     return results;

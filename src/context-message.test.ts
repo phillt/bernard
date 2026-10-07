@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildContextMessage,
+  memoryPriorityFor,
   packMemory,
   packSpecialists,
   MAX_PERSISTENT_MEMORY_CHARS,
@@ -387,5 +388,78 @@ describe('the <specialists> roster is bounded', () => {
 
   it('renders no section at all for an empty roster', () => {
     expect(buildContextMessage({ specialistSummaries: [] })).toBeNull();
+  });
+});
+
+describe('recalled facts carry their date', () => {
+  it('prefixes each fact with the local day it was learned, and says what the date means', () => {
+    const learned = new Date(2026, 2, 14, 12, 0, 0).toISOString();
+    const msg = buildContextMessage({
+      ragResults: [
+        {
+          fact: 'The Daily Blaze goes to john@',
+          similarity: 0.6,
+          domain: 'general',
+          createdAt: learned,
+        },
+        { fact: 'undated legacy fact', similarity: 0.5, domain: 'general' },
+      ],
+    });
+    const content = String(msg?.content);
+    expect(content).toContain('- [2026-03-14] The Daily Blaze goes to john@');
+    expect(content).toContain('- undated legacy fact');
+    expect(content).toContain('the newer one wins');
+  });
+});
+
+describe('dispatch memory is ranked by what the dispatch is for', () => {
+  // Over budget only when both big notes are present: each alone fits.
+  const third = Math.floor(MAX_PERSISTENT_MEMORY_CHARS * 0.45);
+  const entries: [string, string][] = [
+    ['grocery-applet', 'aisles '.repeat(third / 7)],
+    ['daily-blaze-format', 'FleetIQ bullets '.repeat(third / 10)],
+    ['standing-rule', 'never email the client directly'],
+  ];
+
+  it('without a query the biggest note is the first one dropped — the observed defect', () => {
+    const pack = packMemory(new Map(entries), memoryPriorityFor(new Map(entries), {}));
+    expect(pack.dropped).toEqual(['daily-blaze-format']);
+  });
+
+  it('with a query the relevant note survives and the off-topic one goes', () => {
+    const map = new Map(entries);
+    const priority = memoryPriorityFor(map, { memoryRelevanceQuery: 'send the daily blaze' });
+    const pack = packMemory(map, priority);
+    expect(pack.kept).toContain('daily-blaze-format');
+    expect(pack.kept).toContain('standing-rule');
+    expect(pack.dropped).toEqual(['grocery-applet']);
+  });
+
+  it('does not rank at all when everything fits, so the section is unchanged', () => {
+    const small = new Map<string, string>([
+      ['a', 'daily blaze'],
+      ['b', 'other'],
+    ]);
+    expect(memoryPriorityFor(small, { memoryRelevanceQuery: 'daily blaze' })).toBeUndefined();
+  });
+
+  it("defers to a caller's ranking", () => {
+    const map = new Map(entries);
+    expect(
+      memoryPriorityFor(map, {
+        memoryPriority: ['standing-rule'],
+        memoryRelevanceQuery: 'daily blaze',
+      }),
+    ).toEqual(['standing-rule']);
+  });
+
+  it('reaches the rendered section through buildContextMessage', () => {
+    const msg = buildContextMessage({
+      memoryStore: memoryStoreWith(entries),
+      memoryRelevanceQuery: 'send the daily blaze',
+    });
+    const content = String(msg?.content);
+    expect(content).toContain('### daily-blaze-format');
+    expect(content).not.toContain('### grocery-applet');
   });
 });
