@@ -768,6 +768,27 @@ describe('resolver resolutions stay names, from one source', () => {
     });
   });
 
+  it('keeps resolved entries even when the model also reports a phrase it could not place', async () => {
+    // The prompt says never to; a cheap model sometimes does, and honouring the
+    // status would throw away the phrase that DID resolve.
+    generateTextMock.mockResolvedValue({
+      text: JSON.stringify({
+        status: 'unknown',
+        reference: 'his virtual assistant',
+        entries: [{ phrase: 'my boss', resolvedTo: 'Brian', sourceKey: 'boss' }],
+      }),
+    });
+    const result = await resolveReferences(
+      "send my boss's virtual assistant the priorities doc",
+      makeStore({ boss: 'Brian' }),
+      makeConfig(),
+    );
+    expect(result).toEqual({
+      status: 'resolved',
+      entries: [{ phrase: 'my boss', resolvedTo: 'Brian', sourceKey: 'boss' }],
+    });
+  });
+
   it('shows the model each knowledge-base fact with its date', async () => {
     generateTextMock.mockResolvedValue({ text: '{"status":"noop"}' });
     const learned = new Date(2026, 4, 2, 12).toISOString();

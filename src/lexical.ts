@@ -46,7 +46,7 @@
  * BM25's IDF already discounts common terms by construction, so an aggressive
  * stop list buys little and costs recall.
  */
-export const STOP_WORDS: ReadonlySet<string> = new Set([
+const STOP = new Set([
   'a',
   'an',
   'and',
@@ -124,7 +124,7 @@ export function lexicalTokens(text: string): string[] {
       // A piece identical to the whole adds nothing but doubles its term
       // frequency, which would over-weight single-word terms against
       // compound ones.
-      if (piece !== whole && piece.length > 1 && !STOP_WORDS.has(piece)) out.push(piece);
+      if (piece !== whole && piece.length > 1 && !STOP.has(piece)) out.push(piece);
     }
   }
   return out;
@@ -298,9 +298,27 @@ export function reciprocalRankFusion(
   return [...fused.entries()].sort((a, b) => b[1] - a[1]).map(([doc]) => doc);
 }
 
-/** The content words of `text`: lowercased, three characters or more, no stop words. */
+/**
+ * The content words of `text`: lowercased, three characters or more, no stop
+ * words. `STOP` is re-applied because `lexicalTokens` filters only PIECES — a
+ * whole short word like `the` comes through unfiltered.
+ *
+ * Cached by text: a dispatch over budget ranks the same notes on every LLM
+ * call, and tokenizing them is the whole cost (~3 ms for a 40k-char store,
+ * against ~20 µs for the pack itself). `MemoryStore`'s read cache hands back
+ * the same string instances, so a lookup hashes nothing new. Bounded by a
+ * clear, because the store is.
+ */
+const termCache = new Map<string, Set<string>>();
+const TERM_CACHE_MAX = 512;
 function contentTerms(text: string): Set<string> {
-  return new Set(lexicalTokens(text).filter((t) => t.length >= 3 && !STOP_WORDS.has(t)));
+  let terms = termCache.get(text);
+  if (!terms) {
+    if (termCache.size >= TERM_CACHE_MAX) termCache.clear();
+    terms = new Set(lexicalTokens(text).filter((t) => t.length >= 3 && !STOP.has(t)));
+    termCache.set(text, terms);
+  }
+  return terms;
 }
 
 /**
@@ -308,11 +326,11 @@ function contentTerms(text: string): Set<string> {
  * most shared first; entries sharing none are left out rather than ranked last.
  *
  * Built for memory notes, where the key is half the signal — `daily-blaze-format`
- * names its subject better than its first paragraph does — so dashes in the key
- * count as word breaks. Leaving the non-matching entries OUT is the point: a
- * caller packing under a budget orders the rest by its own rule (smallest
- * first, which is what keeps short standing rules), and a ranking that listed
- * everything would override that rule with "store order".
+ * names its subject better than its first paragraph does — so the key's words
+ * count too. Leaving the non-matching entries OUT is the point: a caller packing
+ * under a budget orders the rest by its own rule (smallest first, which is what
+ * keeps short standing rules), and a ranking that listed everything would
+ * override that rule with "store order".
  *
  * Lexical rather than semantic on purpose. It has to run inside dispatch
  * context assembly, per LLM call, with no model and no embedding; and a request
@@ -328,9 +346,10 @@ export function rankByTermOverlap(
   const scored: { key: string; score: number; i: number }[] = [];
   let i = 0;
   for (const [key, content] of entries) {
-    const have = contentTerms(`${key.replace(/-/g, ' ')} ${content}`);
+    const keyTerms = contentTerms(key);
+    const have = contentTerms(content);
     let score = 0;
-    for (const t of wanted) if (have.has(t)) score++;
+    for (const t of wanted) if (keyTerms.has(t) || have.has(t)) score++;
     if (score > 0) scored.push({ key, score, i });
     i++;
   }

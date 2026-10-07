@@ -6,7 +6,7 @@ import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
 import { getCachedLLM, setCachedLLM, type LLMCacheKey } from './llm-cache.js';
 import { usageRecordFromSite, type UsageRecorder } from './framework/hooks/token-stats.js';
-import { buildRecentTurnsBlock, oneLine } from './reference-resolver.js';
+import { buildRecentTurnsBlock, MAX_MEMORY_PREVIEW_CHARS, oneLine } from './reference-resolver.js';
 import { buildRAGQuery, extractRecentUserTexts, extractRecentToolContext } from './rag-query.js';
 import { getDomain } from './domains.js';
 import { REWRITER_HINTS_KEY, type MemoryStore } from './memory.js';
@@ -124,15 +124,7 @@ function buildCandidateBlock(candidates: RAGSearchResultWithId[]): string {
 }
 
 /**
- * Per-entry preview cap in the curator prompt. Deliberately larger than
- * `reference-resolver`'s 140: that pass only has to recognise which entry names
- * an entity; this one has to spot a clause inside an entry that contradicts a
- * recalled fact, which needs more of the text.
- */
-const MAX_MEMORY_ENTRY_CHARS = 400;
-
-/**
- * Whole-block cap. Without it the block is `MAX_MEMORY_ENTRY_CHARS × entries`
+ * Whole-block cap. Without it the block is `MAX_MEMORY_PREVIEW_CHARS × entries`
  * and unbounded — so a user over the persistent-memory budget would send the
  * cheap-tier curator *more* memory than the main agent it advises, since
  * `renderPersistentMemory` drops entries at that budget and this would not.
@@ -188,7 +180,7 @@ function buildMemoryBlock(entries: Map<string, string>): string {
   let used = 0;
   let omitted = 0;
   for (const [key, content] of entries) {
-    const line = `- \`${key}\`: ${oneLine(content, MAX_MEMORY_ENTRY_CHARS)}`;
+    const line = `- \`${key}\`: ${oneLine(content, MAX_MEMORY_PREVIEW_CHARS)}`;
     if (used + line.length > MAX_MEMORY_BLOCK_CHARS) {
       omitted++;
       continue;

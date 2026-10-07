@@ -8,7 +8,7 @@ import { resolveSiteModel } from './model-policy.js';
 import { getCachedLLM, setCachedLLM, type LLMCacheKey } from './llm-cache.js';
 import { usageRecordFromSite, type UsageRecorder } from './framework/hooks/token-stats.js';
 import { rankByTermOverlap } from './lexical.js';
-import { factDatePrefix } from './text.js';
+import { clipSafe, factDatePrefix } from './text.js';
 
 /** Sentinel sourceKey used for resolutions drawn from the RAG knowledge base. */
 export const RAG_SOURCE_KEY = 'rag';
@@ -130,8 +130,8 @@ function buildHintsBlock(hints?: Map<string, string>): string {
  * ones the request actually mentions puts the text where it is needed.
  */
 const MAX_PREVIEWED_MEMORY_ENTRIES = 12;
-/** Matches `recall-filter`'s per-entry cap, so the two passes see the same text. */
-const MAX_MEMORY_PREVIEW_CHARS = 400;
+/** Shared with `recall-filter`, so the two passes see the same text of a note. */
+export const MAX_MEMORY_PREVIEW_CHARS = 400;
 /**
  * A `resolvedTo` longer than this is a description, not a name, and is dropped.
  * The rewriter inlines `resolvedTo` into the user's own words, so a paraphrase
@@ -180,10 +180,7 @@ function buildRagBlock(facts: RAGSearchResult[]): string {
   const lines: string[] = ['## Relevant known facts'];
   const selected = facts.slice(0, MAX_RAG_FACTS_IN_PROMPT);
   for (const f of selected) {
-    const trimmed = f.fact.trim().replace(/\s+/g, ' ');
-    const preview =
-      trimmed.length > MAX_RAG_FACT_CHARS ? trimmed.slice(0, MAX_RAG_FACT_CHARS) + '…' : trimmed;
-    lines.push(`- ${factDatePrefix(f.createdAt)}${preview}`);
+    lines.push(`- ${factDatePrefix(f.createdAt)}${oneLine(f.fact, MAX_RAG_FACT_CHARS)}`);
   }
   return lines.join('\n');
 }
@@ -192,16 +189,14 @@ export function buildMemoryBlock(contents: Map<string, string>, request: string)
   const lines: string[] = ['## Available memory entries'];
   const previewed = rankByTermOverlap(contents, request).slice(0, MAX_PREVIEWED_MEMORY_ENTRIES);
   for (const key of previewed) {
-    lines.push(`- ${key}: ${oneLine(contents.get(key) ?? '', MAX_MEMORY_PREVIEW_CHARS)}`);
+    lines.push(`- ${key}: ${oneLine(contents.get(key)!, MAX_MEMORY_PREVIEW_CHARS)}`);
   }
   const shown = new Set(previewed);
   const rest = [...contents.keys()].filter((k) => !shown.has(k));
   if (rest.length > 0) {
     // Key alone: enough to name an entity, too little to be quoted as one.
     lines.push(
-      previewed.length > 0
-        ? '- Other entries (key only — content not shown):'
-        : '- Entries (key only — content not shown):',
+      `- ${previewed.length > 0 ? 'Other entries' : 'Entries'} (key only — content not shown):`,
     );
     for (const key of rest) lines.push(`  - ${key}`);
   }
@@ -214,7 +209,11 @@ function parseResolverResponse(text: string): ResolveResult | null {
   try {
     const parsed = JSON.parse(match[0]);
     if (parsed?.status === 'noop') return { status: 'noop' };
-    if (parsed?.status === 'resolved' && Array.isArray(parsed.entries)) {
+    // Entries win whatever status came with them. An `ambiguous` or `unknown`
+    // shape cannot carry them, so honouring that status would discard every
+    // phrase that DID resolve — the defect the prompt's "resolve EVERY phrase"
+    // rule exists to stop, and a cheap model will not always follow the rule.
+    if (Array.isArray(parsed?.entries)) {
       const entries: ResolvedEntry[] = parsed.entries
         .filter(
           (e: any) =>
@@ -233,8 +232,8 @@ function parseResolverResponse(text: string): ResolveResult | null {
           return false;
         })
         .map((e: any) => ({ phrase: e.phrase, resolvedTo: e.resolvedTo, sourceKey: e.sourceKey }));
-      if (entries.length === 0) return { status: 'noop' };
-      return { status: 'resolved', entries };
+      if (entries.length > 0) return { status: 'resolved', entries };
+      if (parsed.status === 'resolved') return { status: 'noop' };
     }
     if (
       parsed?.status === 'ambiguous' &&
@@ -416,7 +415,7 @@ export function oneLine(value: string, max: number = MAX_RENDERED_FIELD_CHARS): 
     .replace(/[\r\n\t]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  return flat.length > max ? flat.slice(0, max) + '…' : flat;
+  return flat.length > max ? clipSafe(flat, max) + '…' : flat;
 }
 
 export function renderResolvedBlock(entries: ResolvedEntry[]): string {

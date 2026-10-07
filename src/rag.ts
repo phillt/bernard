@@ -190,15 +190,9 @@ export interface RAGSearchResult {
    */
   id?: string;
   /**
-   * When the fact was learned (ISO 8601), so a reader can tell March from
-   * yesterday.
-   *
-   * Without it a recalled fact carried no age at all, and every consumer — the
-   * recall curator choosing among candidates, and the agent reading
-   * `<recalled_context>` — saw a five-month-old episode ("the user asked for the
-   * Daily Blaze to go to john@…") exactly as it saw one from this morning. The
-   * renderer's own caveat said facts "may be outdated" and then withheld the one
-   * field that would let anyone check. Optional for the reason `id` is.
+   * When the fact was learned (ISO 8601). Without it the curator and the agent
+   * saw a months-old episode exactly as they saw this morning's, so neither
+   * could prefer the newer of two facts. Optional for the reason `id` is.
    */
   createdAt?: string;
 }

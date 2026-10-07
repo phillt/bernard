@@ -541,8 +541,8 @@ export function escapeXml(s: string): string {
  * The `[YYYY-MM-DD] ` prefix a recalled fact is rendered with, or `''` when its
  * date is absent or unreadable.
  *
- * An absolute date rather than an age: this module is a pure function of its
- * inputs, and `<current_datetime>` already tells the reader what today is. The
+ * An absolute date rather than an age: an age would change the rendered text
+ * every day, and `<current_datetime>` already tells the reader what today is. The
  * recall curator renders its candidates through the same function so the two
  * readers of a fact cannot disagree about how old it is.
  */

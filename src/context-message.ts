@@ -35,15 +35,10 @@ export interface ContextMessageInputs {
   /** Memory keys, most- to least-relevant. See {@link orderForPacking}. */
   memoryPriority?: string[];
   /**
-   * What this assembly is FOR, used to rank memory when it will not all fit and
-   * nobody supplied a `memoryPriority`.
-   *
-   * Only the main agent's turn gets a curator ranking; every dispatch packed
-   * smallest-first, so the note most specific to the task — usually the longest
-   * — was the first one dropped. Observed: the Daily Blaze specialist ran with
-   * `daily-blaze-format-brian` cut, on every run, because it was the biggest
-   * note in the store. Consulted only when something would be dropped, so
-   * under budget the section is byte-identical to before.
+   * What this assembly is FOR. When memory will not all fit and no
+   * `memoryPriority` was given, notes sharing words with it are kept first —
+   * otherwise every dispatch drops its biggest, usually most task-specific,
+   * note. See {@link packMemory}.
    */
   memoryRelevanceQuery?: string;
   includeScratch?: boolean;
@@ -112,25 +107,6 @@ type SectionRenderer = () => string | null;
  * reference data and gives the model a clear marker to disregard embedded
  * directives.
  */
-/**
- * The ranking `packMemory` should use: the caller's if it gave one, otherwise —
- * and only when the store is over budget — the entries that share words with
- * `memoryRelevanceQuery`.
- *
- * Main never supplies a query, so `Agent`'s second pack — the one that records
- * what was injected — stays in step with this one without consulting it.
- */
-export function memoryPriorityFor(
-  memories: Map<string, string>,
-  inputs: Pick<ContextMessageInputs, 'memoryPriority' | 'memoryRelevanceQuery'>,
-): string[] | undefined {
-  if (inputs.memoryPriority) return inputs.memoryPriority;
-  const query = inputs.memoryRelevanceQuery?.trim();
-  if (!query || packMemory(memories).dropped.length === 0) return undefined;
-  const ranked = rankByTermOverlap(memories, query);
-  return ranked.length > 0 ? ranked : undefined;
-}
-
 export function buildContextMessage(inputs: ContextMessageInputs): CoreMessage | null {
   const sections: { tag: string; body: string }[] = [];
   // Packed here rather than inside the renderer so the DECISION is available to
@@ -139,7 +115,7 @@ export function buildContextMessage(inputs: ContextMessageInputs): CoreMessage |
   // away. Same number of store reads as before: one.
   const memoryEntries = inputs.memoryStore?.getAllMemoryContents();
   const pack = memoryEntries
-    ? packMemory(memoryEntries, memoryPriorityFor(memoryEntries, inputs))
+    ? packMemory(memoryEntries, inputs.memoryPriority, inputs.memoryRelevanceQuery)
     : undefined;
 
   const renderers: { tag: string; render: SectionRenderer }[] = [
@@ -522,21 +498,37 @@ export interface MemoryPack {
  * inputs — and so the two-method fake in `context-message.test.ts` and the
  * one-method fake in `recall-filter.test.ts` both keep working unchanged.
  */
-export function packMemory(memories: Map<string, string>, priority?: string[]): MemoryPack {
+export function packMemory(
+  memories: Map<string, string>,
+  priority?: string[],
+  relevanceQuery?: string,
+): MemoryPack {
   // Rendered once, here, and carried forward — the packer has to build every
   // block to measure it, and the renderer then needs the kept ones. Escaping
   // the whole store twice cost 14.7 µs against 6.8 µs on the real 30-entry
   // store, on a path that runs per LLM call.
-  //
+  const blocks = Array.from(memories, ([key, content]) => ({
+    key,
+    block: memoryBlock(key, content),
+  }));
+  const pack = packBlocks(blocks, priority);
+  // A caller's ranking always wins. Otherwise `relevanceQuery` ranks the store
+  // by shared words — only when something is being dropped, so under budget
+  // the section is byte-identical, and over budget it is the off-topic notes
+  // that go rather than the biggest ones.
+  if (priority || pack.dropped.length === 0 || !relevanceQuery?.trim()) return pack;
+  return packBlocks(blocks, rankByTermOverlap(memories, relevanceQuery));
+}
+
+function packBlocks(blocks: { key: string; block: string }[], priority?: string[]): MemoryPack {
   // An array of pairs rather than a key→size side-table: the table was built
   // from the same map the loop walks, so every `get` needed a `?? 0` fallback
   // that could not fire — three impossible cases reading as real ones.
   const rank = new Map((priority ?? []).map((key, i) => [key, i]));
   const unranked = rank.size;
-  const sized = Array.from(memories, ([key, content]) => {
-    const block = memoryBlock(key, content);
-    return { key, block, rank: rank.get(key) ?? unranked };
-  }).sort((a, b) => a.rank - b.rank || a.block.length - b.block.length);
+  const sized = blocks
+    .map((b) => ({ ...b, rank: rank.get(b.key) ?? unranked }))
+    .sort((a, b) => a.rank - b.rank || a.block.length - b.block.length);
 
   const kept: string[] = [];
   const keptBlocks: string[] = [];

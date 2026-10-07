@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildContextMessage,
-  memoryPriorityFor,
   packMemory,
   packSpecialists,
   MAX_PERSISTENT_MEMORY_CHARS,
@@ -422,35 +421,30 @@ describe('dispatch memory is ranked by what the dispatch is for', () => {
   ];
 
   it('without a query the biggest note is the first one dropped — the observed defect', () => {
-    const pack = packMemory(new Map(entries), memoryPriorityFor(new Map(entries), {}));
+    const pack = packMemory(new Map(entries));
     expect(pack.dropped).toEqual(['daily-blaze-format']);
   });
 
   it('with a query the relevant note survives and the off-topic one goes', () => {
-    const map = new Map(entries);
-    const priority = memoryPriorityFor(map, { memoryRelevanceQuery: 'send the daily blaze' });
-    const pack = packMemory(map, priority);
+    const pack = packMemory(new Map(entries), undefined, 'send the daily blaze');
     expect(pack.kept).toContain('daily-blaze-format');
     expect(pack.kept).toContain('standing-rule');
     expect(pack.dropped).toEqual(['grocery-applet']);
   });
 
   it('does not rank at all when everything fits, so the section is unchanged', () => {
+    // Ranked, the longer matching note would come first; unranked, smallest first.
     const small = new Map<string, string>([
-      ['a', 'daily blaze'],
+      ['a', 'the daily blaze format'],
       ['b', 'other'],
     ]);
-    expect(memoryPriorityFor(small, { memoryRelevanceQuery: 'daily blaze' })).toBeUndefined();
+    expect(packMemory(small, undefined, 'daily blaze').kept).toEqual(['b', 'a']);
   });
 
   it("defers to a caller's ranking", () => {
-    const map = new Map(entries);
-    expect(
-      memoryPriorityFor(map, {
-        memoryPriority: ['standing-rule'],
-        memoryRelevanceQuery: 'daily blaze',
-      }),
-    ).toEqual(['standing-rule']);
+    const pack = packMemory(new Map(entries), ['standing-rule'], 'daily blaze');
+    expect(pack.kept[0]).toBe('standing-rule');
+    expect(pack.dropped).toEqual(['daily-blaze-format']);
   });
 
   it('reaches the rendered section through buildContextMessage', () => {
