@@ -1903,6 +1903,10 @@ program
       { player: resolveWarmupPlayer(process.platform), ms: voiceWarmupMs },
       synthesize,
     );
+    // The player child is unref()ed so it never holds a REPL open, and a cloud
+    // voice spends its first second waiting on the network with nothing else
+    // pending, so without this the process exits before a word is played.
+    const keepAlive = setInterval(() => undefined, 60_000);
     try {
       // Deterministic normalization only — this path deliberately constructs no
       // provider or model (it must work with no API key configured), and the
@@ -1913,6 +1917,8 @@ program
       const msg = err instanceof Error ? err.message : String(err);
       printError(`TTS failed: ${msg}`);
       process.exit(1);
+    } finally {
+      clearInterval(keepAlive);
     }
   });
 
