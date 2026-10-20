@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   TalkSession,
+  spokenText,
   MAX_CONSECUTIVE_FAILURES,
   type TalkDeps,
   type TalkState,
@@ -98,6 +99,43 @@ describe('TalkSession', () => {
     s.stop();
     expect(h.deps.submit).not.toHaveBeenCalled();
     expect(h.opens()).toBeGreaterThan(1);
+  });
+
+  it('starts no turn for a cough or a click on its own', async () => {
+    const h = harness({ transcribe: vi.fn(async () => '[coughs]') });
+    const s = new TalkSession(h.deps);
+    s.start();
+    for (let i = 0; i < 4; i++) await tick();
+    s.stop();
+    expect(h.deps.submit).not.toHaveBeenCalled();
+    expect(h.opens()).toBeGreaterThan(1);
+  });
+
+  it('does not hand a click heard mid-turn to the running turn', async () => {
+    let release!: (v: string) => void;
+    const followUp = vi.fn(() => true);
+    const h = harness(
+      {
+        transcribe: vi
+          .fn()
+          .mockResolvedValue('')
+          .mockResolvedValueOnce('what time is it')
+          .mockResolvedValueOnce('[clicking]'),
+        submit: vi.fn(() => new Promise<string>((r) => (release = r))),
+        followUp,
+      },
+      1,
+    );
+    const s = new TalkSession(h.deps);
+    s.start();
+    for (let i = 0; i < 5; i++) await tick();
+    expect(h.deps.transcribe).toHaveBeenCalledTimes(2);
+    release('Noon.');
+    for (let i = 0; i < 3; i++) await tick();
+    s.stop();
+    expect(followUp).not.toHaveBeenCalled();
+    // Nor held over to become a turn of its own.
+    expect(h.deps.submit).toHaveBeenCalledTimes(1);
   });
 
   it('gives up after repeated transcription failures, saying why', async () => {
@@ -237,5 +275,20 @@ describe('TalkSession', () => {
     for (let i = 0; i < 5; i++) await tick();
     s.stop();
     expect(h.deps.speak).toHaveBeenCalled();
+  });
+});
+
+describe('spokenText', () => {
+  it.each([
+    ['[coughs]', ''],
+    ['[clicking] [laughter]', ''],
+    ['  [coughs] . ', ''],
+    ['[coughs] what time is it', 'what time is it'],
+    ['send it [clicking] now', 'send it now'],
+    ['meet at 3 (or 4)', 'meet at 3 (or 4)'],
+    ['42', '42'],
+    ['¿qué hora es?', '¿qué hora es?'],
+  ])('%j → %j', (raw, want) => {
+    expect(spokenText(raw)).toBe(want);
   });
 });

@@ -164,6 +164,7 @@ describe('ElevenLabs client', () => {
     expect(url).toMatch(/\/v1\/speech-to-text$/);
     const form = init.body as FormData;
     expect(form.get('model_id')).toBe('scribe_v1');
+    expect(form.get('tag_audio_events')).toBe('false');
     expect((form.get('file') as Blob).type).toBe('audio/wav');
   });
 

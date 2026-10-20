@@ -1,5 +1,23 @@
 import { Endpointer, type EndpointerOptions } from './endpointer.js';
 import type { MicHandle } from './recorder.js';
+import { speechLog } from './log.js';
+
+/**
+ * What the person actually SAID, with the sounds around it removed. Speech-to-
+ * text vendors annotate non-speech audio in square brackets (ElevenLabs writes
+ * `[coughs]`, `[clicking]`, `[laughter]`), and a cough or a mouse click picked
+ * up by an open mic came back as a transcript of nothing but that tag — which
+ * then started a turn, or was handed to the running one as a follow-up.
+ * Returns `''` when no word survives, which every caller already treats as
+ * "nothing intelligible". Brackets only: parentheses are ordinary speech.
+ */
+export function spokenText(raw: string): string {
+  const text = raw
+    .replace(/\[[^\]]*\]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return /[\p{L}\p{N}]/u.test(text) ? text : '';
+}
 
 /**
  * The hands-free loop: listen → transcribe → think → speak → listen. React-free
@@ -140,7 +158,7 @@ export class TalkSession {
   private async followUpFrom(samples: Int16Array): Promise<void> {
     let text: string;
     try {
-      text = (await this.deps.transcribe(samples, this.abort.signal)).trim();
+      text = await this.deps.transcribe(samples, this.abort.signal);
     } catch (err) {
       if (this.stopped) return;
       this.deps.onError(
@@ -148,9 +166,18 @@ export class TalkSession {
       );
       return;
     }
-    if (this.stopped || !text) return;
+    if (this.stopped) return;
+    text = this.heard(text);
+    if (!text) return;
     if (this.turnRunning && this.deps.followUp?.(text)) return;
     this.pending.push(text);
+  }
+
+  /** `spokenText`, logging what it threw away so a dropped cough is visible. */
+  private heard(raw: string): string {
+    const text = spokenText(raw);
+    if (!text && raw.trim()) speechLog('talk:noise', { text: raw.trim() });
+    return text;
   }
 
   private listen(): void {
@@ -203,8 +230,9 @@ export class TalkSession {
       return;
     }
     if (this.stopped) return;
+    text = this.heard(text);
     // Nothing intelligible: listen again rather than start an empty turn.
-    if (!text.trim()) {
+    if (!text) {
       this.listen();
       return;
     }

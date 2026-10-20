@@ -72,6 +72,10 @@ export async function transcribe(
 ): Promise<string> {
   const form = new FormData();
   form.append('model_id', ELEVENLABS_STT_MODEL);
+  // Scribe annotates coughs, clicks and laughter as `[coughs]` by default; a
+  // transcript is what was said, so ask for words only. The talk loop strips
+  // bracketed tags as well, since the next vendor may not have this switch.
+  form.append('tag_audio_events', 'false');
   form.append(
     'file',
     new Blob([new Uint8Array(pcmToWav(audio.samples, audio.rate))], { type: 'audio/wav' }),

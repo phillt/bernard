@@ -93,6 +93,8 @@ transcribed — add a key first with `bernard add-key elevenlabs <key>` or the
 row in `/voice`. Once the key is in, the `auto` backend speaks answers with
 ElevenLabs too; pick a local backend in `/voice` to keep the local voice. The microphone is
 closed while Bernard is speaking, so talking over it does not interrupt it yet.
+A cough, a click or any other sound with no words in it is ignored rather
+than sent.
 It stays open while Bernard is thinking, though: if you pause, it starts, and
 you carry on, what you add reaches the work in progress the way a typed
 follow-up does. If the work finishes first, Bernard answers and then takes your
