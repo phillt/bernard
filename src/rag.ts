@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import { localDay } from './text.js';
 import * as path from 'node:path';
 import {
   getEmbeddingProvider,
@@ -189,6 +190,12 @@ export interface RAGSearchResult {
    * nothing could be looked back up in the store it came from.
    */
   id?: string;
+  /**
+   * When the fact was learned (ISO 8601). Without it the curator and the agent
+   * saw a months-old episode exactly as they saw this morning's, so neither
+   * could prefer the newer of two facts. Optional for the reason `id` is.
+   */
+  createdAt?: string;
 }
 
 /** Extended search result that includes the memory ID and lifecycle metadata. */
@@ -843,6 +850,7 @@ export class RAGStore {
       fact: s.memory.fact,
       similarity: s.similarity,
       domain: s.memory.domain,
+      createdAt: s.memory.createdAt,
     }));
     if (cacheOn) this.turnSearchCache.set(query, results);
     return results;
@@ -863,7 +871,9 @@ export class RAGStore {
   listFacts(): string[] {
     const now = Date.now();
     return this.memories.map((m) => {
-      const date = m.createdAt.slice(0, 10);
+      // Local day, the clock the context block dates the same fact on.
+      const when = new Date(m.createdAt);
+      const date = Number.isNaN(when.getTime()) ? m.createdAt.slice(0, 10) : localDay(when);
       const daysLeft = m.expiresAt
         ? Math.max(0, Math.ceil((new Date(m.expiresAt).getTime() - now) / 86400000))
         : '?';

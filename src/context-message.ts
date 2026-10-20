@@ -6,10 +6,11 @@ import type { SpecialistSummary } from './specialists.js';
 import type { SpecialistMatch } from './specialist-matcher.js';
 import { renderResolvedBlock, RAG_SOURCE_KEY, type ResolvedEntry } from './reference-resolver.js';
 import { sanitizeKey } from './memory.js';
-import { escapeXml, plural } from './text.js';
+import { escapeXml, factDatePrefix, localDay, plural } from './text.js';
 import { getDomain } from './domains.js';
 import type { ProvenanceStore } from './provenance.js';
 import { debugLog } from './logger.js';
+import { rankByTermOverlap } from './lexical.js';
 
 /**
  * Inputs for {@link buildContextMessage}. Mirrors the dynamic per-turn data
@@ -33,6 +34,13 @@ export interface ContextMessageInputs {
   recallReconciliation?: string;
   /** Memory keys, most- to least-relevant. See {@link orderForPacking}. */
   memoryPriority?: string[];
+  /**
+   * What this assembly is FOR. When memory will not all fit and no
+   * `memoryPriority` was given, notes sharing words with it are kept first —
+   * otherwise every dispatch drops its biggest, usually most task-specific,
+   * note. See {@link packMemory}.
+   */
+  memoryRelevanceQuery?: string;
   includeScratch?: boolean;
   mcpServerNames?: string[];
   routineSummaries?: RoutineSummary[];
@@ -106,7 +114,9 @@ export function buildContextMessage(inputs: ContextMessageInputs): CoreMessage |
   // only thing that ever knew which keys were dropped, and it throws that set
   // away. Same number of store reads as before: one.
   const memoryEntries = inputs.memoryStore?.getAllMemoryContents();
-  const pack = memoryEntries ? packMemory(memoryEntries, inputs.memoryPriority) : undefined;
+  const pack = memoryEntries
+    ? packMemory(memoryEntries, inputs.memoryPriority, inputs.memoryRelevanceQuery)
+    : undefined;
 
   const renderers: { tag: string; render: SectionRenderer }[] = [
     { tag: 'current_datetime', render: () => renderCurrentDateTime(inputs.currentDateTime) },
@@ -123,7 +133,12 @@ export function buildContextMessage(inputs: ContextMessageInputs): CoreMessage |
     },
     {
       tag: 'recalled_context',
-      render: () => renderRecalledContext(inputs.ragResults, inputs.recallReconciliation),
+      render: () =>
+        renderRecalledContext(
+          inputs.ragResults,
+          inputs.recallReconciliation,
+          !inputs.currentDateTime,
+        ),
     },
     {
       tag: 'persistent_memory',
@@ -346,10 +361,17 @@ function renderSpecialistMatches(matches?: SpecialistMatch[]): string | null {
 function renderRecalledContext(
   ragResults?: RAGSearchResult[],
   reconciliation?: string,
+  needsToday = false,
 ): string | null {
   if (!ragResults || ragResults.length === 0) return null;
+  // The dating rules are stated here, beside the dates, because this is the
+  // only place both are in front of the model at once. "May be outdated" with
+  // no date to check against was advice nobody could follow.
   const intro =
-    'Auto-recalled observations from past sessions. Hints, not rules — they were matched by similarity and may be outdated or from a different context.';
+    'Auto-recalled observations from past sessions. Hints, not rules — they were matched by similarity and may be outdated or from a different context. Each is prefixed with the date it was learned: when two disagree the newer one wins, and an observation about what happened on a particular day describes that day, not today.' +
+    // Only main carries `<current_datetime>`; every other assembly would be told
+    // to compare against a today it was never given.
+    (needsToday ? ` Today is ${localDay(new Date())}.` : '');
   const byDomain = new Map<string, RAGSearchResult[]>();
   for (const r of ragResults) {
     const d = r.domain;
@@ -361,7 +383,7 @@ function renderRecalledContext(
     const domain = getDomain(domainId);
     blocks.push(`### ${escapeXml(domain.name)}`);
     for (const r of results) {
-      blocks.push(`- ${escapeXml(r.fact)}`);
+      blocks.push(`- ${factDatePrefix(r.createdAt)}${escapeXml(r.fact)}`);
     }
   }
   if (reconciliation) {
@@ -485,21 +507,37 @@ export interface MemoryPack {
  * inputs — and so the two-method fake in `context-message.test.ts` and the
  * one-method fake in `recall-filter.test.ts` both keep working unchanged.
  */
-export function packMemory(memories: Map<string, string>, priority?: string[]): MemoryPack {
+export function packMemory(
+  memories: Map<string, string>,
+  priority?: string[],
+  relevanceQuery?: string,
+): MemoryPack {
   // Rendered once, here, and carried forward — the packer has to build every
   // block to measure it, and the renderer then needs the kept ones. Escaping
   // the whole store twice cost 14.7 µs against 6.8 µs on the real 30-entry
   // store, on a path that runs per LLM call.
-  //
+  const blocks = Array.from(memories, ([key, content]) => ({
+    key,
+    block: memoryBlock(key, content),
+  }));
+  const pack = packBlocks(blocks, priority);
+  // A caller's ranking always wins. Otherwise `relevanceQuery` ranks the store
+  // by shared words — only when something is being dropped, so under budget
+  // the section is byte-identical, and over budget it is the off-topic notes
+  // that go rather than the biggest ones.
+  if (priority || pack.dropped.length === 0 || !relevanceQuery?.trim()) return pack;
+  return packBlocks(blocks, rankByTermOverlap(memories, relevanceQuery));
+}
+
+function packBlocks(blocks: { key: string; block: string }[], priority?: string[]): MemoryPack {
   // An array of pairs rather than a key→size side-table: the table was built
   // from the same map the loop walks, so every `get` needed a `?? 0` fallback
   // that could not fire — three impossible cases reading as real ones.
   const rank = new Map((priority ?? []).map((key, i) => [key, i]));
   const unranked = rank.size;
-  const sized = Array.from(memories, ([key, content]) => {
-    const block = memoryBlock(key, content);
-    return { key, block, rank: rank.get(key) ?? unranked };
-  }).sort((a, b) => a.rank - b.rank || a.block.length - b.block.length);
+  const sized = blocks
+    .map((b) => ({ ...b, rank: rank.get(b.key) ?? unranked }))
+    .sort((a, b) => a.rank - b.rank || a.block.length - b.block.length);
 
   const kept: string[] = [];
   const keptBlocks: string[] = [];

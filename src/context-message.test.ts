@@ -218,6 +218,14 @@ describe('buildContextMessage — curator reconciliation + memory packing (#371)
     expect(content).toContain('template includes Time ~X hrs');
   });
 
+  it('tells an assembly with no <current_datetime> what today is, beside the dated facts', () => {
+    const dispatch = buildContextMessage({ ragResults: RAG })!.content as string;
+    expect(dispatch).toMatch(/Today is \d{4}-\d{2}-\d{2}\./);
+    const main = buildContextMessage({ ragResults: RAG, currentDateTime: 'Mon 2026-10-20' })!
+      .content as string;
+    expect(main).not.toContain('Today is');
+  });
+
   it('omits the note when the curator produced none', () => {
     const msg = buildContextMessage({ ragResults: RAG });
     expect(msg!.content as string).not.toContain('Reconciliation with curated memory');
@@ -387,5 +395,73 @@ describe('the <specialists> roster is bounded', () => {
 
   it('renders no section at all for an empty roster', () => {
     expect(buildContextMessage({ specialistSummaries: [] })).toBeNull();
+  });
+});
+
+describe('recalled facts carry their date', () => {
+  it('prefixes each fact with the local day it was learned, and says what the date means', () => {
+    const learned = new Date(2026, 2, 14, 12, 0, 0).toISOString();
+    const msg = buildContextMessage({
+      ragResults: [
+        {
+          fact: 'The Daily Blaze goes to john@',
+          similarity: 0.6,
+          domain: 'general',
+          createdAt: learned,
+        },
+        { fact: 'undated legacy fact', similarity: 0.5, domain: 'general' },
+      ],
+    });
+    const content = String(msg?.content);
+    expect(content).toContain('- [2026-03-14] The Daily Blaze goes to john@');
+    expect(content).toContain('- undated legacy fact');
+    expect(content).toContain('the newer one wins');
+  });
+});
+
+describe('dispatch memory is ranked by what the dispatch is for', () => {
+  // Over budget only when both big notes are present: each alone fits.
+  const third = Math.floor(MAX_PERSISTENT_MEMORY_CHARS * 0.45);
+  const entries: [string, string][] = [
+    ['grocery-applet', 'aisles '.repeat(third / 7)],
+    ['daily-blaze-format', 'FleetIQ bullets '.repeat(third / 10)],
+    ['standing-rule', 'never email the client directly'],
+  ];
+
+  it('without a query the biggest note is the first one dropped — the observed defect', () => {
+    const pack = packMemory(new Map(entries));
+    expect(pack.dropped).toEqual(['daily-blaze-format']);
+  });
+
+  it('with a query the relevant note survives and the off-topic one goes', () => {
+    const pack = packMemory(new Map(entries), undefined, 'send the daily blaze');
+    expect(pack.kept).toContain('daily-blaze-format');
+    expect(pack.kept).toContain('standing-rule');
+    expect(pack.dropped).toEqual(['grocery-applet']);
+  });
+
+  it('does not rank at all when everything fits, so the section is unchanged', () => {
+    // Ranked, the longer matching note would come first; unranked, smallest first.
+    const small = new Map<string, string>([
+      ['a', 'the daily blaze format'],
+      ['b', 'other'],
+    ]);
+    expect(packMemory(small, undefined, 'daily blaze').kept).toEqual(['b', 'a']);
+  });
+
+  it("defers to a caller's ranking", () => {
+    const pack = packMemory(new Map(entries), ['standing-rule'], 'daily blaze');
+    expect(pack.kept[0]).toBe('standing-rule');
+    expect(pack.dropped).toEqual(['daily-blaze-format']);
+  });
+
+  it('reaches the rendered section through buildContextMessage', () => {
+    const msg = buildContextMessage({
+      memoryStore: memoryStoreWith(entries),
+      memoryRelevanceQuery: 'send the daily blaze',
+    });
+    const content = String(msg?.content);
+    expect(content).toContain('### daily-blaze-format');
+    expect(content).not.toContain('### grocery-applet');
   });
 });

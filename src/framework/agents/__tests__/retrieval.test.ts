@@ -189,7 +189,11 @@ describe('resolveRetrieval', () => {
     // The case that made the recorder lie: it re-ran the thunk unconditionally,
     // so a dispatch with no store recorded a `retrievalQuery` for a search that
     // never happened.
-    expect(await resolveRetrieval({} as AgentContext, def, { task: 'x' })).toEqual({});
+    // `relevanceQuery` still says what the dispatch is FOR — memory packing
+    // needs that with RAG off — but `query` stays absent: no search ran.
+    expect(await resolveRetrieval({} as AgentContext, def, { task: 'x' })).toEqual({
+      relevanceQuery: 'x',
+    });
   });
 
   it('degrades to nothing when the search throws', async () => {
@@ -199,7 +203,9 @@ describe('resolveRetrieval', () => {
     const search = vi.fn(async () => {
       throw new Error('embedding provider unavailable');
     });
-    expect(await resolveRetrieval(ctxWithRag(search), def, { task: 'x' })).toEqual({});
+    expect(await resolveRetrieval(ctxWithRag(search), def, { task: 'x' })).toEqual({
+      relevanceQuery: 'x',
+    });
   });
 
   it('does not search when the query resolves to null', async () => {

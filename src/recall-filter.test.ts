@@ -82,7 +82,7 @@ beforeEach(() => {
 });
 
 describe('recallFilter', () => {
-  it('keeps only the LLM-selected subset and returns it stripped to the 3-field shape', async () => {
+  it('keeps only the LLM-selected subset, carrying its id and date but not its access count', async () => {
     generateTextMock.mockResolvedValue({ text: JSON.stringify({ keep: [1, 3] }) });
     const { store } = makeRagStore([
       candidate('a', 'fact one'),
@@ -95,8 +95,17 @@ describe('recallFilter', () => {
     expect(result.status).toBe('filtered');
     if (result.status !== 'filtered') return;
     expect(result.facts.map((f) => f.fact)).toEqual(['fact one', 'fact three']);
-    // Stripped: no id/createdAt/accessCount leak downstream.
-    expect(Object.keys(result.facts[0]).sort()).toEqual(['domain', 'fact', 'similarity']);
+    // `id` is the provenance address (#549) and `createdAt` is what lets the
+    // agent tell a stale episode from a current fact — both must survive the
+    // curator. `accessCount` is store bookkeeping and must not.
+    expect(Object.keys(result.facts[0]).sort()).toEqual([
+      'createdAt',
+      'domain',
+      'fact',
+      'id',
+      'similarity',
+    ]);
+    expect(result.facts[0].id).toBe('a');
   });
 
   it('widens the candidate net beyond store defaults', async () => {
@@ -386,5 +395,35 @@ describe('recallFilter — memory reconciliation (#371)', () => {
     expect(result.status).toBe('filtered');
     const sent = generateTextMock.mock.calls[0][0];
     expect(sent.messages[0].content).not.toContain('Curated memory');
+  });
+});
+
+describe('recallFilter shows the curator how old each candidate is', () => {
+  beforeEach(() => {
+    generateTextMock.mockReset();
+    clearLLMCache();
+  });
+
+  it("dates every candidate and states today's date beside them", async () => {
+    generateTextMock.mockResolvedValue({ text: '{"keep":[]}' });
+    const learned = new Date(2026, 2, 14, 12).toISOString();
+    const { store } = makeRagStore([
+      {
+        id: 'x',
+        fact: 'User requested the blaze go to john@',
+        similarity: 0.5,
+        domain: 'general',
+        createdAt: learned,
+        accessCount: 197,
+      },
+    ]);
+    await recallFilter('send the daily blaze', makeConfig(), store, HISTORY, {
+      now: new Date(2026, 9, 6, 9),
+    });
+    const call = generateTextMock.mock.calls[0][0];
+    const sent = call.messages[0].content as string;
+    expect(sent).toContain('## Today\n2026-10-06');
+    expect(sent).toMatch(/1\. \[2026-03-14\] \[[^\]]+\] User requested the blaze/);
+    expect(call.system).toContain('keep the newer one');
   });
 });

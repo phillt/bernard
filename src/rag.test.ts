@@ -864,7 +864,8 @@ describe('RAGStore', () => {
             .map((_, i) => (i === 0 ? 1 : 0)),
           source: 'test',
           domain: 'tool-usage',
-          createdAt: '2025-01-15T00:00:00.000Z',
+          // Midday UTC, so the local day is 2025-01-15 in every real timezone.
+          createdAt: '2025-01-15T12:00:00.000Z',
           accessCount: 3,
         },
       ];

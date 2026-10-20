@@ -118,6 +118,12 @@ export interface Retrieval {
   /** The query, present only when a search actually ran. */
   query?: string;
   results?: RAGSearchResult[];
+  /**
+   * What the dispatch is FOR, whether or not a search ran. Separate from
+   * `query` so the dispatch record keeps meaning "a search ran"; memory packing
+   * needs the statement of purpose even with RAG off or a failed search.
+   */
+  relevanceQuery?: string;
 }
 
 /**
@@ -133,9 +139,10 @@ export async function resolveRetrieval<TInput>(
   input: TInput,
   owner?: string,
 ): Promise<Retrieval> {
-  if (!ctx.rag || !def.retrievalQuery) return {};
+  if (!def.retrievalQuery) return {};
   const query = def.retrievalQuery(input);
   if (!query) return {};
+  if (!ctx.rag) return { relevanceQuery: query };
   try {
     // BOTH stores, and the merge is the point of the per-specialist one (#501).
     // Its purpose is that `maxMemories`, the dedup scan and `prune()` become
@@ -174,12 +181,12 @@ export async function resolveRetrieval<TInput>(
         ...(own.length > 0 ? { owner, ownerResults: own.length } : {}),
       });
     }
-    return { query, results };
+    return { query, results, relevanceQuery: query };
   } catch (err) {
     debugLog('dispatch:rag:error', {
       definition: def.id,
       message: err instanceof Error ? err.message : String(err),
     });
-    return {};
+    return { relevanceQuery: query };
   }
 }
