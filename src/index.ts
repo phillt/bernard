@@ -128,6 +128,7 @@ import { initShellParser } from './permissions/shell-ast.js';
 import { App } from './ui/App.js';
 import { DimensionsProvider } from './ui/DimensionsContext.js';
 import { withFullScreen } from './ui/withFullScreen.js';
+import { setTerminalTitle } from './ui/terminal-title.js';
 import { getInkHandlers } from './ui/ink-handlers.js';
 import type {
   AskUserBatchResult,
@@ -822,6 +823,8 @@ async function runInkRepl(args: {
   // is gated by `config.mouse` (BERNARD_DISABLE_MOUSE). A non-TTY stdout
   // (piped / CI) never enters full-screen — the escapes would corrupt output.
   const fullScreen = fullScreenActive ? withFullScreen({ mouse: config.mouse }) : null;
+  // Name the tab while the REPL runs; handed back below, and on any exit.
+  const terminalTitle = setTerminalTitle('Bernard');
 
   const { waitUntilExit } = render(
     createElement(
@@ -856,6 +859,7 @@ async function runInkRepl(args: {
   );
 
   await waitUntilExit();
+  terminalTitle.restore();
   // Leave the alt buffer + disable mouse BEFORE cleanup(): cleanup prints via
   // printInfo / printError and that output must land on the restored normal
   // screen, not the about-to-be-discarded alt screen.
