@@ -264,6 +264,12 @@ interface StreamProgress {
  * and post-processing all live in the caller.
  */
 export interface AgentSpec {
+  /**
+   * What this dispatch IS, for the trace: the definition that ran it and the
+   * telemetry site its spend is billed to (`specialist:<id>`, `mcp:<server>`).
+   * Logged on `agent:dispatch:start` and nowhere else.
+   */
+  traceLabel?: { definitionId: string; site: string };
   model: LanguageModel;
   providerOptions?: Parameters<typeof generateText>[0]['providerOptions'];
   /**
@@ -530,6 +536,7 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
 
   debugLog('agent:dispatch:start', {
     dispatchId,
+    ...(spec.traceLabel ?? {}),
     model: modelId,
     streaming: spec.useStreaming === true,
     systemLen: spec.system?.length ?? 0,

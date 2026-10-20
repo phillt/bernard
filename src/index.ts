@@ -971,6 +971,31 @@ program
   });
 
 program
+  .command('trace [session]')
+  .description(
+    "Show where a session's time went: every turn as a timed tree of agents, model calls and tool calls (needs BERNARD_DEBUG=1).",
+  )
+  .option('-t, --turn <id>', 'Only this turn (its number, or an id like turn-3)')
+  .option('-n, --last <n>', 'Only the last N turns', (v) => Number.parseInt(v, 10))
+  .option('--min-ms <ms>', 'Hide calls shorter than this', (v) => Number.parseInt(v, 10))
+  .option('-l, --list', 'List the turns instead of drawing them')
+  .option('--json', 'Print the trees as JSON')
+  .action(
+    async (
+      session: string | undefined,
+      opts: { turn?: string; last?: number; minMs?: number; list?: boolean; json?: boolean },
+    ) => {
+      const { traceLines } = await import('./trace/cli.js');
+      const { lines, error } = traceLines(session, opts);
+      for (const l of lines) console.log(l);
+      if (error) {
+        printError(error);
+        process.exitCode = 1;
+      }
+    },
+  );
+
+program
   .command('usage [sessionId]')
   .description('Show the LLM cost/usage breakdown for a session (defaults to the most recent).')
   .action((sessionId?: string) => {

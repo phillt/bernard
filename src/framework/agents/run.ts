@@ -611,6 +611,7 @@ export async function runDefinition<TInput, TFormatted>(
     onToolCallStart,
     onToolResult,
     takeInterjections,
+    traceLabel: { definitionId: def.id, site: modelInfo.site },
   };
 
   let stepLimitHit = false;

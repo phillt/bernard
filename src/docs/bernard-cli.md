@@ -25,6 +25,7 @@ replacement.
 | `bernard add-key <provider> <key>` | Store an API key.                                          |
 | `bernard providers`                | Which providers are installed, and which have a key.       |
 | `bernard usage`                    | What the last session cost, by call site and model.        |
+| `bernard trace`                    | Where the last session's time went, call by call.          |
 | `bernard facts`                    | Browse what Bernard has picked up from past conversations. |
 | `bernard cron-list`                | Every scheduled job and how it is doing.                   |
 | `bernard app list`                 | Your applets.                                              |
