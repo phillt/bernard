@@ -1,6 +1,8 @@
 import { type ToolProfileStore, classifyShellCommand, detectToolError } from '../tool-profiles.js';
 import { ERROR_SNIPPET_MAX, detectResultFailure } from '../tool-result-shape.js';
 import { debugLog, isDebugEnabled } from '../logger.js';
+import { runWithToolCall } from '../framework/dispatch-context.js';
+import { randomBytes } from 'node:crypto';
 import { printInfo } from '../output.js';
 import { readBernardSource, readToolMeta, preserveMeta } from '../framework/tools/adapter.js';
 import { isCacheable, type ToolResult } from '../framework/tools/types.js';
@@ -1265,12 +1267,31 @@ export function augmentTools(
       {
         ...toolDef,
         execute: async (args: unknown, execOptions: unknown) => {
-          const dispatchId = enterToolWrapper();
-          try {
-            return await inner(args, execOptions);
-          } finally {
-            exitToolWrapper(dispatchId);
-          }
+          // Every log line from here down — the execute events, an MCP call, a
+          // child dispatch — carries this call's id, so a trace can hang it
+          // off the right step. The SDK's own id where it gives one, so the id
+          // also matches the call in the conversation history.
+          const sdkId = (execOptions as { toolCallId?: unknown } | undefined)?.toolCallId;
+          const toolCallId =
+            typeof sdkId === 'string' && sdkId ? sdkId : `call_${randomBytes(4).toString('hex')}`;
+          return runWithToolCall(toolCallId, async () => {
+            const dispatchId = enterToolWrapper();
+            const t0 = Date.now();
+            // `tool:call:*` brackets the WHOLE call, permission gates and the
+            // write barrier included; `tool:execute:*` inside it is the tool
+            // alone. The gap between them is time spent waiting, which is the
+            // number parallelisation work needs and nothing else records.
+            debugLog('tool:call:start', { tool: toolName });
+            let ok = false;
+            try {
+              const out = await inner(args, execOptions);
+              ok = true;
+              return out;
+            } finally {
+              exitToolWrapper(dispatchId);
+              debugLog('tool:call:end', { tool: toolName, durationMs: Date.now() - t0, ok });
+            }
+          });
         },
       },
       toolDef,

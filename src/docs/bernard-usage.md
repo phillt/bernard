@@ -72,3 +72,16 @@ These are Bernard's own counts, priced from a catalogue it fetches. They should
 track your provider's invoice closely and are not that invoice. Where a session
 predates a fix to how something was counted, `bernard usage` says the figure
 may be understated rather than quietly presenting it as certain.
+
+## Where the time went
+
+`bernard trace` is the same question about time. It draws each turn of a
+session as a tree: the passes before the turn, the main agent, every model
+call and tool call, and every sub-agent or MCP helper a tool started, with how
+long each took and when it started. Under the tree it sums the time by kind,
+names the slowest calls, and points out tool calls in one step that ran one
+after another when they could have run together.
+
+It reads the debug log, so the session has to have run with `BERNARD_DEBUG=1`.
+`bernard trace --last 1` shows only the latest turn, `--turn 3` one turn,
+`--list` the turns, and `--min-ms 100` hides the quick calls.

@@ -605,6 +605,8 @@ export class Agent {
     let turnAborted = false;
     debugLog('turn:start', {
       inputLen: userInput.length,
+      // Enough to recognise the turn in a trace; the whole input is in history.
+      inputPreview: userInput.replace(/\s+/g, ' ').trim().slice(0, 80),
       hasImages: !!(images && images.length > 0),
       refCount: resolvedReferences?.length ?? 0,
       historyLen: this.history.length,

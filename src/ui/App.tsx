@@ -262,6 +262,7 @@ import { isWildcardSource, type GrantableDirective } from '../host/csp-grant.js'
 import type { PermissionConsentRequest } from '../tools/types.js';
 import { deleteSpecialist } from '../specialist-lifecycle.js';
 import { clearDuplicateGuard } from '../tools/duplicate-guard.js';
+import { runWithTurn } from '../framework/dispatch-context.js';
 
 /**
  * Slash commands and overlays need direct access to the same stores the
@@ -1127,6 +1128,8 @@ export function App({
   // Synchronous guard against double-Enter: setBusy schedules a re-render but
   // a second submit can land before Prompt sees `disabled={busy}` flip.
   const submittingRef = useRef(false);
+  /** Numbers turns for the trace; `turn-<n>` reads in order in the session log. */
+  const turnSeqRef = useRef(0);
   /**
    * Turns waiting for the current one. A ref, not state: it is drained from
    * `runAgentTurn`'s `finally` and nothing renders from it directly, so making
@@ -5136,7 +5139,23 @@ export function App({
     });
   }
 
-  async function runAgentTurn(
+  /**
+   * One turn, as one trace scope: everything below — the pre-turn passes, the
+   * main dispatch, every tool call and sub-agent — is stamped with this id, so
+   * `bernard trace` can lay a turn out as a tree.
+   */
+  function runAgentTurn(
+    input: string,
+    images?: ImageAttachment[],
+    extra?: { data?: UntrustedData; announced?: boolean },
+  ): Promise<void> {
+    turnSeqRef.current += 1;
+    return runWithTurn(`turn-${turnSeqRef.current}`, () =>
+      runAgentTurnInScope(input, images, extra),
+    );
+  }
+
+  async function runAgentTurnInScope(
     input: string,
     images?: ImageAttachment[],
     extra?: { data?: UntrustedData; announced?: boolean },
