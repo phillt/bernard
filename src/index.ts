@@ -21,6 +21,9 @@ import {
   removeProviderKey,
   getProviderKeyStatus,
   PROVIDER_ENV_VARS,
+  SERVICE_KEY_ENV_VARS,
+  getServiceKey,
+  getStoredKeyHint,
   OPTIONS_REGISTRY,
   resetOption,
   resetAllOptions,
@@ -56,6 +59,7 @@ import {
 import {
   resolveBackend,
   resolveWarmupPlayer,
+  isCloudVoiceBackend,
   VoiceService,
   type VoiceBackend,
 } from './voice-service.js';
@@ -945,6 +949,15 @@ program
         const status = hasKey ? '\u2713' : '\u2717';
         printInfo(`  ${status} ${provider} \u2014 sdk=${entry.sdk} url=${entry.baseURL}`);
       }
+    }
+
+    // Services hold a key in the same file but run no turns, so they are listed
+    // apart and never count toward "a provider is configured".
+    printInfo('\nServices:');
+    for (const [service, envVar] of Object.entries(SERVICE_KEY_ENV_VARS)) {
+      const hint = getStoredKeyHint(service);
+      const status = getServiceKey(service) ? '\u2713' : '\u2717';
+      printInfo(`  ${status} ${service} (${envVar})${hint ? ` \u2014 ****${hint}` : ''}`);
     }
 
     if (statuses.some((s) => !s.hasKey)) {
@@ -1880,10 +1893,16 @@ program
     }
     printInfo(`TTS backend: ${resolved.backend} (${resolved.bin})`);
     printInfo(`Speaking: "${message}"`);
-    const svc = new VoiceService(resolved, {
-      player: resolveWarmupPlayer(process.platform),
-      ms: voiceWarmupMs,
-    });
+    // A cloud voice needs its vendor; the import is deferred so a local voice
+    // test still loads nothing but the TTS leaf.
+    const synthesize = isCloudVoiceBackend(voiceBackend)
+      ? (await import('./speech/registry.js')).synthesizerFor(voiceBackend)
+      : null;
+    const svc = new VoiceService(
+      resolved,
+      { player: resolveWarmupPlayer(process.platform), ms: voiceWarmupMs },
+      synthesize,
+    );
     try {
       // Deterministic normalization only — this path deliberately constructs no
       // provider or model (it must work with no API key configured), and the

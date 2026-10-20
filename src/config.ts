@@ -5,6 +5,7 @@ import type { RemoteMessageMode } from './remote-messages.js';
 import { KEYS_PATH, ENV_PATH, LEGACY_DIR } from './paths.js';
 import { loadCustomProviders, validateBaseURL, type CustomProvider } from './custom-providers.js';
 import { type VoiceBackend, VOICE_BACKEND_VALUES } from './voice-service.js';
+import { DEFAULT_STT_PROVIDER, isSpeechProviderId, type SpeechProviderId } from './speech/ids.js';
 import { loadProfiles, saveActiveSettings, type ProfileSettings } from './profiles.js';
 import {
   setMaxConcurrentAgents,
@@ -302,6 +303,12 @@ export interface BernardConfig {
    */
   voiceNormalizer: boolean;
   /**
+   * Which speech vendor transcribes the microphone in talk mode (`/talk`).
+   * One option today; a setting rather than a constant so a second vendor is
+   * a registry entry, not a code change at every caller.
+   */
+  voiceSttProvider: SpeechProviderId;
+  /**
    * Look over persistent memory at session close and PROPOSE what it could
    * shed (#529).
    *
@@ -494,6 +501,21 @@ export const PROVIDER_ENV_VARS: Record<string, string> = {
 };
 
 /**
+ * Keys for SERVICES — vendors Bernard calls for something other than a model
+ * completion. Same `keys.json`, same 0600 write, same `bernard add-key`, but a
+ * separate table on purpose: `PROVIDER_ENV_VARS` is iterated by everything that
+ * means "an LLM I can run a turn on" (key status, the setup hub's "at least one
+ * keyed provider" check, the default-provider pick), and a speech key must
+ * never satisfy any of those.
+ *
+ * ElevenLabs is here rather than in `BUILTIN_PROVIDERS` because it has no LLM to
+ * offer: its Agents platform CALLS an LLM, and exposes no completion endpoint.
+ */
+export const SERVICE_KEY_ENV_VARS: Record<string, string> = {
+  elevenlabs: 'ELEVENLABS_API_KEY',
+};
+
+/**
  * Registry of user-configurable numeric options.
  *
  * Each entry maps a CLI option name (e.g. "max-tokens") to its config key,
@@ -586,6 +608,7 @@ export function savePreferences(prefs: {
   voiceRate?: number;
   voiceWarmupMs?: number;
   voiceNormalizer?: boolean;
+  voiceSttProvider?: SpeechProviderId;
   memoryConsolidation?: boolean;
   specialistRecall?: boolean;
 }): void {
@@ -647,6 +670,7 @@ export function loadPreferences(): {
   voiceRate?: number;
   voiceWarmupMs?: number;
   voiceNormalizer?: boolean;
+  voiceSttProvider?: SpeechProviderId;
   memoryConsolidation?: boolean;
   specialistRecall?: boolean;
 } {
@@ -715,6 +739,9 @@ export function loadPreferences(): {
     voiceWarmupMs: typeof parsed.voiceWarmupMs === 'number' ? parsed.voiceWarmupMs : undefined,
     voiceNormalizer:
       typeof parsed.voiceNormalizer === 'boolean' ? parsed.voiceNormalizer : undefined,
+    voiceSttProvider: isSpeechProviderId(parsed.voiceSttProvider)
+      ? parsed.voiceSttProvider
+      : undefined,
     memoryConsolidation:
       typeof parsed.memoryConsolidation === 'boolean' ? parsed.memoryConsolidation : undefined,
     specialistRecall:
@@ -744,11 +771,15 @@ function loadStoredKeys(): Record<string, string> {
  * @throws {Error} If `provider` is neither a built-in nor a known custom provider.
  */
 export function saveProviderKey(provider: string, key: string): void {
-  const isBuiltin = !!PROVIDER_ENV_VARS[provider];
+  const isBuiltin = !!PROVIDER_ENV_VARS[provider] || !!SERVICE_KEY_ENV_VARS[provider];
   if (!isBuiltin) {
     const customProviders = loadCustomProviders();
     if (!Object.hasOwn(customProviders, provider)) {
-      const known = [...Object.keys(PROVIDER_ENV_VARS), ...Object.keys(customProviders)];
+      const known = [
+        ...Object.keys(PROVIDER_ENV_VARS),
+        ...Object.keys(SERVICE_KEY_ENV_VARS),
+        ...Object.keys(customProviders),
+      ];
       throw new Error(
         `Unknown provider "${provider}". Known: ${known.join(', ') || '(none)'}. ` +
           `Run \`bernard add-provider ${provider} …\` first to register a custom provider.`,
@@ -871,6 +902,21 @@ export function resetAllOptions(): void {
  * echo back even in part, and it is not what a "saved in this profile" surface
  * is talking about.
  */
+/**
+ * The key for a service in {@link SERVICE_KEY_ENV_VARS}: `keys.json` first, then
+ * the environment — the precedence `loadConfig` gives a stored provider key.
+ * `undefined` for an unknown name or no key, never a throw, because every
+ * caller's answer to "no key" is to say so rather than to crash.
+ */
+export function getServiceKey(service: string): string | undefined {
+  const envVar = SERVICE_KEY_ENV_VARS[service];
+  if (!envVar) return undefined;
+  const stored = loadStoredKeys()[service];
+  if (typeof stored === 'string' && stored.trim()) return stored.trim();
+  const fromEnv = process.env[envVar]?.trim();
+  return fromEnv || undefined;
+}
+
 export function getStoredKeyHint(provider: string, chars = 4): string | undefined {
   const key = loadStoredKeys()[provider];
   return typeof key === 'string' && key.length >= chars ? key.slice(-chars) : undefined;
@@ -1160,6 +1206,7 @@ export function loadConfig(overrides?: {
   voiceRate?: number;
   voiceWarmupMs?: number;
   voiceNormalizer?: boolean;
+  voiceSttProvider?: SpeechProviderId;
   memoryConsolidation?: boolean;
   specialistRecall?: boolean;
 }): BernardConfig {
@@ -1496,6 +1543,12 @@ export function loadConfig(overrides?: {
       ? true
       : !(rawVoiceNormalizer === 'false' || rawVoiceNormalizer === '0'));
 
+  const envSttProvider = isSpeechProviderId(process.env.BERNARD_VOICE_STT)
+    ? process.env.BERNARD_VOICE_STT
+    : undefined;
+  const voiceSttProvider =
+    overrides?.voiceSttProvider ?? prefs.voiceSttProvider ?? envSttProvider ?? DEFAULT_STT_PROVIDER;
+
   const config: BernardConfig = {
     provider,
     model,
@@ -1548,6 +1601,7 @@ export function loadConfig(overrides?: {
     voiceRate,
     voiceWarmupMs,
     voiceNormalizer,
+    voiceSttProvider,
     memoryConsolidation,
     specialistRecall,
     fullScreen,
@@ -1638,6 +1692,7 @@ const PROFILE_SCOPED_KEYS: ReadonlyArray<keyof BernardConfig> = [
   'voiceRate',
   'voiceWarmupMs',
   'voiceNormalizer',
+  'voiceSttProvider',
   'memoryConsolidation',
   'specialistRecall',
 ];

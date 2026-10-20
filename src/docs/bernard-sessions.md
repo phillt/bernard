@@ -84,6 +84,16 @@ Replies are rewritten before they are spoken, so links are named rather than
 spelled out and a phone number is read as a phone number. That rewriting is a
 setting; turning it off still strips the markdown.
 
+`/talk` is a spoken conversation. Bernard listens, notices when you stop
+talking, answers out loud, and listens again; Esc or `/talk` again stops it,
+and so does a couple of minutes of silence. The hint bar says whether the
+microphone is open the whole time. It records through PipeWire or PulseAudio,
+so it is Linux only for now, and it sends what you say to ElevenLabs to be
+transcribed — add a key first with `bernard add-key elevenlabs <key>` or the
+row in `/voice`. Pick `elevenlabs` as the `/voice` backend to have the answers
+spoken by ElevenLabs as well; any other backend works too. The microphone is
+closed while Bernard is speaking, so talking over it does not interrupt it yet.
+
 ## Everything else
 
 `/help` lists every slash command, and `bernard-commands` is the same list with

@@ -3,6 +3,9 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CACHE_DIR } from './paths.js';
 import { clampForSpeech } from './speech-text.js';
+import { wavHeader } from './speech/wav.js';
+import { buildRawPlayCommand } from './speech/player.js';
+import type { Pcm } from './speech/types.js';
 
 /** Default PATH probe: true when `which <bin>` succeeds. */
 export function defaultHasBin(bin: string): boolean {
@@ -20,7 +23,20 @@ export type VoiceBackend =
   | 'spd-say'
   | 'espeak-ng'
   | 'espeak'
-  | 'windows-speech';
+  | 'windows-speech'
+  | CloudVoiceBackend;
+
+/**
+ * Backends that synthesize over the network and play the result locally. They
+ * resolve to a PLAYER rather than a speech binary, and need a `synthesize`
+ * handed to {@link VoiceService} — the vendor lives in `src/speech/`, which this
+ * leaf does not import.
+ */
+export type CloudVoiceBackend = 'elevenlabs';
+export const CLOUD_VOICE_BACKENDS: readonly CloudVoiceBackend[] = ['elevenlabs'];
+export function isCloudVoiceBackend(b: string): b is CloudVoiceBackend {
+  return (CLOUD_VOICE_BACKENDS as readonly string[]).includes(b);
+}
 
 export const VOICE_BACKEND_VALUES: readonly VoiceBackend[] = [
   'auto',
@@ -29,10 +45,11 @@ export const VOICE_BACKEND_VALUES: readonly VoiceBackend[] = [
   'espeak-ng',
   'espeak',
   'windows-speech',
+  ...CLOUD_VOICE_BACKENDS,
 ];
 
-/** Maps each concrete backend to its binary name. */
-const BACKEND_BIN: Record<Exclude<VoiceBackend, 'auto'>, string> = {
+/** Maps each concrete local backend to its binary name. */
+const BACKEND_BIN: Record<Exclude<VoiceBackend, 'auto' | CloudVoiceBackend>, string> = {
   'macos-say': 'say',
   'spd-say': 'spd-say',
   'espeak-ng': 'espeak-ng',
@@ -58,6 +75,11 @@ export function resolveBackend(
 ): ResolvedBackend | null {
   const hasBin = availableBins ?? defaultHasBin;
 
+  if (isCloudVoiceBackend(configBackend)) {
+    // A cloud voice still needs something local to play the audio through.
+    const player = resolveWarmupPlayer(platform, hasBin);
+    return player ? { backend: configBackend, bin: player } : null;
+  }
   if (configBackend !== 'auto') {
     return { backend: configBackend, bin: BACKEND_BIN[configBackend] };
   }
@@ -138,6 +160,10 @@ export function buildSpeakCommand(
       ];
       return { bin, args };
     }
+
+    case 'elevenlabs':
+      // Not a command: the audio is synthesized first and piped to a player.
+      throw new Error(`${backend} has no speak command; VoiceService plays it as PCM.`);
   }
 }
 
@@ -204,23 +230,9 @@ export function buildSilenceWav(
   channels = WARMUP_CHANNELS,
 ): Buffer {
   const frames = Math.max(1, Math.round((rate * ms) / 1000));
-  const bytesPerFrame = channels * 2; // 16-bit samples
-  const dataLen = frames * bytesPerFrame;
-  const buf = Buffer.alloc(44 + dataLen); // data region stays zero-filled = silence
-  buf.write('RIFF', 0, 'ascii');
-  buf.writeUInt32LE(36 + dataLen, 4);
-  buf.write('WAVE', 8, 'ascii');
-  buf.write('fmt ', 12, 'ascii');
-  buf.writeUInt32LE(16, 16); // PCM fmt chunk size
-  buf.writeUInt16LE(1, 20); // audio format = PCM
-  buf.writeUInt16LE(channels, 22);
-  buf.writeUInt32LE(rate, 24);
-  buf.writeUInt32LE(rate * bytesPerFrame, 28); // byte rate
-  buf.writeUInt16LE(bytesPerFrame, 32); // block align
-  buf.writeUInt16LE(16, 34); // bits per sample
-  buf.write('data', 36, 'ascii');
-  buf.writeUInt32LE(dataLen, 40);
-  return buf;
+  const dataLen = frames * channels * 2; // 16-bit samples
+  // The data region stays zero-filled, which is silence.
+  return Buffer.concat([wavHeader(dataLen, rate, channels), Buffer.alloc(dataLen)]);
 }
 
 /**
@@ -238,8 +250,23 @@ export function ensureSilenceWav(ms: number): string {
   return p;
 }
 
+/**
+ * How one `speak()` ended. A talk loop needs the difference: `finished` means
+ * the person has heard the whole reply and it is their turn, `cancelled` means
+ * something else took over and the loop must not start listening on its own.
+ */
+export type SpeakOutcome = 'finished' | 'cancelled';
+
+/** Network synthesis for a cloud backend, supplied by the caller. */
+export type Synthesize = (
+  text: string,
+  opts: { voice?: string; signal: AbortSignal },
+) => Promise<Pcm>;
+
 export class VoiceService {
   private _child: ChildProcess | null = null;
+  private _synthesize: Synthesize | null;
+  private _synthAbort: AbortController | null = null;
   private _resolved: ResolvedBackend | null;
   private _warmup: WarmupConfig | null;
   /** Monotonic utterance counter; bumped by stop() so a warmup that finishes
@@ -249,9 +276,14 @@ export class VoiceService {
    *  own warmup instead of the two running back to back. */
   private _warmedAt = 0;
 
-  constructor(resolved: ResolvedBackend | null, warmup?: WarmupConfig | null) {
+  constructor(
+    resolved: ResolvedBackend | null,
+    warmup?: WarmupConfig | null,
+    synthesize?: Synthesize | null,
+  ) {
     this._resolved = resolved;
     this._warmup = warmup ?? null;
+    this._synthesize = synthesize ?? null;
   }
 
   get backend(): ResolvedBackend | null {
@@ -288,10 +320,15 @@ export class VoiceService {
       });
   }
 
-  async speak(text: string, opts?: SpeakOptions): Promise<void> {
-    if (!this._resolved) return;
+  async speak(text: string, opts?: SpeakOptions): Promise<SpeakOutcome> {
+    if (!this._resolved) return 'cancelled';
     this.stop();
     const epoch = ++this._epoch; // claim this utterance
+    const resolved = this._resolved;
+
+    if (isCloudVoiceBackend(resolved.backend)) {
+      return this._speakCloud(resolved.bin as WarmupPlayer, text, opts, epoch);
+    }
 
     // A recent prewarm already woke the sink. The window is deliberately well
     // under PipeWire's ~5 s idle-suspend timeout, so a hit means the device is
@@ -299,27 +336,74 @@ export class VoiceService {
     if (Date.now() - this._warmedAt > WARMUP_FRESH_MS) {
       await this._runWarmup();
       // If stop() or a newer speak() ran during the warmup, abandon this one.
-      if (epoch !== this._epoch) return;
+      if (epoch !== this._epoch) return 'cancelled';
     }
 
-    const { bin, args } = buildSpeakCommand(this._resolved, text, opts);
+    const { bin, args } = buildSpeakCommand(resolved, text, opts);
+    return this._play(bin, args, epoch);
+  }
 
-    return new Promise<void>((resolve, reject) => {
+  /**
+   * Synthesize over the network, then pipe the PCM to a local player. The sink
+   * warmup runs DURING synthesis rather than after it, so it costs nothing.
+   */
+  private async _speakCloud(
+    player: WarmupPlayer,
+    text: string,
+    opts: SpeakOptions | undefined,
+    epoch: number,
+  ): Promise<SpeakOutcome> {
+    if (!this._synthesize) throw new Error('No speech provider is configured for this backend.');
+    const abort = new AbortController();
+    this._synthAbort = abort;
+    let pcm: Pcm;
+    try {
+      const warm =
+        Date.now() - this._warmedAt > WARMUP_FRESH_MS ? this._runWarmup() : Promise.resolve();
+      [pcm] = await Promise.all([
+        this._synthesize(clampForSpeech(text), { voice: opts?.voice, signal: abort.signal }),
+        warm,
+      ]);
+    } catch (err) {
+      if (epoch !== this._epoch || abort.signal.aborted) return 'cancelled';
+      throw err;
+    } finally {
+      if (this._synthAbort === abort) this._synthAbort = null;
+    }
+    if (epoch !== this._epoch) return 'cancelled';
+    const { bin, args } = buildRawPlayCommand(player, pcm.rate);
+    const bytes = Buffer.from(pcm.samples.buffer, pcm.samples.byteOffset, pcm.samples.byteLength);
+    return this._play(bin, args, epoch, bytes);
+  }
+
+  private _play(bin: string, args: string[], epoch: number, stdin?: Buffer): Promise<SpeakOutcome> {
+    return new Promise<SpeakOutcome>((resolve, reject) => {
       let advanced = false;
       const _advance = (err?: Error) => {
         if (advanced) return;
         advanced = true;
         if (this._child === child) this._child = null;
-        if (err) reject(err);
-        else resolve();
+        // A kill from stop() is a cancel, not a failure.
+        if (epoch !== this._epoch) resolve('cancelled');
+        else if (err) reject(err);
+        else resolve('finished');
       };
 
-      const child = spawn(bin, args, { stdio: 'ignore', detached: false });
+      const child = spawn(bin, args, {
+        stdio: [stdin ? 'pipe' : 'ignore', 'ignore', 'ignore'],
+        detached: false,
+      });
       // Don't let the child's handle keep the event loop alive — the caller
       // voids this promise, so speech must never block process exit. `stop()`
       // still holds the reference and can SIGTERM it while it's playing.
       child.unref();
       this._child = child;
+
+      if (stdin && child.stdin) {
+        // EPIPE when the player is killed mid-write is a cancel, not a crash.
+        child.stdin.on('error', () => undefined);
+        child.stdin.end(stdin);
+      }
 
       child.on('error', (err) => _advance(err));
       child.on('close', (code) => {
@@ -385,6 +469,8 @@ export class VoiceService {
   stop(): void {
     // Invalidate any in-flight utterance (including one awaiting warmup).
     this._epoch++;
+    this._synthAbort?.abort();
+    this._synthAbort = null;
     if (this._child) {
       try {
         this._child.kill('SIGTERM');

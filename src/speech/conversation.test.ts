@@ -1,0 +1,122 @@
+import { describe, it, expect, vi } from 'vitest';
+import {
+  TalkSession,
+  MAX_CONSECUTIVE_FAILURES,
+  type TalkDeps,
+  type TalkState,
+} from './conversation.js';
+
+const RATE = 16000;
+const tick = () => new Promise((r) => setTimeout(r, 5));
+
+/** A fake mic that plays one scripted utterance per open. */
+function harness(over: Partial<TalkDeps> = {}) {
+  const states: TalkState[] = [];
+  let opens = 0;
+  let open = false;
+  const deps: TalkDeps = {
+    rate: RATE,
+    // Tiny windows so a few ms of synthetic audio is a whole utterance.
+    endpointer: {
+      endSilenceMs: 60,
+      startMs: 30,
+      prerollMs: 30,
+      noSpeechMs: 600_000,
+      minLevel: 100,
+    },
+    startMic: (onChunk) => {
+      opens++;
+      open = true;
+      const quiet = new Int16Array(RATE * 0.4).fill(10);
+      const loud = new Int16Array(RATE * 0.2).map((_, i) => (i % 2 ? 5000 : -5000));
+      // A macrotask, and only for the first few opens: a loop that reopens the
+      // mic from microtasks alone would starve the test's own ticks.
+      if (opens <= 3) {
+        setTimeout(() => {
+          if (!open) return;
+          onChunk(quiet);
+          onChunk(loud);
+          onChunk(quiet);
+        }, 0);
+      }
+      return { stop: () => (open = false) };
+    },
+    transcribe: vi.fn(async () => 'what time is it'),
+    submit: vi.fn(async () => 'It is noon.'),
+    speak: vi.fn(async () => {
+      // Half-duplex: the mic is closed while Bernard talks.
+      expect(open).toBe(false);
+    }),
+    onState: (s) => states.push(s),
+    onError: vi.fn(),
+    onEnded: vi.fn(),
+    ...over,
+  };
+  return { deps, states, opens: () => opens };
+}
+
+describe('TalkSession', () => {
+  it('runs listen → transcribe → think → speak → listen', async () => {
+    const h = harness();
+    const s = new TalkSession(h.deps);
+    s.start();
+    for (let i = 0; i < 5; i++) await tick();
+    s.stop();
+    expect(h.states.slice(0, 5)).toEqual([
+      'listening',
+      'transcribing',
+      'thinking',
+      'speaking',
+      'listening',
+    ]);
+    expect(h.deps.submit).toHaveBeenCalledWith('what time is it');
+    expect(h.deps.speak).toHaveBeenCalledWith('It is noon.');
+  });
+
+  it('listens again without starting a turn when nothing was understood', async () => {
+    const h = harness({ transcribe: vi.fn(async () => '   ') });
+    const s = new TalkSession(h.deps);
+    s.start();
+    for (let i = 0; i < 4; i++) await tick();
+    s.stop();
+    expect(h.deps.submit).not.toHaveBeenCalled();
+    expect(h.opens()).toBeGreaterThan(1);
+  });
+
+  it('gives up after repeated transcription failures, saying why', async () => {
+    const h = harness({ transcribe: vi.fn(async () => Promise.reject(new Error('401'))) });
+    const s = new TalkSession(h.deps);
+    s.start();
+    for (let i = 0; i < 10; i++) await tick();
+    expect(h.deps.transcribe).toHaveBeenCalledTimes(MAX_CONSECUTIVE_FAILURES);
+    expect(h.deps.onEnded).toHaveBeenCalledWith(expect.stringContaining('401'));
+    expect(s.active).toBe(false);
+  });
+
+  it('a stop mid-turn does not speak or reopen the mic', async () => {
+    let release!: (v: string) => void;
+    const h = harness({ submit: vi.fn(() => new Promise<string>((r) => (release = r))) });
+    const s = new TalkSession(h.deps);
+    s.start();
+    for (let i = 0; i < 3; i++) await tick();
+    const opened = h.opens();
+    s.stop();
+    release('late reply');
+    await tick();
+    expect(h.deps.speak).not.toHaveBeenCalled();
+    expect(h.opens()).toBe(opened);
+    expect(h.deps.onEnded).not.toHaveBeenCalled();
+  });
+
+  it('ends when the microphone dies', async () => {
+    const h = harness({
+      startMic: (_c, onError) => {
+        queueMicrotask(() => onError(new Error('pw-record exited with code 1')));
+        return { stop: () => undefined };
+      },
+    });
+    new TalkSession(h.deps).start();
+    await tick();
+    expect(h.deps.onEnded).toHaveBeenCalledWith(expect.stringContaining('pw-record'));
+  });
+});

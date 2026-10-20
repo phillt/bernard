@@ -62,6 +62,7 @@ export const DISPATCHED_COMMANDS = [
   '/theme',
   '/tool-permissions',
   '/voice',
+  '/talk',
   '/provider',
   '/models',
   '/model',
@@ -199,6 +200,12 @@ const CATALOGUE: readonly BuiltinSlashCommand[] = [
   },
   { name: '/theme', description: 'Switch color theme' },
   { name: '/voice', description: 'Voice settings: readback, backend, voice, natural speech' },
+  {
+    name: '/talk',
+    description: 'Talk with Bernard out loud, hands-free',
+    detail:
+      'Listens, notices when you stop, replies out loud, then listens again. Esc or /talk again stops. Transcription uses ElevenLabs, so add a key first.',
+  },
   { name: '/routines', description: 'List saved routines' },
   { name: '/create-routine', description: 'Create a routine with guided AI assistance' },
   { name: '/create-task', description: 'Create a task routine with guided AI assistance' },

@@ -198,7 +198,7 @@ describe('<Prompt>', () => {
     const onSubmit = vi.fn();
     const { stdin, lastFrame } = render(createElement(Prompt, { onSubmit }));
     await tick();
-    stdin.write('/ta');
+    stdin.write('/tas');
     await tick();
     stdin.write(TAB);
     await tick();

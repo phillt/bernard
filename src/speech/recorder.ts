@@ -1,0 +1,99 @@
+import { spawn, type ChildProcess } from 'node:child_process';
+import { defaultHasBin } from '../voice-service.js';
+
+/**
+ * Microphone capture through a system recorder, the same "probe for a binary"
+ * shape `resolveBackend` uses for TTS. No native module: PipeWire and
+ * PulseAudio already ship a recorder that writes raw PCM to stdout.
+ *
+ * Linux only for now. macOS (`rec`/sox) and Windows (ffmpeg) are a row each
+ * here when they arrive.
+ */
+
+export const RECORDER_PRIORITY = ['pw-record', 'parec', 'arecord'] as const;
+export type Recorder = (typeof RECORDER_PRIORITY)[number];
+
+/** What every recorder is asked for: what speech-to-text wants, and small. */
+export const RECORD_RATE = 16000;
+
+export function resolveRecorder(
+  platform: string,
+  hasBin: (bin: string) => boolean = defaultHasBin,
+): Recorder | null {
+  if (platform !== 'linux') return null;
+  return RECORDER_PRIORITY.find((r) => hasBin(r)) ?? null;
+}
+
+/** Raw s16le, mono, {@link RECORD_RATE}, on stdout. Pure. */
+export function buildRecordCommand(recorder: Recorder): { bin: string; args: string[] } {
+  switch (recorder) {
+    case 'pw-record':
+      return {
+        bin: 'pw-record',
+        args: ['--rate', String(RECORD_RATE), '--channels', '1', '--format', 's16', '-'],
+      };
+    case 'parec':
+      return {
+        bin: 'parec',
+        args: ['--raw', `--rate=${RECORD_RATE}`, '--channels=1', '--format=s16le'],
+      };
+    case 'arecord':
+      return {
+        bin: 'arecord',
+        args: ['-q', '-t', 'raw', '-f', 'S16_LE', '-r', String(RECORD_RATE), '-c', '1'],
+      };
+  }
+}
+
+export interface MicHandle {
+  stop(): void;
+}
+
+/**
+ * Starts recording and hands each PCM chunk to `onChunk`.
+ *
+ * stdin is `'ignore'`, never inherited: Ink owns `process.stdin`, and a second
+ * reader on it would steal keystrokes (`useRawKeys.ts` explains how). stderr is
+ * ignored too, because a recorder's warnings would otherwise land in the frame
+ * Ink is drawing.
+ */
+export function startMic(
+  recorder: Recorder,
+  onChunk: (pcm: Int16Array) => void,
+  onError: (err: Error) => void,
+): MicHandle {
+  const { bin, args } = buildRecordCommand(recorder);
+  let child: ChildProcess | null = spawn(bin, args, { stdio: ['ignore', 'pipe', 'ignore'] });
+  let carry: Buffer | null = null;
+  let stopped = false;
+
+  child.stdout?.on('data', (chunk: Buffer) => {
+    // A chunk boundary can split a sample; carry the odd byte to the next one.
+    const buf = carry ? Buffer.concat([carry, chunk]) : chunk;
+    const even = buf.length & ~1;
+    carry = even < buf.length ? buf.subarray(even) : null;
+    if (even === 0) return;
+    const copy = new Uint8Array(even);
+    copy.set(buf.subarray(0, even));
+    onChunk(new Int16Array(copy.buffer));
+  });
+  child.on('error', (err) => {
+    if (!stopped) onError(err);
+  });
+  child.on('close', (code) => {
+    if (!stopped && code !== 0) onError(new Error(`${bin} exited with code ${code}`));
+    child = null;
+  });
+
+  return {
+    stop() {
+      stopped = true;
+      try {
+        child?.kill('SIGTERM');
+      } catch {
+        // already gone
+      }
+      child = null;
+    },
+  };
+}

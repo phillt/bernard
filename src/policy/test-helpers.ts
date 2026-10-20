@@ -57,6 +57,7 @@ export function makePolicyInput(overrides?: {
     voiceBackend: 'auto',
     voiceWarmupMs: 0,
     voiceNormalizer: true,
+    voiceSttProvider: 'elevenlabs',
     specialistRecall: true,
     memoryConsolidation: true,
     fullScreen: false,
