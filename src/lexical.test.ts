@@ -166,10 +166,32 @@ describe('rankByTermOverlap', () => {
   it('ranks by shared words, counting the key, and leaves non-matches OUT', () => {
     // Leaving them out is what lets a packer order the rest by its own rule
     // (smallest first) instead of by store order.
+    // Both score 4 — a key word counts double — so the tie keeps store order.
     expect(rankByTermOverlap(notes, 'send the daily blaze to Brian')).toEqual([
-      'blaze-recipients',
       'daily-blaze-format',
+      'blaze-recipients',
     ]);
+  });
+
+  it('does not rank a note on one shared body word', () => {
+    // One ordinary word is what every big note has; ranking on it put large
+    // off-topic notes ahead of short standing rules.
+    const big: [string, string][] = [
+      ['quarterly-notes', 'x '.repeat(5000) + 'we send these every quarter'],
+      ['never-email-client', 'Never email the client directly.'],
+    ];
+    expect(rankByTermOverlap(big, 'can you send our weekly report')).toEqual([]);
+  });
+
+  it('ignores a word that most of the store shares', () => {
+    const many: [string, string][] = [
+      ['a-note', 'report about apples and report pears'],
+      ['b-note', 'report on bananas'],
+      ['c-note', 'report of cherries'],
+      ['d-note', 'dates only'],
+    ];
+    // `report` is in 3 of 4 notes, so only `apples` + `pears` can score.
+    expect(rankByTermOverlap(many, 'the report on apples and pears')).toEqual(['a-note']);
   });
 
   it('ranks nothing for a request made only of stop words', () => {

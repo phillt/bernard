@@ -534,8 +534,9 @@ export async function runDefinition<TInput, TFormatted>(
       // exactly that reason.
       ragResults: extras.ragResults ?? retrieved.results,
       // The dispatch's own retrieval query is the best statement of what it is
-      // for, so it also decides which memory survives when not all of it fits.
-      memoryRelevanceQuery: extras.memoryRelevanceQuery ?? retrieved.query,
+      // for, so it also decides which memory survives when not all of it fits —
+      // with RAG off or a failed search too, which is why it is not `query`.
+      memoryRelevanceQuery: extras.memoryRelevanceQuery ?? retrieved.relevanceQuery,
       memoryStore: ctx.stores.memory,
       includeScratch: extras.includeScratch ?? true,
     });

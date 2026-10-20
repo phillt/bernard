@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import { localDay } from './text.js';
 import * as path from 'node:path';
 import {
   getEmbeddingProvider,
@@ -870,7 +871,9 @@ export class RAGStore {
   listFacts(): string[] {
     const now = Date.now();
     return this.memories.map((m) => {
-      const date = m.createdAt.slice(0, 10);
+      // Local day, the clock the context block dates the same fact on.
+      const when = new Date(m.createdAt);
+      const date = Number.isNaN(when.getTime()) ? m.createdAt.slice(0, 10) : localDay(when);
       const daysLeft = m.expiresAt
         ? Math.max(0, Math.ceil((new Date(m.expiresAt).getTime() - now) / 86400000))
         : '?';

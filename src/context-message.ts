@@ -6,7 +6,7 @@ import type { SpecialistSummary } from './specialists.js';
 import type { SpecialistMatch } from './specialist-matcher.js';
 import { renderResolvedBlock, RAG_SOURCE_KEY, type ResolvedEntry } from './reference-resolver.js';
 import { sanitizeKey } from './memory.js';
-import { escapeXml, factDatePrefix, plural } from './text.js';
+import { escapeXml, factDatePrefix, localDay, plural } from './text.js';
 import { getDomain } from './domains.js';
 import type { ProvenanceStore } from './provenance.js';
 import { debugLog } from './logger.js';
@@ -133,7 +133,12 @@ export function buildContextMessage(inputs: ContextMessageInputs): CoreMessage |
     },
     {
       tag: 'recalled_context',
-      render: () => renderRecalledContext(inputs.ragResults, inputs.recallReconciliation),
+      render: () =>
+        renderRecalledContext(
+          inputs.ragResults,
+          inputs.recallReconciliation,
+          !inputs.currentDateTime,
+        ),
     },
     {
       tag: 'persistent_memory',
@@ -356,13 +361,17 @@ function renderSpecialistMatches(matches?: SpecialistMatch[]): string | null {
 function renderRecalledContext(
   ragResults?: RAGSearchResult[],
   reconciliation?: string,
+  needsToday = false,
 ): string | null {
   if (!ragResults || ragResults.length === 0) return null;
   // The dating rules are stated here, beside the dates, because this is the
   // only place both are in front of the model at once. "May be outdated" with
   // no date to check against was advice nobody could follow.
   const intro =
-    'Auto-recalled observations from past sessions. Hints, not rules — they were matched by similarity and may be outdated or from a different context. Each is prefixed with the date it was learned: when two disagree the newer one wins, and an observation about what happened on a particular day describes that day, not today.';
+    'Auto-recalled observations from past sessions. Hints, not rules — they were matched by similarity and may be outdated or from a different context. Each is prefixed with the date it was learned: when two disagree the newer one wins, and an observation about what happened on a particular day describes that day, not today.' +
+    // Only main carries `<current_datetime>`; every other assembly would be told
+    // to compare against a today it was never given.
+    (needsToday ? ` Today is ${localDay(new Date())}.` : '');
   const byDomain = new Map<string, RAGSearchResult[]>();
   for (const r of ragResults) {
     const d = r.domain;

@@ -218,6 +218,14 @@ describe('buildContextMessage — curator reconciliation + memory packing (#371)
     expect(content).toContain('template includes Time ~X hrs');
   });
 
+  it('tells an assembly with no <current_datetime> what today is, beside the dated facts', () => {
+    const dispatch = buildContextMessage({ ragResults: RAG })!.content as string;
+    expect(dispatch).toMatch(/Today is \d{4}-\d{2}-\d{2}\./);
+    const main = buildContextMessage({ ragResults: RAG, currentDateTime: 'Mon 2026-10-20' })!
+      .content as string;
+    expect(main).not.toContain('Today is');
+  });
+
   it('omits the note when the curator produced none', () => {
     const msg = buildContextMessage({ ragResults: RAG });
     expect(msg!.content as string).not.toContain('Reconciliation with curated memory');

@@ -227,6 +227,26 @@ describe('resolveReferences', () => {
     }
   });
 
+  it('keeps a valid ambiguity when the entries that came with it name no real source', async () => {
+    generateTextMock.mockResolvedValue({
+      text: JSON.stringify({
+        status: 'ambiguous',
+        reference: 'my daughter',
+        candidates: [
+          { label: 'Allyson', sourceKey: 'daughter-allyson', preview: 'age 8' },
+          { label: 'Emma', sourceKey: 'daughter-emma', preview: 'age 11' },
+        ],
+        entries: [{ phrase: 'the car', resolvedTo: 'the Volvo', sourceKey: 'no-such-key' }],
+      }),
+    });
+    const store = makeStore({
+      'daughter-allyson': 'Allyson, 8',
+      'daughter-emma': 'Emma, 11',
+    });
+    const result = await resolveReferences('call my daughter', store, makeConfig());
+    expect(result.status).toBe('ambiguous');
+  });
+
   it('returns ambiguous with at least 2 candidates', async () => {
     generateTextMock.mockResolvedValue({
       text: JSON.stringify({
@@ -735,6 +755,23 @@ describe('buildMemoryBlock', () => {
     // And nothing is hidden: the filler is still there by key.
     expect(block).toContain('  - aaa-filler-59');
     expect(block).not.toContain('omitted');
+  });
+
+  it('still previews notes that share no word with a semantic reference', () => {
+    // "my wife" shares nothing with "Spouse: Ana"; a key-only listing would
+    // leave the resolver nothing to name her from.
+    const contents = new Map([['family-contacts', 'Spouse: Ana. Brother: Leo.']]);
+    expect(buildMemoryBlock(contents, 'text my wife')).toContain(
+      '- family-contacts: Spouse: Ana. Brother: Leo.',
+    );
+  });
+
+  it('bounds the key-only listing on a large store', () => {
+    const contents = new Map<string, string>();
+    for (let i = 0; i < 500; i++) contents.set(`note-${i}`, 'x');
+    const block = buildMemoryBlock(contents, 'hello');
+    expect(block).toContain('more entries omitted');
+    expect(block.split('\n').length).toBeLessThan(260);
   });
 });
 

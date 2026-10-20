@@ -306,15 +306,22 @@ export function reciprocalRankFusion(
  * Cached by text: a dispatch over budget ranks the same notes on every LLM
  * call, and tokenizing them is the whole cost (~3 ms for a 40k-char store,
  * against ~20 µs for the pack itself). `MemoryStore`'s read cache hands back
- * the same string instances, so a lookup hashes nothing new. Bounded by a
- * clear, because the store is.
+ * the same string instances, so a lookup hashes nothing new.
+ *
+ * Bounded by evicting the OLDEST entry, never by a wholesale clear: one pass
+ * looks up a key and a content per note, so a clear at the cap fired mid-pass
+ * on any store over half the cap and the cache never warmed at all. The cap is
+ * set well above any real store (a few hundred notes), so steady state is all
+ * hits and only churn — edited notes, new requests — is evicted.
  */
 const termCache = new Map<string, Set<string>>();
-const TERM_CACHE_MAX = 512;
+const TERM_CACHE_MAX = 4096;
 function contentTerms(text: string): Set<string> {
   let terms = termCache.get(text);
   if (!terms) {
-    if (termCache.size >= TERM_CACHE_MAX) termCache.clear();
+    if (termCache.size >= TERM_CACHE_MAX) {
+      termCache.delete(termCache.keys().next().value as string);
+    }
     terms = new Set(lexicalTokens(text).filter((t) => t.length >= 3 && !STOP.has(t)));
     termCache.set(text, terms);
   }
@@ -322,15 +329,23 @@ function contentTerms(text: string): Set<string> {
 }
 
 /**
- * Keys of the entries that share at least one content word with `request`,
- * most shared first; entries sharing none are left out rather than ranked last.
+ * Keys of the entries that share content words with `request`, best match
+ * first; entries that do not clear the bar are left out rather than ranked last.
  *
  * Built for memory notes, where the key is half the signal — `daily-blaze-format`
- * names its subject better than its first paragraph does — so the key's words
- * count too. Leaving the non-matching entries OUT is the point: a caller packing
- * under a budget orders the rest by its own rule (smallest first, which is what
- * keeps short standing rules), and a ranking that listed everything would
- * override that rule with "store order".
+ * names its subject better than its first paragraph does — so a word in the KEY
+ * counts double. Leaving the non-matching entries OUT is the point: a caller
+ * packing under a budget orders the rest by its own rule (smallest first, which
+ * is what keeps short standing rules), and a ranking that listed everything
+ * would override that rule with "store order".
+ *
+ * **The bar is two points, not one shared word.** One ordinary word in a long
+ * note's body — `send`, `report`, `weekly` — is what every big note has, and
+ * ranking on it put a 10k-char off-topic note ahead of every short standing
+ * rule, so the relevance pack dropped MORE rules than size order would have.
+ * A note has to share a word in its key, or two distinct words in its body.
+ * Words that appear in most of the store say nothing about any one note and
+ * are not counted at all.
  *
  * Lexical rather than semantic on purpose. It has to run inside dispatch
  * context assembly, per LLM call, with no model and no embedding; and a request
@@ -343,15 +358,29 @@ export function rankByTermOverlap(
 ): string[] {
   const wanted = contentTerms(request);
   if (wanted.size === 0) return [];
-  const scored: { key: string; score: number; i: number }[] = [];
-  let i = 0;
+  const notes: { key: string; keyTerms: Set<string>; have: Set<string> }[] = [];
   for (const [key, content] of entries) {
-    const keyTerms = contentTerms(key);
-    const have = contentTerms(content);
-    let score = 0;
-    for (const t of wanted) if (keyTerms.has(t) || have.has(t)) score++;
-    if (score > 0) scored.push({ key, score, i });
-    i++;
+    notes.push({ key, keyTerms: contentTerms(key), have: contentTerms(content) });
   }
+  // A term present in more than half of a store of at least four notes is
+  // common vocabulary there, not a pointer to one of them.
+  const common = new Set<string>();
+  if (notes.length >= 4) {
+    for (const t of wanted) {
+      let df = 0;
+      for (const n of notes) if (n.keyTerms.has(t) || n.have.has(t)) df++;
+      if (df * 2 > notes.length) common.add(t);
+    }
+  }
+  const scored: { key: string; score: number; i: number }[] = [];
+  notes.forEach((n, i) => {
+    let score = 0;
+    for (const t of wanted) {
+      if (common.has(t)) continue;
+      if (n.keyTerms.has(t)) score += 2;
+      else if (n.have.has(t)) score += 1;
+    }
+    if (score >= 2) scored.push({ key: n.key, score, i });
+  });
   return scored.sort((a, b) => b.score - a.score || a.i - b.i).map((e) => e.key);
 }

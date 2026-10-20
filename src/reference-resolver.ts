@@ -118,8 +118,13 @@ function buildHintsBlock(hints?: Map<string, string>): string {
 }
 
 /**
- * How many memory entries are shown with their content; every other live entry
- * is still listed, by key alone.
+ * How the memory list is budgeted. Entries sharing words with the request are
+ * previewed first and in full ({@link MAX_MEMORY_PREVIEW_CHARS}); the rest of
+ * the first {@link MAX_MEMORY_ENTRIES_IN_PROMPT} still get a short preview,
+ * because a reference is usually SEMANTIC — "my wife" shares no word with a note
+ * reading "Spouse: Ana", and a key alone cannot be resolved from. Past that,
+ * entries are listed by key alone, up to {@link MAX_KEY_ONLY_ENTRIES}, so the
+ * prompt stays bounded on a large store.
  *
  * This used to be the first 40 entries in `readdir` order, each cut at 140
  * characters — so on a store of 120 notes anything filed after roughly "d" was
@@ -130,6 +135,9 @@ function buildHintsBlock(hints?: Map<string, string>): string {
  * ones the request actually mentions puts the text where it is needed.
  */
 const MAX_PREVIEWED_MEMORY_ENTRIES = 12;
+const MAX_MEMORY_ENTRIES_IN_PROMPT = 40;
+const MAX_SHORT_PREVIEW_CHARS = 140;
+const MAX_KEY_ONLY_ENTRIES = 200;
 /** Shared with `recall-filter`, so the two passes see the same text of a note. */
 export const MAX_MEMORY_PREVIEW_CHARS = 400;
 /**
@@ -193,17 +201,24 @@ export function buildMemoryBlock(contents: Map<string, string>, request: string)
   }
   const shown = new Set(previewed);
   const rest = [...contents.keys()].filter((k) => !shown.has(k));
-  if (rest.length > 0) {
+  const shortRoom = Math.max(0, MAX_MEMORY_ENTRIES_IN_PROMPT - previewed.length);
+  for (const key of rest.slice(0, shortRoom)) {
+    lines.push(`- ${key}: ${oneLine(contents.get(key)!, MAX_SHORT_PREVIEW_CHARS)}`);
+  }
+  const keyOnly = rest.slice(shortRoom, shortRoom + MAX_KEY_ONLY_ENTRIES);
+  if (keyOnly.length > 0) {
     // Key alone: enough to name an entity, too little to be quoted as one.
-    lines.push(
-      `- ${previewed.length > 0 ? 'Other entries' : 'Entries'} (key only — content not shown):`,
-    );
-    for (const key of rest) lines.push(`  - ${key}`);
+    lines.push('- Other entries (key only — content not shown):');
+    for (const key of keyOnly) lines.push(`  - ${key}`);
+  }
+  const omitted = rest.length - shortRoom - keyOnly.length;
+  if (omitted > 0) {
+    lines.push(`- … ${omitted} more entr${omitted === 1 ? 'y' : 'ies'} omitted for brevity`);
   }
   return lines.join('\n');
 }
 
-function parseResolverResponse(text: string): ResolveResult | null {
+function parseResolverResponse(text: string, ignoreEntries = false): ResolveResult | null {
   const match = text.match(/\{[\s\S]*\}/);
   if (!match) return null;
   try {
@@ -213,7 +228,7 @@ function parseResolverResponse(text: string): ResolveResult | null {
     // shape cannot carry them, so honouring that status would discard every
     // phrase that DID resolve — the defect the prompt's "resolve EVERY phrase"
     // rule exists to stop, and a cheap model will not always follow the rule.
-    if (Array.isArray(parsed?.entries)) {
+    if (!ignoreEntries && Array.isArray(parsed?.entries)) {
       const entries: ResolvedEntry[] = parsed.entries
         .filter(
           (e: any) =>
@@ -399,7 +414,18 @@ export async function resolveReferences(
       debugLog('reference-resolver:parse-failed', rawText.slice(0, 200));
       return { status: 'noop' };
     }
-    const validated = validateAgainstMemory(parsed, new Set(memoryKeys), ragFacts.length > 0);
+    const keySet = new Set(memoryKeys);
+    let validated = validateAgainstMemory(parsed, keySet, ragFacts.length > 0);
+    // Entries outrank a declared `ambiguous`/`unknown` only if they SURVIVE
+    // validation. When every one names a source that does not exist, the
+    // model's own question is still a real one — fall back to it rather than
+    // discarding a valid ambiguity for an invalid resolution.
+    if (validated.status === 'noop' && parsed.status === 'resolved') {
+      const declared = parseResolverResponse(rawText, true);
+      if (declared && declared.status !== 'resolved' && declared.status !== 'noop') {
+        validated = validateAgainstMemory(declared, keySet, ragFacts.length > 0);
+      }
+    }
     debugLog('reference-resolver:result', validated);
     return validated;
   } catch (err) {
