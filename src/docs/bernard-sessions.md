@@ -90,8 +90,8 @@ and so does a couple of minutes of silence. The hint bar says whether the
 microphone is open the whole time. It records through PipeWire or PulseAudio,
 so it is Linux only for now, and it sends what you say to ElevenLabs to be
 transcribed — add a key first with `bernard add-key elevenlabs <key>` or the
-row in `/voice`. Pick `elevenlabs` as the `/voice` backend to have the answers
-spoken by ElevenLabs as well; any other backend works too. The microphone is
+row in `/voice`. Once the key is in, the `auto` backend speaks answers with
+ElevenLabs too; pick a local backend in `/voice` to keep the local voice. The microphone is
 closed while Bernard is speaking, so talking over it does not interrupt it yet.
 
 ## Everything else

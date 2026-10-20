@@ -255,6 +255,7 @@ import {
   isCloudVoiceBackend,
   type SpeakOutcome,
   type VoiceBackend,
+  type CloudVoiceBackend,
   type ResolvedBackend,
 } from '../voice-service.js';
 import { synthesizerFor, transcriberFor, speechProviderUnavailable } from '../speech/registry.js';
@@ -456,15 +457,20 @@ type PendingDialog = PendingConfirm | PendingBlock;
  */
 let _voiceService: VoiceService | null = null;
 
+/** Whether a cloud voice has what it needs (a key) to be picked by `auto`. */
+function cloudVoiceReady(backend: CloudVoiceBackend): boolean {
+  return speechProviderUnavailable(backend, 'synthesize') === null;
+}
+
 function getVoiceService(cfg: import('../config.js').BernardConfig): VoiceService {
   if (!_voiceService) {
-    const resolved = resolveBackend(process.platform, cfg.voiceBackend);
+    const resolved = resolveBackend(process.platform, cfg.voiceBackend, undefined, cloudVoiceReady);
     const warmup = { player: resolveWarmupPlayer(process.platform), ms: cfg.voiceWarmupMs };
     // A cloud voice is synthesized by its vendor and played locally; the
-    // service gets the vendor as a function so it never imports one.
-    const synthesize = isCloudVoiceBackend(cfg.voiceBackend)
-      ? synthesizerFor(cfg.voiceBackend)
-      : null;
+    // service gets the vendor as a function so it never imports one. Keyed on
+    // the RESOLVED backend, since `auto` can land on a cloud voice too.
+    const synthesize =
+      resolved && isCloudVoiceBackend(resolved.backend) ? synthesizerFor(resolved.backend) : null;
     _voiceService = new VoiceService(resolved, warmup, synthesize);
   }
   return _voiceService;
@@ -4710,7 +4716,8 @@ export function App({
         item: {
           label: 'Backend',
           annotation: backendAnnotation,
-          description: 'Which TTS engine speaks. Auto detects one for this platform.',
+          description:
+            'Which TTS engine speaks. Auto uses ElevenLabs when its key is set, otherwise the one this platform has.',
         },
         action: async () => {
           const res = await requestMenu(
@@ -4846,6 +4853,9 @@ export function App({
           if (res.cancelled) return;
           try {
             saveProviderKey('elevenlabs', res.raw.trim());
+            // `auto` prefers a keyed cloud voice, so the key just changed
+            // which voice it resolves to.
+            resetVoiceService();
             flashToast('ElevenLabs key saved.', 'success');
           } catch (err) {
             flashToast(err instanceof Error ? err.message : String(err), 'error');

@@ -46,6 +46,42 @@ import {
 } from './voice-service.js';
 
 describe('resolveBackend', () => {
+  describe('auto with a cloud voice', () => {
+    const has = (bins: string[]) => (b: string) => bins.includes(b);
+
+    it('picks a keyed cloud voice over the local engine', () => {
+      expect(resolveBackend('linux', 'auto', has(['spd-say', 'pw-play']), () => true)).toEqual({
+        backend: 'elevenlabs',
+        bin: 'pw-play',
+      });
+    });
+
+    it('keeps the local engine when the cloud voice has no key', () => {
+      expect(resolveBackend('linux', 'auto', has(['spd-say', 'pw-play']), () => false)).toEqual({
+        backend: 'spd-say',
+        bin: 'spd-say',
+      });
+    });
+
+    it('keeps the local engine when nothing can play cloud audio', () => {
+      expect(resolveBackend('linux', 'auto', has(['spd-say']), () => true)).toEqual({
+        backend: 'spd-say',
+        bin: 'spd-say',
+      });
+      expect(resolveBackend('darwin', 'auto', has([]), () => true)).toEqual({
+        backend: 'macos-say',
+        bin: 'say',
+      });
+    });
+
+    it('never overrides an explicitly chosen local backend', () => {
+      expect(resolveBackend('linux', 'espeak', has(['espeak', 'pw-play']), () => true)).toEqual({
+        backend: 'espeak',
+        bin: 'espeak',
+      });
+    });
+  });
+
   it('returns macos-say on darwin with auto', () => {
     const result = resolveBackend('darwin', 'auto');
     expect(result).toEqual({ backend: 'macos-say', bin: 'say' });

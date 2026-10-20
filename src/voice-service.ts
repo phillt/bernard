@@ -67,11 +67,20 @@ export interface ResolvedBackend {
   bin: string;
 }
 
-/** Resolve the TTS backend to use given platform and config. */
+/**
+ * Resolve the TTS backend to use given platform and config.
+ *
+ * `cloudReady` says whether a cloud voice can be used right now (its key is
+ * set). Under `auto` a ready cloud voice wins over a local one: storing a key
+ * for it is the user saying which voice they want, and asking them to also
+ * flip a backend setting is a second step nobody expects. Injected rather than
+ * read here because this module is a leaf and the keys live in `config.ts`.
+ */
 export function resolveBackend(
   platform: string,
   configBackend: VoiceBackend,
   availableBins?: (bin: string) => boolean,
+  cloudReady?: (backend: CloudVoiceBackend) => boolean,
 ): ResolvedBackend | null {
   const hasBin = availableBins ?? defaultHasBin;
 
@@ -84,7 +93,15 @@ export function resolveBackend(
     return { backend: configBackend, bin: BACKEND_BIN[configBackend] };
   }
 
-  // auto-detect
+  // auto-detect. A cloud voice with a key comes first, when something local can
+  // play it; otherwise the platform's own engine, exactly as before.
+  if (cloudReady) {
+    for (const cloud of CLOUD_VOICE_BACKENDS) {
+      if (!cloudReady(cloud)) continue;
+      const player = resolveWarmupPlayer(platform, hasBin);
+      if (player) return { backend: cloud, bin: player };
+    }
+  }
   if (platform === 'darwin') {
     return { backend: 'macos-say', bin: 'say' };
   }

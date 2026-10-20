@@ -1883,7 +1883,13 @@ program
     } catch {
       // ignore — fall through to env/default
     }
-    const resolved = resolveBackend(process.platform, voiceBackend);
+    const { speechProviderUnavailable } = await import('./speech/registry.js');
+    const resolved = resolveBackend(
+      process.platform,
+      voiceBackend,
+      undefined,
+      (b) => speechProviderUnavailable(b, 'synthesize') === null,
+    );
     if (!resolved) {
       printError(
         'No TTS backend found. Install spd-say, espeak-ng, or espeak on Linux; ' +
@@ -1895,8 +1901,8 @@ program
     printInfo(`Speaking: "${message}"`);
     // A cloud voice needs its vendor; the import is deferred so a local voice
     // test still loads nothing but the TTS leaf.
-    const synthesize = isCloudVoiceBackend(voiceBackend)
-      ? (await import('./speech/registry.js')).synthesizerFor(voiceBackend)
+    const synthesize = isCloudVoiceBackend(resolved.backend)
+      ? (await import('./speech/registry.js')).synthesizerFor(resolved.backend)
       : null;
     const svc = new VoiceService(
       resolved,
