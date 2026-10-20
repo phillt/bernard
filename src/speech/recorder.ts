@@ -1,5 +1,9 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { defaultHasBin } from '../voice-service.js';
+import { errorFields, speechLog } from './log.js';
+
+/** How much of a recorder's stderr is kept for the error and the log. */
+const STDERR_TAIL = 500;
 
 /**
  * Microphone capture through a system recorder, the same "probe for a binary"
@@ -63,12 +67,22 @@ export function startMic(
   onError: (err: Error) => void,
 ): MicHandle {
   const { bin, args } = buildRecordCommand(recorder);
-  let child: ChildProcess | null = spawn(bin, args, { stdio: ['ignore', 'pipe', 'ignore'] });
+  // stderr is piped and kept (a tail) because it is where a recorder says WHY
+  // it failed; with it ignored, "exited with code 1" is all anyone learns.
+  let child: ChildProcess | null = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
   let carry: Buffer | null = null;
   let stopped = false;
+  let stderr = '';
+  let bytes = 0;
+  const t0 = Date.now();
+  speechLog('mic:start', { recorder, bin, args, pid: child.pid ?? null });
+  child.stderr?.on('data', (chunk: Buffer) => {
+    stderr = (stderr + chunk.toString('utf8')).slice(-STDERR_TAIL);
+  });
 
   child.stdout?.on('data', (chunk: Buffer) => {
     // A chunk boundary can split a sample; carry the odd byte to the next one.
+    bytes += chunk.length;
     const buf = carry ? Buffer.concat([carry, chunk]) : chunk;
     const even = buf.length & ~1;
     carry = even < buf.length ? buf.subarray(even) : null;
@@ -78,10 +92,23 @@ export function startMic(
     onChunk(new Int16Array(copy.buffer));
   });
   child.on('error', (err) => {
+    speechLog('mic:error', { bin, stopped, ...errorFields(err) });
     if (!stopped) onError(err);
   });
-  child.on('close', (code) => {
-    if (!stopped && code !== 0) onError(new Error(`${bin} exited with code ${code}`));
+  child.on('close', (code, signal) => {
+    const tail = stderr.replace(/\s+/g, ' ').trim();
+    speechLog('mic:exit', {
+      bin,
+      code,
+      signal,
+      stopped,
+      ms: Date.now() - t0,
+      bytes,
+      ...(tail ? { stderr: tail } : {}),
+    });
+    if (!stopped && code !== 0) {
+      onError(new Error(`${bin} exited with code ${code}${tail ? `: ${tail}` : ''}`));
+    }
     child = null;
   });
 

@@ -2,6 +2,7 @@ import { getServiceKey } from '../config.js';
 import { elevenLabs } from './elevenlabs.js';
 import type { Pcm, SpeechProvider } from './types.js';
 import type { SpeechProviderId } from './ids.js';
+import { errorFields, previewText, speechLog } from './log.js';
 
 export { SPEECH_PROVIDER_IDS, isSpeechProviderId, type SpeechProviderId } from './ids.js';
 
@@ -48,8 +49,35 @@ export function synthesizerFor(
     const run = SPEECH_PROVIDERS[id].synthesize;
     const key = speechProviderKey(id);
     const problem = speechProviderUnavailable(id, 'synthesize');
-    if (problem || !run || key === undefined) throw new Error(problem ?? 'Unavailable.');
-    return run(text, key, opts);
+    if (problem || !run || key === undefined) {
+      speechLog('tts:unavailable', { provider: id, error: problem ?? 'Unavailable.' });
+      throw new Error(problem ?? 'Unavailable.');
+    }
+    const t0 = Date.now();
+    speechLog('tts:request', {
+      provider: id,
+      voice: opts.voice?.trim() ? opts.voice : null,
+      chars: text.length,
+      text: previewText(text),
+    });
+    try {
+      const pcm = await run(text, key, opts);
+      speechLog('tts:response', {
+        provider: id,
+        ms: Date.now() - t0,
+        samples: pcm.samples.length,
+        rate: pcm.rate,
+        seconds: Math.round((pcm.samples.length / pcm.rate) * 100) / 100,
+      });
+      return pcm;
+    } catch (err) {
+      speechLog(opts.signal.aborted ? 'tts:aborted' : 'tts:error', {
+        provider: id,
+        ms: Date.now() - t0,
+        ...errorFields(err),
+      });
+      throw err;
+    }
   };
 }
 
@@ -61,7 +89,35 @@ export function transcriberFor(
     const run = SPEECH_PROVIDERS[id].transcribe;
     const key = speechProviderKey(id);
     const problem = speechProviderUnavailable(id, 'transcribe');
-    if (problem || !run || key === undefined) throw new Error(problem ?? 'Unavailable.');
-    return run(audio, key, { signal });
+    if (problem || !run || key === undefined) {
+      speechLog('stt:unavailable', { provider: id, error: problem ?? 'Unavailable.' });
+      throw new Error(problem ?? 'Unavailable.');
+    }
+    const t0 = Date.now();
+    const seconds = Math.round((audio.samples.length / audio.rate) * 100) / 100;
+    speechLog('stt:request', {
+      provider: id,
+      seconds,
+      samples: audio.samples.length,
+      rate: audio.rate,
+    });
+    try {
+      const text = await run(audio, key, { signal });
+      speechLog('stt:response', {
+        provider: id,
+        ms: Date.now() - t0,
+        chars: text.length,
+        text: previewText(text),
+      });
+      return text;
+    } catch (err) {
+      speechLog(signal.aborted ? 'stt:aborted' : 'stt:error', {
+        provider: id,
+        ms: Date.now() - t0,
+        seconds,
+        ...errorFields(err),
+      });
+      throw err;
+    }
   };
 }

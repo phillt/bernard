@@ -169,6 +169,7 @@ import {
   type ParamDescriptor,
 } from '../providers/model-params.js';
 import { debugLog, getSessionId, getSessionLogPath, isDebugEnabled } from '../logger.js';
+import { errorFields, previewText, speechLog } from '../speech/log.js';
 import { SessionTelemetry } from '../session-telemetry.js';
 import { withSlot, getMaxConcurrentAgents, getActiveCount } from '../tools/agent-pool.js';
 import type {
@@ -5178,11 +5179,31 @@ export function App({
       // `_speechAbort !== ac` sits beside `aborted` deliberately: it makes "a
       // newer readback started" true without depending on abort-propagation
       // ordering.
-      if (ac.signal.aborted || _speechAbort !== ac) return 'cancelled';
-      if (!spoken.text) return 'finished';
+      if (ac.signal.aborted || _speechAbort !== ac) {
+        speechLog('speak:superseded', { stage: 'normalize' });
+        return 'cancelled';
+      }
+      if (!spoken.text) {
+        speechLog('speak:empty', { writtenChars: writtenForm.length });
+        return 'finished';
+      }
       if (spoken.normalized) hooks?.onNormalized?.();
-      return await svc.speak(spoken.text, { voice: config.voiceVoice, rate: config.voiceRate });
+      const t0 = Date.now();
+      speechLog('speak:start', {
+        backend: svc.backend?.backend ?? null,
+        bin: svc.backend?.bin ?? null,
+        normalized: spoken.normalized,
+        chars: spoken.text.length,
+        text: previewText(spoken.text),
+      });
+      const outcome = await svc.speak(spoken.text, {
+        voice: config.voiceVoice,
+        rate: config.voiceRate,
+      });
+      speechLog('speak:end', { outcome, ms: Date.now() - t0 });
+      return outcome;
     } catch (err) {
+      speechLog('speak:error', { backend: config.voiceBackend, ...errorFields(err) });
       // Never rethrow — TTS must not crash the REPL. A producer that wants the
       // failure visible (the menu's Preview row) passes `onError`.
       hooks?.onError?.(err instanceof Error ? err.message : String(err));
@@ -5211,6 +5232,7 @@ export function App({
     talkRef.current = null;
     setTalkState(null);
     if (!session) return;
+    speechLog('talk:stop', { reason: notice ?? null });
     session.stop();
     _voiceService?.stop();
     if (notice) flashToast(notice, 'info');
@@ -5225,6 +5247,7 @@ export function App({
     if (talkRef.current) return;
     const recorder = resolveRecorder(process.platform);
     if (!recorder) {
+      speechLog('talk:refused', { reason: 'no-recorder', platform: process.platform });
       flashToast(
         process.platform === 'linux'
           ? 'No microphone recorder found — install pw-record, parec or arecord.'
@@ -5235,10 +5258,12 @@ export function App({
     }
     const sttProblem = speechProviderUnavailable(config.voiceSttProvider, 'transcribe');
     if (sttProblem) {
+      speechLog('talk:refused', { reason: 'stt-unavailable', error: sttProblem });
       flashToast(sttProblem, 'error');
       return;
     }
     if (!getVoiceService(config).backend) {
+      speechLog('talk:refused', { reason: 'no-voice', backend: config.voiceBackend });
       flashToast('No voice to answer with — pick a backend in /voice.', 'error');
       return;
     }
@@ -5251,24 +5276,37 @@ export function App({
         // A turn already running (something typed) is not interrupted; this
         // utterance is dropped with a word rather than queued behind it.
         if (submittingRef.current) {
+          speechLog('talk:dropped', { reason: 'turn-running', chars: text.length });
           flashToast('Still working on the last request — say that again in a moment.', 'info');
           return null;
         }
+        const t0 = Date.now();
+        speechLog('talk:turn', { chars: text.length, text: previewText(text) });
         const before = agent.getHistory().length;
         await runAgentTurn(text);
         const history = agent.getHistory();
         for (let i = history.length - 1; i >= before; i--) {
-          if (history[i].role === 'assistant') return extractTextFromContent(history[i].content);
+          if (history[i].role === 'assistant') {
+            const reply = extractTextFromContent(history[i].content);
+            speechLog('talk:reply', { ms: Date.now() - t0, chars: reply.length });
+            return reply;
+          }
         }
+        speechLog('talk:reply', { ms: Date.now() - t0, chars: 0, missing: true });
         return null;
       },
       speak: (text) =>
         startSpeech(text, { onError: (m) => flashToast(`Could not speak: ${m}`, 'error') }),
       onState: (state) => {
+        speechLog('talk:state', { state });
         if (talkRef.current === session) setTalkState(state);
       },
-      onError: (message) => flashToast(message, 'error'),
+      onError: (message) => {
+        speechLog('talk:error', { error: message });
+        flashToast(message, 'error');
+      },
       onEnded: (reason) => {
+        speechLog('talk:ended', { reason });
         if (talkRef.current !== session) return;
         talkRef.current = null;
         setTalkState(null);
@@ -5276,6 +5314,12 @@ export function App({
       },
     });
     talkRef.current = session;
+    speechLog('talk:start', {
+      recorder,
+      stt: config.voiceSttProvider,
+      backend: config.voiceBackend,
+      voice: config.voiceVoice ?? null,
+    });
     if (!talkNoticeShownRef.current) {
       talkNoticeShownRef.current = true;
       flashToast(

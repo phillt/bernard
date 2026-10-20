@@ -1907,14 +1907,22 @@ program
     // voice spends its first second waiting on the network with nothing else
     // pending, so without this the process exits before a word is played.
     const keepAlive = setInterval(() => undefined, 60_000);
+    const { speechLog, errorFields } = await import('./speech/log.js');
+    speechLog('voice-test:start', {
+      backend: resolved.backend,
+      bin: resolved.bin,
+      chars: message.length,
+    });
     try {
       // Deterministic normalization only — this path deliberately constructs no
       // provider or model (it must work with no API key configured), and the
       // message is text the user typed themselves.
       await svc.speak(toLiteralSpeech(message), { voice: voiceVoice, rate: voiceRate });
+      speechLog('voice-test:end', {});
       printInfo('Done.');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
+      speechLog('voice-test:error', errorFields(err));
       printError(`TTS failed: ${msg}`);
       process.exit(1);
     } finally {

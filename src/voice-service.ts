@@ -389,9 +389,18 @@ export class VoiceService {
         else resolve('finished');
       };
 
+      // stderr is kept (a tail) so a failure says what the player said, not
+      // only its exit code — a bad voice name or a missing sink lives there.
       const child = spawn(bin, args, {
-        stdio: [stdin ? 'pipe' : 'ignore', 'ignore', 'ignore'],
+        stdio: [stdin ? 'pipe' : 'ignore', 'ignore', 'pipe'],
         detached: false,
+      });
+      let stderr = '';
+      // A piped stream is its own handle; unref it too, or reading stderr
+      // would hold the process open where `child.unref()` promises it won't.
+      (child.stderr as { unref?: () => void } | null)?.unref?.();
+      child.stderr?.on('data', (chunk: Buffer) => {
+        stderr = (stderr + chunk.toString('utf8')).slice(-500);
       });
       // Don't let the child's handle keep the event loop alive — the caller
       // voids this promise, so speech must never block process exit. `stop()`
@@ -408,7 +417,8 @@ export class VoiceService {
       child.on('error', (err) => _advance(err));
       child.on('close', (code) => {
         if (code !== 0 && code !== null) {
-          _advance(new Error(`TTS process exited with code ${code}`));
+          const tail = stderr.replace(/\s+/g, ' ').trim();
+          _advance(new Error(`${bin} exited with code ${code}${tail ? `: ${tail}` : ''}`));
         } else {
           _advance();
         }
