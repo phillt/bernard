@@ -5305,6 +5305,15 @@ export function App({
         speechLog('talk:reply', { ms: Date.now() - t0, chars: 0, missing: true });
         return null;
       },
+      // Said while the turn runs: the same door as text typed mid-turn (#200).
+      // Anything the turn never reaches comes back through `queueFollowUps`.
+      followUp: (text) => {
+        if (!submittingRef.current) return false;
+        agent.interject(text);
+        speechLog('talk:follow-up', { chars: text.length, text: previewText(text) });
+        flashToast('Heard — Bernard will see it before the next step.', 'success');
+        return true;
+      },
       speak: (text) =>
         startSpeech(text, { onError: (m) => flashToast(`Could not speak: ${m}`, 'error') }),
       onState: (state) => {
@@ -5724,7 +5733,13 @@ export function App({
       // and says so. After an interrupt it does NOT run — Esc means stop, and
       // starting a turn off a correction to the work just stopped would undo
       // that. The words are one ↑ away either way, since `Prompt` recorded them.
-      if (undelivered.length > 0 && !controller.signal.aborted) {
+      // In talk mode they go back to the talk loop instead, which runs them
+      // after speaking this reply — a queued turn here would answer silently.
+      const talk = talkRef.current;
+      if (undelivered.length > 0 && !controller.signal.aborted && talk) {
+        talk.queueFollowUps(undelivered);
+        speechLog('talk:follow-up-deferred', { count: undelivered.length });
+      } else if (undelivered.length > 0 && !controller.signal.aborted) {
         for (const text of undelivered) requestTurn({ text, source: { kind: 'user' } });
         flashToast(
           plural(

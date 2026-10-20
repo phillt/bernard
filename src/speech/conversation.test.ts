@@ -9,11 +9,16 @@ import {
 const RATE = 16000;
 const tick = () => new Promise((r) => setTimeout(r, 5));
 
-/** A fake mic that plays one scripted utterance per open. */
-function harness(over: Partial<TalkDeps> = {}) {
+/**
+ * A fake mic that plays one scripted utterance per open. A mic opened while
+ * the loop is `thinking` is the follow-up mic, and stays silent unless
+ * `followUps` scripts it.
+ */
+function harness(over: Partial<TalkDeps> = {}, followUps = 0) {
   const states: TalkState[] = [];
   let opens = 0;
   let open = false;
+  let followOpens = 0;
   const deps: TalkDeps = {
     rate: RATE,
     // Tiny windows so a few ms of synthetic audio is a whole utterance.
@@ -25,10 +30,22 @@ function harness(over: Partial<TalkDeps> = {}) {
       minLevel: 100,
     },
     startMic: (onChunk) => {
-      opens++;
-      open = true;
       const quiet = new Int16Array(RATE * 0.4).fill(10);
       const loud = new Int16Array(RATE * 0.2).map((_, i) => (i % 2 ? 5000 : -5000));
+      if (states[states.length - 1] === 'thinking') {
+        let live = true;
+        if (followOpens++ < followUps) {
+          setTimeout(() => {
+            if (!live) return;
+            onChunk(quiet);
+            onChunk(loud);
+            onChunk(quiet);
+          }, 0);
+        }
+        return { stop: () => (live = false) };
+      }
+      opens++;
+      open = true;
       // A macrotask, and only for the first few opens: a loop that reopens the
       // mic from microtasks alone would starve the test's own ticks.
       if (opens <= 3) {
@@ -118,5 +135,107 @@ describe('TalkSession', () => {
     new TalkSession(h.deps).start();
     await tick();
     expect(h.deps.onEnded).toHaveBeenCalledWith(expect.stringContaining('pw-record'));
+  });
+
+  it('hands something said mid-turn to the running turn', async () => {
+    let release!: (v: string) => void;
+    const followUp = vi.fn(() => true);
+    const h = harness(
+      {
+        transcribe: vi
+          .fn()
+          .mockResolvedValue('')
+          .mockResolvedValueOnce('what time is it')
+          .mockResolvedValueOnce('and in Tokyo'),
+        submit: vi.fn(() => new Promise<string>((r) => (release = r))),
+        followUp,
+      },
+      1,
+    );
+    const s = new TalkSession(h.deps);
+    s.start();
+    for (let i = 0; i < 5; i++) await tick();
+    expect(followUp).toHaveBeenCalledWith('and in Tokyo');
+    release('Noon here, 4 a.m. in Tokyo.');
+    for (let i = 0; i < 3; i++) await tick();
+    s.stop();
+    // Delivered, so it is not run again as a turn of its own.
+    expect(h.deps.submit).toHaveBeenCalledTimes(1);
+    expect(h.deps.speak).toHaveBeenCalledWith('Noon here, 4 a.m. in Tokyo.');
+  });
+
+  it('runs a follow-up the turn could not take, after speaking the reply', async () => {
+    let release!: (v: string) => void;
+    const submit = vi
+      .fn()
+      .mockResolvedValue(null)
+      .mockImplementationOnce(() => new Promise<string>((r) => (release = r)))
+      .mockResolvedValueOnce('In Tokyo it is 4 a.m.');
+    const h = harness(
+      {
+        transcribe: vi
+          .fn()
+          .mockResolvedValue('')
+          .mockResolvedValueOnce('what time is it')
+          .mockResolvedValueOnce('and in Tokyo'),
+        submit,
+        followUp: () => false,
+      },
+      1,
+    );
+    const s = new TalkSession(h.deps);
+    s.start();
+    for (let i = 0; i < 5; i++) await tick();
+    release('It is noon.');
+    for (let i = 0; i < 5; i++) await tick();
+    s.stop();
+    expect(submit).toHaveBeenNthCalledWith(2, 'and in Tokyo');
+    expect(h.deps.speak).toHaveBeenNthCalledWith(1, 'It is noon.');
+    expect(h.deps.speak).toHaveBeenNthCalledWith(2, 'In Tokyo it is 4 a.m.');
+  });
+
+  it('runs follow-ups handed back by the REPL as the next turn', async () => {
+    let release!: (v: string) => void;
+    const submit = vi
+      .fn()
+      .mockResolvedValue(null)
+      .mockImplementationOnce(() => new Promise<string>((r) => (release = r)))
+      .mockResolvedValueOnce('Done.');
+    const h = harness({ submit });
+    const s = new TalkSession(h.deps);
+    s.start();
+    for (let i = 0; i < 3; i++) await tick();
+    s.queueFollowUps(['  also check the deploy  ', ' ']);
+    release('It is noon.');
+    for (let i = 0; i < 5; i++) await tick();
+    s.stop();
+    expect(submit).toHaveBeenNthCalledWith(2, 'also check the deploy');
+  });
+
+  it('closes the follow-up mic before speaking', async () => {
+    let followLive = 0;
+    const h = harness();
+    const inner = h.deps.startMic;
+    const states: TalkState[] = [];
+    h.deps.onState = (st) => states.push(st);
+    h.deps.startMic = (onChunk, onError) => {
+      const following = states[states.length - 1] === 'thinking';
+      const m = following ? { stop: () => undefined } : inner(onChunk, onError);
+      if (following) followLive++;
+      return {
+        stop: () => {
+          if (following) followLive--;
+          m.stop();
+        },
+      };
+    };
+    h.deps.speak = vi.fn(async () => {
+      expect(followLive).toBe(0);
+    });
+    const s = new TalkSession(h.deps);
+    s.start();
+    for (let i = 0; i < 5; i++) await tick();
+    s.stop();
+    expect(h.deps.speak).toHaveBeenCalled();
   });
 });
