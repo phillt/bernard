@@ -21,6 +21,9 @@ import {
   removeProviderKey,
   getProviderKeyStatus,
   PROVIDER_ENV_VARS,
+  SERVICE_KEY_ENV_VARS,
+  getServiceKey,
+  getStoredKeyHint,
   OPTIONS_REGISTRY,
   resetOption,
   resetAllOptions,
@@ -56,6 +59,7 @@ import {
 import {
   resolveBackend,
   resolveWarmupPlayer,
+  isCloudVoiceBackend,
   VoiceService,
   type VoiceBackend,
 } from './voice-service.js';
@@ -128,6 +132,7 @@ import { initShellParser } from './permissions/shell-ast.js';
 import { App } from './ui/App.js';
 import { DimensionsProvider } from './ui/DimensionsContext.js';
 import { withFullScreen } from './ui/withFullScreen.js';
+import { setTerminalTitle } from './ui/terminal-title.js';
 import { getInkHandlers } from './ui/ink-handlers.js';
 import type {
   AskUserBatchResult,
@@ -822,6 +827,8 @@ async function runInkRepl(args: {
   // is gated by `config.mouse` (BERNARD_DISABLE_MOUSE). A non-TTY stdout
   // (piped / CI) never enters full-screen — the escapes would corrupt output.
   const fullScreen = fullScreenActive ? withFullScreen({ mouse: config.mouse }) : null;
+  // Name the tab while the REPL runs; handed back below, and on any exit.
+  const terminalTitle = setTerminalTitle('Bernard');
 
   const { waitUntilExit } = render(
     createElement(
@@ -856,6 +863,7 @@ async function runInkRepl(args: {
   );
 
   await waitUntilExit();
+  terminalTitle.restore();
   // Leave the alt buffer + disable mouse BEFORE cleanup(): cleanup prints via
   // printInfo / printError and that output must land on the restored normal
   // screen, not the about-to-be-discarded alt screen.
@@ -947,6 +955,15 @@ program
       }
     }
 
+    // Services hold a key in the same file but run no turns, so they are listed
+    // apart and never count toward "a provider is configured".
+    printInfo('\nServices:');
+    for (const [service, envVar] of Object.entries(SERVICE_KEY_ENV_VARS)) {
+      const hint = getStoredKeyHint(service);
+      const status = getServiceKey(service) ? '\u2713' : '\u2717';
+      printInfo(`  ${status} ${service} (${envVar})${hint ? ` \u2014 ****${hint}` : ''}`);
+    }
+
     if (statuses.some((s) => !s.hasKey)) {
       printInfo('\nTo add a key: bernard add-key <provider> <key>');
     }
@@ -956,6 +973,31 @@ program
       );
     }
   });
+
+program
+  .command('trace [session]')
+  .description(
+    "Show where a session's time went: every turn as a timed tree of agents, model calls and tool calls (needs BERNARD_DEBUG=1).",
+  )
+  .option('-t, --turn <id>', 'Only this turn (its number, or an id like turn-3)')
+  .option('-n, --last <n>', 'Only the last N turns', (v) => Number.parseInt(v, 10))
+  .option('--min-ms <ms>', 'Hide calls shorter than this', (v) => Number.parseInt(v, 10))
+  .option('-l, --list', 'List the turns instead of drawing them')
+  .option('--json', 'Print the trees as JSON')
+  .action(
+    async (
+      session: string | undefined,
+      opts: { turn?: string; last?: number; minMs?: number; list?: boolean; json?: boolean },
+    ) => {
+      const { traceLines } = await import('./trace/cli.js');
+      const { lines, error } = traceLines(session, opts);
+      for (const l of lines) console.log(l);
+      if (error) {
+        printError(error);
+        process.exitCode = 1;
+      }
+    },
+  );
 
 program
   .command('usage [sessionId]')
@@ -1870,7 +1912,13 @@ program
     } catch {
       // ignore — fall through to env/default
     }
-    const resolved = resolveBackend(process.platform, voiceBackend);
+    const { speechProviderUnavailable } = await import('./speech/registry.js');
+    const resolved = resolveBackend(
+      process.platform,
+      voiceBackend,
+      undefined,
+      (b) => speechProviderUnavailable(b, 'synthesize') === null,
+    );
     if (!resolved) {
       printError(
         'No TTS backend found. Install spd-say, espeak-ng, or espeak on Linux; ' +
@@ -1880,20 +1928,40 @@ program
     }
     printInfo(`TTS backend: ${resolved.backend} (${resolved.bin})`);
     printInfo(`Speaking: "${message}"`);
-    const svc = new VoiceService(resolved, {
-      player: resolveWarmupPlayer(process.platform),
-      ms: voiceWarmupMs,
+    // A cloud voice needs its vendor; the import is deferred so a local voice
+    // test still loads nothing but the TTS leaf.
+    const synthesize = isCloudVoiceBackend(resolved.backend)
+      ? (await import('./speech/registry.js')).synthesizerFor(resolved.backend)
+      : null;
+    const svc = new VoiceService(
+      resolved,
+      { player: resolveWarmupPlayer(process.platform), ms: voiceWarmupMs },
+      synthesize,
+    );
+    // The player child is unref()ed so it never holds a REPL open, and a cloud
+    // voice spends its first second waiting on the network with nothing else
+    // pending, so without this the process exits before a word is played.
+    const keepAlive = setInterval(() => undefined, 60_000);
+    const { speechLog, errorFields } = await import('./speech/log.js');
+    speechLog('voice-test:start', {
+      backend: resolved.backend,
+      bin: resolved.bin,
+      chars: message.length,
     });
     try {
       // Deterministic normalization only — this path deliberately constructs no
       // provider or model (it must work with no API key configured), and the
       // message is text the user typed themselves.
       await svc.speak(toLiteralSpeech(message), { voice: voiceVoice, rate: voiceRate });
+      speechLog('voice-test:end', {});
       printInfo('Done.');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
+      speechLog('voice-test:error', errorFields(err));
       printError(`TTS failed: ${msg}`);
       process.exit(1);
+    } finally {
+      clearInterval(keepAlive);
     }
   });
 

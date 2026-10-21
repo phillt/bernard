@@ -1,6 +1,7 @@
 import { Box } from 'ink';
 import { HintRow, KEY, HINT_CLOSE, type KeyHint } from './hints.js';
 import { OPTIONS_KEY, isAutomatic, type RemoteMessageMode } from '../remote-messages.js';
+import type { TalkState } from '../speech/conversation.js';
 
 interface HintBarProps {
   busy: boolean;
@@ -28,7 +29,21 @@ interface HintBarProps {
    * offered "…and on this profile" had nothing to open on.
    */
   remoteMode: RemoteMessageMode;
+  /**
+   * Talk mode's phase, or null when it is off. Shown ahead of everything but
+   * an overlay, busy or not: a live microphone is the one state this row must
+   * never leave unsaid.
+   */
+  talkState?: TalkState | null;
 }
+
+/** What each talk phase says. `listening` is the one that means "the mic is open". */
+const TALK_LABEL: Record<TalkState, string> = {
+  listening: 'listening',
+  transcribing: 'transcribing',
+  thinking: 'thinking',
+  speaking: 'speaking',
+};
 
 /**
  * Renders contextual keystroke hints in the bottom-left, mirroring StatusBar
@@ -44,6 +59,7 @@ export function HintBar({
   scrollable,
   pendingMessage,
   remoteMode,
+  talkState,
 }: HintBarProps) {
   return (
     <Box>
@@ -55,6 +71,7 @@ export function HintBar({
           scrollable,
           pendingMessage,
           remoteMode,
+          talkState,
         })}
       />
     </Box>
@@ -64,6 +81,12 @@ export function HintBar({
 function pickHints(state: HintBarProps): KeyHint[] {
   if (state.overlayActive) {
     return [HINT_CLOSE];
+  }
+  if (state.talkState) {
+    return [
+      { key: '●', label: TALK_LABEL[state.talkState] },
+      { key: KEY.esc, label: 'stop talking' },
+    ];
   }
   if (state.busy) {
     // The prompt is live during a turn (#202), and this row is the only thing

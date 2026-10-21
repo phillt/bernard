@@ -21,6 +21,8 @@ import { initShellParser } from './permissions/shell-ast.js';
 import { headlessToolOptions, type HeadlessPosture } from './headless-posture.js';
 import { clearDuplicateGuard } from './tools/duplicate-guard.js';
 import { ensureRunWorkspace } from './workspaces.js';
+import { runWithTurn } from './framework/dispatch-context.js';
+import { randomBytes } from 'node:crypto';
 
 export {
   resolvePosture,
@@ -204,7 +206,16 @@ function emptyMCPSnapshot(): AgentContextMCP {
  * severity to `critical` because a hung job was holding a scheduler slot —
  * neither of which is true of a script invocation.
  */
-export async function runHeadless<TInput, TFormatted>(
+export function runHeadless<TInput, TFormatted>(
+  opts: RunHeadlessOpts<TInput, TFormatted>,
+): Promise<RunHeadlessResult<TFormatted>> {
+  // A headless run is one turn for the trace: a cron run, a script action.
+  return runWithTurn(`run-${opts.debugLabel}-${randomBytes(3).toString('hex')}`, () =>
+    runHeadlessInScope(opts),
+  );
+}
+
+async function runHeadlessInScope<TInput, TFormatted>(
   opts: RunHeadlessOpts<TInput, TFormatted>,
 ): Promise<RunHeadlessResult<TFormatted>> {
   const { buildInput, posture, ragQuery, timeoutMs, log, debugLabel } = opts;

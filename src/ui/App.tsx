@@ -7,6 +7,8 @@ import {
   loadPreferences,
   PROVIDER_MODELS,
   saveProviderKey,
+  getStoredKeyHint,
+  getServiceKey,
   OPTIONS_REGISTRY,
   saveOption,
   getProviderKeyStatus,
@@ -167,6 +169,7 @@ import {
   type ParamDescriptor,
 } from '../providers/model-params.js';
 import { debugLog, getSessionId, getSessionLogPath, isDebugEnabled } from '../logger.js';
+import { errorFields, previewText, speechLog } from '../speech/log.js';
 import { SessionTelemetry } from '../session-telemetry.js';
 import { withSlot, getMaxConcurrentAgents, getActiveCount } from '../tools/agent-pool.js';
 import type {
@@ -249,9 +252,15 @@ import {
   resolveBackend,
   resolveWarmupPlayer,
   VOICE_BACKEND_VALUES,
+  isCloudVoiceBackend,
+  type SpeakOutcome,
   type VoiceBackend,
+  type CloudVoiceBackend,
   type ResolvedBackend,
 } from '../voice-service.js';
+import { synthesizerFor, transcriberFor, speechProviderUnavailable } from '../speech/registry.js';
+import { TalkSession, type TalkState } from '../speech/conversation.js';
+import { RECORD_RATE, resolveRecorder, startMic } from '../speech/recorder.js';
 import { toSpokenForm } from '../speech-normalizer.js';
 import { toLiteralSpeech } from '../speech-text.js';
 import { AppRegistry, bundledAppIds } from '../apps/registry.js';
@@ -262,6 +271,7 @@ import { isWildcardSource, type GrantableDirective } from '../host/csp-grant.js'
 import type { PermissionConsentRequest } from '../tools/types.js';
 import { deleteSpecialist } from '../specialist-lifecycle.js';
 import { clearDuplicateGuard } from '../tools/duplicate-guard.js';
+import { runWithTurn } from '../framework/dispatch-context.js';
 
 /**
  * Slash commands and overlays need direct access to the same stores the
@@ -448,11 +458,21 @@ type PendingDialog = PendingConfirm | PendingBlock;
  */
 let _voiceService: VoiceService | null = null;
 
+/** Whether a cloud voice has what it needs (a key) to be picked by `auto`. */
+function cloudVoiceReady(backend: CloudVoiceBackend): boolean {
+  return speechProviderUnavailable(backend, 'synthesize') === null;
+}
+
 function getVoiceService(cfg: import('../config.js').BernardConfig): VoiceService {
   if (!_voiceService) {
-    const resolved = resolveBackend(process.platform, cfg.voiceBackend);
+    const resolved = resolveBackend(process.platform, cfg.voiceBackend, undefined, cloudVoiceReady);
     const warmup = { player: resolveWarmupPlayer(process.platform), ms: cfg.voiceWarmupMs };
-    _voiceService = new VoiceService(resolved, warmup);
+    // A cloud voice is synthesized by its vendor and played locally; the
+    // service gets the vendor as a function so it never imports one. Keyed on
+    // the RESOLVED backend, since `auto` can land on a cloud voice too.
+    const synthesize =
+      resolved && isCloudVoiceBackend(resolved.backend) ? synthesizerFor(resolved.backend) : null;
+    _voiceService = new VoiceService(resolved, warmup, synthesize);
   }
   return _voiceService;
 }
@@ -494,6 +514,13 @@ const VOICE_SAMPLE = [
  *  between "none available" and "no backend available". */
 function describeBackend(resolved: ResolvedBackend | null): string {
   return resolved ? `${resolved.backend} (${resolved.bin})` : 'none available';
+}
+
+/** Where the ElevenLabs key comes from, without echoing more than its tail. */
+function elevenLabsKeyAnnotation(): string {
+  const hint = getStoredKeyHint('elevenlabs');
+  if (hint) return `= saved ****${hint}`;
+  return getServiceKey('elevenlabs') ? '= from ELEVENLABS_API_KEY' : '= not set';
 }
 
 /** Aborts a pending normalization. Deliberately does NOT tear down the service. */
@@ -923,7 +950,7 @@ const QUEUE_PREFIX_RE = /^\+(?:\s+|$)/;
  * correction the user is typing into their own turn, so it takes #202's
  * meaning — run after — and not #200's, which bare typed text now has.
  */
-const BUSY_ALLOWED_COMMANDS: readonly DispatchedCommand[] = ['/queue'];
+const BUSY_ALLOWED_COMMANDS: readonly DispatchedCommand[] = ['/queue', '/talk'];
 
 /**
  * Standalone toggles consolidated into `/agent-options` or `/options` in
@@ -1127,6 +1154,21 @@ export function App({
   // Synchronous guard against double-Enter: setBusy schedules a re-render but
   // a second submit can land before Prompt sees `disabled={busy}` flip.
   const submittingRef = useRef(false);
+  // Talk mode (`/talk`). The session is a ref because its callbacks outlive any
+  // one render; the state is what the hint bar shows.
+  const talkRef = useRef<TalkSession | null>(null);
+  const [talkState, setTalkState] = useState<TalkState | null>(null);
+  const talkNoticeShownRef = useRef(false);
+  /**
+   * `auto` moves readback to a cloud voice the moment its key is stored — often
+   * stored for transcription alone — so the first reply it speaks says so once,
+   * with the way back to a local voice.
+   */
+  const cloudVoiceNoticeShownRef = useRef(false);
+  // A live microphone must not outlive the REPL that opened it.
+  useEffect(() => () => talkRef.current?.stop(), []);
+  /** Numbers turns for the trace; `turn-<n>` reads in order in the session log. */
+  const turnSeqRef = useRef(0);
   /**
    * Turns waiting for the current one. A ref, not state: it is drained from
    * `runAgentTurn`'s `finally` and nothing renders from it directly, so making
@@ -1380,6 +1422,9 @@ export function App({
         // *after* `busy` clears, so the not-busy branch is the one that matters.
         // Both are no-ops when nothing is speaking or pending.
         cancelPendingSpeech();
+        // Esc ends talk mode before anything else, busy or not: a live
+        // microphone is the thing a person reaching for Esc most wants off.
+        if (talkRef.current) stopTalk('Talk mode off.');
         // The bare singleton, not `getVoiceService(config)`: that constructs on
         // first use, forking up to six `which` probes (~8 ms) inside a keystroke
         // handler — to stop a service that, never having been constructed,
@@ -2771,6 +2816,12 @@ export function App({
 
     if (is(text, '/tool-permissions')) {
       await runToolPermissionsMenu();
+      return;
+    }
+
+    if (is(text, '/talk')) {
+      if (talkRef.current) stopTalk('Talk mode off.');
+      else startTalk();
       return;
     }
 
@@ -4674,7 +4725,8 @@ export function App({
         item: {
           label: 'Backend',
           annotation: backendAnnotation,
-          description: 'Which TTS engine speaks. Auto detects one for this platform.',
+          description:
+            'Which TTS engine speaks. Auto uses ElevenLabs when its key is set, otherwise the one this platform has.',
         },
         action: async () => {
           const res = await requestMenu(
@@ -4782,6 +4834,42 @@ export function App({
             cancelPendingSpeech,
             persistVoice,
           ),
+      },
+
+      { kind: 'section', title: 'Talk mode' },
+      {
+        kind: 'item',
+        item: {
+          label: 'Talk mode',
+          annotation: `= ${talkRef.current ? 'on' : 'off'}`,
+          description: `Talk back and forth out loud: Bernard listens, answers, and listens again. Transcribed by ${config.voiceSttProvider}. Esc stops.`,
+        },
+        action: () => {
+          if (talkRef.current) stopTalk('Talk mode off.');
+          else startTalk();
+        },
+      },
+      {
+        kind: 'item',
+        item: {
+          label: 'ElevenLabs API key',
+          annotation: elevenLabsKeyAnnotation(),
+          description:
+            'Used for talk mode transcription and the elevenlabs voice. Stored in keys.json, like a provider key. Blank leaves it unchanged.',
+        },
+        action: async () => {
+          const res = await requestTextInput({ label: 'ElevenLabs API key' });
+          if (res.cancelled) return;
+          try {
+            saveProviderKey('elevenlabs', res.raw.trim());
+            // `auto` prefers a keyed cloud voice, so the key just changed
+            // which voice it resolves to.
+            resetVoiceService();
+            flashToast('ElevenLabs key saved.', 'success');
+          } catch (err) {
+            flashToast(err instanceof Error ? err.message : String(err), 'error');
+          }
+        },
       },
 
       { kind: 'section', title: 'Try it' },
@@ -5090,7 +5178,7 @@ export function App({
   async function startSpeech(
     writtenForm: string,
     hooks?: { onNormalized?: () => void; onError?: (message: string) => void },
-  ): Promise<void> {
+  ): Promise<SpeakOutcome> {
     cancelPendingSpeech();
     const ac = new AbortController();
     _speechAbort = ac;
@@ -5110,14 +5198,48 @@ export function App({
       // `_speechAbort !== ac` sits beside `aborted` deliberately: it makes "a
       // newer readback started" true without depending on abort-propagation
       // ordering.
-      if (ac.signal.aborted || _speechAbort !== ac) return;
-      if (!spoken.text) return;
+      if (ac.signal.aborted || _speechAbort !== ac) {
+        speechLog('speak:superseded', { stage: 'normalize' });
+        return 'cancelled';
+      }
+      if (!spoken.text) {
+        speechLog('speak:empty', { writtenChars: writtenForm.length });
+        return 'finished';
+      }
       if (spoken.normalized) hooks?.onNormalized?.();
-      await svc.speak(spoken.text, { voice: config.voiceVoice, rate: config.voiceRate });
+      const t0 = Date.now();
+      speechLog('speak:start', {
+        backend: svc.backend?.backend ?? null,
+        bin: svc.backend?.bin ?? null,
+        normalized: spoken.normalized,
+        chars: spoken.text.length,
+        text: previewText(spoken.text),
+      });
+      const backend = svc.backend?.backend;
+      if (
+        config.voiceBackend === 'auto' &&
+        backend &&
+        isCloudVoiceBackend(backend) &&
+        !cloudVoiceNoticeShownRef.current
+      ) {
+        cloudVoiceNoticeShownRef.current = true;
+        flashToast(
+          'Replies are spoken by ElevenLabs because its key is set. Pick a local backend in /voice to keep speech on this machine.',
+          'info',
+        );
+      }
+      const outcome = await svc.speak(spoken.text, {
+        voice: config.voiceVoice,
+        rate: config.voiceRate,
+      });
+      speechLog('speak:end', { outcome, ms: Date.now() - t0 });
+      return outcome;
     } catch (err) {
+      speechLog('speak:error', { backend: config.voiceBackend, ...errorFields(err) });
       // Never rethrow — TTS must not crash the REPL. A producer that wants the
       // failure visible (the menu's Preview row) passes `onError`.
       hooks?.onError?.(err instanceof Error ? err.message : String(err));
+      return 'cancelled';
     } finally {
       if (_speechAbort === ac) _speechAbort = null;
     }
@@ -5136,7 +5258,141 @@ export function App({
     });
   }
 
-  async function runAgentTurn(
+  /** Ends talk mode. `notice` is said once, as a toast. Idempotent. */
+  function stopTalk(notice?: string): void {
+    const session = talkRef.current;
+    talkRef.current = null;
+    setTalkState(null);
+    if (!session) return;
+    speechLog('talk:stop', { reason: notice ?? null });
+    session.stop();
+    _voiceService?.stop();
+    if (notice) flashToast(notice, 'info');
+  }
+
+  /**
+   * Starts talk mode: listen, transcribe, run a turn, speak the reply, listen
+   * again. Refuses up front, naming the fix, rather than opening a mic that
+   * cannot be heard or a loop that cannot answer.
+   */
+  function startTalk(): void {
+    if (talkRef.current) return;
+    const recorder = resolveRecorder(process.platform);
+    if (!recorder) {
+      speechLog('talk:refused', { reason: 'no-recorder', platform: process.platform });
+      flashToast(
+        process.platform === 'linux'
+          ? 'No microphone recorder found — install pw-record, parec or arecord.'
+          : 'Talk mode needs Linux for now (it records through PipeWire/PulseAudio).',
+        'error',
+      );
+      return;
+    }
+    const sttProblem = speechProviderUnavailable(config.voiceSttProvider, 'transcribe');
+    if (sttProblem) {
+      speechLog('talk:refused', { reason: 'stt-unavailable', error: sttProblem });
+      flashToast(sttProblem, 'error');
+      return;
+    }
+    if (!getVoiceService(config).backend) {
+      speechLog('talk:refused', { reason: 'no-voice', backend: config.voiceBackend });
+      flashToast('No voice to answer with — pick a backend in /voice.', 'error');
+      return;
+    }
+    const transcribe = transcriberFor(config.voiceSttProvider);
+    const session = new TalkSession({
+      rate: RECORD_RATE,
+      startMic: (onChunk, onError) => startMic(recorder, onChunk, onError),
+      transcribe: (samples, signal) => transcribe({ samples, rate: RECORD_RATE }, signal),
+      submit: async (text) => {
+        // A turn already running (something typed) is not interrupted; this
+        // utterance is dropped with a word rather than queued behind it.
+        if (submittingRef.current) {
+          speechLog('talk:dropped', { reason: 'turn-running', chars: text.length });
+          flashToast('Still working on the last request — say that again in a moment.', 'info');
+          return null;
+        }
+        const t0 = Date.now();
+        speechLog('talk:turn', { chars: text.length, text: previewText(text) });
+        // Anchored on this turn's own user message, by identity, not on a
+        // pre-turn history length: compression mid-turn shortens history, and
+        // a length taken before it would then find nothing to speak.
+        const prior = agent.getLastUserMessage();
+        await runAgentTurn(text);
+        const history = agent.getHistory();
+        const anchor = agent.getLastUserMessage();
+        const from = anchor && anchor !== prior ? history.lastIndexOf(anchor) : -1;
+        for (let i = history.length - 1; from >= 0 && i > from; i--) {
+          if (history[i].role === 'assistant') {
+            const reply = extractTextFromContent(history[i].content);
+            speechLog('talk:reply', { ms: Date.now() - t0, chars: reply.length });
+            return reply;
+          }
+        }
+        speechLog('talk:reply', { ms: Date.now() - t0, chars: 0, missing: true });
+        return null;
+      },
+      // Said while the turn runs: the same door as text typed mid-turn (#200).
+      // Anything the turn never reaches comes back through `queueFollowUps`.
+      followUp: (text) => {
+        if (!submittingRef.current) return false;
+        agent.interject(text);
+        speechLog('talk:follow-up', { chars: text.length, text: previewText(text) });
+        flashToast('Heard — Bernard will see it before the next step.', 'success');
+        return true;
+      },
+      speak: (text) =>
+        startSpeech(text, { onError: (m) => flashToast(`Could not speak: ${m}`, 'error') }),
+      onState: (state) => {
+        speechLog('talk:state', { state });
+        if (talkRef.current === session) setTalkState(state);
+      },
+      onError: (message) => {
+        speechLog('talk:error', { error: message });
+        flashToast(message, 'error');
+      },
+      onEnded: (reason) => {
+        speechLog('talk:ended', { reason });
+        if (talkRef.current !== session) return;
+        talkRef.current = null;
+        setTalkState(null);
+        flashToast(reason, 'info');
+      },
+    });
+    talkRef.current = session;
+    speechLog('talk:start', {
+      recorder,
+      stt: config.voiceSttProvider,
+      backend: config.voiceBackend,
+      voice: config.voiceVoice ?? null,
+    });
+    if (!talkNoticeShownRef.current) {
+      talkNoticeShownRef.current = true;
+      flashToast(
+        'Talk mode on. What you say is sent to ElevenLabs to transcribe. Esc stops.',
+        'info',
+      );
+    }
+    session.start();
+  }
+
+  /**
+   * One turn, as one trace scope: everything below — the pre-turn passes, the
+   * main dispatch, every tool call and sub-agent — is stamped with this id, so
+   * `bernard trace` can lay a turn out as a tree.
+   */
+  function runAgentTurn(
+    input: string,
+    images?: ImageAttachment[],
+    extra?: { data?: UntrustedData; announced?: boolean },
+  ): Promise<void> {
+    turnSeqRef.current += 1;
+    return runWithTurn(`turn-${turnSeqRef.current}`, () =>
+      runAgentTurnInScope(input, images, extra),
+    );
+  }
+
+  async function runAgentTurnInScope(
     input: string,
     images?: ImageAttachment[],
     extra?: { data?: UntrustedData; announced?: boolean },
@@ -5317,7 +5573,8 @@ export function App({
       }
       turnCompleted = !controller.signal.aborted;
       // Voice TTS readback: speak the last assistant response if voiceTts is on.
-      if (turnCompleted && config.voiceTts) {
+      // Talk mode speaks its own replies, so the readback would say it twice.
+      if (turnCompleted && config.voiceTts && !talkRef.current) {
         const history = agent.getHistory();
         let lastMsg: (typeof history)[number] | undefined;
         for (let i = history.length - 1; i >= 0; i--) {
@@ -5519,7 +5776,13 @@ export function App({
       // and says so. After an interrupt it does NOT run — Esc means stop, and
       // starting a turn off a correction to the work just stopped would undo
       // that. The words are one ↑ away either way, since `Prompt` recorded them.
-      if (undelivered.length > 0 && !controller.signal.aborted) {
+      // In talk mode they go back to the talk loop instead, which runs them
+      // after speaking this reply — a queued turn here would answer silently.
+      const talk = talkRef.current;
+      if (undelivered.length > 0 && !controller.signal.aborted && talk) {
+        talk.queueFollowUps(undelivered);
+        speechLog('talk:follow-up-deferred', { count: undelivered.length });
+      } else if (undelivered.length > 0 && !controller.signal.aborted) {
         for (const text of undelivered) requestTurn({ text, source: { kind: 'user' } });
         flashToast(
           plural(
@@ -6303,6 +6566,7 @@ export function App({
           scrollable={fullScreen}
           pendingMessage={pendingMessage !== null}
           remoteMode={config.remoteMessages}
+          talkState={talkState}
         />
         <StatusBar agent={agent} />
       </Box>

@@ -34,6 +34,7 @@ import {
 } from './tool-permissions.js';
 import type { AppCspGrant } from './host/csp-grant.js';
 import type { VoiceBackend } from './voice-service.js';
+import type { SpeechProviderId } from './speech/ids.js';
 
 /** Slug pattern + length cap used for profile ids. */
 const ID_PATTERN = /^[a-z][a-z0-9_-]*$/;
@@ -160,6 +161,8 @@ export interface ProfileSettings {
    * unconditional. Speech path only; the transcript stays literal.
    */
   voiceNormalizer?: boolean;
+  /** Speech-to-text vendor for talk mode (`/talk`). */
+  voiceSttProvider?: SpeechProviderId;
   memoryConsolidation?: boolean;
   specialistRecall?: boolean;
   /**

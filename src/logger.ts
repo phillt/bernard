@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { SESSION_LOGS_DIR } from './paths.js';
 import { pruneFileGroupsByMtime } from './jsonl.js';
+import { getTraceContext } from './framework/dispatch-context.js';
 
 const MAX_SESSIONS = 50;
 
@@ -89,10 +90,15 @@ export function debugLog(label: string, data: unknown): void {
   }
 
   const sessionId = getSessionId();
+  // Where this happened — turn, dispatch, parent, tool call — stamped here
+  // rather than by each caller, so no event can be left out of the tree. Absent
+  // outside any scope (startup, MCP connect), which is the true answer.
+  const trace = getTraceContext();
   const entry = JSON.stringify({
     timestamp: new Date().toISOString(),
     sessionId,
     label,
+    ...(trace ? { trace } : {}),
     data,
   });
   fs.appendFileSync(getSessionLogPath(), entry + '\n');

@@ -46,6 +46,42 @@ import {
 } from './voice-service.js';
 
 describe('resolveBackend', () => {
+  describe('auto with a cloud voice', () => {
+    const has = (bins: string[]) => (b: string) => bins.includes(b);
+
+    it('picks a keyed cloud voice over the local engine', () => {
+      expect(resolveBackend('linux', 'auto', has(['spd-say', 'pw-play']), () => true)).toEqual({
+        backend: 'elevenlabs',
+        bin: 'pw-play',
+      });
+    });
+
+    it('keeps the local engine when the cloud voice has no key', () => {
+      expect(resolveBackend('linux', 'auto', has(['spd-say', 'pw-play']), () => false)).toEqual({
+        backend: 'spd-say',
+        bin: 'spd-say',
+      });
+    });
+
+    it('keeps the local engine when nothing can play cloud audio', () => {
+      expect(resolveBackend('linux', 'auto', has(['spd-say']), () => true)).toEqual({
+        backend: 'spd-say',
+        bin: 'spd-say',
+      });
+      expect(resolveBackend('darwin', 'auto', has([]), () => true)).toEqual({
+        backend: 'macos-say',
+        bin: 'say',
+      });
+    });
+
+    it('never overrides an explicitly chosen local backend', () => {
+      expect(resolveBackend('linux', 'espeak', has(['espeak', 'pw-play']), () => true)).toEqual({
+        backend: 'espeak',
+        bin: 'espeak',
+      });
+    });
+  });
+
   it('returns macos-say on darwin with auto', () => {
     const result = resolveBackend('darwin', 'auto');
     expect(result).toEqual({ backend: 'macos-say', bin: 'say' });
@@ -225,8 +261,9 @@ describe('VOICE_BACKEND_VALUES', () => {
 
 describe('VoiceService', () => {
   it('resolves without error when no backend', async () => {
+    // Nothing was said, so a talk loop must not treat it as a finished reply.
     const svc = new VoiceService(null);
-    await expect(svc.speak('hello')).resolves.toBeUndefined();
+    await expect(svc.speak('hello')).resolves.toBe('cancelled');
   });
 
   it('stop() is a no-op when nothing playing', () => {
@@ -293,5 +330,50 @@ describe('VoiceService', () => {
       mockState.autoClose = true;
       vi.useRealTimers();
     }
+  });
+});
+
+describe('cloud voice (elevenlabs)', () => {
+  it('resolves to a local player, or to nothing without one', () => {
+    expect(resolveBackend('linux', 'elevenlabs', (b) => b === 'paplay')).toEqual({
+      backend: 'elevenlabs',
+      bin: 'paplay',
+    });
+    expect(resolveBackend('linux', 'elevenlabs', () => false)).toBeNull();
+  });
+
+  it('synthesizes, then plays the PCM through the player as raw audio', async () => {
+    spawnCalls.length = 0;
+    const synthesize = vi.fn(async () => ({ samples: new Int16Array([1, 2]), rate: 22050 }));
+    const svc = new VoiceService({ backend: 'elevenlabs', bin: 'pw-play' }, null, synthesize);
+    await expect(svc.speak('hello', { voice: 'v1' })).resolves.toBe('finished');
+    expect(synthesize).toHaveBeenCalledWith('hello', expect.objectContaining({ voice: 'v1' }));
+    expect(spawnCalls).toEqual([
+      { bin: 'pw-play', args: ['--rate', '22050', '--channels', '1', '--format', 's16', '-'] },
+    ]);
+  });
+
+  it('a stop during synthesis cancels before anything plays', async () => {
+    spawnCalls.length = 0;
+    let release!: () => void;
+    const synthesize = vi.fn(
+      (_t: string, o: { signal: AbortSignal }) =>
+        new Promise<{ samples: Int16Array; rate: number }>((resolve, reject) => {
+          o.signal.addEventListener('abort', () => reject(new Error('aborted')));
+          release = () => resolve({ samples: new Int16Array(2), rate: 22050 });
+        }),
+    );
+    const svc = new VoiceService({ backend: 'elevenlabs', bin: 'pw-play' }, null, synthesize);
+    const said = svc.speak('hello');
+    await Promise.resolve();
+    svc.stop();
+    release();
+    await expect(said).resolves.toBe('cancelled');
+    expect(spawnCalls).toEqual([]);
+  });
+
+  it('says so when no vendor was supplied', async () => {
+    const svc = new VoiceService({ backend: 'elevenlabs', bin: 'pw-play' }, null);
+    await expect(svc.speak('hello')).rejects.toThrow(/No speech provider/);
   });
 });

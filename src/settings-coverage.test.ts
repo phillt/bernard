@@ -80,6 +80,7 @@ const NOT_IN_SETUP: Readonly<Record<string, string>> = {
   voiceBackend: '`auto` is right until it is not, and then you are debugging — `/voice`',
   voiceRate: 'words per minute means nothing unheard — `/voice`',
   voiceWarmupMs: 'a PipeWire troubleshooting knob, not a first-run choice — `/voice`',
+  voiceSttProvider: 'one vendor today, and it needs a key first — `/voice`',
   // Not a preference at all: the set of first-use hints already announced
   // (#583). Nobody sets it, and the only thing a wizard row could do with it is
   // clear it — a question about what you have already been told.

@@ -19,6 +19,8 @@ import {
   blankToUndefined,
   resolveProviderAndModel,
   defaultProviderErrorMessage,
+  getServiceKey,
+  SERVICE_KEY_ENV_VARS,
 } from './config.js';
 import type { BernardConfig } from './config.js';
 
@@ -189,6 +191,51 @@ describe('saveProviderKey', () => {
     const writtenData = JSON.parse(fsMock.writeFileSync.mock.calls[0][1] as string);
     expect(writtenData.anthropic).toBe('existing-key');
     expect(writtenData.openai).toBe('sk-openai-test');
+  });
+});
+
+describe('service keys', () => {
+  const saved = process.env.ELEVENLABS_API_KEY;
+  beforeEach(() => {
+    delete process.env.ELEVENLABS_API_KEY;
+    fsMock.readFileSync.mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+  });
+  afterEach(() => {
+    if (saved === undefined) delete process.env.ELEVENLABS_API_KEY;
+    else process.env.ELEVENLABS_API_KEY = saved;
+  });
+
+  it('saves an ElevenLabs key through the provider-key door', () => {
+    saveProviderKey('elevenlabs', 'xi-test');
+    expect(fsMock.writeFileSync).toHaveBeenCalledWith(
+      expect.stringContaining('keys.json'),
+      expect.stringContaining('"elevenlabs": "xi-test"'),
+    );
+  });
+
+  it('reads keys.json before the environment', () => {
+    process.env.ELEVENLABS_API_KEY = 'from-env';
+    expect(getServiceKey('elevenlabs')).toBe('from-env');
+    fsMock.readFileSync.mockReturnValue(JSON.stringify({ elevenlabs: 'stored' }));
+    expect(getServiceKey('elevenlabs')).toBe('stored');
+  });
+
+  it('answers undefined for an unknown service or no key, never throws', () => {
+    expect(getServiceKey('elevenlabs')).toBeUndefined();
+    expect(getServiceKey('nope')).toBeUndefined();
+  });
+
+  it('never counts as an LLM provider', () => {
+    // The setup hub's "at least one keyed provider" check and the default-
+    // provider pick both read this list; a speech key must satisfy neither.
+    fsMock.readFileSync.mockReturnValue(JSON.stringify({ elevenlabs: 'stored' }));
+    const names = getProviderKeyStatus().map((s) => s.provider);
+    for (const service of Object.keys(SERVICE_KEY_ENV_VARS)) {
+      expect(names).not.toContain(service);
+      expect(PROVIDER_ENV_VARS[service]).toBeUndefined();
+    }
   });
 });
 
