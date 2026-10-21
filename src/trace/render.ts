@@ -4,8 +4,10 @@ import type { Span, Turn, TurnSummary } from './build.js';
 export function formatMs(ms: number): string {
   if (ms < 1000) return `${Math.round(ms)} ms`;
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`;
-  const m = Math.floor(ms / 60_000);
-  const s = Math.round((ms % 60_000) / 1000);
+  // Round once, then split: rounding the remainder alone printed `1m 60s`.
+  const total = Math.round(ms / 1000);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
   return `${m}m ${String(s).padStart(2, '0')}s`;
 }
 

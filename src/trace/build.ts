@@ -63,7 +63,18 @@ export function buildTraces(rows: readonly LogRow[]): Turn[] {
     string,
     Span & { turnId?: string; parentDispatchId?: string; parentToolCallId?: string }
   >();
+  // Keyed by a sequence, never by the provider's tool-call id alone: an
+  // OpenAI-compatible local server can hand out `call_0` on every step, so the
+  // raw id is not unique even within one dispatch. `liveTool` maps
+  // dispatch + call id to the most recent call that started under it, which is
+  // the one any later event in that scope belongs to.
   const tools = new Map<string, Span & { dispatchId?: string }>();
+  const liveTool = new Map<string, string>();
+  const toolScope = (dispatchId: string | undefined, callId: string): string =>
+    `${dispatchId ?? ''}\u0000${callId}`;
+  const toolFor = (dispatchId: string | undefined, callId: string | undefined) =>
+    callId === undefined ? undefined : liveTool.get(toolScope(dispatchId, callId));
+  let toolSeq = 0;
   const http = new Map<
     string,
     { start: number; dispatchId?: string; toolCallId?: string; host?: string; turnId?: string }
@@ -119,7 +130,7 @@ export function buildTraces(rows: readonly LogRow[]): Turn[] {
           open: true,
           turnId: tr.turnId,
           parentDispatchId: tr.parentDispatchId,
-          parentToolCallId: tr.parentToolCallId,
+          parentToolCallId: toolFor(tr.parentDispatchId, tr.parentToolCallId),
         });
         break;
       }
@@ -139,7 +150,9 @@ export function buildTraces(rows: readonly LogRow[]): Turn[] {
       }
       case 'tool:call:start': {
         if (!tr.toolCallId) break;
-        tools.set(tr.toolCallId, {
+        const uid = String(toolSeq++);
+        liveTool.set(toolScope(tr.dispatchId, tr.toolCallId), uid);
+        tools.set(uid, {
           ...span('tool', str(d.tool) ?? 'tool', t, t),
           open: true,
           dispatchId: tr.dispatchId,
@@ -147,7 +160,7 @@ export function buildTraces(rows: readonly LogRow[]): Turn[] {
         break;
       }
       case 'tool:call:end': {
-        const node = tools.get(tr.toolCallId ?? '');
+        const node = tools.get(toolFor(tr.dispatchId, tr.toolCallId) ?? '');
         if (!node) break;
         node.end = t;
         node.open = false;
@@ -155,7 +168,7 @@ export function buildTraces(rows: readonly LogRow[]): Turn[] {
         break;
       }
       case 'tool:execute:end': {
-        const node = tools.get(tr.toolCallId ?? '');
+        const node = tools.get(toolFor(tr.dispatchId, tr.toolCallId) ?? '');
         if (!node) break;
         const ms = num(d.durationMs);
         if (ms !== undefined) node.execMs = ms;
@@ -168,7 +181,7 @@ export function buildTraces(rows: readonly LogRow[]): Turn[] {
         http.set(reqId, {
           start: t,
           dispatchId: tr.dispatchId ?? str(d.dispatchId),
-          toolCallId: tr.toolCallId,
+          toolCallId: toolFor(tr.dispatchId, tr.toolCallId),
           host: str(d.host),
         });
         break;
@@ -310,9 +323,16 @@ export function summarizeTurn(turn: Turn): TurnSummary {
       // is the model's, not something holding them apart.
       const ends = s.stepEnds ?? [];
       let from = s.start;
+      let first = true;
       for (const end of [...ends, Number.POSITIVE_INFINITY]) {
-        const inStep = s.children.filter((c) => c.start >= from && c.start <= end);
+        // Half-open after the first step, so a child starting exactly on a
+        // `step:end` belongs to that step and is not counted again in the next.
+        const lo = from;
+        const inStep = s.children.filter(
+          (c) => (first ? c.start >= lo : c.start > lo) && c.start <= end,
+        );
         from = end;
+        first = false;
         const model = inStep.find((c) => c.kind === 'model');
         const after = model ? model.end - 5 : Number.NEGATIVE_INFINITY;
         const run = inStep.filter((c) => c.kind === 'tool' && c.start >= after);

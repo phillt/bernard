@@ -31,8 +31,12 @@ export function listSessionLogs(dir = SESSION_LOGS_DIR): string[] {
 }
 
 export function readLogRows(file: string): LogRow[] {
+  return parseLogRows(fs.readFileSync(file, 'utf8'));
+}
+
+function parseLogRows(text: string): LogRow[] {
   const rows: LogRow[] = [];
-  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+  for (const line of text.split('\n')) {
     if (!line.trim()) continue;
     try {
       rows.push(JSON.parse(line) as LogRow);
@@ -47,7 +51,11 @@ export function readLogRows(file: string): LogRow[] {
  * Resolves `session` to a log file: a path, a session id, an id prefix, or —
  * when omitted — the newest session that has a traced turn in it.
  */
-export function resolveSessionLog(session?: string): { file?: string; error?: string } {
+export function resolveSessionLog(session?: string): {
+  file?: string;
+  rows?: LogRow[];
+  error?: string;
+} {
   if (session && fs.existsSync(session)) return { file: session };
   const logs = listSessionLogs();
   if (logs.length === 0) {
@@ -58,7 +66,12 @@ export function resolveSessionLog(session?: string): { file?: string; error?: st
     return hit ? { file: hit } : { error: `No session log matches "${session}".` };
   }
   for (const f of logs.slice(0, 30)) {
-    if (buildTraces(readLogRows(f)).length > 0) return { file: f };
+    // A log written before turns were stamped has no `turnId` anywhere; skip it
+    // on a substring test instead of parsing and building every line of it.
+    const text = fs.readFileSync(f, 'utf8');
+    if (!text.includes('"turnId"')) continue;
+    const rows = parseLogRows(text);
+    if (buildTraces(rows).length > 0) return { file: f, rows };
   }
   return {
     error:
@@ -80,9 +93,9 @@ export function traceLines(
   session: string | undefined,
   opts: TraceOptions,
 ): { lines: string[]; error?: string } {
-  const { file, error } = resolveSessionLog(session);
+  const { file, rows, error } = resolveSessionLog(session);
   if (!file) return { lines: [], error };
-  const turns = buildTraces(readLogRows(file));
+  const turns = buildTraces(rows ?? readLogRows(file));
   const picked = pickTurns(turns, opts);
   const lines = [`session ${path.basename(file, '.jsonl')}`];
   if (picked.length === 0) {

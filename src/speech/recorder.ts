@@ -58,8 +58,8 @@ export interface MicHandle {
  *
  * stdin is `'ignore'`, never inherited: Ink owns `process.stdin`, and a second
  * reader on it would steal keystrokes (`useRawKeys.ts` explains how). stderr is
- * ignored too, because a recorder's warnings would otherwise land in the frame
- * Ink is drawing.
+ * piped, never inherited, because a recorder's warnings would otherwise land in
+ * the frame Ink is drawing.
  */
 export function startMic(
   recorder: Recorder,
@@ -106,8 +106,12 @@ export function startMic(
       bytes,
       ...(tail ? { stderr: tail } : {}),
     });
-    if (!stopped && code !== 0) {
-      onError(new Error(`${bin} exited with code ${code}${tail ? `: ${tail}` : ''}`));
+    // Any exit we did not ask for is a dead mic, code 0 included: a recorder
+    // whose source device was unplugged can exit cleanly, and staying silent
+    // would leave the hint bar saying "listening" to nothing.
+    if (!stopped) {
+      const how = code === 0 ? 'stopped on its own' : `exited with code ${code ?? signal}`;
+      onError(new Error(`${bin} ${how}${tail ? `: ${tail}` : ''}`));
     }
     child = null;
   });

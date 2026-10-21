@@ -250,6 +250,37 @@ describe('TalkSession', () => {
     expect(submit).toHaveBeenNthCalledWith(2, 'also check the deploy');
   });
 
+  it('speaks the reply without waiting on a follow-up still being transcribed', async () => {
+    let release!: (v: string) => void;
+    let finishFollowUp!: (v: string) => void;
+    const h = harness(
+      {
+        transcribe: vi
+          .fn()
+          .mockResolvedValue('')
+          .mockResolvedValueOnce('what time is it')
+          .mockImplementationOnce(() => new Promise<string>((r) => (finishFollowUp = r))),
+        submit: vi
+          .fn()
+          .mockResolvedValue(null)
+          .mockImplementationOnce(() => new Promise<string>((r) => (release = r))),
+        followUp: () => false,
+      },
+      1,
+    );
+    const s = new TalkSession(h.deps);
+    s.start();
+    for (let i = 0; i < 5; i++) await tick();
+    release('It is noon.');
+    for (let i = 0; i < 3; i++) await tick();
+    expect(h.deps.speak).toHaveBeenCalledWith('It is noon.');
+    finishFollowUp('and in Tokyo');
+    for (let i = 0; i < 3; i++) await tick();
+    s.stop();
+    // Still held over and run next, after the reply.
+    expect(h.deps.submit).toHaveBeenNthCalledWith(2, 'and in Tokyo');
+  });
+
   it('closes the follow-up mic before speaking', async () => {
     let followLive = 0;
     const h = harness();

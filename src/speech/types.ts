@@ -14,10 +14,14 @@ export interface SynthesizeOptions {
   /** Vendor voice id; the vendor's default when absent. */
   voice?: string;
   signal?: AbortSignal;
+  /** How long the request may take; the vendor module's default when absent. */
+  timeoutMs?: number;
 }
 
 export interface TranscribeOptions {
   signal?: AbortSignal;
+  /** How long the request may take; the vendor module's default when absent. */
+  timeoutMs?: number;
 }
 
 export interface SpeechProvider {

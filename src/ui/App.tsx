@@ -1159,6 +1159,12 @@ export function App({
   const talkRef = useRef<TalkSession | null>(null);
   const [talkState, setTalkState] = useState<TalkState | null>(null);
   const talkNoticeShownRef = useRef(false);
+  /**
+   * `auto` moves readback to a cloud voice the moment its key is stored — often
+   * stored for transcription alone — so the first reply it speaks says so once,
+   * with the way back to a local voice.
+   */
+  const cloudVoiceNoticeShownRef = useRef(false);
   // A live microphone must not outlive the REPL that opened it.
   useEffect(() => () => talkRef.current?.stop(), []);
   /** Numbers turns for the trace; `turn-<n>` reads in order in the session log. */
@@ -5209,6 +5215,19 @@ export function App({
         chars: spoken.text.length,
         text: previewText(spoken.text),
       });
+      const backend = svc.backend?.backend;
+      if (
+        config.voiceBackend === 'auto' &&
+        backend &&
+        isCloudVoiceBackend(backend) &&
+        !cloudVoiceNoticeShownRef.current
+      ) {
+        cloudVoiceNoticeShownRef.current = true;
+        flashToast(
+          'Replies are spoken by ElevenLabs because its key is set. Pick a local backend in /voice to keep speech on this machine.',
+          'info',
+        );
+      }
       const outcome = await svc.speak(spoken.text, {
         voice: config.voiceVoice,
         rate: config.voiceRate,
@@ -5295,10 +5314,15 @@ export function App({
         }
         const t0 = Date.now();
         speechLog('talk:turn', { chars: text.length, text: previewText(text) });
-        const before = agent.getHistory().length;
+        // Anchored on this turn's own user message, by identity, not on a
+        // pre-turn history length: compression mid-turn shortens history, and
+        // a length taken before it would then find nothing to speak.
+        const prior = agent.getLastUserMessage();
         await runAgentTurn(text);
         const history = agent.getHistory();
-        for (let i = history.length - 1; i >= before; i--) {
+        const anchor = agent.getLastUserMessage();
+        const from = anchor && anchor !== prior ? history.lastIndexOf(anchor) : -1;
+        for (let i = history.length - 1; from >= 0 && i > from; i--) {
           if (history[i].role === 'assistant') {
             const reply = extractTextFromContent(history[i].content);
             speechLog('talk:reply', { ms: Date.now() - t0, chars: reply.length });

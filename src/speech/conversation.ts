@@ -248,14 +248,15 @@ export class TalkSession {
     const reply = await this.deps.submit(text).catch(() => null);
     this.turnRunning = false;
     this.closeFollowMic();
-    // A follow-up still being transcribed lands in `pending`, not in a turn
-    // that has already ended.
-    while (this.inflight.size > 0) await Promise.all([...this.inflight]);
     if (this.stopped) return;
     if (reply?.trim()) {
       this.deps.onState('speaking');
       await this.deps.speak(reply).catch(() => undefined);
     }
+    // A follow-up still being transcribed lands in `pending`, not in a turn
+    // that has already ended. Awaited after speaking, not before: its audio is
+    // already captured, and only the next turn needs the text.
+    while (this.inflight.size > 0) await Promise.all([...this.inflight]);
     if (this.stopped) return;
     const next = this.pending.splice(0);
     if (next.length > 0) {

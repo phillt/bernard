@@ -24,6 +24,47 @@ export const ELEVENLABS_DEFAULT_VOICE = 'JBFqnCBsd6RMkjVDRZzb';
  */
 const TTS_RATE = 22050;
 const MAX_DETAIL_CHARS = 300;
+/**
+ * How long one request may take, body included. The session's own signal only
+ * fires on Esc, so without this a service that accepts the POST and never
+ * answers holds talk mode on "transcribing" forever.
+ */
+export const ELEVENLABS_REQUEST_TIMEOUT_MS = 60_000;
+/**
+ * The shape of an ElevenLabs voice id. `voiceVoice` is shared with the local
+ * engines, where it holds a name like `Daniel` or `en-us+f3`; sent as a voice
+ * id, that fails every utterance. Anything else falls back to the default.
+ */
+const VOICE_ID = /^[A-Za-z0-9]{20}$/;
+
+export function elevenLabsVoice(voice: string | undefined): string {
+  const named = voice?.trim() ?? '';
+  return VOICE_ID.test(named) ? named : ELEVENLABS_DEFAULT_VOICE;
+}
+
+/** The caller's signal plus the request clock, with a timeout that says so. */
+async function request(
+  fetchImpl: typeof fetch,
+  url: string,
+  init: RequestInit,
+  opts: { signal?: AbortSignal; timeoutMs?: number },
+  read: (res: Response) => Promise<unknown>,
+): Promise<unknown> {
+  const { signal } = opts;
+  const ms = opts.timeoutMs ?? ELEVENLABS_REQUEST_TIMEOUT_MS;
+  const clock = AbortSignal.timeout(ms);
+  const combined = signal ? AbortSignal.any([signal, clock]) : clock;
+  try {
+    const res = await fetchImpl(url, { ...init, signal: combined });
+    if (!res.ok) throw await failure(res);
+    return await read(res);
+  } catch (err) {
+    if (clock.aborted && !signal?.aborted) {
+      throw new Error(`ElevenLabs did not answer within ${ms / 1000} s (timed out).`);
+    }
+    throw err;
+  }
+}
 
 async function failure(res: Response): Promise<SpeechProviderError> {
   let detail = '';
@@ -41,22 +82,19 @@ export async function synthesize(
   opts: SynthesizeOptions = {},
   fetchImpl: typeof fetch = fetch,
 ): Promise<Pcm> {
-  // A blank voice means "the default", so an empty string falls through too.
-  const named = opts.voice?.trim();
-  const voice = encodeURIComponent(
-    named !== undefined && named.length > 0 ? named : ELEVENLABS_DEFAULT_VOICE,
-  );
-  const res = await fetchImpl(
+  const voice = encodeURIComponent(elevenLabsVoice(opts.voice));
+  const buf = (await request(
+    fetchImpl,
     `${ELEVENLABS_API}/v1/text-to-speech/${voice}?output_format=pcm_${TTS_RATE}`,
     {
       method: 'POST',
       headers: { 'xi-api-key': apiKey, 'content-type': 'application/json' },
       body: JSON.stringify({ text, model_id: ELEVENLABS_TTS_MODEL }),
-      signal: opts.signal,
     },
-  );
-  if (!res.ok) throw await failure(res);
-  const bytes = new Uint8Array(await res.arrayBuffer());
+    opts,
+    (res) => res.arrayBuffer(),
+  )) as ArrayBuffer;
+  const bytes = new Uint8Array(buf);
   // Copy into an aligned buffer: an Int16Array view needs an even offset, and
   // a trailing odd byte (never expected, but this is a network body) is dropped.
   const aligned = new Uint8Array(bytes.length & ~1);
@@ -81,14 +119,13 @@ export async function transcribe(
     new Blob([new Uint8Array(pcmToWav(audio.samples, audio.rate))], { type: 'audio/wav' }),
     'speech.wav',
   );
-  const res = await fetchImpl(`${ELEVENLABS_API}/v1/speech-to-text`, {
-    method: 'POST',
-    headers: { 'xi-api-key': apiKey },
-    body: form,
-    signal: opts.signal,
-  });
-  if (!res.ok) throw await failure(res);
-  const body = (await res.json()) as { text?: unknown };
+  const body = (await request(
+    fetchImpl,
+    `${ELEVENLABS_API}/v1/speech-to-text`,
+    { method: 'POST', headers: { 'xi-api-key': apiKey }, body: form },
+    opts,
+    (res) => res.json(),
+  )) as { text?: unknown };
   return typeof body.text === 'string' ? body.text.trim() : '';
 }
 

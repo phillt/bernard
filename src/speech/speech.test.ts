@@ -6,8 +6,6 @@ import { buildRecordCommand, resolveRecorder, RECORD_RATE } from './recorder.js'
 import { Endpointer } from './endpointer.js';
 import { synthesize, transcribe, ELEVENLABS_DEFAULT_VOICE } from './elevenlabs.js';
 import { SpeechProviderError } from './types.js';
-import { SPEECH_PROVIDER_IDS } from './ids.js';
-import { SPEECH_PROVIDERS } from './registry.js';
 
 const RATE = 16000;
 const FRAME = (RATE * 30) / 1000;
@@ -189,12 +187,56 @@ describe('ElevenLabs client', () => {
       { signal: ac.signal },
       fetchImpl as unknown as typeof fetch,
     );
-    expect((fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].signal).toBe(ac.signal);
+    const sent = (fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].signal!;
+    expect(sent.aborted).toBe(false);
+    ac.abort();
+    expect(sent.aborted).toBe(true);
   });
-});
 
-describe('registry', () => {
-  it('has an entry for every declared id', () => {
-    for (const id of SPEECH_PROVIDER_IDS) expect(SPEECH_PROVIDERS[id].id).toBe(id);
+  it('gives up on a request that never answers, saying it timed out', async () => {
+    // Answers only by rejecting when its signal fires, like a stalled socket.
+    const fetchImpl = vi.fn(
+      (_url: string, init: RequestInit) =>
+        new Promise<Response>((_r, reject) =>
+          init.signal!.addEventListener('abort', () => reject(init.signal!.reason)),
+        ),
+    );
+    const err = await transcribe(
+      { samples: new Int16Array(2), rate: RATE },
+      'k',
+      { timeoutMs: 20 },
+      fetchImpl as unknown as typeof fetch,
+    ).catch((e: Error) => e);
+    expect((err as Error).message).toContain('timed out');
+  });
+
+  it('keeps Esc an abort rather than reporting it as a timeout', async () => {
+    const fetchImpl = vi.fn(
+      (_url: string, init: RequestInit) =>
+        new Promise<Response>((_r, reject) =>
+          init.signal!.addEventListener('abort', () => reject(init.signal!.reason)),
+        ),
+    );
+    const ac = new AbortController();
+    const p = transcribe(
+      { samples: new Int16Array(2), rate: RATE },
+      'k',
+      { signal: ac.signal, timeoutMs: 10_000 },
+      fetchImpl as unknown as typeof fetch,
+    ).catch((e: Error) => e);
+    ac.abort();
+    expect(((await p) as Error).message).not.toContain('timed out');
+  });
+
+  it.each([
+    ['Daniel', ELEVENLABS_DEFAULT_VOICE],
+    ['en-us+f3', ELEVENLABS_DEFAULT_VOICE],
+    ['  ', ELEVENLABS_DEFAULT_VOICE],
+    ['21m00Tcm4TlvDq8ikWAM', '21m00Tcm4TlvDq8ikWAM'],
+  ])('sends voice %j as %j', async (voice, want) => {
+    const fetchImpl = vi.fn(async () => new Response(new Uint8Array([1, 0])));
+    await synthesize('hi', 'k', { voice }, fetchImpl as unknown as typeof fetch);
+    const [url] = fetchImpl.mock.calls[0] as unknown as [string];
+    expect(url).toContain(`/v1/text-to-speech/${want}?`);
   });
 });

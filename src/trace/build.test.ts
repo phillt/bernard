@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildTraces, summarizeTurn, type LogRow } from './build.js';
-import { renderSummary, renderTurn } from './render.js';
+import { formatMs, renderSummary, renderTurn } from './render.js';
 
 const T0 = Date.parse('2026-10-20T20:00:00.000Z');
 const at = (ms: number): string => new Date(T0 + ms).toISOString();
@@ -162,7 +162,69 @@ describe('buildTraces', () => {
   });
 });
 
+describe('buildTraces with a reused tool-call id', () => {
+  // An OpenAI-compatible local server can name every call `call_0`.
+  it('keeps each call and hangs a helper off the call it ran under', () => {
+    const turn = { turnId: 'turn-1' };
+    const main = { ...turn, dispatchId: 'main1' };
+    const call = { ...main, toolCallId: 'call_0' };
+    const rows = [
+      row(0, 'agent:dispatch:start', main, { dispatchId: 'main1', site: 'main' }),
+      row(10, 'tool:call:start', call, { tool: 'web_read' }),
+      row(20, 'tool:call:end', call, { tool: 'web_read', ok: true }),
+      row(30, 'step:end', main, { dispatchId: 'main1', n: 1 }),
+      row(40, 'tool:call:start', call, { tool: 'subagent' }),
+      row(
+        50,
+        'agent:dispatch:start',
+        { ...turn, dispatchId: 'sub1', parentDispatchId: 'main1', parentToolCallId: 'call_0' },
+        { dispatchId: 'sub1', site: 'sub' },
+      ),
+      row(60, 'agent:dispatch:end', { ...turn, dispatchId: 'sub1' }, { dispatchId: 'sub1' }),
+      row(70, 'tool:call:end', call, { tool: 'subagent', ok: true }),
+      row(80, 'agent:dispatch:end', main, { dispatchId: 'main1' }),
+    ];
+    const [t] = buildTraces(rows);
+    const m = t.children.find((c) => c.kind === 'dispatch')!;
+    const tools = m.children.filter((c) => c.kind === 'tool');
+    expect(tools.map((c) => c.name)).toEqual(['web_read', 'subagent']);
+    expect(tools[0].children).toEqual([]);
+    expect(tools[1].children.map((c) => c.name)).toEqual(['sub']);
+  });
+});
+
+describe('formatMs', () => {
+  it.each([
+    [850, '850 ms'],
+    [4700, '4.7 s'],
+    [61_000, '1m 01s'],
+    [119_700, '2m 00s'],
+  ])('%d → %s', (ms, want) => {
+    expect(formatMs(ms)).toBe(want);
+  });
+});
+
 describe('summarizeTurn', () => {
+  it('counts a tool that starts on a step boundary in one step only', () => {
+    const turn = { turnId: 'turn-1' };
+    const d = { ...turn, dispatchId: 'd1' };
+    const t = (id: string) => ({ ...d, toolCallId: id });
+    const rows = [
+      row(0, 'agent:dispatch:start', d, { dispatchId: 'd1', site: 'main' }),
+      row(1, 'http:request:start', d, { reqId: 'r1', dispatchId: 'd1' }),
+      row(50, 'http:response:end', d, { reqId: 'r1' }),
+      row(100, 'step:end', d, { dispatchId: 'd1', n: 1 }),
+      row(100, 'tool:call:start', t('a'), { tool: 'a' }),
+      row(100, 'tool:call:start', t('b'), { tool: 'b' }),
+      row(200, 'tool:execute:end', t('a'), { durationMs: 100 }),
+      row(200, 'tool:call:end', t('a'), { ok: true }),
+      row(300, 'tool:execute:end', t('b'), { durationMs: 100 }),
+      row(300, 'tool:call:end', t('b'), { ok: true }),
+      row(310, 'agent:dispatch:end', d, { dispatchId: 'd1' }),
+    ];
+    expect(summarizeTurn(buildTraces(rows)[0]).serialGroups).toHaveLength(1);
+  });
+
   it('splits the time by kind and finds the serial step', () => {
     const s = summarizeTurn(buildTraces(emailTurn())[0]);
     expect(s.preTurnMs).toBe(1500);
