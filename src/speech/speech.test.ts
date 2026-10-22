@@ -287,6 +287,21 @@ describe('ElevenLabs client', () => {
     expect(sent.voice_settings).toEqual({ style: 0.3 });
   });
 
+  it('reads a voice’s stored settings once per account, not once per voice id', async () => {
+    clearElevenLabsCache();
+    const fetchImpl = vi.fn(async (url: string) =>
+      url.endsWith('/settings')
+        ? Response.json({ stability: 0.4 })
+        : new Response(new Uint8Array([1, 0])),
+    );
+    const opts = { tuning: { style: 0.3 } };
+    await synthesize('a', 'key-one', opts, fetchImpl as unknown as typeof fetch);
+    await synthesize('b', 'key-one', opts, fetchImpl as unknown as typeof fetch);
+    await synthesize('c', 'key-two', opts, fetchImpl as unknown as typeof fetch);
+    const reads = fetchImpl.mock.calls.filter(([u]) => (u as string).endsWith('/settings'));
+    expect(reads).toHaveLength(2);
+  });
+
   it('lists voices with their traits, skipping malformed entries', async () => {
     const fetchImpl = vi.fn(async () =>
       Response.json({

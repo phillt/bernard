@@ -161,21 +161,27 @@ async function storedSettings(
   signal: AbortSignal | undefined,
   fetchImpl: typeof fetch,
 ): Promise<Record<string, unknown>> {
-  const cached = storedSettingsCache.get(voiceId);
+  // Keyed by key AND voice: a voice id means a different voice's settings
+  // under another account, and a key changed in `/voice` must not inherit the
+  // last one's. Memory only; the key never leaves this map.
+  const cacheKey = `${apiKey}\u0000${voiceId}`;
+  const cached = storedSettingsCache.get(cacheKey);
   if (cached) return cached;
   try {
     const body = (await request(
       fetchImpl,
       `${ELEVENLABS_API}/v1/voices/${encodeURIComponent(voiceId)}/settings`,
       { method: 'GET', headers: { 'xi-api-key': apiKey } },
-      { signal, timeoutMs: 10_000 },
+      // Short: this sits in front of the first utterance per voice, and a
+      // settings read that hangs is worth less than speaking on time.
+      { signal, timeoutMs: 3_000 },
       (res) => res.json(),
     )) as Record<string, unknown>;
     const keep: Record<string, unknown> = {};
     for (const k of ['stability', 'similarity_boost', 'style', 'use_speaker_boost', 'speed']) {
       if (body && body[k] !== undefined && body[k] !== null) keep[k] = body[k];
     }
-    storedSettingsCache.set(voiceId, keep);
+    storedSettingsCache.set(cacheKey, keep);
     return keep;
   } catch {
     if (signal?.aborted) throw new DOMException('This operation was aborted', 'AbortError');

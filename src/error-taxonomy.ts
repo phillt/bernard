@@ -580,21 +580,23 @@ export function isDispatchCancellation(err: unknown): boolean {
   // input (providers and MCP servers build these) and a cycle would hang the
   // catch handler. Eight is far past any real nesting here.
   //
-  // A provider stall stops the walk. The first-byte guard ends a silent
-  // request by aborting its own fetch, so the `AbortError` that fetch rejects
-  // with is the stall error's `cause` — and walking past the stall found it
-  // and read a provider that never answered as the user pressing Esc. That
-  // unwound every dispatch above it, so one silent request ended the whole
-  // turn where the parent should have been handed a failed tool call it can
-  // work around. A stall the RUNNER fired carries `DISPATCH_ABORT_NAME` on the
-  // stall error itself, which the name test reaches first, so that deliberate
-  // unwind is unchanged.
+  // A provider stall anywhere in the chain means the work FAILED, never that
+  // it was cancelled — and it is checked first, ahead of the name test,
+  // because both kinds of stall carry something that reads as a cancellation.
+  // The first-byte guard ends a silent request by aborting its own fetch, so
+  // its error's `cause` is an `AbortError`; and a stall the runner fires
+  // itself (mid-stream, or the non-streaming liveness guard) is named
+  // `DISPATCH_ABORT_NAME`, as is the exhausted-retries error wrapping it.
+  // Read as cancellations, either unwound every dispatch above it and ended
+  // the whole turn where the parent should have been handed a failed tool
+  // call it can work around. What still unwinds is the user's Esc (an
+  // `AbortError` with no stall behind it) and the operator's own wall clock,
+  // `BERNARD_DISPATCH_TIMEOUT_MS`, which carries the name and no stall brand.
+  if (providerStallInfo(err)) return false;
   return (
-    findInCauseChain(err, (e) => {
-      if (e.name === 'AbortError' || e.name === DISPATCH_ABORT_NAME) return true;
-      if ((e as { [PROVIDER_STALL]?: ProviderStallInfo })[PROVIDER_STALL]) return false;
-      return null;
-    }) ?? false
+    findInCauseChain(err, (e) =>
+      e.name === 'AbortError' || e.name === DISPATCH_ABORT_NAME ? true : null,
+    ) ?? false
   );
 }
 

@@ -5,6 +5,7 @@ import {
   providerErrorDetail,
   isDispatchCancellation,
   DISPATCH_ABORT_NAME,
+  markProviderStall,
   failureMarker,
   parseFailureMarker,
   classifyToolFailure,
@@ -216,6 +217,20 @@ describe('isDispatchCancellation', () => {
     const own = new Error('Provider stream timed out — no data received for 120000 ms');
     own.name = DISPATCH_ABORT_NAME;
     expect(isDispatchCancellation(own)).toBe(true);
+  });
+
+  it('does NOT treat a stall the runner fired as a cancellation, wrapped or not', () => {
+    // A sub-agent's own liveness or mid-stream stall must reach its parent as a
+    // failed tool call, not unwind the parent's whole turn.
+    const stall = markProviderStall(new Error('Provider stream timed out'), {
+      phase: 'dispatch',
+      producedOutput: false,
+    });
+    stall.name = DISPATCH_ABORT_NAME;
+    expect(isDispatchCancellation(stall)).toBe(false);
+    const exhausted = new Error('Provider timed out and did not recover', { cause: stall });
+    exhausted.name = DISPATCH_ABORT_NAME;
+    expect(isDispatchCancellation(exhausted)).toBe(false);
   });
 
   it('does NOT treat a provider timeout as a cancellation', () => {

@@ -48,7 +48,16 @@ function harness(over: Partial<DictationDeps> = {}) {
     feed?.(quiet());
     for (let i = 0; i < 3; i++) await tick();
   };
-  return { deps, states, texts, say, opens: () => opens, micOpen: () => feed !== null };
+  const feedQuiet = () => feed?.(quiet());
+  return {
+    deps,
+    states,
+    texts,
+    say,
+    feedQuiet,
+    opens: () => opens,
+    micOpen: () => feed !== null,
+  };
 }
 
 describe('DictationSession', () => {
@@ -117,6 +126,25 @@ describe('DictationSession', () => {
     await h.say();
     s.stop();
     expect(h.texts).toEqual(['hello there']);
+  });
+
+  it('does not stop on a long silence while Bernard is working', async () => {
+    const h = harness({
+      endpointer: { endSilenceMs: 60, startMs: 30, prerollMs: 30, noSpeechMs: 300, minLevel: 100 },
+    });
+    const s = new DictationSession(h.deps);
+    s.start();
+    s.setBusy(true);
+    for (let i = 0; i < 3; i++) {
+      await new Promise((r) => setTimeout(r, 0));
+      // ~0.4 s of room noise each, past the 300 ms silence budget every time.
+      h.feedQuiet();
+    }
+    expect(h.deps.onEnded).not.toHaveBeenCalled();
+    // ...and still does once the turn is over and the silence goes on.
+    s.setBusy(false);
+    h.feedQuiet();
+    expect(h.deps.onEnded).toHaveBeenCalledWith(expect.stringContaining('long silence'));
   });
 
   it('gives up after repeated transcription failures, saying why', async () => {

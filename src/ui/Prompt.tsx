@@ -121,7 +121,7 @@ interface PromptProps {
    * private constants.
    */
   renderAbove?: (budget: PromptAboveBudget) => ReactNode;
-  /** Where dictation hands its text in (`/dictate`). See {@link DictationDoor}. */
+  /** Where dictation hands its text in (plain `/talk`). See {@link DictationDoor}. */
   dictation?: DictationDoor;
 }
 

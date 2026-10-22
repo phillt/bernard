@@ -533,7 +533,6 @@ function elevenLabsKeyAnnotation(): string {
   return getServiceKey('elevenlabs') ? '= from ELEVENLABS_API_KEY' : '= not set';
 }
 
-/** Aborts a pending normalization. Deliberately does NOT tear down the service. */
 /**
  * Cloud voice ids → names, filled when the picker lists them, so the `/voice`
  * row shows "Rachel" rather than a 20-character id. Per process; an id not yet
@@ -541,6 +540,7 @@ function elevenLabsKeyAnnotation(): string {
  */
 const cloudVoiceNames = new Map<string, string>();
 
+/** Aborts a pending normalization. Deliberately does NOT tear down the service. */
 function cancelPendingSpeech(): void {
   _speechAbort?.abort();
   _speechAbort = null;
@@ -1204,6 +1204,12 @@ export function App({
     gen: 0,
     pending: 0,
   }).current;
+  // Dictation keeps listening through a long turn; it needs to know one is
+  // running, or two minutes of waiting would read as the person leaving.
+  useEffect(() => {
+    dictateRef.current?.setBusy(busy);
+  }, [busy]);
+
   // A live microphone must not outlive the REPL that opened it.
   useEffect(
     () => () => {
@@ -1513,7 +1519,7 @@ export function App({
     new Narrator((text) => {
       if (!narrateRef.current || (!dictateRef.current && !talkRef.current)) return;
       speechLog('talk:narrate', { chars: text.length, text: previewText(text) });
-      void speakQueued(text);
+      void speakQueued(text, { literal: true });
     }),
   ).current;
   useEffect(() => {
@@ -2904,7 +2910,20 @@ export function App({
         return;
       }
       const narrate = !flags.includes('minimal');
-      if (flags.includes('hands-free')) startTalk(narrate);
+      const handsFree = flags.includes('hands-free');
+      // Already in the mode asked for: only the narration flag can change, so
+      // change it and say so, rather than return quietly having done nothing.
+      if (handsFree ? talkRef.current : dictateRef.current) {
+        setNarration(narrate);
+        flashToast(
+          narrate
+            ? 'Narration on — Bernard says what it is doing.'
+            : 'Narration off — replies only.',
+          'info',
+        );
+        return;
+      }
+      if (handsFree) startTalk(narrate);
       else startDictate(narrate);
       return;
     }
@@ -5405,7 +5424,17 @@ export function App({
    */
   async function startSpeech(
     writtenForm: string,
-    hooks?: { onNormalized?: () => void; onError?: (message: string) => void },
+    hooks?: {
+      onNormalized?: () => void;
+      onError?: (message: string) => void;
+      /**
+       * Speak the deterministic form only, skipping the LLM normalizer. For
+       * talk mode's narrated lines: a few plain words each, one per step, so a
+       * billed round trip per line would buy nothing and hold up the reply
+       * queued behind them.
+       */
+      literal?: boolean;
+    },
   ): Promise<SpeakOutcome> {
     cancelPendingSpeech();
     const ac = new AbortController();
@@ -5417,12 +5446,9 @@ export function App({
       // overlapped nothing; putting an LLM call in front of it would otherwise
       // add the two together on every voiced turn.
       svc.prewarm();
-      const spoken = await toSpokenForm(
-        writtenForm,
-        config,
-        ac.signal,
-        makeOutOfTurnUsageRecorder(agent),
-      );
+      const spoken = hooks?.literal
+        ? { text: toLiteralSpeech(writtenForm), normalized: false }
+        : await toSpokenForm(writtenForm, config, ac.signal, makeOutOfTurnUsageRecorder(agent));
       // `_speechAbort !== ac` sits beside `aborted` deliberately: it makes "a
       // newer readback started" true without depending on abort-propagation
       // ordering.
@@ -5619,6 +5645,10 @@ export function App({
     );
     talkNoticeShownRef.current = true;
     session.start();
+    // Started while a reply is still playing: the mic would hear it, and the
+    // queue only closes mics when it goes from idle to busy.
+    if (speechQueue.pending > 0) session.pause();
+    session.setBusy(submittingRef.current);
   }
 
   /**
@@ -5728,7 +5758,15 @@ export function App({
         'info',
       );
     }
-    session.start();
+    // Started while a reply is still playing: hands-free opens its main mic
+    // at once and has no pause, so it starts listening once speech is done.
+    if (speechQueue.pending > 0) {
+      void speechQueue.tail.then(() => {
+        if (talkRef.current === session) session.start();
+      });
+    } else {
+      session.start();
+    }
   }
 
   /**

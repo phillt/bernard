@@ -4,7 +4,7 @@ import { spokenText } from './conversation.js';
 import { speechLog } from './log.js';
 
 /**
- * Dictation (`/dictate`): speech goes into the composer, and nothing runs
+ * Dictation (plain `/talk`): speech goes into the composer, and nothing runs
  * until the person presses Enter. Talk mode submits the moment an utterance
  * ends, and an utterance ends at the first long-enough pause — which is often
  * mid-thought, so a sentence arrived as a turn half-said. Here a pause only
@@ -47,6 +47,8 @@ export class DictationSession {
   private mic: MicHandle | null = null;
   private stopped = false;
   private paused = false;
+  /** Bernard is working on a turn; silence then is not the person leaving. */
+  private busy = false;
   private failures = 0;
   /** Transcriptions not yet delivered, chained so they deliver in order. */
   private queue: Promise<void> = Promise.resolve();
@@ -69,6 +71,16 @@ export class DictationSession {
     this.stopped = true;
     this.closeMic();
     this.abort.abort();
+  }
+
+  /**
+   * Tells the session a turn is running. The long-silence stop is for a mic
+   * nobody is using; a person waiting on Bernard is silent because they are
+   * waiting, and stopping talk mode under them would be the opposite of
+   * helpful. The silence clock restarts once the turn is over.
+   */
+  setBusy(busy: boolean): void {
+    this.busy = busy;
   }
 
   /** Closes the mic until `resume()`. Pieces already captured still arrive. */
@@ -105,7 +117,7 @@ export class DictationSession {
     if (this.stopped || this.paused) return;
     // A fresh endpointer per open: it re-calibrates the room, and its silence
     // clock starts over, so time spent paused is not counted as silence.
-    const endpointer = new Endpointer({ rate: this.deps.rate, ...this.deps.endpointer });
+    let endpointer = new Endpointer({ rate: this.deps.rate, ...this.deps.endpointer });
     let dead = false;
     const handle = this.deps.startMic(
       (pcm) => {
@@ -113,6 +125,13 @@ export class DictationSession {
         for (const e of endpointer.push(pcm)) {
           if (e.type === 'utterance') this.enqueue(e.samples);
           if (e.type === 'no-speech') {
+            // While a turn runs, start the clock again rather than stop: no
+            // speech was in progress (that is what `no-speech` means), so a
+            // fresh endpointer loses nothing.
+            if (this.busy) {
+              endpointer = new Endpointer({ rate: this.deps.rate, ...this.deps.endpointer });
+              return;
+            }
             dead = true;
             this.end('Stopped dictating after a long silence.');
             return;

@@ -1,4 +1,4 @@
-import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
+import { spawn, execFile, execFileSync, type ChildProcess } from 'node:child_process';
 import type { VoiceTuning } from './speech/tuning.js';
 import { cloudSpeedFor, localTempoFor } from './voice-speed.js';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -313,10 +313,10 @@ export async function changeTempo(
   pcm: Pcm,
   tempo: number,
   run: (bin: string, args: string[], input: Buffer) => Promise<Buffer | null> = runFilter,
-  hasBin: (bin: string) => boolean = defaultHasBin,
+  hasBin: (bin: string) => boolean | Promise<boolean> = hasBinAsync,
 ): Promise<Pcm> {
   if (tempo === 1 || pcm.samples.length === 0) return pcm;
-  ffmpegPresent ??= hasBin('ffmpeg');
+  ffmpegPresent ??= await hasBin('ffmpeg');
   if (!ffmpegPresent) return pcm;
   const { bin, args } = buildTempoCommand(pcm.rate, tempo);
   const input = Buffer.from(pcm.samples.buffer, pcm.samples.byteOffset, pcm.samples.byteLength);
@@ -325,6 +325,21 @@ export async function changeTempo(
   const aligned = new Uint8Array(out.length & ~1);
   aligned.set(out.subarray(0, aligned.length));
   return { samples: new Int16Array(aligned.buffer), rate: pcm.rate };
+}
+
+/**
+ * `defaultHasBin` without blocking: it is `execFileSync`, fine for a one-off
+ * at startup and wrong on the speak path, where it would hold the render loop
+ * for the length of a `which` spawn.
+ */
+function hasBinAsync(bin: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    try {
+      execFile('which', [bin], (err) => resolve(!err));
+    } catch {
+      resolve(false);
+    }
+  });
 }
 
 /** For tests: forget whether ffmpeg was found. */
