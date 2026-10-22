@@ -269,6 +269,7 @@ function makeAgent(
     getLastVerification: () => null,
     abort: () => {},
     setAlertContext: () => {},
+    setVoiceNarration: () => {},
     setSpinnerStats: () => {},
     beginTurnStats: () => {},
     finalizeTurnStats: () => undefined,
@@ -773,7 +774,7 @@ describe('<App> /voice menu (#432)', () => {
     await submit(stdin, '/voice');
     const frame = stripAnsi(lastFrame() ?? '');
     expect(frame).toContain('Voice —');
-    for (const row of ['Speech', 'Backend', 'Voice', 'Rate', 'Sink warmup', 'Natural speech']) {
+    for (const row of ['Speech', 'Backend', 'Voice', 'Speed', 'Sink warmup', 'Natural speech']) {
       expect(frame).toContain(row);
     }
     unmount();

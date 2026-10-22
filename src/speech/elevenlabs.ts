@@ -5,7 +5,9 @@ import {
   type SpeechProvider,
   type SynthesizeOptions,
   type TranscribeOptions,
+  type VoiceInfo,
 } from './types.js';
+import { isUntuned, type VoiceTuning } from './tuning.js';
 
 /**
  * ElevenLabs over its REST API with Node's built-in `fetch` — no SDK, so the
@@ -36,6 +38,11 @@ export const ELEVENLABS_REQUEST_TIMEOUT_MS = 60_000;
  * id, that fails every utterance. Anything else falls back to the default.
  */
 const VOICE_ID = /^[A-Za-z0-9]{20}$/;
+
+/** ElevenLabs accepts a speed of 0.7–1.2 and rejects anything outside it. */
+function clampSpeed(speed: number): number {
+  return Math.min(1.2, Math.max(0.7, speed));
+}
 
 export function elevenLabsVoice(voice: string | undefined): string {
   const named = voice?.trim() ?? '';
@@ -82,14 +89,20 @@ export async function synthesize(
   opts: SynthesizeOptions = {},
   fetchImpl: typeof fetch = fetch,
 ): Promise<Pcm> {
-  const voice = encodeURIComponent(elevenLabsVoice(opts.voice));
+  const voiceId = elevenLabsVoice(opts.voice);
+  const voice = encodeURIComponent(voiceId);
+  const settings = await voiceSettingsFor(voiceId, apiKey, opts, fetchImpl);
   const buf = (await request(
     fetchImpl,
     `${ELEVENLABS_API}/v1/text-to-speech/${voice}?output_format=pcm_${TTS_RATE}`,
     {
       method: 'POST',
       headers: { 'xi-api-key': apiKey, 'content-type': 'application/json' },
-      body: JSON.stringify({ text, model_id: ELEVENLABS_TTS_MODEL }),
+      body: JSON.stringify({
+        text,
+        model_id: ELEVENLABS_TTS_MODEL,
+        ...(settings ? { voice_settings: settings } : {}),
+      }),
     },
     opts,
     (res) => res.arrayBuffer(),
@@ -100,6 +113,115 @@ export async function synthesize(
   const aligned = new Uint8Array(bytes.length & ~1);
   aligned.set(bytes.subarray(0, aligned.length));
   return { samples: new Int16Array(aligned.buffer), rate: TTS_RATE };
+}
+
+/**
+ * The `voice_settings` to send, or `undefined` to send none and let the voice
+ * speak as stored.
+ *
+ * Sent only when something differs from the voice's own, and then MERGED onto
+ * the voice's stored settings: the API takes `voice_settings` as a whole
+ * replacement, so sending only `speed` would reset stability and similarity
+ * to ElevenLabs' defaults and change how a carefully tuned voice sounds. The
+ * stored settings are read once per voice per process. If that read fails
+ * (a key without voice permissions), only the fields asked for are sent —
+ * the request still works, it just may not keep the voice's own tuning.
+ */
+async function voiceSettingsFor(
+  voiceId: string,
+  apiKey: string,
+  opts: SynthesizeOptions,
+  fetchImpl: typeof fetch,
+): Promise<Record<string, unknown> | undefined> {
+  const speedSet = opts.speed !== undefined && opts.speed !== 1;
+  if (!speedSet && isUntuned(opts.tuning)) return undefined;
+  const base = await storedSettings(voiceId, apiKey, opts.signal, fetchImpl);
+  return {
+    ...base,
+    ...tuningFields(opts.tuning),
+    ...(speedSet ? { speed: clampSpeed(opts.speed as number) } : {}),
+  };
+}
+
+/** Bernard's names to ElevenLabs' field names; unset fields are left out. */
+function tuningFields(t: VoiceTuning | undefined): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (t?.stability !== undefined) out.stability = t.stability;
+  if (t?.similarity !== undefined) out.similarity_boost = t.similarity;
+  if (t?.style !== undefined) out.style = t.style;
+  if (t?.speakerBoost !== undefined) out.use_speaker_boost = t.speakerBoost;
+  return out;
+}
+
+const storedSettingsCache = new Map<string, Record<string, unknown>>();
+
+async function storedSettings(
+  voiceId: string,
+  apiKey: string,
+  signal: AbortSignal | undefined,
+  fetchImpl: typeof fetch,
+): Promise<Record<string, unknown>> {
+  const cached = storedSettingsCache.get(voiceId);
+  if (cached) return cached;
+  try {
+    const body = (await request(
+      fetchImpl,
+      `${ELEVENLABS_API}/v1/voices/${encodeURIComponent(voiceId)}/settings`,
+      { method: 'GET', headers: { 'xi-api-key': apiKey } },
+      { signal, timeoutMs: 10_000 },
+      (res) => res.json(),
+    )) as Record<string, unknown>;
+    const keep: Record<string, unknown> = {};
+    for (const k of ['stability', 'similarity_boost', 'style', 'use_speaker_boost', 'speed']) {
+      if (body && body[k] !== undefined && body[k] !== null) keep[k] = body[k];
+    }
+    storedSettingsCache.set(voiceId, keep);
+    return keep;
+  } catch {
+    if (signal?.aborted) throw new DOMException('This operation was aborted', 'AbortError');
+    return {};
+  }
+}
+
+/** For tests: forget what was read about each voice. */
+export function clearElevenLabsCache(): void {
+  storedSettingsCache.clear();
+}
+
+/**
+ * Every voice this key can use — the stock library plus the account's own
+ * clones and generated voices. Needs the key's "Voices: read" permission; a
+ * restricted key without it gets a 401 naming `missing_permissions`, which the
+ * caller turns into a sentence about the permission rather than a bare status.
+ */
+export async function listVoices(
+  apiKey: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<VoiceInfo[]> {
+  const body = (await request(
+    fetchImpl,
+    `${ELEVENLABS_API}/v1/voices`,
+    { method: 'GET', headers: { 'xi-api-key': apiKey } },
+    {},
+    (res) => res.json(),
+  )) as { voices?: unknown };
+  const voices = Array.isArray(body.voices) ? body.voices : [];
+  const out: VoiceInfo[] = [];
+  for (const v of voices as Record<string, unknown>[]) {
+    if (typeof v?.voice_id !== 'string' || typeof v.name !== 'string') continue;
+    const labels = v.labels && typeof v.labels === 'object' ? v.labels : {};
+    const traits = ['accent', 'age', 'gender', 'description', 'descriptive', 'use_case']
+      .map((k) => (labels as Record<string, unknown>)[k])
+      .filter((t): t is string => typeof t === 'string' && t.trim() !== '')
+      .map((t) => t.replace(/_/g, ' '));
+    out.push({
+      id: v.voice_id,
+      name: v.name,
+      traits: [...new Set(traits)],
+      category: typeof v.category === 'string' ? v.category : undefined,
+    });
+  }
+  return out;
 }
 
 export async function transcribe(
@@ -135,4 +257,5 @@ export const elevenLabs: SpeechProvider = {
   keyName: 'elevenlabs',
   synthesize: (text, key, opts) => synthesize(text, key, opts),
   transcribe: (audio, key, opts) => transcribe(audio, key, opts),
+  listVoices: (key) => listVoices(key),
 };

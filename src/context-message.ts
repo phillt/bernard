@@ -1,4 +1,5 @@
 import type { CoreMessage } from './framework/sdk.js';
+import { VOICE_NARRATION_GUIDANCE } from './speech/narrator.js';
 import type { MemoryStore } from './memory.js';
 import type { RAGSearchResult } from './rag.js';
 import type { RoutineSummary } from './routines.js';
@@ -48,6 +49,13 @@ export interface ContextMessageInputs {
   specialistMatches?: SpecialistMatch[];
   resolvedReferences?: ResolvedEntry[];
   alertContext?: string;
+  /**
+   * Narrated talk mode is on: the user hears each step announced, so the
+   * model is asked for one short spoken sentence before each tool step. Here
+   * rather than in the system prompt so starting and stopping talk mode does
+   * not change the cached prefix (#269).
+   */
+  voiceNarration?: boolean;
   /**
    * Per-turn ProvenanceStore — populated by retrieval tools and the Agent
    * class (RAG hits). Rendered as `<available_sources>` so the model knows
@@ -153,6 +161,10 @@ export function buildContextMessage(inputs: ContextMessageInputs): CoreMessage |
       render: () => renderResolvedReferences(inputs.resolvedReferences),
     },
     { tag: 'alert_context', render: () => renderAlertContext(inputs.alertContext) },
+    {
+      tag: 'voice_mode',
+      render: () => (inputs.voiceNarration ? VOICE_NARRATION_GUIDANCE : null),
+    },
     { tag: 'available_sources', render: () => renderAvailableSources(inputs.provenance) },
   ];
 

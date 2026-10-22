@@ -6,6 +6,7 @@ import {
   wordRight,
   wrapRows,
   windowBuffer,
+  insertWordsAt,
 } from '../line-geometry.js';
 
 /**
@@ -149,5 +150,18 @@ describe('wrapRows / windowBuffer', () => {
     const w = windowBuffer(b, 100, 10, 3);
     expect(w.text.split('\n')).toHaveLength(3);
     expect(w.above).toBe(7);
+  });
+});
+
+describe('insertWordsAt', () => {
+  it.each([
+    ['', 0, 'hello there', 'hello there', 11],
+    ['check the', 9, 'deploy log', 'check the deploy log', 20],
+    ['check the ', 10, 'deploy', 'check the deploy', 16],
+    ['the log', 3, 'deploy', 'the deploy log', 10],
+    ['fix it', 0, 'please', 'please fix it', 6],
+    ['abc', 3, '   ', 'abc', 3],
+  ])('%j at %i + %j → %j', (buffer, cursor, text, want, wantCursor) => {
+    expect(insertWordsAt(buffer, cursor, text)).toEqual({ buffer: want, cursor: wantCursor });
   });
 });

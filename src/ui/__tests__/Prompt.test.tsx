@@ -801,3 +801,33 @@ describe('<Prompt> with a pinned plan inside the border', () => {
     expect(frame).toContain('11-');
   });
 });
+
+describe('Prompt dictation door', () => {
+  it('puts dictated words in the buffer and sends nothing until Enter', async () => {
+    const onSubmit = vi.fn();
+    const door = { insert: null as ((t: string) => void) | null, held: [] as string[] };
+    const { stdin } = render(createElement(Prompt, { onSubmit, dictation: door }));
+    await tick();
+    door.insert?.('check the');
+    door.insert?.('deploy log');
+    await tick();
+    expect(onSubmit).not.toHaveBeenCalled();
+    stdin.write(ENTER);
+    await tick();
+    expect(onSubmit).toHaveBeenCalledWith('check the deploy log');
+  });
+
+  it('drains words held while no prompt was mounted, and lets go on unmount', async () => {
+    const onSubmit = vi.fn();
+    const door = { insert: null as ((t: string) => void) | null, held: ['held over'] };
+    const { stdin, unmount } = render(createElement(Prompt, { onSubmit, dictation: door }));
+    await tick();
+    expect(door.held).toEqual([]);
+    stdin.write(ENTER);
+    await tick();
+    expect(onSubmit).toHaveBeenCalledWith('held over');
+    unmount();
+    await tick();
+    expect(door.insert).toBeNull();
+  });
+});

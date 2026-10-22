@@ -20,6 +20,7 @@
  * place (no destructive delete) so users can roll back.
  */
 
+import type { VoiceTuning } from './speech/tuning.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { PREFS_PATH, PROFILES_PATH, PROFILES_MIGRATED_MARKER } from './paths.js';
@@ -163,6 +164,8 @@ export interface ProfileSettings {
   voiceNormalizer?: boolean;
   /** Speech-to-text vendor for talk mode (`/talk`). */
   voiceSttProvider?: SpeechProviderId;
+  /** Cloud voice tuning, set from `/voice`; absent fields are the voice's own. */
+  voiceTuning?: VoiceTuning;
   memoryConsolidation?: boolean;
   specialistRecall?: boolean;
   /**

@@ -84,21 +84,44 @@ Replies are rewritten before they are spoken, so links are named rather than
 spelled out and a phone number is read as a phone number. That rewriting is a
 setting; turning it off still strips the markdown.
 
-`/talk` is a spoken conversation. Bernard listens, notices when you stop
-talking, answers out loud, and listens again; Esc or `/talk` again stops it,
-and so does a couple of minutes of silence. The hint bar says whether the
-microphone is open the whole time. It records through PipeWire or PulseAudio,
-so it is Linux only for now, and it sends what you say to ElevenLabs to be
-transcribed — add a key first with `bernard add-key elevenlabs <key>` or the
-row in `/voice`. Once the key is in, the `auto` backend speaks answers with
-ElevenLabs too; pick a local backend in `/voice` to keep the local voice. The microphone is
-closed while Bernard is speaking, so talking over it does not interrupt it yet.
-A cough, a click or any other sound with no words in it is ignored rather
-than sent.
-It stays open while Bernard is thinking, though: if you pause, it starts, and
-you carry on, what you add reaches the work in progress the way a typed
-follow-up does. If the work finishes first, Bernard answers and then takes your
-addition as the next turn.
+`/talk` is a spoken conversation where you decide when you are done. What
+you say is typed into the prompt as you go, a piece at each pause, and nothing
+is sent until you press Enter — so a pause to think cannot send half a
+sentence, and a mis-heard word can be fixed first. Bernard reads its reply
+aloud, closing the microphone while it does, then listens again. Esc or
+`/talk` again stops it. It records through PipeWire or PulseAudio, so it is
+Linux only for now, and it sends what you say to ElevenLabs to be transcribed —
+add a key first with `bernard add-key elevenlabs <key>` or the row in `/voice`.
+Once the key is in, the `auto` backend speaks answers with ElevenLabs too; pick
+a local backend in `/voice` to keep the local voice. A cough, a click or any
+other sound with no words in it is ignored rather than typed.
+
+While it works, Bernard also says what it is doing, in a few words — "let me
+draft that up for you", "let me see what this says" — so a long task is not
+minutes of silence. Its reasoning is never read out. `/talk minimal` turns
+that off and reads only the final reply.
+
+The **Speed** row in `/voice` sets how fast it talks: slow, regular (the
+voice's own pace), fast or fastest. It applies to every voice, ElevenLabs
+included. ElevenLabs tops out a little above regular, so fastest speeds its
+audio up further on your machine, with the pitch kept, when ffmpeg is installed.
+
+With an ElevenLabs voice, the **Voice** row in `/voice` lists every voice your
+account can use — the stock library and your own clones — with its accent and
+style, and speaks a line in the one you pick. A restricted key needs the
+"Voices: read" permission for the list; without it you can still type a voice
+id. The **Tuning** row adjusts that voice: **Stability** (expressive to steady),
+**Similarity**, **Style** and **Speaker boost**. Each starts at the voice's own
+setting, and anything you leave alone stays that way.
+
+`/talk hands-free` drops the Enter: Bernard listens, notices when you stop,
+answers, and listens again, and a couple of minutes of silence ends it. It is
+opted into each time because a long pause can still send a request half-said.
+It narrates the same way, and takes `minimal` too: `/talk hands-free minimal`.
+The microphone stays open while Bernard thinks, so if you carry on after a
+pause, what you add reaches the work in progress the way a typed follow-up
+does; it is closed while Bernard speaks, so talking over it does not interrupt
+it yet.
 
 ## Everything else
 

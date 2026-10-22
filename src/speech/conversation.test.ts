@@ -323,3 +323,30 @@ describe('spokenText', () => {
     expect(spokenText(raw)).toBe(want);
   });
 });
+
+describe('TalkSession follow-up hold', () => {
+  it('closes the follow-up mic while something is said mid-turn, then reopens it', async () => {
+    let release!: (v: string) => void;
+    let followLive = 0;
+    const h = harness({ submit: vi.fn(() => new Promise<string>((r) => (release = r))) });
+    const inner = h.deps.startMic;
+    const states: TalkState[] = [];
+    h.deps.onState = (st) => states.push(st);
+    h.deps.startMic = (onChunk, onError) => {
+      if (states[states.length - 1] !== 'thinking') return inner(onChunk, onError);
+      followLive++;
+      return { stop: () => followLive-- };
+    };
+    const s = new TalkSession(h.deps);
+    s.start();
+    for (let i = 0; i < 3; i++) await tick();
+    expect(followLive).toBe(1);
+    s.holdFollowUps();
+    expect(followLive).toBe(0);
+    s.releaseFollowUps();
+    expect(followLive).toBe(1);
+    release('done');
+    for (let i = 0; i < 3; i++) await tick();
+    s.stop();
+  });
+});

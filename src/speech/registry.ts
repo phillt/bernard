@@ -1,6 +1,7 @@
 import { getServiceKey } from '../config.js';
 import { elevenLabs } from './elevenlabs.js';
-import type { Pcm, SpeechProvider } from './types.js';
+import type { Pcm, SpeechProvider, VoiceInfo } from './types.js';
+import type { VoiceTuning } from './tuning.js';
 import type { SpeechProviderId } from './ids.js';
 import { errorFields, previewText, speechLog } from './log.js';
 
@@ -44,7 +45,10 @@ export function speechProviderUnavailable(
  */
 export function synthesizerFor(
   id: SpeechProviderId,
-): (text: string, opts: { voice?: string; signal: AbortSignal }) => Promise<Pcm> {
+): (
+  text: string,
+  opts: { voice?: string; speed?: number; tuning?: VoiceTuning; signal: AbortSignal },
+) => Promise<Pcm> {
   return async (text, opts) => {
     const run = SPEECH_PROVIDERS[id].synthesize;
     const key = speechProviderKey(id);
@@ -120,4 +124,24 @@ export function transcriberFor(
       throw err;
     }
   };
+}
+
+/**
+ * The voices a vendor offers this key, for the `/voice` picker, or `null` when
+ * the vendor has no list to give. Throws what the vendor said, so a key
+ * without permission to list voices can be told so by name.
+ */
+export async function voicesFor(id: SpeechProviderId): Promise<VoiceInfo[] | null> {
+  const p = SPEECH_PROVIDERS[id];
+  const key = speechProviderKey(id);
+  if (!p.listVoices || key === undefined) return null;
+  const t0 = Date.now();
+  try {
+    const voices = await p.listVoices(key);
+    speechLog('voices:list', { provider: id, ms: Date.now() - t0, count: voices.length });
+    return voices;
+  } catch (err) {
+    speechLog('voices:error', { provider: id, ms: Date.now() - t0, ...errorFields(err) });
+    throw err;
+  }
 }

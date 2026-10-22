@@ -202,9 +202,9 @@ const CATALOGUE: readonly BuiltinSlashCommand[] = [
   { name: '/voice', description: 'Voice settings: readback, backend, voice, natural speech' },
   {
     name: '/talk',
-    description: 'Talk with Bernard out loud, hands-free',
+    description: 'Talk to Bernard; Enter sends, replies are spoken',
     detail:
-      'Listens, notices when you stop, replies out loud, then listens again. Esc or /talk again stops. Transcription uses ElevenLabs, so add a key first.',
+      'What you say goes into the prompt at each pause; fix it if you need to and press Enter. Replies are read aloud, and so is each short line Bernard says while it works ("let me check your inbox"); `/talk minimal` reads only the final reply. `/talk hands-free` sends at every pause instead, with no Enter; the two combine. Esc or /talk again stops. Transcription uses ElevenLabs, so add a key first.',
   },
   { name: '/routines', description: 'List saved routines' },
   { name: '/create-routine', description: 'Create a routine with guided AI assistance' },
