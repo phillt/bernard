@@ -1,0 +1,87 @@
+# Architecture
+
+<!-- Moved out of CLAUDE.md, which keeps a pointer here. -->
+
+One line per entry; each links to its full notes.
+
+- [**src/index.ts**](src-index-ts.md) — CLI entry point (Commander, shebang).
+- [**src/agent.ts**](src-agent-ts.md) — Agent loop using AI SDK `generateText` + `maxSteps` + auto-continue on truncation
+- [**src/config.ts**](src-config-ts.md) — .env loading, defaults, validation
+- [**src/ui/App.tsx**](src-ui-app-tsx.md) — Top-level Ink component.
+- [**Full-screen rendering**](full-screen-rendering.md) — (`BERNARD_FULLSCREEN`, default on) — the REPL runs in the terminal's \*\*alternate screen…
+- [**The text-input layer (#354/#355/#356)**](the-text-input-layer.md)
+- [**src/ui/overlays/**](src-ui-overlays.md) — One file per ephemeral overlay (`MenuOverlay`, `TextInputOverlay`, `ConfirmDialog`…
+- [**src/ui/message-store.ts**](src-ui-message-store-ts.md) — In-memory event store backing the live transcript.
+- [**src/output.ts**](src-output-ts.md) — Pure helpers that survived the Phase D cutover: `formatTokenCount`…
+- [**src/theme.ts**](src-theme-ts.md) — Color theme definitions (bernard, ocean, forest, synthwave, high-contrast, colorblind)
+- [**src/docs-store.ts**](src-docs-store-ts.md) — + **src/docs-generated.ts** + **src/docs/** — Bernard's own manual, in one place with two…
+- [**src/domains.ts**](src-domains-ts.md) — Memory domain registry (tool-usage, user-preferences, general) with specialized…
+- [**src/routines.ts**](src-routines-ts.md) — RoutineStore class: per-file JSON storage for named multi-step workflows
+- [**src/specialist-matcher.ts**](src-specialist-matcher-ts.md) — Keyword scorer matching user input to saved specialists for auto-dispatch
+- [**src/applet-detector.ts**](src-applet-detector-ts.md) — + **src/applet-candidates.ts** — noticing that work would be better served by an applet…
+- [**src/specialist-authority.ts**](src-specialist-authority-ts.md) — Authoritative role/permission layer for specialists.
+- [**src/correction.ts**](src-correction-ts.md) — Orchestrates the `correction-agent` meta-specialist at REPL shutdown to learn from…
+- [**src/work-queue.ts**](src-work-queue-ts.md) — the work queue behind both session-close passes that have one.
+- [**src/structured-output.ts**](src-structured-output-ts.md) — `{status, result, error?, reasoning?}` JSON parser for tool-wrapper output.
+- [**src/os-info.ts**](src-os-info-ts.md) — OS detection helper; `osPromptBlock()` is injected into tool-wrapper system prompts
+- [**src/voice-service.ts**](src-voice-service-ts.md) — `VoiceService` class: cross-platform TTS (darwin → `say`, linux →…
+- [**src/speech/**](src-speech.md) — talk mode (`/talk`) and cloud voices: a hands-free spoken conversation, with ElevenLabs…
+- [**src/speech-text.ts**](src-speech-text-ts.md) — + **src/speech-examples.ts** + **src/speech-normalizer.ts** — \*\*speech text…
+- [**src/reasoning-log.ts**](src-reasoning-log-ts.md) — Appends one JSONL entry per `tool_wrapper_run` to `logs/tool-wrappers.jsonl`
+- [**src/builtin-specialists/**](src-builtin-specialists.md) — Bundled specialists (shell/file/web wrappers + correction-agent + specialist-creator)…
+- [**src/tool-profiles.ts**](src-tool-profiles-ts.md) — `ToolProfileStore`: per-tool profiles with guidelines and good/bad examples, auto-learned…
+- [**src/tools/augment.ts**](src-tools-augment-ts.md) — `augmentTools()`: transparent execute-wrapper that observes every tool call, records…
+- [**src/cron/notes-store.ts**](src-cron-notes-store-ts.md) — `CronNotesStore`: per-job persistent notes (JSON per job, capped at 100 entries, atomic…
+- [**Path-scoped writes (#340)**](path-scoped-writes.md)
+- [**An unattended refusal no longer claims a user cancelled it (#447).**](an-unattended-refusal-no-longer-claims-a-user-cancelled-it.md)
+- [**src/headless.ts**](src-headless-ts.md) — `runHeadless`: the whole no-user-present recipe, extracted from cron's `runJob` (#419).
+- [**src/host/**](src-host.md) — the applet host (#421) and the capability bridge (#420).
+- [**src/apps/**](src-apps.md) — + **src/script/** — `bernard script`, the programmatic entry point (#419).
+- [**An applet reports back (#461, #462, #456).**](an-applet-reports-back.md)
+- [**One brief, and the data channel is a type (#509).**](one-brief-and-the-data-channel-is-a-type.md)
+- [**Bernard reacts to a change, instead of waiting to be asked (#479/#201/#493/#202).**](bernard-reacts-to-a-change-instead-of-waiting-to-be-asked.md)
+- [**Attachments reach a dispatch (#427).**](attachments-reach-a-dispatch.md)
+- [**A specialist record addresses the runtime it already has (#508).**](a-specialist-record-addresses-the-runtime-it-already-has.md)
+- [**A dispatch reads only the knowledge it was granted (#511).**](a-dispatch-reads-only-the-knowledge-it-was-granted.md)
+- [**One rule about role and pins, obeyed by both creators (#519).**](one-rule-about-role-and-pins-obeyed-by-both-creators.md)
+- [**`agent-builder` — the specialist that builds applet-action agents (#426).**](agent-builder-the-specialist-that-builds-applet-action-agent.md)
+- [**A dispatch has an inbound token budget (#451), and `createTools` is lazy (#452).**](a-dispatch-has-an-inbound-token-budget-and-createtools-is-la.md)
+- [**Cron step-log result cap (#347)**](cron-step-log-result-cap.md)
+- [**Cron tool surface (#333)**](cron-tool-surface.md)
+- [**Cron fires off the wall clock, and says what it dropped (#400, #401).**](cron-fires-off-the-wall-clock-and-says-what-it-dropped.md)
+- [**A RAG store per specialist (#501).**](a-rag-store-per-specialist.md)
+- [**src/knowledge/**](src-knowledge.md) — ingested document libraries (#516/#517), the user's own corpus.
+- [**One `AgentContext` for tests (#318).**](one-agentcontext-for-tests.md)
+- [**src/overlap-checker.ts**](src-overlap-checker-ts.md) — Token-based Jaccard overlap detection for specialist candidates
+- [**src/reference-resolver.ts**](src-reference-resolver-ts.md) — Pre-turn LLM pass that resolves user-named entities (e.g. "my daughter") against…
+- [**The resolver's `unknown` branch falls open, and the module that was to catch it is gone (#447).**](the-resolver-s-unknown-branch-falls-open-and-the-module-that.md)
+- [**src/prompt-rewriter.ts**](src-prompt-rewriter-ts.md) — Pre-turn LLM pass that rewrites the user's message for the active model family (see…
+- [**Curator memory reconciliation (#371)**](curator-memory-reconciliation.md)
+- [**The context provider was close-but-wrong in four ways, all measured in one session.**](the-context-provider-was-close-but-wrong-in-four-ways-all-me.md)
+- [**src/recall-filter.ts**](src-recall-filter-ts.md) — Pre-turn LLM pass that curates recalled memory (widen-then-rerank).
+- [**src/providers/**](src-providers.md) — `getModel()` factory returning AI SDK `LanguageModel`.
+- [**src/providers/catalog.ts**](src-providers-catalog-ts.md) — Model catalog fetched from the Vercel AI Gateway…
+- [**src/custom-providers.ts**](src-custom-providers-ts.md) — `CustomProviderStore`: single-file JSON store at…
+- [**src/profiles.ts**](src-profiles-ts.md) — Settings-profile store (#207) at `~/.config/bernard/profiles.json`.
+- [**src/profiles-wizard-data.ts**](src-profiles-wizard-data-ts.md) — the declarative field registry behind every settings wizard.
+- [**src/tool-call-repair.ts**](src-tool-call-repair-ts.md) — `makeRepairHook()`: one-shot `ToolCallRepairFunction` wired into every `generateText`…
+- [**src/tools/wrap-with-specialist.ts**](src-tools-wrap-with-specialist-ts.md) — Transparent shim that routes the main agent's direct `shell`, `web_read`, and…
+- [**src/tools/ask-user.ts**](src-tools-ask-user-ts.md) — `ask_user` tool: pauses the agent loop to ask the user one or more clarifying questions…
+- [**src/framework/agents/pac-planner.ts**](src-framework-agents-pac-planner-ts.md) — , **pac-actor.ts**, **pac-critic.ts** — Three `AgentDefinition`s that compose the…
+- [**src/framework/pac/run-pac.ts**](src-framework-pac-run-pac-ts.md) — `runPAC()` orchestrator: invokes the three definitions in sequence.
+- [**src/provenance.ts**](src-provenance-ts.md) — Per-turn `ProvenanceStore` that collects cite-able sources (`web` / `rag` / `memory` /…
+- [**A claim can be checked back to its exact source span (#549).**](a-claim-can-be-checked-back-to-its-exact-source-span.md)
+- [**src/session-telemetry.ts**](src-session-telemetry-ts.md) — Per-call telemetry sink (`ModelCallTelemetry` JSONL under `logs/telemetry/`).
+- [**src/providers/request-counter.ts**](src-providers-request-counter-ts.md) — Always-on count of HTTP requests issued to a model provider (#308). xAI billed \*\*87…
+- [**A memory carries metadata (#513)**](a-memory-carries-metadata.md)
+- [**Memory proposes what it could shed (#529)**](memory-proposes-what-it-could-shed.md)
+- [**One packer decides what memory fits (#528)**](one-packer-decides-what-memory-fits.md)
+- [**A write that contradicts a saved note (#373).**](a-write-that-contradicts-a-saved-note.md)
+- [**Persistent-memory byte cap (#307)**](persistent-memory-byte-cap.md)
+- [**What each dispatch was given (#512).**](what-each-dispatch-was-given.md)
+- [**Plan enforcement is addressed to the model, and was rendering as a user turn (#447).**](plan-enforcement-is-addressed-to-the-model-and-was-rendering.md)
+- [**An interrupt one stage earlier left no record at all (#478).**](an-interrupt-one-stage-earlier-left-no-record-at-all.md)
+- [**The typed text is on screen before the pipeline runs (#613).**](the-typed-text-is-on-screen-before-the-pipeline-runs.md)
+- [**src/turn-context.ts**](src-turn-context-ts.md) — `TurnContextRecord` type + `TurnContextStore` (sibling of `ProvenanceHistoryStore`; both…
+- [**src/tools/**](src-tools.md) — Tool registry; each tool is a separate file using `tool()` from `ai`
+- [**src/tools/file.ts**](src-tools-file-ts.md) — `file_read_lines`, `file_write`, `file_edit_lines`.
