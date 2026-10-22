@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { stallGuardedFetch } from './providers/stall-guard.js';
 import {
   classifyError,
   providerErrorDetail,
@@ -225,6 +226,51 @@ describe('isDispatchCancellation', () => {
     const providerTimeout = new Error('network timeout');
     expect(classifyError({ message: providerTimeout.message }).category).toBe('timeout');
     expect(isDispatchCancellation(providerTimeout)).toBe(false);
+  });
+
+  it('does NOT read a provider stall as a cancellation, though it carries an AbortError', async () => {
+    // The real producer: the first-byte guard aborts its own fetch, so the
+    // stall error's cause IS an AbortError. Read as Esc, one silent request
+    // unwound every dispatch above it and ended the turn.
+    const never = (_: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_r, reject) =>
+        init!.signal!.addEventListener('abort', () =>
+          reject(new DOMException('This operation was aborted', 'AbortError')),
+        ),
+      );
+    const guarded = stallGuardedFetch(
+      () => 20,
+      never as typeof fetch,
+      () => 0,
+    );
+    const stall = await guarded('https://api.x.ai/v1/chat/completions').catch((e: Error) => e);
+    expect((stall as Error).cause).toBeInstanceOf(DOMException);
+    const wrapped = new Error(`Error executing tool delegate_google: ${(stall as Error).message}`, {
+      cause: stall,
+    });
+    wrapped.name = 'AI_ToolExecutionError';
+    expect(isDispatchCancellation(stall)).toBe(false);
+    expect(isDispatchCancellation(wrapped)).toBe(false);
+  });
+
+  it('still reads Esc during a guarded request as a cancellation', async () => {
+    const never = (_: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_r, reject) =>
+        init!.signal!.addEventListener('abort', () =>
+          reject(new DOMException('This operation was aborted', 'AbortError')),
+        ),
+      );
+    const ac = new AbortController();
+    const guarded = stallGuardedFetch(
+      () => 10_000,
+      never as typeof fetch,
+      () => 0,
+    );
+    const p = guarded('https://api.x.ai/v1/chat/completions', { signal: ac.signal }).catch(
+      (e: Error) => e,
+    );
+    ac.abort();
+    expect(isDispatchCancellation(await p)).toBe(true);
   });
 
   it('sees through the AI SDK wrapping a re-thrown tool error (#327)', () => {
