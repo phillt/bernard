@@ -1,4 +1,5 @@
 import * as dotenv from 'dotenv';
+import { parseVoiceTuning, type VoiceTuning } from './speech/tuning.js';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import type { RemoteMessageMode } from './remote-messages.js';
@@ -309,6 +310,11 @@ export interface BernardConfig {
    */
   voiceSttProvider: SpeechProviderId;
   /**
+   * How a cloud voice is tuned (stability, similarity, style, speaker boost).
+   * Absent fields are the voice's own; set from `/voice`. Local engines ignore it.
+   */
+  voiceTuning?: VoiceTuning;
+  /**
    * Look over persistent memory at session close and PROPOSE what it could
    * shed (#529).
    *
@@ -609,6 +615,7 @@ export function savePreferences(prefs: {
   voiceWarmupMs?: number;
   voiceNormalizer?: boolean;
   voiceSttProvider?: SpeechProviderId;
+  voiceTuning?: VoiceTuning;
   memoryConsolidation?: boolean;
   specialistRecall?: boolean;
 }): void {
@@ -671,6 +678,7 @@ export function loadPreferences(): {
   voiceWarmupMs?: number;
   voiceNormalizer?: boolean;
   voiceSttProvider?: SpeechProviderId;
+  voiceTuning?: VoiceTuning;
   memoryConsolidation?: boolean;
   specialistRecall?: boolean;
 } {
@@ -742,6 +750,7 @@ export function loadPreferences(): {
     voiceSttProvider: isSpeechProviderId(parsed.voiceSttProvider)
       ? parsed.voiceSttProvider
       : undefined,
+    voiceTuning: parseVoiceTuning(parsed.voiceTuning),
     memoryConsolidation:
       typeof parsed.memoryConsolidation === 'boolean' ? parsed.memoryConsolidation : undefined,
     specialistRecall:
@@ -1207,6 +1216,7 @@ export function loadConfig(overrides?: {
   voiceWarmupMs?: number;
   voiceNormalizer?: boolean;
   voiceSttProvider?: SpeechProviderId;
+  voiceTuning?: VoiceTuning;
   memoryConsolidation?: boolean;
   specialistRecall?: boolean;
 }): BernardConfig {
@@ -1602,6 +1612,7 @@ export function loadConfig(overrides?: {
     voiceWarmupMs,
     voiceNormalizer,
     voiceSttProvider,
+    voiceTuning: overrides?.voiceTuning ?? parseVoiceTuning(prefs.voiceTuning),
     memoryConsolidation,
     specialistRecall,
     fullScreen,
@@ -1693,6 +1704,7 @@ const PROFILE_SCOPED_KEYS: ReadonlyArray<keyof BernardConfig> = [
   'voiceWarmupMs',
   'voiceNormalizer',
   'voiceSttProvider',
+  'voiceTuning',
   'memoryConsolidation',
   'specialistRecall',
 ];

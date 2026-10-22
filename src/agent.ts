@@ -131,6 +131,8 @@ export class Agent {
   private config: BernardConfig;
   private memoryStore: MemoryStore;
   private alertContext?: string;
+  /** Narrated talk mode is on; set by the REPL while `/talk` runs. */
+  private voiceNarration = false;
   private ragStore?: RAGStore;
   private previousRAGFacts: Set<string> = new Set();
   private lastRAGResults: RAGSearchResult[] = [];
@@ -554,6 +556,11 @@ export class Agent {
     this.ctx.statsTarget = this;
   }
 
+  /** Turns the narrated-talk instruction on or off for the turns that follow. */
+  setVoiceNarration(on: boolean): void {
+    this.voiceNarration = on;
+  }
+
   /** Updates the alert context injected into the system prompt (e.g., specialist candidates). */
   setAlertContext(ctx: string): void {
     this.alertContext = ctx;
@@ -875,6 +882,7 @@ export class Agent {
         specialistSummaries,
         specialistMatches,
         alertContext: this.alertContext,
+        voiceNarration: this.voiceNarration,
         statsTarget: this,
         planStore: this.planStore,
       };

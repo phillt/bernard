@@ -4,7 +4,13 @@ import { buildSilenceWav } from '../voice-service.js';
 import { buildRawPlayCommand } from './player.js';
 import { buildRecordCommand, resolveRecorder, RECORD_RATE } from './recorder.js';
 import { Endpointer } from './endpointer.js';
-import { synthesize, transcribe, ELEVENLABS_DEFAULT_VOICE } from './elevenlabs.js';
+import {
+  synthesize,
+  transcribe,
+  listVoices,
+  clearElevenLabsCache,
+  ELEVENLABS_DEFAULT_VOICE,
+} from './elevenlabs.js';
 import { SpeechProviderError } from './types.js';
 
 const RATE = 16000;
@@ -226,6 +232,111 @@ describe('ElevenLabs client', () => {
     ).catch((e: Error) => e);
     ac.abort();
     expect(((await p) as Error).message).not.toContain('timed out');
+  });
+
+  it('sends no voice settings, and reads none, at the voice’s own pace and tuning', async () => {
+    clearElevenLabsCache();
+    const fetchImpl = vi.fn(async () => new Response(new Uint8Array([1, 0])));
+    await synthesize('hi', 'k', { speed: 1 }, fetchImpl as unknown as typeof fetch);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string).voice_settings).toBeUndefined();
+  });
+
+  it('merges speed and tuning onto the voice’s stored settings', async () => {
+    clearElevenLabsCache();
+    const fetchImpl = vi.fn(async (url: string) =>
+      url.endsWith('/settings')
+        ? Response.json({
+            stability: 0.4,
+            similarity_boost: 0.8,
+            style: 0,
+            use_speaker_boost: true,
+          })
+        : new Response(new Uint8Array([1, 0])),
+    );
+    await synthesize(
+      'hi',
+      'k',
+      { speed: 1.5, tuning: { stability: 0.9 } },
+      fetchImpl as unknown as typeof fetch,
+    );
+    const post = fetchImpl.mock.calls.find(([u]) => (u as string).includes('/text-to-speech/'));
+    const sent = JSON.parse((post as unknown as [string, RequestInit])[1].body as string);
+    // The tuned field wins, the rest is the voice's own, and the speed is
+    // clamped to ElevenLabs' accepted range rather than refused.
+    expect(sent.voice_settings).toEqual({
+      stability: 0.9,
+      similarity_boost: 0.8,
+      style: 0,
+      use_speaker_boost: true,
+      speed: 1.2,
+    });
+  });
+
+  it('still speaks, with only what was asked, when the stored settings cannot be read', async () => {
+    clearElevenLabsCache();
+    const fetchImpl = vi.fn(async (url: string) =>
+      url.endsWith('/settings')
+        ? new Response('{"detail":{"status":"missing_permissions"}}', { status: 401 })
+        : new Response(new Uint8Array([1, 0])),
+    );
+    await synthesize('hi', 'k', { tuning: { style: 0.3 } }, fetchImpl as unknown as typeof fetch);
+    const post = fetchImpl.mock.calls.find(([u]) => (u as string).includes('/text-to-speech/'));
+    const sent = JSON.parse((post as unknown as [string, RequestInit])[1].body as string);
+    expect(sent.voice_settings).toEqual({ style: 0.3 });
+  });
+
+  it('reads a voice’s stored settings once per account, not once per voice id', async () => {
+    clearElevenLabsCache();
+    const fetchImpl = vi.fn(async (url: string) =>
+      url.endsWith('/settings')
+        ? Response.json({ stability: 0.4 })
+        : new Response(new Uint8Array([1, 0])),
+    );
+    const opts = { tuning: { style: 0.3 } };
+    await synthesize('a', 'key-one', opts, fetchImpl as unknown as typeof fetch);
+    await synthesize('b', 'key-one', opts, fetchImpl as unknown as typeof fetch);
+    await synthesize('c', 'key-two', opts, fetchImpl as unknown as typeof fetch);
+    const reads = fetchImpl.mock.calls.filter(([u]) => (u as string).endsWith('/settings'));
+    expect(reads).toHaveLength(2);
+  });
+
+  it('lists voices with their traits, skipping malformed entries', async () => {
+    const fetchImpl = vi.fn(async () =>
+      Response.json({
+        voices: [
+          {
+            voice_id: 'abc',
+            name: 'Rachel',
+            category: 'premade',
+            labels: { accent: 'american', gender: 'female', use_case: 'narration' },
+          },
+          { name: 'no id' },
+        ],
+      }),
+    );
+    const voices = await listVoices('k', fetchImpl as unknown as typeof fetch);
+    expect(voices).toEqual([
+      {
+        id: 'abc',
+        name: 'Rachel',
+        traits: ['american', 'female', 'narration'],
+        category: 'premade',
+      },
+    ]);
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toMatch(/\/v1\/voices$/);
+    expect((init.headers as Record<string, string>)['xi-api-key']).toBe('k');
+  });
+
+  it('says which permission a restricted key lacks when listing voices', async () => {
+    const fetchImpl = vi.fn(
+      async () => new Response('{"detail":{"status":"missing_permissions"}}', { status: 401 }),
+    );
+    const err = await listVoices('k', fetchImpl as unknown as typeof fetch).catch((e) => e);
+    expect(err).toBeInstanceOf(SpeechProviderError);
+    expect(err.message).toContain('missing_permissions');
   });
 
   it.each([

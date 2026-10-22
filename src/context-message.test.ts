@@ -465,3 +465,16 @@ describe('dispatch memory is ranked by what the dispatch is for', () => {
     expect(content).not.toContain('### grocery-applet');
   });
 });
+
+describe('voice_mode section', () => {
+  const memoryStore = {
+    getAllMemoryContents: () => new Map(),
+    getAllScratchContents: () => new Map(),
+  };
+  it('asks for a spoken line before each tool step only while narrated talk is on', () => {
+    const on = buildContextMessage({ memoryStore: memoryStore as never, voiceNarration: true });
+    expect(JSON.stringify(on)).toContain('<voice_mode>');
+    const off = buildContextMessage({ memoryStore: memoryStore as never });
+    expect(JSON.stringify(off ?? '')).not.toContain('voice_mode');
+  });
+});

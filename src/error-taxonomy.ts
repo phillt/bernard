@@ -579,6 +579,20 @@ export function isDispatchCancellation(err: unknown): boolean {
   // Bounded rather than `while (cause)`: an error chain is attacker-adjacent
   // input (providers and MCP servers build these) and a cycle would hang the
   // catch handler. Eight is far past any real nesting here.
+  //
+  // A provider stall anywhere in the chain means the work FAILED, never that
+  // it was cancelled — and it is checked first, ahead of the name test,
+  // because both kinds of stall carry something that reads as a cancellation.
+  // The first-byte guard ends a silent request by aborting its own fetch, so
+  // its error's `cause` is an `AbortError`; and a stall the runner fires
+  // itself (mid-stream, or the non-streaming liveness guard) is named
+  // `DISPATCH_ABORT_NAME`, as is the exhausted-retries error wrapping it.
+  // Read as cancellations, either unwound every dispatch above it and ended
+  // the whole turn where the parent should have been handed a failed tool
+  // call it can work around. What still unwinds is the user's Esc (an
+  // `AbortError` with no stall behind it) and the operator's own wall clock,
+  // `BERNARD_DISPATCH_TIMEOUT_MS`, which carries the name and no stall brand.
+  if (providerStallInfo(err)) return false;
   return (
     findInCauseChain(err, (e) =>
       e.name === 'AbortError' || e.name === DISPATCH_ABORT_NAME ? true : null,

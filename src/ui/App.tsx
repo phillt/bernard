@@ -198,7 +198,7 @@ import {
 import { TranscriptViewport } from './TranscriptViewport.js';
 import { useDimensionsCtx } from './DimensionsContext.js';
 import { formatAgentError, type ErrorPanelData } from './error-format.js';
-import { Prompt } from './Prompt.js';
+import { Prompt, type DictationDoor } from './Prompt.js';
 import type { SlashCommand } from './SlashHints.js';
 import { DISPATCHED_COMMANDS, type DispatchedCommand } from './slash-commands.js';
 import { Spinner } from './Spinner.js';
@@ -258,8 +258,18 @@ import {
   type CloudVoiceBackend,
   type ResolvedBackend,
 } from '../voice-service.js';
-import { synthesizerFor, transcriberFor, speechProviderUnavailable } from '../speech/registry.js';
+import {
+  synthesizerFor,
+  transcriberFor,
+  speechProviderUnavailable,
+  voicesFor,
+} from '../speech/registry.js';
+import { TUNING_FIELDS, tuningLabel, type VoiceTuning } from '../speech/tuning.js';
+import { SpeechProviderError } from '../speech/types.js';
 import { TalkSession, type TalkState } from '../speech/conversation.js';
+import { DictationSession, type DictationState } from '../speech/dictation.js';
+import { VOICE_SPEEDS, voiceSpeedFor } from '../voice-speed.js';
+import { Narrator } from '../speech/narrator.js';
 import { RECORD_RATE, resolveRecorder, startMic } from '../speech/recorder.js';
 import { toSpokenForm } from '../speech-normalizer.js';
 import { toLiteralSpeech } from '../speech-text.js';
@@ -522,6 +532,13 @@ function elevenLabsKeyAnnotation(): string {
   if (hint) return `= saved ****${hint}`;
   return getServiceKey('elevenlabs') ? '= from ELEVENLABS_API_KEY' : '= not set';
 }
+
+/**
+ * Cloud voice ids → names, filled when the picker lists them, so the `/voice`
+ * row shows "Rachel" rather than a 20-character id. Per process; an id not yet
+ * seen shows as itself.
+ */
+const cloudVoiceNames = new Map<string, string>();
 
 /** Aborts a pending normalization. Deliberately does NOT tear down the service. */
 function cancelPendingSpeech(): void {
@@ -1165,8 +1182,42 @@ export function App({
    * with the way back to a local voice.
    */
   const cloudVoiceNoticeShownRef = useRef(false);
+  // Dictation (plain `/talk`): speech into the composer, Enter to send. Same
+  // ref-plus-state split as talk mode; the door is how text reaches `<Prompt>`.
+  const dictateRef = useRef<DictationSession | null>(null);
+  const [dictateState, setDictateState] = useState<DictationState | null>(null);
+  const dictationDoor = useRef<DictationDoor>({ insert: null, held: [] }).current;
+  /**
+   * Narrated talk: what Bernard writes between tool calls is spoken as it
+   * goes. On for every talk session unless started with `minimal`.
+   */
+  const narrateRef = useRef(false);
+  /**
+   * Talk-mode speech plays one utterance at a time, in order. `startSpeech`
+   * supersedes whatever is speaking, which is right for a fresh readback and
+   * wrong here, where a narrated line and the reply after it must both be
+   * heard. `gen` is bumped to drop everything queued (Esc, a new turn);
+   * `pending` is what keeps the microphones closed until the last one ends.
+   */
+  const speechQueue = useRef({
+    tail: Promise.resolve() as Promise<unknown>,
+    gen: 0,
+    pending: 0,
+  }).current;
+  // Dictation keeps listening through a long turn; it needs to know one is
+  // running, or two minutes of waiting would read as the person leaving.
+  useEffect(() => {
+    dictateRef.current?.setBusy(busy);
+  }, [busy]);
+
   // A live microphone must not outlive the REPL that opened it.
-  useEffect(() => () => talkRef.current?.stop(), []);
+  useEffect(
+    () => () => {
+      talkRef.current?.stop();
+      dictateRef.current?.stop();
+    },
+    [],
+  );
   /** Numbers turns for the trace; `turn-<n>` reads in order in the session log. */
   const turnSeqRef = useRef(0);
   /**
@@ -1422,9 +1473,11 @@ export function App({
         // *after* `busy` clears, so the not-busy branch is the one that matters.
         // Both are no-ops when nothing is speaking or pending.
         cancelPendingSpeech();
+        dropQueuedSpeech();
         // Esc ends talk mode before anything else, busy or not: a live
         // microphone is the thing a person reaching for Esc most wants off.
         if (talkRef.current) stopTalk('Talk mode off.');
+        if (dictateRef.current) stopDictate('Talk mode off.');
         // The bare singleton, not `getVoiceService(config)`: that constructs on
         // first use, forking up to six `which` probes (~8 ms) inside a keystroke
         // handler — to stop a service that, never having been constructed,
@@ -1460,10 +1513,24 @@ export function App({
   // this slot on every step; the legacy readline REPL leaves it null. Cleared
   // on unmount so a test or preview that re-mounts <App> doesn't leak the
   // previous store into the new run.
+  // Talk mode reads the same stream to narrate (see `Narrator`), so the sink
+  // is the store plus that listener rather than the store alone.
+  const narrator = useRef(
+    new Narrator((text) => {
+      if (!narrateRef.current || (!dictateRef.current && !talkRef.current)) return;
+      speechLog('talk:narrate', { chars: text.length, text: previewText(text) });
+      void speakQueued(text, { literal: true });
+    }),
+  ).current;
   useEffect(() => {
-    setOutputSink(messageStore);
+    setOutputSink({
+      append: (event) => {
+        messageStore.append(event);
+        narrator.onEvent(event);
+      },
+    });
     return () => setOutputSink(null);
-  }, [messageStore]);
+  }, [messageStore, narrator]);
 
   /**
    * External messages (#462).
@@ -1950,7 +2017,11 @@ export function App({
     // `onSubmit`, so the command is one `↑` away — which is what makes naming
     // the remedy enough. What counts as a command is what the idle chain would
     // dispatch; anything else it hands to the agent, and so does this.
-    if (submittingRef.current && !BUSY_ALLOWED_COMMANDS.some((c) => is(text, c))) {
+    // `/talk hands-free` carries an argument and must reach the mic mid-turn
+    // too, so a live microphone can always be switched or stopped.
+    const busyAllowed =
+      BUSY_ALLOWED_COMMANDS.some((c) => is(text, c)) || startsWithCmd(text, '/talk');
+    if (submittingRef.current && !busyAllowed) {
       if (isSlashCommand(text)) {
         flashToast(
           'Commands wait until Bernard finishes — press ↑ to run it then, or esc to interrupt.',
@@ -2819,9 +2890,41 @@ export function App({
       return;
     }
 
-    if (is(text, '/talk')) {
-      if (talkRef.current) stopTalk('Talk mode off.');
-      else startTalk();
+    if (is(text, '/talk') || startsWithCmd(text, '/talk')) {
+      // `/talk` puts what you say in the prompt and waits for Enter; hands-free
+      // (send at every pause) is opted into per session, because a pause to
+      // think too often ended a request half-said. Bare `/talk` while either is
+      // on stops it; `/talk hands-free` switches.
+      // `minimal` reads only the final reply; without it Bernard also says
+      // what it is doing between steps. Both flags are per session.
+      const flags = text.slice('/talk'.length).trim().toLowerCase().split(/\s+/).filter(Boolean);
+      if (flags.some((f) => f !== 'hands-free' && f !== 'minimal')) {
+        flashToast('Use /talk, optionally with hands-free and/or minimal.', 'error');
+        return;
+      }
+      const on = talkRef.current !== null || dictateRef.current !== null;
+      if (flags.length === 0 && on) {
+        stopTalk();
+        stopDictate();
+        flashToast('Talk mode off.', 'info');
+        return;
+      }
+      const narrate = !flags.includes('minimal');
+      const handsFree = flags.includes('hands-free');
+      // Already in the mode asked for: only the narration flag can change, so
+      // change it and say so, rather than return quietly having done nothing.
+      if (handsFree ? talkRef.current : dictateRef.current) {
+        setNarration(narrate);
+        flashToast(
+          narrate
+            ? 'Narration on — Bernard says what it is doing.'
+            : 'Narration off — replies only.',
+          'info',
+        );
+        return;
+      }
+      if (handsFree) startTalk(narrate);
+      else startDictate(narrate);
       return;
     }
 
@@ -2841,7 +2944,11 @@ export function App({
           return;
         }
         void svc
-          .speak(toLiteralSpeech(phrase), { voice: config.voiceVoice, rate: config.voiceRate })
+          .speak(toLiteralSpeech(phrase), {
+            voice: config.voiceVoice,
+            rate: config.voiceRate,
+            tuning: config.voiceTuning,
+          })
           .catch(() => {
             // Fail silently — TTS errors must never crash the REPL.
           });
@@ -4574,7 +4681,129 @@ export function App({
       voiceRate: config.voiceRate,
       voiceWarmupMs: config.voiceWarmupMs,
       voiceNormalizer: config.voiceNormalizer,
+      voiceTuning: config.voiceTuning,
     });
+  }
+
+  /**
+   * The cloud voice picker. Lists what the key can use — stock voices and the
+   * account's own — and speaks a line in the chosen one, since a voice is
+   * chosen by ear. A key without permission to list voices is told which
+   * permission, and offered the typed id instead, which needs none.
+   */
+  async function pickCloudVoice(provider: Parameters<typeof voicesFor>[0]): Promise<void> {
+    flashToast('Loading voices…', 'info');
+    let voices: Awaited<ReturnType<typeof voicesFor>>;
+    try {
+      voices = await voicesFor(provider);
+    } catch (err) {
+      const denied =
+        err instanceof SpeechProviderError &&
+        (err.status === 401 || err.status === 403) &&
+        /permission/i.test(err.message);
+      flashToast(
+        denied
+          ? 'Your ElevenLabs key cannot list voices — give it the "Voices: read" permission, or type a voice id.'
+          : `Could not list voices: ${err instanceof Error ? err.message : String(err)}`,
+        'error',
+      );
+      await typeVoiceName('Voice id');
+      return;
+    }
+    if (!voices || voices.length === 0) {
+      await typeVoiceName('Voice id');
+      return;
+    }
+    for (const v of voices) cloudVoiceNames.set(v.id, v.name);
+    const entries = [
+      { label: 'Default voice', active: !config.voiceVoice, value: '' },
+      ...voices
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((v) => ({
+          label: v.name,
+          active: config.voiceVoice === v.id,
+          description: [...v.traits, v.category && v.category !== 'premade' ? v.category : '']
+            .filter(Boolean)
+            .join(' · '),
+          value: v.id,
+        })),
+    ];
+    const res = await requestMenu(entries, {
+      title: `Voice: ${voiceDisplayName(config.voiceVoice)}`,
+    });
+    if (res.cancelled) return;
+    const id = res.item.value as string;
+    config.voiceVoice = id || undefined;
+    resetVoiceService();
+    persistVoice();
+    const name = voiceDisplayName(config.voiceVoice);
+    flashToast(`Voice: ${name}.`, 'success');
+    void startSpeech(`Hi, this is ${name === 'default voice' ? 'my default voice' : name}.`, {
+      onError: (m) => flashToast(`Could not speak: ${m}`, 'error'),
+    });
+  }
+
+  /** The free-text voice prompt, for local engines and as the cloud fallback. */
+  async function typeVoiceName(label: string): Promise<void> {
+    // `cancelOnEmpty: false` is required, or the field could never be cleared
+    // back to the backend default once set.
+    const res = await requestTextInput({
+      label,
+      initialValue: config.voiceVoice ?? '',
+      cancelOnEmpty: false,
+    });
+    if (res.cancelled) return;
+    const name = res.raw.trim();
+    config.voiceVoice = name.length > 0 ? name : undefined;
+    resetVoiceService();
+    persistVoice();
+    flashToast(`Voice: ${config.voiceVoice ?? 'backend default'}.`, 'success');
+  }
+
+  /** "voice default", or how many of the four fields are set. */
+  function describeTuning(t: VoiceTuning | undefined): string {
+    const n = TUNING_FIELDS.filter((f) => t?.[f.field] !== undefined).length;
+    return n === 0 ? 'voice default' : `${n} changed`;
+  }
+
+  /** The four tuning fields, each a short list of named steps. Loops until Esc. */
+  async function runTuningMenu(): Promise<void> {
+    let index = 0;
+    for (;;) {
+      const res = await requestMenu(
+        TUNING_FIELDS.map((f) => ({
+          label: f.label,
+          annotation: `= ${tuningLabel(f.field, config.voiceTuning).toLowerCase()}`,
+          description: f.description,
+          value: f.field,
+        })),
+        { title: 'Voice tuning — ElevenLabs voices only', initialIndex: index },
+      );
+      if (res.cancelled) return;
+      index = res.index;
+      const f = TUNING_FIELDS[res.index];
+      const current = tuningLabel(f.field, config.voiceTuning);
+      const pick = await requestMenu(
+        f.choices.map((c) => ({ label: c.label, active: c.label === current, value: c.label })),
+        { title: `${f.label}: ${current.toLowerCase()}` },
+      );
+      if (pick.cancelled) continue;
+      const picked = f.choices.find((c) => c.label === pick.item.value);
+      if (!picked) continue;
+      const next: VoiceTuning = { ...config.voiceTuning, [f.field]: picked.value };
+      if (picked.value === undefined) delete next[f.field];
+      config.voiceTuning = Object.keys(next).length > 0 ? next : undefined;
+      resetVoiceService();
+      persistVoice();
+      flashToast(`${f.label}: ${picked.label.toLowerCase()}.`, 'success');
+    }
+  }
+
+  /** A cloud voice id reads as its name once the list has been fetched. */
+  function voiceDisplayName(id: string | undefined): string {
+    if (!id) return 'default voice';
+    return cloudVoiceNames.get(id) ?? id;
   }
 
   /**
@@ -4642,7 +4871,7 @@ export function App({
       },
       { text: `Voice: ${config.voiceVoice ?? 'backend default'}`, dim: true },
       {
-        text: config.voiceRate ? `Rate: ${config.voiceRate} wpm` : 'Rate: backend default',
+        text: `Speed: ${voiceSpeedFor(config.voiceRate).label.toLowerCase()}`,
         dim: true,
       },
       {
@@ -4694,6 +4923,8 @@ export function App({
   function buildVoiceMenu(): SettingsMenu {
     const svc = getVoiceService(config);
     const resolved = svc.backend;
+    const cloudBackend =
+      resolved && isCloudVoiceBackend(resolved.backend) ? resolved.backend : null;
     const backendAnnotation =
       config.voiceBackend === 'auto'
         ? `= auto → ${describeBackend(resolved)}`
@@ -4749,45 +4980,48 @@ export function App({
         kind: 'item',
         item: {
           label: 'Voice',
-          annotation: `= ${config.voiceVoice ?? '(backend default)'}`,
-          description:
-            'Named voice passed to the backend — "Daniel" on macOS, "en-us+f3" on espeak. Blank uses the backend’s own.',
+          annotation: `= ${
+            cloudBackend
+              ? voiceDisplayName(config.voiceVoice)
+              : (config.voiceVoice ?? '(backend default)')
+          }`,
+          description: cloudBackend
+            ? 'Pick from the voices your ElevenLabs account can use; each is spoken once chosen.'
+            : 'Named voice passed to the backend — "Daniel" on macOS, "en-us+f3" on espeak. Blank uses the backend’s own.',
         },
-        action: async () => {
-          // `cancelOnEmpty: false` is required, or the field could never be
-          // cleared back to the backend default once set.
-          const res = await requestTextInput({
-            label: 'Voice name',
-            initialValue: config.voiceVoice ?? '',
-            cancelOnEmpty: false,
-          });
-          if (res.cancelled) return;
-          const name = res.raw.trim();
-          config.voiceVoice = name.length > 0 ? name : undefined;
-          resetVoiceService();
-          persistVoice();
-          flashToast(`Voice: ${config.voiceVoice ?? 'backend default'}.`, 'success');
-        },
+        action: () => (cloudBackend ? pickCloudVoice(cloudBackend) : typeVoiceName('Voice name')),
       },
       {
         kind: 'item',
         item: {
-          label: 'Rate',
-          annotation: `= ${config.voiceRate ? `${config.voiceRate} wpm` : '(backend default)'}`,
-          description: 'Words per minute. Blank uses the backend default.',
+          label: 'Tuning',
+          annotation: `= ${describeTuning(config.voiceTuning)}`,
+          description:
+            'Stability, similarity, style and speaker boost for an ElevenLabs voice. Each starts at the voice’s own.',
         },
-        action: () =>
-          promptVoiceInt({
-            prompt: 'Rate (words per minute)',
-            initial: config.voiceRate ? String(config.voiceRate) : '',
-            min: 1,
-            blankClears: true,
-            invalid: 'Invalid rate. Must be a positive integer.',
-            apply: (n) => {
-              config.voiceRate = n;
-            },
-            describe: () => `Rate: ${config.voiceRate ?? 'backend default'}.`,
-          }),
+        action: () => runTuningMenu(),
+      },
+      {
+        kind: 'item',
+        item: {
+          label: 'Speed',
+          annotation: `= ${voiceSpeedFor(config.voiceRate).label.toLowerCase()}`,
+          description:
+            'How fast Bernard talks: slow, regular, fast or fastest. Regular is the voice’s own pace.',
+        },
+        action: async () => {
+          const current = voiceSpeedFor(config.voiceRate);
+          const res = await requestMenu(
+            VOICE_SPEEDS.map((sp) => ({ label: sp.label, active: sp === current, value: sp.id })),
+            { title: `Speed: ${current.label.toLowerCase()}` },
+          );
+          if (res.cancelled) return;
+          const picked = VOICE_SPEEDS.find((sp) => sp.id === res.item.value) ?? current;
+          config.voiceRate = picked.wpm;
+          resetVoiceService();
+          persistVoice();
+          flashToast(`Speed: ${picked.label.toLowerCase()}.`, 'success');
+        },
       },
       {
         kind: 'item',
@@ -4841,8 +5075,21 @@ export function App({
         kind: 'item',
         item: {
           label: 'Talk mode',
+          annotation: `= ${dictateRef.current ? 'on' : 'off'}`,
+          description: `What you say goes into the prompt; Enter sends it and the reply is read aloud. Transcribed by ${config.voiceSttProvider}. Esc stops.`,
+        },
+        action: () => {
+          if (dictateRef.current) stopDictate('Talk mode off.');
+          else startDictate();
+        },
+      },
+      {
+        kind: 'item',
+        item: {
+          label: 'Talk hands-free',
           annotation: `= ${talkRef.current ? 'on' : 'off'}`,
-          description: `Talk back and forth out loud: Bernard listens, answers, and listens again. Transcribed by ${config.voiceSttProvider}. Esc stops.`,
+          description:
+            'Sends at every pause, with no Enter: Bernard listens, answers, and listens again. A long pause can send half a sentence. Esc stops.',
         },
         action: () => {
           if (talkRef.current) stopTalk('Talk mode off.');
@@ -5177,7 +5424,17 @@ export function App({
    */
   async function startSpeech(
     writtenForm: string,
-    hooks?: { onNormalized?: () => void; onError?: (message: string) => void },
+    hooks?: {
+      onNormalized?: () => void;
+      onError?: (message: string) => void;
+      /**
+       * Speak the deterministic form only, skipping the LLM normalizer. For
+       * talk mode's narrated lines: a few plain words each, one per step, so a
+       * billed round trip per line would buy nothing and hold up the reply
+       * queued behind them.
+       */
+      literal?: boolean;
+    },
   ): Promise<SpeakOutcome> {
     cancelPendingSpeech();
     const ac = new AbortController();
@@ -5189,12 +5446,9 @@ export function App({
       // overlapped nothing; putting an LLM call in front of it would otherwise
       // add the two together on every voiced turn.
       svc.prewarm();
-      const spoken = await toSpokenForm(
-        writtenForm,
-        config,
-        ac.signal,
-        makeOutOfTurnUsageRecorder(agent),
-      );
+      const spoken = hooks?.literal
+        ? { text: toLiteralSpeech(writtenForm), normalized: false }
+        : await toSpokenForm(writtenForm, config, ac.signal, makeOutOfTurnUsageRecorder(agent));
       // `_speechAbort !== ac` sits beside `aborted` deliberately: it makes "a
       // newer readback started" true without depending on abort-propagation
       // ordering.
@@ -5231,6 +5485,7 @@ export function App({
       const outcome = await svc.speak(spoken.text, {
         voice: config.voiceVoice,
         rate: config.voiceRate,
+        tuning: config.voiceTuning,
       });
       speechLog('speak:end', { outcome, ms: Date.now() - t0 });
       return outcome;
@@ -5247,8 +5502,11 @@ export function App({
 
   /** The post-turn readback. Fire-and-forget by design — see its call site. */
   async function speakAssistantReply(writtenForm: string): Promise<void> {
-    if (!config.voiceTts) return;
-    await startSpeech(writtenForm, {
+    if (!config.voiceTts && !dictateRef.current) return;
+    // In talk mode the reply waits its turn behind any narrated line, and the
+    // queue keeps the mic closed while it plays (half-duplex).
+    const speak = dictateRef.current ? speakQueued : startSpeech;
+    await speak(writtenForm, {
       onNormalized: () => {
         // The moment, not the setting: this fires only when the LLM pass really
         // changed what a listener hears.
@@ -5264,6 +5522,7 @@ export function App({
     talkRef.current = null;
     setTalkState(null);
     if (!session) return;
+    if (!dictateRef.current) setNarration(false);
     speechLog('talk:stop', { reason: notice ?? null });
     session.stop();
     _voiceService?.stop();
@@ -5271,11 +5530,133 @@ export function App({
   }
 
   /**
+   * Speaks after whatever talk mode is already saying, with every microphone
+   * closed from the first queued line until the last one ends.
+   */
+  function speakQueued(
+    text: string,
+    hooks?: Parameters<typeof startSpeech>[1],
+  ): Promise<SpeakOutcome> {
+    const gen = speechQueue.gen;
+    if (speechQueue.pending++ === 0) {
+      dictateRef.current?.pause();
+      talkRef.current?.holdFollowUps();
+    }
+    const run = speechQueue.tail.then(() =>
+      gen === speechQueue.gen ? startSpeech(text, hooks) : ('cancelled' as const),
+    );
+    speechQueue.tail = run.catch(() => undefined);
+    return run.finally(() => {
+      if (--speechQueue.pending > 0) return;
+      dictateRef.current?.resume();
+      talkRef.current?.releaseFollowUps();
+    });
+  }
+
+  /** Narration on or off, for the speaker and for what the model is asked. */
+  function setNarration(on: boolean): void {
+    narrateRef.current = on;
+    agent.setVoiceNarration(on);
+  }
+
+  /** Drops queued talk-mode speech, and narration collected for this turn. */
+  function dropQueuedSpeech(): void {
+    speechQueue.gen++;
+    narrator.reset();
+  }
+
+  /** Ends dictation. Text already in the composer stays there. Idempotent. */
+  function stopDictate(notice?: string): void {
+    const session = dictateRef.current;
+    dictateRef.current = null;
+    setDictateState(null);
+    if (!session) return;
+    if (!talkRef.current) setNarration(false);
+    speechLog('dictate:stop', { reason: notice ?? null });
+    session.stop();
+    if (notice) flashToast(notice, 'info');
+  }
+
+  /**
+   * Starts dictation: what is said goes into the composer, piece by piece, and
+   * nothing is sent until Enter. Talk mode is stopped first — two sessions on
+   * one microphone would each hear the same words.
+   */
+  function startDictate(narrate = true): void {
+    if (dictateRef.current) return;
+    const recorder = resolveRecorder(process.platform);
+    if (!recorder) {
+      speechLog('dictate:refused', { reason: 'no-recorder', platform: process.platform });
+      flashToast(
+        process.platform === 'linux'
+          ? 'No microphone recorder found — install pw-record, parec or arecord.'
+          : 'Talk mode needs Linux for now (it records through PipeWire/PulseAudio).',
+        'error',
+      );
+      return;
+    }
+    const sttProblem = speechProviderUnavailable(config.voiceSttProvider, 'transcribe');
+    if (sttProblem) {
+      speechLog('dictate:refused', { reason: 'stt-unavailable', error: sttProblem });
+      flashToast(sttProblem, 'error');
+      return;
+    }
+    if (!getVoiceService(config).backend) {
+      speechLog('dictate:refused', { reason: 'no-voice', backend: config.voiceBackend });
+      flashToast('No voice to answer with — pick a backend in /voice.', 'error');
+      return;
+    }
+    if (talkRef.current) stopTalk();
+    const transcribe = transcriberFor(config.voiceSttProvider);
+    const session = new DictationSession({
+      rate: RECORD_RATE,
+      startMic: (onChunk, onError) => startMic(recorder, onChunk, onError),
+      transcribe: (samples, signal) => transcribe({ samples, rate: RECORD_RATE }, signal),
+      onText: (text) => {
+        if (dictateRef.current !== session) return;
+        speechLog('dictate:text', { chars: text.length, text: previewText(text) });
+        if (dictationDoor.insert) dictationDoor.insert(text);
+        else dictationDoor.held.push(text);
+      },
+      onState: (state) => {
+        if (dictateRef.current === session) setDictateState(state);
+      },
+      onError: (message) => {
+        speechLog('dictate:error', { error: message });
+        flashToast(message, 'error');
+      },
+      onEnded: (reason) => {
+        speechLog('dictate:ended', { reason });
+        if (dictateRef.current !== session) return;
+        dictateRef.current = null;
+        setDictateState(null);
+        setNarration(false);
+        flashToast(reason, 'info');
+      },
+    });
+    dictateRef.current = session;
+    setNarration(narrate);
+    speechLog('dictate:start', { recorder, stt: config.voiceSttProvider, narrate });
+    flashToast(
+      talkNoticeShownRef.current
+        ? 'Talk mode on — what you say goes into the prompt. Enter sends it.'
+        : 'Talk mode on — what you say goes into the prompt; Enter sends it. Audio is sent to ElevenLabs to transcribe. Esc stops.',
+      'info',
+    );
+    talkNoticeShownRef.current = true;
+    session.start();
+    // Started while a reply is still playing: the mic would hear it, and the
+    // queue only closes mics when it goes from idle to busy.
+    if (speechQueue.pending > 0) session.pause();
+    session.setBusy(submittingRef.current);
+  }
+
+  /**
    * Starts talk mode: listen, transcribe, run a turn, speak the reply, listen
    * again. Refuses up front, naming the fix, rather than opening a mic that
    * cannot be heard or a loop that cannot answer.
    */
-  function startTalk(): void {
+  function startTalk(narrate = true): void {
     if (talkRef.current) return;
     const recorder = resolveRecorder(process.platform);
     if (!recorder) {
@@ -5299,6 +5680,7 @@ export function App({
       flashToast('No voice to answer with — pick a backend in /voice.', 'error');
       return;
     }
+    if (dictateRef.current) stopDictate();
     const transcribe = transcriberFor(config.voiceSttProvider);
     const session = new TalkSession({
       rate: RECORD_RATE,
@@ -5342,7 +5724,7 @@ export function App({
         return true;
       },
       speak: (text) =>
-        startSpeech(text, { onError: (m) => flashToast(`Could not speak: ${m}`, 'error') }),
+        speakQueued(text, { onError: (m) => flashToast(`Could not speak: ${m}`, 'error') }),
       onState: (state) => {
         speechLog('talk:state', { state });
         if (talkRef.current === session) setTalkState(state);
@@ -5356,11 +5738,14 @@ export function App({
         if (talkRef.current !== session) return;
         talkRef.current = null;
         setTalkState(null);
+        setNarration(false);
         flashToast(reason, 'info');
       },
     });
     talkRef.current = session;
+    setNarration(narrate);
     speechLog('talk:start', {
+      narrate,
       recorder,
       stt: config.voiceSttProvider,
       backend: config.voiceBackend,
@@ -5369,11 +5754,19 @@ export function App({
     if (!talkNoticeShownRef.current) {
       talkNoticeShownRef.current = true;
       flashToast(
-        'Talk mode on. What you say is sent to ElevenLabs to transcribe. Esc stops.',
+        'Hands-free talk on — it sends at every pause. Audio is sent to ElevenLabs to transcribe. Esc stops.',
         'info',
       );
     }
-    session.start();
+    // Started while a reply is still playing: hands-free opens its main mic
+    // at once and has no pause, so it starts listening once speech is done.
+    if (speechQueue.pending > 0) {
+      void speechQueue.tail.then(() => {
+        if (talkRef.current === session) session.start();
+      });
+    } else {
+      session.start();
+    }
   }
 
   /**
@@ -5418,6 +5811,7 @@ export function App({
     // A new turn supersedes the previous turn's unspoken readback (#432) — the
     // case that motivates the guard at all.
     cancelPendingSpeech();
+    dropQueuedSpeech();
     setInterrupted(false);
     setBusy(true);
     // Paint the user's own words NOW, before anything is awaited (#613).
@@ -5574,7 +5968,9 @@ export function App({
       turnCompleted = !controller.signal.aborted;
       // Voice TTS readback: speak the last assistant response if voiceTts is on.
       // Talk mode speaks its own replies, so the readback would say it twice.
-      if (turnCompleted && config.voiceTts && !talkRef.current) {
+      // `/talk` (press-Enter) always answers aloud — that is what talk means —
+      // whether or not readback is on for ordinary turns.
+      if (turnCompleted && (config.voiceTts || dictateRef.current) && !talkRef.current) {
         const history = agent.getHistory();
         let lastMsg: (typeof history)[number] | undefined;
         for (let i = history.length - 1; i >= 0; i--) {
@@ -6557,6 +6953,7 @@ export function App({
         renderAbove={({ maxRows, reserveColumns }) => (
           <PlanPanel agent={agent} maxRows={maxRows} reserveColumns={reserveColumns} />
         )}
+        dictation={dictationDoor}
       />
       <Box justifyContent="space-between">
         <HintBar
@@ -6567,6 +6964,7 @@ export function App({
           pendingMessage={pendingMessage !== null}
           remoteMode={config.remoteMessages}
           talkState={talkState}
+          dictateState={dictateState}
         />
         <StatusBar agent={agent} />
       </Box>

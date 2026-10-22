@@ -1,0 +1,5 @@
+<!-- Moved out of CLAUDE.md, which keeps a pointer here. -->
+
+# Persistent-memory byte cap (#307)
+
+- **Persistent-memory byte cap (#307)** — `renderPersistentMemory` (`src/context-message.ts`) bounds the whole `<persistent_memory>` section at `MAX_PERSISTENT_MEMORY_CHARS` (24k chars ≈ 6k tokens), dropping **whole entries** and appending a visible `### (truncated)` note plus a `context:memory-capped` debug line. Memory is injected in full every turn and sits _after_ the prompt-cache breakpoint, so it is re-billed per **step**; it reached 182,585 bytes / ~45,646 tokens before anyone noticed (#313 removed the writer responsible and it now measures ~6,900 chars). Nothing _bounded_ it, and `memory write` is model-driven, so the same growth can recur through a different writer. Whole entries only — a fact truncated mid-sentence still reads as authoritative. Phase 3 of #307 (routing memory through `recall-filter`) stays deferred on measurement: ~1,720 tokens is ~2.4% of the prefix, and a cheap-tier model dropping _user-curated_ instructions for looking off-topic is a risk the RAG path does not carry.

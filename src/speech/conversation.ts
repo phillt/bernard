@@ -71,6 +71,8 @@ export class TalkSession {
   /** Follow-ups the running turn could not take; they become the next turn. */
   private pending: string[] = [];
   private turnRunning = false;
+  /** Bernard is speaking mid-turn (narration): keep the follow-up mic shut. */
+  private followHeld = false;
   private stopped = false;
   private failures = 0;
   private readonly abort = new AbortController();
@@ -93,6 +95,23 @@ export class TalkSession {
   queueFollowUps(texts: readonly string[]): void {
     if (this.stopped) return;
     for (const t of texts) if (t.trim()) this.pending.push(t.trim());
+  }
+
+  /**
+   * Closes the follow-up mic while something is spoken mid-turn, so the
+   * narration is not transcribed back as something the person said. A
+   * follow-up already captured still arrives.
+   */
+  holdFollowUps(): void {
+    this.followHeld = true;
+    this.closeFollowMic();
+  }
+
+  /** Reopens it, if a turn is still running to hear follow-ups for. */
+  releaseFollowUps(): void {
+    if (!this.followHeld) return;
+    this.followHeld = false;
+    if (this.turnRunning && !this.stopped && !this.followMic) this.openFollowMic();
   }
 
   /** Ends the session from outside. Idempotent; never reports `onEnded`. */
@@ -126,7 +145,7 @@ export class TalkSession {
    * turn is still running and the main mic reopens after it.
    */
   private openFollowMic(): void {
-    if (this.stopped) return;
+    if (this.stopped || this.followHeld) return;
     const endpointer = new Endpointer({
       rate: this.deps.rate,
       ...this.deps.endpointer,

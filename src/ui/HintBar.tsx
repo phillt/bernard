@@ -2,6 +2,7 @@ import { Box } from 'ink';
 import { HintRow, KEY, HINT_CLOSE, type KeyHint } from './hints.js';
 import { OPTIONS_KEY, isAutomatic, type RemoteMessageMode } from '../remote-messages.js';
 import type { TalkState } from '../speech/conversation.js';
+import type { DictationState } from '../speech/dictation.js';
 
 interface HintBarProps {
   busy: boolean;
@@ -35,7 +36,16 @@ interface HintBarProps {
    * never leave unsaid.
    */
   talkState?: TalkState | null;
+  /** Dictation's phase, or null when it is off. Same precedence as talk mode. */
+  dictateState?: DictationState | null;
 }
+
+/** `paused` is the mic closed while Bernard reads a reply aloud. */
+const DICTATE_LABEL: Record<DictationState, string> = {
+  listening: 'listening',
+  transcribing: 'transcribing',
+  paused: 'speaking',
+};
 
 /** What each talk phase says. `listening` is the one that means "the mic is open". */
 const TALK_LABEL: Record<TalkState, string> = {
@@ -60,6 +70,7 @@ export function HintBar({
   pendingMessage,
   remoteMode,
   talkState,
+  dictateState,
 }: HintBarProps) {
   return (
     <Box>
@@ -72,6 +83,7 @@ export function HintBar({
           pendingMessage,
           remoteMode,
           talkState,
+          dictateState,
         })}
       />
     </Box>
@@ -82,9 +94,18 @@ function pickHints(state: HintBarProps): KeyHint[] {
   if (state.overlayActive) {
     return [HINT_CLOSE];
   }
+  if (state.dictateState) {
+    // Enter is named because it is the whole difference from talk mode:
+    // nothing said is sent until it is pressed.
+    return [
+      { key: '●', label: DICTATE_LABEL[state.dictateState] },
+      { key: KEY.enter, label: 'send' },
+      { key: KEY.esc, label: 'stop talking' },
+    ];
+  }
   if (state.talkState) {
     return [
-      { key: '●', label: TALK_LABEL[state.talkState] },
+      { key: '●', label: `${TALK_LABEL[state.talkState]} · hands-free` },
       { key: KEY.esc, label: 'stop talking' },
     ];
   }

@@ -180,3 +180,26 @@ export function windowBuffer(
     below: rows.length - offset - cap,
   };
 }
+
+/**
+ * Inserts a run of words at `cursor`, adding a space on either side only where
+ * it would otherwise touch a word — dictation lands one spoken piece at a
+ * time, and a plain insert would run them together. Blank text changes
+ * nothing. The cursor ends after the inserted words, before any trailing space.
+ */
+export function insertWordsAt(
+  buffer: string,
+  cursor: number,
+  text: string,
+): { buffer: string; cursor: number } {
+  const words = text.trim();
+  if (!words) return { buffer, cursor };
+  const before = buffer.slice(0, cursor);
+  const after = buffer.slice(cursor);
+  const lead = before && !/\s$/.test(before) ? ' ' : '';
+  const trail = after && !/^\s/.test(after) ? ' ' : '';
+  return {
+    buffer: before + lead + words + trail + after,
+    cursor: before.length + lead.length + words.length,
+  };
+}

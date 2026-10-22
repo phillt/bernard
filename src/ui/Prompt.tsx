@@ -30,6 +30,21 @@ export interface PromptAboveBudget {
   reserveColumns: number;
 }
 
+/**
+ * The door dictation writes through. `insert` is set while a Prompt is
+ * mounted and cleared when it unmounts; a piece arriving with no Prompt (an
+ * overlay replaces it in full-screen) goes on `held`, which the next Prompt to
+ * mount drains — so nothing said is lost to a menu being open.
+ *
+ * A mutable object rather than a "text to insert" prop: insertion is an event,
+ * not state, and a prop would have to be cleared after being applied or the
+ * same words would go in again on the next render.
+ */
+export interface DictationDoor {
+  insert: ((text: string) => void) | null;
+  held: string[];
+}
+
 interface PromptProps {
   /** When true, suppress key handling — used while an overlay is open. */
   disabled?: boolean;
@@ -106,6 +121,8 @@ interface PromptProps {
    * private constants.
    */
   renderAbove?: (budget: PromptAboveBudget) => ReactNode;
+  /** Where dictation hands its text in (plain `/talk`). See {@link DictationDoor}. */
+  dictation?: DictationDoor;
 }
 
 /**
@@ -133,6 +150,7 @@ export function Prompt({
   onRecordInput,
   dynamicCommands,
   renderAbove,
+  dictation,
 }: PromptProps) {
   const editor = useLineEditor('', { multiline: true });
   // Home/End never reach `useInput` (Ink drops them — see `keys.ts`), so they
@@ -143,6 +161,15 @@ export function Prompt({
     else editor.toLineEnd();
   }, !disabled);
   const { buffer } = editor;
+  const { insertWords } = editor;
+  useEffect(() => {
+    if (!dictation) return;
+    dictation.insert = insertWords;
+    for (const text of dictation.held.splice(0)) insertWords(text);
+    return () => {
+      if (dictation.insert === insertWords) dictation.insert = null;
+    };
+  }, [dictation, insertWords]);
   // Position in `history` while browsing with ↑/↓; null = editing the live
   // buffer (not on the history rail).
   const [historyCursor, setHistoryCursor] = useState<number | null>(null);

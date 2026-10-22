@@ -43,6 +43,9 @@ import {
   VOICE_BACKEND_VALUES,
   VoiceService,
   type ResolvedBackend,
+  buildTempoCommand,
+  changeTempo,
+  resetTempoProbe,
 } from './voice-service.js';
 
 describe('resolveBackend', () => {
@@ -375,5 +378,41 @@ describe('cloud voice (elevenlabs)', () => {
   it('says so when no vendor was supplied', async () => {
     const svc = new VoiceService({ backend: 'elevenlabs', bin: 'pw-play' }, null);
     await expect(svc.speak('hello')).rejects.toThrow(/No speech provider/);
+  });
+});
+
+describe('changeTempo', () => {
+  const pcm = { samples: Int16Array.from([1, 2, 3, 4]), rate: 22050 };
+  const present = () => true;
+
+  it('asks ffmpeg for its pitch-keeping tempo filter, raw in and out', () => {
+    const { bin, args } = buildTempoCommand(22050, 1.25);
+    expect(bin).toBe('ffmpeg');
+    expect(args).toContain('atempo=1.25');
+    expect(args.filter((a) => a === '22050')).toHaveLength(2);
+  });
+
+  it('plays what ffmpeg hands back', async () => {
+    resetTempoProbe();
+    const run = vi.fn(async () => Buffer.from(Int16Array.from([9, 8]).buffer));
+    const out = await changeTempo(pcm, 1.25, run, present);
+    expect(Array.from(out.samples)).toEqual([9, 8]);
+    expect(out.rate).toBe(22050);
+  });
+
+  it('does nothing at a tempo of 1', async () => {
+    resetTempoProbe();
+    const run = vi.fn();
+    expect(await changeTempo(pcm, 1, run, present)).toBe(pcm);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('keeps the clip as it was without ffmpeg, or when ffmpeg fails', async () => {
+    resetTempoProbe();
+    const run = vi.fn(async () => null);
+    expect(await changeTempo(pcm, 1.25, run, () => false)).toBe(pcm);
+    expect(run).not.toHaveBeenCalled();
+    resetTempoProbe();
+    expect(await changeTempo(pcm, 1.25, run, present)).toBe(pcm);
   });
 });

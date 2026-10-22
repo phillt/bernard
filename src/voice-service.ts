@@ -1,4 +1,6 @@
-import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
+import { spawn, execFile, execFileSync, type ChildProcess } from 'node:child_process';
+import type { VoiceTuning } from './speech/tuning.js';
+import { cloudSpeedFor, localTempoFor } from './voice-speed.js';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CACHE_DIR } from './paths.js';
@@ -60,6 +62,8 @@ const BACKEND_BIN: Record<Exclude<VoiceBackend, 'auto' | CloudVoiceBackend>, str
 export interface SpeakOptions {
   voice?: string;
   rate?: number; // words per minute
+  /** Cloud voices only; local engines have nothing to tune. */
+  tuning?: VoiceTuning;
 }
 
 export interface ResolvedBackend {
@@ -274,10 +278,105 @@ export function ensureSilenceWav(ms: number): string {
  */
 export type SpeakOutcome = 'finished' | 'cancelled';
 
+/** ffmpeg's tempo filter, raw mono s16le in and out at `rate`. Pure. */
+export function buildTempoCommand(rate: number, tempo: number): { bin: string; args: string[] } {
+  const fmt = ['-f', 's16le', '-ar', String(rate), '-ac', '1'];
+  return {
+    bin: 'ffmpeg',
+    args: [
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      ...fmt,
+      '-i',
+      '-',
+      '-filter:a',
+      `atempo=${tempo}`,
+      ...fmt,
+      '-',
+    ],
+  };
+}
+
+let ffmpegPresent: boolean | undefined;
+
+/**
+ * Speeds a clip up (or down) on this machine with the pitch kept, for a cloud
+ * voice asked to go past what its vendor allows. ffmpeg's `atempo` rather than
+ * playing the PCM at a higher declared rate, which would raise the pitch into
+ * a chipmunk. Best effort, like the sink warmup: no ffmpeg, a failed run or a
+ * tempo of 1 all hand back the clip unchanged rather than costing the reply.
+ * Async, never `spawnSync` — a few seconds of audio is ~50 ms of work, and it
+ * must not stall the render loop for it.
+ */
+export async function changeTempo(
+  pcm: Pcm,
+  tempo: number,
+  run: (bin: string, args: string[], input: Buffer) => Promise<Buffer | null> = runFilter,
+  hasBin: (bin: string) => boolean | Promise<boolean> = hasBinAsync,
+): Promise<Pcm> {
+  if (tempo === 1 || pcm.samples.length === 0) return pcm;
+  ffmpegPresent ??= await hasBin('ffmpeg');
+  if (!ffmpegPresent) return pcm;
+  const { bin, args } = buildTempoCommand(pcm.rate, tempo);
+  const input = Buffer.from(pcm.samples.buffer, pcm.samples.byteOffset, pcm.samples.byteLength);
+  const out = await run(bin, args, input);
+  if (!out || out.length < 2) return pcm;
+  const aligned = new Uint8Array(out.length & ~1);
+  aligned.set(out.subarray(0, aligned.length));
+  return { samples: new Int16Array(aligned.buffer), rate: pcm.rate };
+}
+
+/**
+ * `defaultHasBin` without blocking: it is `execFileSync`, fine for a one-off
+ * at startup and wrong on the speak path, where it would hold the render loop
+ * for the length of a `which` spawn.
+ */
+function hasBinAsync(bin: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    try {
+      execFile('which', [bin], (err) => resolve(!err));
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
+/** For tests: forget whether ffmpeg was found. */
+export function resetTempoProbe(): void {
+  ffmpegPresent = undefined;
+}
+
+function runFilter(bin: string, args: string[], input: Buffer): Promise<Buffer | null> {
+  return new Promise((resolve) => {
+    let child: ChildProcess;
+    try {
+      child = spawn(bin, args, { stdio: ['pipe', 'pipe', 'ignore'] });
+    } catch {
+      resolve(null);
+      return;
+    }
+    const chunks: Buffer[] = [];
+    const timer = setTimeout(() => child.kill('SIGKILL'), 10_000);
+    timer.unref?.();
+    child.stdout?.on('data', (c: Buffer) => chunks.push(c));
+    child.on('error', () => {
+      clearTimeout(timer);
+      resolve(null);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve(code === 0 ? Buffer.concat(chunks) : null);
+    });
+    child.stdin?.on('error', () => undefined);
+    child.stdin?.end(input);
+  });
+}
+
 /** Network synthesis for a cloud backend, supplied by the caller. */
 export type Synthesize = (
   text: string,
-  opts: { voice?: string; signal: AbortSignal },
+  opts: { voice?: string; speed?: number; tuning?: VoiceTuning; signal: AbortSignal },
 ) => Promise<Pcm>;
 
 export class VoiceService {
@@ -378,7 +477,12 @@ export class VoiceService {
       const warm =
         Date.now() - this._warmedAt > WARMUP_FRESH_MS ? this._runWarmup() : Promise.resolve();
       [pcm] = await Promise.all([
-        this._synthesize(clampForSpeech(text), { voice: opts?.voice, signal: abort.signal }),
+        this._synthesize(clampForSpeech(text), {
+          voice: opts?.voice,
+          speed: cloudSpeedFor(opts?.rate),
+          tuning: opts?.tuning,
+          signal: abort.signal,
+        }),
         warm,
       ]);
     } catch (err) {
@@ -387,6 +491,8 @@ export class VoiceService {
     } finally {
       if (this._synthAbort === abort) this._synthAbort = null;
     }
+    if (epoch !== this._epoch) return 'cancelled';
+    pcm = await changeTempo(pcm, localTempoFor(opts?.rate));
     if (epoch !== this._epoch) return 'cancelled';
     const { bin, args } = buildRawPlayCommand(player, pcm.rate);
     const bytes = Buffer.from(pcm.samples.buffer, pcm.samples.byteOffset, pcm.samples.byteLength);

@@ -1,0 +1,5 @@
+<!-- Moved out of CLAUDE.md, which keeps a pointer here. -->
+
+# src/turn-context.ts
+
+- **src/turn-context.ts** — `TurnContextRecord` type + `TurnContextStore` (sibling of `ProvenanceHistoryStore`; both are thin `PerTurnStore<T>` subclasses — see `src/per-turn-store.ts` — with atomic writes to `turn-context.json`). One record per completed turn capturing the pre-turn prompt-assembly trail — `originalInput` (typed) vs. `rewrittenInput` (post-rewriter), `resolvedReferences`, and `recalledFacts` (post-filter/stickiness). Deliberately **omits the system prompt** (internal infra — not persisted or shown). The `Agent` snapshots it alongside `turnProvenance` in `processInput` (originalInput threaded through the `processInput` options bag by `App.tsx`), exposes it via `getTurnContext()` / `setTurnContext()`, and clears it in `clearHistory`. Persisted + resumed by `src/index.ts` and `src/ui/save.ts` exactly like the provenance history; powers the Shift+Tab "Prompt & Context" viewer (`ContextViewer`).

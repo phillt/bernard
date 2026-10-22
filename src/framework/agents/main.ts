@@ -54,6 +54,8 @@ export interface MainInput {
   specialistSummaries: SpecialistSummary[];
   specialistMatches: SpecialistMatch[];
   alertContext?: string;
+  /** Narrated talk mode: see `ContextMessageInputs.voiceNarration`. */
+  voiceNarration?: boolean;
   /** Mutated in place by `tokenStatsHook`. The Agent class owns this object. */
   statsTarget: TokenStatsTarget;
   /** PlanStore shared with the `plan` tool (exposed in every mode). */
@@ -162,6 +164,7 @@ function buildMainContextInputs(ctx: AgentContext, input: Omit<MainInput, 'syste
     specialistMatches: input.specialistMatches,
     resolvedReferences: input.resolvedReferences,
     alertContext: input.alertContext,
+    voiceNarration: input.voiceNarration,
     provenance: ctx.provenance,
   };
 }

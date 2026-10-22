@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react';
 import { Text, type Key } from 'ink';
 import { looksLikeMouseReport } from './mouse.js';
 import { stripModifiedEnter } from './keys.js';
-import { lineStart, lineEnd, wordLeft, wordRight } from './line-geometry.js';
+import { lineStart, lineEnd, wordLeft, wordRight, insertWordsAt } from './line-geometry.js';
 
 /**
  * Shared single-line editing state for the REPL's text inputs (`Prompt`,
@@ -23,6 +23,12 @@ export interface LineEditor {
   clear: () => void;
   /** Inserts text at the cursor (e.g. an explicit newline from Shift+Enter). */
   insert: (text: string) => void;
+  /**
+   * Inserts a run of words at the cursor, adding a space on either side only
+   * where it would otherwise touch a word. Dictation lands one spoken piece at
+   * a time, and `insert` would run them together.
+   */
+  insertWords: (text: string) => void;
   /**
    * Handles editing keys (arrows, Ctrl-A/E, backspace, printable input).
    * Returns true when consumed — the caller should stop processing. Keys with
@@ -96,6 +102,15 @@ export function useLineEditor(initial = '', opts: LineEditorOptions = {}): LineE
         buffer: s.buffer.slice(0, s.cursor) + cleaned + s.buffer.slice(s.cursor),
         cursor: s.cursor + cleaned.length,
       }));
+    },
+    [multiline],
+  );
+
+  const insertWords = useCallback(
+    (text: string) => {
+      let cleaned = text.replace(CRLF_RE, '\n');
+      if (!multiline) cleaned = cleaned.replace(NEWLINE_RE, ' ');
+      setState((s) => insertWordsAt(s.buffer, s.cursor, cleaned));
     },
     [multiline],
   );
@@ -198,6 +213,7 @@ export function useLineEditor(initial = '', opts: LineEditorOptions = {}): LineE
     setBuffer,
     clear,
     insert,
+    insertWords,
     handleKey,
     toLineStart,
     toLineEnd,

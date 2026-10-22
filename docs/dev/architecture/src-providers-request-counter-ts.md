@@ -1,0 +1,5 @@
+<!-- Moved out of CLAUDE.md, which keeps a pointer here. -->
+
+# src/providers/request-counter.ts
+
+- **src/providers/request-counter.ts** — Always-on count of HTTP requests issued to a model provider (#308). xAI billed **87 requests** for a session Bernard recorded **22 LLM calls** and 24 `http:request:start` events for; tokens reconciled to 0.22% but request counts were 3.6x off. Nothing in `src/` sets `maxRetries`, so every `generateText` runs the AI SDK default (2 retries → up to 3 attempts) — invisible spend if that is the cause. Incremented from the `stallGuardedFetch` wrapper **before** the guard's own `timeoutMs <= 0` off-switch, since that wrapper is the only always-installed layer under the SDK's retry loop; `installInstrumentedFetchIfDebug` cannot answer this because it only observes sessions someone already suspected. Counts only — no URL, host, method, status, or body, so the instrumented-fetch privacy contract holds by construction. Surfaced in the `/usage` Session section (only when attempts exceed recorded calls) and as a per-turn `provider:requests` debug line.
